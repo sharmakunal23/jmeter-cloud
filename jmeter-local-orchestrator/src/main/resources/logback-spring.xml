@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  OBSERVABILITY Phase A — structured JSON logging.
+
+  Defaults to JSON on stdout (one record per line) so log search by
+  traceId/runId works out of the box once tracing wires in (Phase B).
+  Operators who want Spring Boot's pretty plaintext during interactive
+  dev set DEV_MODE_LOG=true; the janino-powered <if> below flips the
+  root appender at config-load time.
+
+  MDC keys (traceId, spanId, runId, workerId, actor, errorContext) are
+  populated at request entry by the TracingFilter (Phase C). They
+  surface here as top-level JSON fields when present.
+
+  Note: this service has no application.yml by design (by
+  convention OrchestratorConfig.from(env) is the single config entrypoint).
+  spring.application.name therefore isn't set anywhere, so the
+  service-name field is hardcoded below rather than read from the
+  Spring Environment.
+-->
+<configuration>
+
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+    <property name="appName" value="jmeter-local-orchestrator"/>
+
+    <appender name="CONSOLE_TEXT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${CONSOLE_LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <appender name="CONSOLE_JSON" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeMdcKeyName>traceId</includeMdcKeyName>
+            <includeMdcKeyName>spanId</includeMdcKeyName>
+            <includeMdcKeyName>runId</includeMdcKeyName>
+            <includeMdcKeyName>workerId</includeMdcKeyName>
+            <includeMdcKeyName>actor</includeMdcKeyName>
+            <includeMdcKeyName>errorContext</includeMdcKeyName>
+            <!-- OBSERVABILITY Phase E — access-log MDC keys. -->
+            <includeMdcKeyName>method</includeMdcKeyName>
+            <includeMdcKeyName>path</includeMdcKeyName>
+            <includeMdcKeyName>status</includeMdcKeyName>
+            <includeMdcKeyName>latencyMs</includeMdcKeyName>
+            <includeMdcKeyName>clientIp</includeMdcKeyName>
+            <includeMdcKeyName>userAgent</includeMdcKeyName>
+            <customFields>{"service":"${appName}"}</customFields>
+        </encoder>
+    </appender>
+
+    <if condition='"true".equals(System.getenv("DEV_MODE_LOG"))'>
+        <then>
+            <root level="INFO"><appender-ref ref="CONSOLE_TEXT"/></root>
+        </then>
+        <else>
+            <root level="INFO"><appender-ref ref="CONSOLE_JSON"/></root>
+        </else>
+    </if>
+
+</configuration>

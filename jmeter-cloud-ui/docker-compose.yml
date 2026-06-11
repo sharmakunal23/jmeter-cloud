@@ -1,0 +1,29 @@
+# jmeter-cloud-ui subsystem — Compose fragment.
+#
+# Step 7 skeleton: serves a single React page that fetches the global
+# orchestrator's health endpoint. The SPA + nginx reverse-proxy is the
+# control-plane shell; future feature pages (run launcher, fleet status,
+# live metrics) plug in as additional routes.
+
+services:
+
+  jmeter-cloud-ui:
+    build:
+      context: .
+    image: jmeter-cloud-ui:dev
+    profiles: [default]
+    restart: unless-stopped   # Reliability: self-heal on crash/reboot.
+    depends_on:
+      global-orchestrator:
+        condition: service_healthy
+      # Step 18 — UI also proxies /api/v1/blob to document-service.
+      document-service:
+        condition: service_healthy
+    ports:
+      - "${UI_HTTP_PORT:-8086}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/healthz | grep -q ok"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s

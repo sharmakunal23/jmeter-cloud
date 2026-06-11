@@ -1,0 +1,866 @@
+openapi: 3.0.3
+
+info:
+  title: jmeter-local-orchestrator
+  version: 1.1.0
+  summary: HTTP-driven orchestrator that runs alongside one JMeter worker per host.
+  description: |
+    A lightweight HTTP API that owns the full lifecycle of a single JMeter test
+    on one Kubernetes pod or EC2 instance: accept artifacts, launch JMeter as a
+    child process, tail the JTL output, stream 1-second tumbling windows to
+    Kafka, and (optionally) upload the post-test JTL to a configured backend.
+
+    **Operating model.** One process per host. One JMeter worker. One test at a
+    time. Every REST resource is a singleton — no `runId` (or any other) path
+    parameter. `POST /test` clears the previous run's `results/` and `logs/`
+    before starting; uploaded artifacts (test plan, data files) persist until
+    they are re-uploaded.
+  contact:
+    name: Performance Engineering
+  license:
+    name: Apache-2.0
+
+servers:
+  - url: http://localhost:8080
+    description: Local dev (the orchestrator binds to HTTP_PORT, default 8080)
+  - url: http://{host}:{port}
+    description: Pod / instance — host and port are deployment-specific
+    variables:
+      host:
+        default: jmeter-orchestrator
+      port:
+        default: "8080"
+
+tags:
+  - name: testPlan
+    description: The currently uploaded JMX test plan (singleton).
+  - name: dataFiles
+    description: The currently uploaded data-file zip (singleton, up to 512 MB).
+  - name: test
+    description: The currently active or last-completed test run (singleton).
+  - name: results
+    description: The current/latest JTL output file (singleton).
+  - name: observability
+    description: JMeter JVM metrics, orchestrator counters, and log tail.
+  - name: platform
+    description: Health, readiness, build info, Prometheus, effective config.
+
+security:
+  - bearerAuth: []
+  - {}
+
+paths:
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Test plan — singleton .jmx
+  # ────────────────────────────────────────────────────────────────────────
+  /api/v1/testPlan:
+    post:
+      tags: [testPlan]
+      summary: Upload a test plan
+      description: |
+        Upload a single `.jmx` (or a `.zip` containing exactly one `.jmx`).
+        Supports `Content-Encoding: gzip`. Replaces any previously uploaded
+        plan atomically. Rejected with `409` if a test is currently `RUNNING`.
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+          application/zip:
+            schema: { type: string, format: binary }
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+              required: [file]
+      responses:
+        "201":
+          description: Plan stored.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TestPlanMetadata" }
+        "400": { $ref: "#/components/responses/InvalidArchive" }
+        "409": { $ref: "#/components/responses/TestRunning" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+
+    get:
+      tags: [testPlan]
+      summary: Get metadata of the currently uploaded plan
+      responses:
+        "200":
+          description: Plan metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TestPlanMetadata" }
+        "404": { $ref: "#/components/responses/NoFile" }
+
+    delete:
+      tags: [testPlan]
+      summary: Remove the uploaded plan
+      responses:
+        "204": { description: Plan removed. }
+        "409": { $ref: "#/components/responses/TestRunning" }
+
+  /api/v1/testPlan/file:
+    get:
+      tags: [testPlan]
+      summary: Download the raw plan file
+      responses:
+        "200":
+          description: Raw plan bytes.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "404": { $ref: "#/components/responses/NoFile" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Data files — singleton zip (up to 512 MB)
+  # ────────────────────────────────────────────────────────────────────────
+  /api/v1/dataFiles:
+    post:
+      tags: [dataFiles]
+      summary: Upload a data-file zip
+      description: |
+        Streams the upload directly to disk (no full-buffer in memory) and
+        extracts on the fly with strict validation. Returns `201` only after
+        extraction succeeds — atomic from the client's view. Allowed entry
+        extensions: `.csv .json .txt .properties .xml .jmx`.
+      requestBody:
+        required: true
+        content:
+          application/zip:
+            schema: { type: string, format: binary }
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+              required: [file]
+      responses:
+        "201":
+          description: Zip extracted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DataFilesManifest" }
+        "400": { $ref: "#/components/responses/InvalidArchive" }
+        "409": { $ref: "#/components/responses/TestRunning" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+
+    get:
+      tags: [dataFiles]
+      summary: Manifest of currently uploaded data files
+      responses:
+        "200":
+          description: Data files manifest.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DataFilesManifest" }
+        "404": { $ref: "#/components/responses/NoFile" }
+
+    delete:
+      tags: [dataFiles]
+      summary: Remove all data files
+      responses:
+        "204": { description: Cleared. }
+        "409": { $ref: "#/components/responses/TestRunning" }
+
+  /api/v1/dataFiles/file:
+    get:
+      tags: [dataFiles]
+      summary: Re-download the original zip
+      responses:
+        "200":
+          description: Raw zip bytes.
+          content:
+            application/zip:
+              schema: { type: string, format: binary }
+        "404": { $ref: "#/components/responses/NoFile" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Test lifecycle — singleton
+  # ────────────────────────────────────────────────────────────────────────
+  /api/v1/test:
+    post:
+      tags: [test]
+      summary: Start a test
+      description: |
+        Validates preconditions, clears `${RESULTS_DIR}` and `${LOGS_DIR}`,
+        transitions `IDLE → PREPARING` and asynchronously launches JMeter.
+
+        Override hierarchy for any field: **request body > env var > built-in default.**
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StartTestRequest" }
+      responses:
+        "202":
+          description: Accepted; the test has entered `PREPARING`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StartTestResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/TestRunning" }
+        "412":
+          description: No test plan uploaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              example:
+                error: NO_TEST_PLAN
+                message: Upload a test plan via POST /api/v1/testPlan first.
+
+    get:
+      tags: [test]
+      summary: Current test state (or last-completed)
+      responses:
+        "200":
+          description: Test state snapshot.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TestStateResponse" }
+        "404":
+          description: No test has ever run on this instance.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              example:
+                error: NO_TEST_EXISTS
+                message: No test has been started
+
+    delete:
+      tags: [test]
+      summary: Graceful stop (SIGTERM → drain → ABORTED)
+      description: |
+        Sends `SIGTERM` to the JMeter child, waits up to
+        `terminationGracePeriodSeconds` (default 120 s) for it to drain, then
+        marks the run `ABORTED`. Idempotent — calling on an already-terminal
+        run is a no-op.
+      responses:
+        "202": { description: Stop accepted; transition to `DRAINING`. }
+        "404":
+          description: No active or completed run to stop.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/test/abort:
+    post:
+      tags: [test]
+      summary: Hard kill (SIGKILL → ABORTED)
+      description: |
+        Sends `SIGKILL` to the JMeter child immediately and marks the run
+        `ABORTED`. Use only when graceful stop has failed.
+      responses:
+        "202": { description: Abort accepted. }
+        "404":
+          description: No active run.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/test/drain:
+    post:
+      tags: [test]
+      summary: Graceful drain via JMeter TCP shutdown port → DRAINED
+      description: |
+        MID-TEST-SCALING Phase B. Sends `Shutdown` to JMeter's TCP shutdown
+        port (default `4445`, configurable via `JMETER_SHUTDOWN_PORT`).
+        In-flight samplers complete; no new ones start. Run lands in
+        `DRAINED` on clean exit (distinct from `COMPLETED`/`ABORTED`).
+
+        If the TCP send fails (port not yet listening, JMeter already
+        exited), falls back to `SIGTERM` — JMeter's signal handler treats
+        SIGTERM as a less-graceful stop (StopTestNow-equivalent). The run
+        still lands `DRAINED` on clean exit.
+
+        If JMeter does not exit within `JMETER_DRAIN_TIMEOUT_S` (default
+        60 s), the lifecycle escalates to `SIGKILL` and the run lands
+        `ABORTED` with reason `drainTimeoutExpired`.
+
+        Returns 202 immediately — caller polls `GET /api/v1/test` for
+        state convergence. Idempotent; repeated calls during the same
+        drain window are no-ops.
+      responses:
+        "202": { description: Drain accepted. }
+        "404":
+          description: No active run to drain.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Results — singleton JTL
+  # ────────────────────────────────────────────────────────────────────────
+  /api/v1/results:
+    get:
+      tags: [results]
+      summary: JTL metadata (size, row count, upload state)
+      responses:
+        "200":
+          description: Results metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResultsMetadata" }
+        "404": { $ref: "#/components/responses/NoFile" }
+
+    delete:
+      tags: [results]
+      summary: Manually clear the JTL
+      description: |
+        Implicitly performed by the next `POST /test`. Returns `409` if a test
+        is currently running.
+      responses:
+        "204": { description: Cleared. }
+        "409": { $ref: "#/components/responses/TestRunning" }
+
+  /api/v1/results/file:
+    get:
+      tags: [results]
+      summary: Stream the raw JTL
+      parameters:
+        - in: query
+          name: format
+          schema:
+            type: string
+            enum: [raw, zip]
+            default: raw
+          description: |
+            `raw` (default) streams the JTL as `text/csv`. `zip` streams a
+            server-compressed zip of the JTL.
+      responses:
+        "200":
+          description: JTL bytes.
+          content:
+            text/csv:
+              schema: { type: string, format: binary }
+            application/zip:
+              schema: { type: string, format: binary }
+        "404": { $ref: "#/components/responses/NoFile" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Observability
+  # ────────────────────────────────────────────────────────────────────────
+  /api/v1/metrics/jmeterJvm:
+    get:
+      tags: [observability]
+      summary: JMeter JVM stats via JMX
+      description: |
+        Lazy connect to `localhost:${JMX_PORT}` (default 9999); response is
+        cached for 1 s to avoid hammering the JMX endpoint under polling.
+      responses:
+        "200":
+          description: JVM metrics snapshot.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JmeterJvmMetrics" }
+        "503":
+          description: JMeter is not running.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              example:
+                error: JMETER_NOT_RUNNING
+                message: No JMeter child process is alive.
+
+  /api/v1/metrics/orchestrator:
+    get:
+      tags: [observability]
+      summary: Orchestrator's own counters
+      responses:
+        "200":
+          description: Orchestrator counter snapshot.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrchestratorMetrics" }
+
+  /api/v1/logs:
+    get:
+      tags: [observability]
+      summary: Tail of the JMeter child's stdout/stderr (console) or jmeter.log
+      description: |
+        `stream` selects the source. The two surfaces are intentionally
+        not merged so a UI tab labelled "Console" doesn't sprout JMeter
+        log4j lines and vice versa.
+
+        * `console` (default) — orchestrator's in-memory ring buffer of
+          the JMeter child process's stdout + stderr, captured by the
+          drainer in `JmeterProcessManager`. Capped at `LOG_BUFFER_LINES`
+          (default 1000). Available as soon as JMeter starts writing.
+        * `jmeter` — tail of `jmeter.log` on disk, written by JMeter's
+          own log4j logger. Distinct content (much more verbose:
+          internal scheduler, thread group lifecycle, etc.). Returns an
+          empty body when the file doesn't exist yet (e.g. `IDLE` /
+          `PREPARING` state, before the child has started writing).
+
+        Any other value returns 400 BAD_REQUEST.
+      parameters:
+        - in: query
+          name: tail
+          schema: { type: integer, default: 200, minimum: 1, maximum: 10000 }
+          description: Number of lines to return from the end of the chosen stream.
+        - in: query
+          name: stream
+          schema:
+            type: string
+            enum: [console, jmeter]
+            default: console
+      responses:
+        "200":
+          description: Log lines (newline-separated text). Empty body when no lines are available.
+          content:
+            text/plain:
+              schema: { type: string }
+        "400":
+          description: Unknown `stream` value.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Platform
+  #
+  # /api/v1/health, /api/v1/info, and /api/v1/metrics were dropped when the
+  # orchestrator migrated to Spring Boot — those concerns are served by
+  # Spring Boot Actuator at /actuator/health, /actuator/info, and
+  # /actuator/prometheus respectively. /api/v1/ready and /api/v1/config
+  # stay because they implement orchestrator-specific logic that actuator
+  # doesn't cover (Kafka + disk readiness composition; resolved-config
+  # snapshot with secrets redacted).
+  # ────────────────────────────────────────────────────────────────────────
+  /api/v1/ready:
+    get:
+      tags: [platform]
+      summary: Readiness — pod can accept HTTP traffic
+      description: |
+        Independent of the test lifecycle. Returns 200 whenever the
+        orchestrator can serve traffic (Kafka client connected, disk OK).
+        A `RUNNING` test never causes a 503; `testState` is reported as
+        informational only.
+      security: []
+      responses:
+        "200":
+          description: Ready.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReadyResponse" }
+        "503":
+          description: Not ready (Kafka unreachable, disk full, startup not finished).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReadyResponse" }
+
+  /api/v1/config:
+    get:
+      tags: [platform]
+      summary: Effective config (env + per-run overrides), secrets redacted
+      responses:
+        "200":
+          description: Resolved config.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfigResponse" }
+
+# ──────────────────────────────────────────────────────────────────────────
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: |
+        Static token from the `AUTH_TOKEN` env var. When `AUTH_TOKEN` is
+        empty (default), all endpoints accept anonymous requests. When set,
+        every `/api/v1/*` endpoint except `/api/v1/ready` and the Spring
+        Boot Actuator endpoints (`/actuator/health`, `/actuator/info`,
+        `/actuator/prometheus`) requires `Authorization: Bearer ${AUTH_TOKEN}`.
+
+  responses:
+    NoFile:
+      description: Resource has not been uploaded / does not yet exist.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example:
+            error: NO_FILE_EXISTS
+            message: No file has been uploaded.
+    TestRunning:
+      description: A test is currently `RUNNING` (or non-terminal).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example:
+            error: TEST_RUNNING
+            message: A test is currently in progress; cannot mutate this resource.
+    InvalidArchive:
+      description: |
+        Upload rejected by validation. Causes include path-traversal entries,
+        symlinks, absolute paths, NUL bytes, oversized entries, oversized
+        total extracted size, too many files, or disallowed extensions.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example:
+            error: INVALID_ARCHIVE
+            message: "Entry 'foo/../bar.csv' contains a path-traversal segment."
+    PayloadTooLarge:
+      description: |
+        Upload exceeded `MAX_PLAN_SIZE_MB` / `MAX_DATA_ZIP_SIZE_MB` /
+        `MAX_EXTRACTED_SIZE_MB` (defaults 32 / 512 / 1024).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    BadRequest:
+      description: Malformed request body or query.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  schemas:
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Common
+    # ──────────────────────────────────────────────────────────────────────
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          description: |
+            Machine-readable code, e.g. `NO_FILE_EXISTS`, `TEST_RUNNING`,
+            `INVALID_ARCHIVE`, `NO_TEST_PLAN`, `NO_TEST_EXISTS`,
+            `JMETER_NOT_RUNNING`, `BAD_REQUEST`.
+        message:
+          type: string
+          description: Human-readable explanation. Not stable; do not parse.
+
+    TestState:
+      type: string
+      description: |
+        Outer test lifecycle (owned by `TestRunManager`).
+
+        `DRAINED` (MID-TEST-SCALING Phase B) — graceful drain via
+        `POST /api/v1/test/drain` succeeded; in-flight samplers completed
+        and JMeter exited cleanly. Distinct from `COMPLETED` (natural
+        end-of-test) and `ABORTED` (forced stop). Treated as a successful
+        terminal state for run-level pass/fail rollups.
+      enum: [IDLE, PREPARING, STARTING, RUNNING, DRAINING, COMPLETED, FAILED, ABORTED, DRAINED]
+
+    InnerTailerState:
+      type: string
+      description: Inner state from the existing `TailerStateMachine`.
+      enum: [WAITING_FOR_FILE, RUNNING, DRAINING, DONE]
+
+    UploadState:
+      type: string
+      description: |
+        Auto-upload outcome. `SKIPPED` is the default terminal state when
+        `AUTO_UPLOAD_RESULTS=false` — it is normal, not an error.
+      enum: [SKIPPED, PENDING, UPLOADING, UPLOADED, FAILED]
+
+    ArtifactSourceType:
+      type: string
+      enum: [HTTP_UPLOAD, S3, DOCUMENT_SERVICE]
+
+    ResultSinkType:
+      type: string
+      description: |
+        `S3` is intentionally not supported as a sink — auto-upload targets
+        the document service only. Configuring `RESULT_SINK=S3` is rejected
+        at startup.
+      enum: [HTTP_UPLOAD, DOCUMENT_SERVICE]
+
+    WorkerIdSource:
+      type: string
+      enum: [POD_NAME, THREAD_NAME]
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Test plan
+    # ──────────────────────────────────────────────────────────────────────
+    TestPlanMetadata:
+      type: object
+      required: [filename, sizeBytes, sha256, uploadedAt]
+      properties:
+        filename:    { type: string, example: "checkout-flow.jmx" }
+        sizeBytes:   { type: integer, format: int64, example: 18432 }
+        sha256:      { type: string,  example: "f3a2b1..." }
+        uploadedAt:  { type: string, format: date-time }
+        compressed:
+          type: boolean
+          description: True if the upload was a zip/gzip; false for raw `.jmx`.
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Data files
+    # ──────────────────────────────────────────────────────────────────────
+    DataFilesManifest:
+      type: object
+      required: [zipSizeBytes, extractedBytes, fileCount, files, sha256, uploadedAt]
+      properties:
+        zipSizeBytes:    { type: integer, format: int64, example: 402653184 }
+        extractedBytes:  { type: integer, format: int64, example: 524288000 }
+        fileCount:       { type: integer, example: 53 }
+        files:
+          type: array
+          items: { type: string }
+          example: ["users.csv", "products.csv"]
+        sha256:      { type: string }
+        uploadedAt:  { type: string, format: date-time }
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Test
+    # ──────────────────────────────────────────────────────────────────────
+    StartTestRequest:
+      type: object
+      required: [runId]
+      properties:
+        runId:
+          type: string
+          description: Required; the same value across the entire fleet for one coordinated run.
+          example: "20260502-fleet-east"
+        region:
+          type: string
+          description: Falls back to `TEST_REGION` env.
+          example: "us-east-1"
+        scheduledStartAt:
+          type: string
+          format: date-time
+          description: |
+            If set, the orchestrator transitions to `PREPARING` immediately
+            and waits until this wall-clock time before launching JMeter.
+            Tolerates clock skew up to ±5 s.
+        jmeterArgs:
+          type: array
+          items: { type: string }
+          example: ["-Gthreads=50", "-Gduration=28800"]
+        jmeterJvmArgs:
+          type: array
+          items: { type: string }
+          description: Overrides `JMETER_JVM_ARGS`.
+          example: ["-Xms2g", "-Xmx2g"]
+        properties:
+          type: object
+          additionalProperties: { type: string }
+          description: |
+            Track G (Step 31) — JMeter system properties. Each entry
+            forwarded to the child process as `-J<key>=<value>`. Keys
+            must match `[A-Za-z_][A-Za-z0-9_.]{0,63}`; values ≤ 256
+            chars, no control characters. Validated at request time —
+            a malformed entry returns 400 BAD_REQUEST. Cleaner than
+            stuffing the same data into `jmeterArgs` because the
+            structured shape is what the global-orchestrator's
+            per-node fan-out fills in (one property map per pod
+            within a region).
+          example:
+            REGION: "us-east-1"
+            USER_OFFSET: "0"
+        kafkaBrokers:        { type: string, example: "b1:9092,b2:9092" }
+        schemaRegistryUrl:   { type: string, format: uri }
+        kafkaTopic:          { type: string, example: "jmeter.metrics.perSecond" }
+        workerIdSource:      { $ref: "#/components/schemas/WorkerIdSource" }
+        resultSink:          { $ref: "#/components/schemas/ResultSinkType" }
+        autoUploadResults:
+          type: boolean
+          description: Falls back to `AUTO_UPLOAD_RESULTS` env (default false).
+        joinedAtSecond:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: |
+            MID-TEST-SCALING Phase C — seconds since `run.startedAt` at
+            which this worker joined. `0`/null for original-fleet workers
+            (joined at run start); `> 0` for mid-test scale-up joiners
+            (set by the global-orchestrator's
+            `POST /api/v1/runs/{runId}/scaleUp` fan-out). Stamped onto
+            every published `WorkerMetricBatch` Avro envelope so the
+            consumer + UI can compute per-second fleet rollups (sum over
+            members live at second X).
+        application:
+          type: string
+          nullable: true
+          description: |
+            Save Results — the run's application name, set by the
+            global-orchestrator from the run record. Used only when
+            `autoUploadResults=true` + `resultSink=DOCUMENT_SERVICE`: forwarded
+            to the Document Service as the `X-Application` tag so a saved result
+            files under the right app for the download-all-by-run flow
+            (`GET /api/v1/blob/run/{runId}/archive`). Null for untagged runs.
+        gracePeriodSeconds:
+          type: integer
+          format: int32
+          minimum: 1
+          nullable: true
+          description: |
+            Per-run override of the aggregator's late-arrival grace period
+            (seconds). A 1-second metric window stays open until the JTL tailer
+            has seen this many seconds of newer data before closing, so slow
+            samples — JMeter timestamps a sample at its START but writes it at
+            COMPLETION, so a slow row lands in the JTL out of order — are
+            recorded in their correct window instead of being dropped as "late"
+            (which otherwise biases p95/p99 low). Trades a proportional
+            reporting lag + a little aggregator memory for completeness; size it
+            to your worst tolerable response time. Falls back to the
+            orchestrator's `GRACE_PERIOD_SECONDS` env (default 2) when omitted.
+          example: 10
+        artifactSource:
+          type: object
+          description: |
+            Optional override of the configured `ARTIFACT_SOURCE`. When
+            `type=S3` or `type=DOCUMENT_SERVICE`, the orchestrator pulls the
+            artifacts from the named source on `PREPARING` instead of using
+            previously-uploaded files.
+          properties:
+            type: { $ref: "#/components/schemas/ArtifactSourceType" }
+            testPlanS3Url:
+              type: string
+              description: e.g. `s3://perf-bucket/plans/checkout-flow.jmx` (only with `type=S3`).
+            dataFilesS3Url:
+              type: string
+              description: e.g. `s3://perf-bucket/data/checkout-flow-data.zip` (only with `type=S3`).
+            testPlan:
+              type: object
+              description: Only with `type=DOCUMENT_SERVICE`.
+              properties:
+                documentName: { type: string }
+                documentId:   { type: string }
+                version:      { type: string, default: "latest" }
+            dataFiles:
+              type: object
+              description: Only with `type=DOCUMENT_SERVICE`.
+              properties:
+                documentName: { type: string }
+                documentId:   { type: string }
+                version:      { type: string, default: "latest" }
+
+    StartTestResponse:
+      type: object
+      required: [runId, state, startedAt]
+      properties:
+        runId:     { type: string }
+        state:     { $ref: "#/components/schemas/TestState" }
+        startedAt: { type: string, format: date-time }
+
+    TestStateResponse:
+      type: object
+      required: [runId, state]
+      properties:
+        runId:            { type: string, example: "20260502-fleet-east" }
+        state:            { $ref: "#/components/schemas/TestState" }
+        innerState:       { $ref: "#/components/schemas/InnerTailerState" }
+        startedAt:        { type: string, format: date-time }
+        completedAt:      { type: string, format: date-time, nullable: true }
+        elapsedMs:        { type: integer, format: int64, example: 45321 }
+        rowsIngested:     { type: integer, format: int64, example: 12890 }
+        windowsPublished: { type: integer, format: int64, example: 44 }
+        lastKafkaAckMs:   { type: integer, format: int64, nullable: true }
+        kafkaSendErrors:  { type: integer, format: int64, example: 0 }
+        jmeterPid:        { type: integer, nullable: true, example: 12345 }
+        jmeterAlive:      { type: boolean }
+        exitCode:         { type: integer, nullable: true }
+        uploadState:      { $ref: "#/components/schemas/UploadState" }
+        uploadTarget:
+          type: string
+          nullable: true
+          description: |
+            Save Results — where the post-run JTL was uploaded, present once
+            `uploadState=UPLOADED`. The global-orchestrator polls this field
+            from `GET /api/v1/test` to emit the per-worker `RESULTS_SAVED`
+            audit event. Absent until the upload completes.
+          example: "doc-service://results/20260502-fleet-east/jmeter-worker-0.zip"
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Results
+    # ──────────────────────────────────────────────────────────────────────
+    ResultsMetadata:
+      type: object
+      required: [runId, filename, sizeBytes]
+      properties:
+        runId:        { type: string }
+        filename:     { type: string, example: "results.jtl" }
+        sizeBytes:    { type: integer, format: int64, example: 2684354560 }
+        rowCount:     { type: integer, format: int64, example: 8640000 }
+        createdAt:    { type: string, format: date-time }
+        completedAt:  { type: string, format: date-time, nullable: true }
+        uploadState:  { $ref: "#/components/schemas/UploadState" }
+        uploadTarget:
+          type: string
+          nullable: true
+          example: "doc-service://results/20260502-fleet-east/jmeter-worker-0.zip"
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Observability
+    # ──────────────────────────────────────────────────────────────────────
+    JmeterJvmMetrics:
+      type: object
+      properties:
+        heapUsedBytes:    { type: integer, format: int64, example: 314572800 }
+        heapMaxBytes:     { type: integer, format: int64, example: 2147483648 }
+        nonHeapUsedBytes: { type: integer, format: int64, example: 89128960 }
+        gcYoungCount:     { type: integer, format: int64, example: 12 }
+        gcYoungPauseMs:   { type: integer, format: int64, example: 140 }
+        gcOldCount:       { type: integer, format: int64, example: 1 }
+        gcOldPauseMs:     { type: integer, format: int64, example: 200 }
+        threadCount:      { type: integer, example: 87 }
+        cpuLoadPercent:   { type: number, format: double, example: 34.2 }
+        uptimeMs:         { type: integer, format: int64, example: 45321 }
+        loadedClasses:    { type: integer, example: 18432 }
+
+    OrchestratorMetrics:
+      type: object
+      description: Orchestrator's own counters (subset; full list in /api/v1/metrics Prometheus output).
+      properties:
+        rowsParsedTotal:           { type: integer, format: int64 }
+        windowsPublishedTotal:     { type: integer, format: int64 }
+        kafkaSendErrorsTotal:      { type: integer, format: int64 }
+        kafkaLastAckEpochMs:       { type: integer, format: int64 }
+        uploadInflightBytes:       { type: integer, format: int64, description: Bytes currently buffered into staging .tmp files across all in-flight uploads. Zero when idle. }
+        diskFreeBytes:             { type: integer, format: int64 }
+        offsetSaveFailuresTotal:   { type: integer, format: int64, description: Cumulative JTL byte-offset persist failures since process start. Each failure means up to one flush interval of rows is reprocessed and de-duplicated by Kafka on the next restart. Alert on a non-zero rate of increase. }
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Platform
+    # ──────────────────────────────────────────────────────────────────────
+    ReadyResponse:
+      type: object
+      required: [status, kafkaReachable, diskFreeBytes, testState]
+      properties:
+        status:
+          type: string
+          enum: [UP, DOWN]
+        kafkaReachable: { type: boolean }
+        diskFreeBytes:  { type: integer, format: int64 }
+        testState:
+          allOf:
+            - $ref: "#/components/schemas/TestState"
+          description: |
+            Informational only. Never causes a 503 — readiness is decoupled
+            from the test lifecycle.
+        reason:
+          type: string
+          nullable: true
+          description: Present only when `status=DOWN` (e.g. `kafka_unreachable`, `disk_full`, `starting`).
+
+    ConfigResponse:
+      type: object
+      description: |
+        The effective resolved config (request body > env var > built-in
+        default). Secrets are redacted (e.g. `AUTH_TOKEN`,
+        `DOCUMENT_SERVICE_AUTH_HEADER` are replaced with `"***"`).
+      additionalProperties: true
+      example:
+        HTTP_PORT: 8080
+        BASE_DIR: "/opt/jmeter"
+        JMETER_HOME: "/opt/jmeter"
+        JMETER_JVM_ARGS: "-Xms2g -Xmx2g"
+        KAFKA_BROKERS: "b1:9092,b2:9092"
+        SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+        KAFKA_TOPIC: "jmeter.metrics.perSecond"
+        TEST_REGION: "us-east-1"
+        ARTIFACT_SOURCE: "HTTP_UPLOAD"
+        RESULT_SINK: "HTTP_UPLOAD"
+        AUTO_UPLOAD_RESULTS: false
+        AUTH_TOKEN: "***"

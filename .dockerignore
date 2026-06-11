@@ -1,0 +1,33 @@
+# Root build context — used by services that build from `..` (the repo root):
+#   jmeter-metrics-consumer (dockerfile: jmeter-metrics-consumer/Dockerfile)
+#   jmeter-local-orchestrator (dockerfile: jmeter-local-orchestrator/docker/Dockerfile)
+# Without this, `docker build` would ship node_modules, every target/, and the
+# local backup tarball to the daemon. Keep the context lean and reproducible.
+
+# Build output (regenerated inside the image)
+**/target/
+**/dist/
+**/node_modules/
+
+# VCS / IDE / OS
+.git/
+**/.idea/
+*.iml
+.vscode/
+**/.DS_Store
+
+# Secrets / env (never bake into an image layer)
+.env
+**/.env.local
+
+# Runtime / logs / diagnostics
+**/.runtime/
+**/tmp/
+**/heapdumps/
+*.log
+
+# Local backups
+*.checkpoint.*.tar.gz
+
+# Docs — not needed in any build context
+docs/

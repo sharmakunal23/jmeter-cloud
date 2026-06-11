@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 400" font-family="-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 z" fill="#475569"/></marker>
+  </defs>
+  <rect width="980" height="400" fill="#ffffff"/>
+  <text x="30" y="34" font-size="19" font-weight="700" fill="#0f172a">jmeter-cloud-ui — single-origin via nginx</text>
+  <text x="30" y="56" font-size="12.5" fill="#64748b">The browser only ever talks to nginx; it serves the SPA and reverse-proxies the API by path prefix.</text>
+
+  <g font-size="12.5">
+    <rect x="30" y="160" width="160" height="72" rx="8" fill="#f1f5f9" stroke="#475569" stroke-width="1.5"/>
+    <text x="110" y="190" text-anchor="middle" font-weight="600" fill="#1e293b">Browser</text>
+    <text x="110" y="209" text-anchor="middle" font-size="10.5" fill="#64748b">React SPA (uPlot charts)</text>
+
+    <rect x="270" y="148" width="190" height="96" rx="8" fill="#dbeafe" stroke="#1e40af" stroke-width="1.5"/>
+    <text x="365" y="176" text-anchor="middle" font-weight="600" fill="#1e3a8a">nginx</text>
+    <text x="365" y="195" text-anchor="middle" font-size="10.5" fill="#2563eb" font-family="monospace">:8086</text>
+    <text x="365" y="213" text-anchor="middle" font-size="10.5" fill="#2563eb">serve static assets</text>
+    <text x="365" y="229" text-anchor="middle" font-size="10.5" fill="#2563eb">+ reverse proxy</text>
+
+    <!-- targets -->
+    <rect x="600" y="70" width="340" height="56" rx="8" fill="#dbeafe" stroke="#1e40af" stroke-width="1.5"/>
+    <text x="618" y="94" font-weight="600" font-size="12" fill="#1e3a8a">global-orchestrator</text>
+    <text x="618" y="113" font-size="10.5" fill="#2563eb" font-family="monospace">:8082 — /api/* · /actuator/*</text>
+
+    <rect x="600" y="170" width="340" height="56" rx="8" fill="#dbeafe" stroke="#1e40af" stroke-width="1.5"/>
+    <text x="618" y="194" font-weight="600" font-size="12" fill="#1e3a8a">document-service</text>
+    <text x="618" y="213" font-size="10.5" fill="#2563eb" font-family="monospace">:8084 — /api/v1/blob*</text>
+
+    <rect x="600" y="270" width="340" height="56" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.3"/>
+    <text x="618" y="294" font-weight="600" font-size="12" fill="#475569">static bundle</text>
+    <text x="618" y="313" font-size="10.5" fill="#64748b">index.html · JS · CSS · favicon.svg</text>
+  </g>
+
+  <g stroke="#475569" stroke-width="1.6" fill="none" marker-end="url(#a)">
+    <line x1="190" y1="196" x2="268" y2="196"/>
+    <path d="M460,178 Q540,150 598,100"/>
+    <path d="M460,196 H598"/>
+    <path d="M460,214 Q540,250 598,294"/>
+  </g>
+
+  <g font-size="10.5" fill="#64748b">
+    <text x="229" y="186" text-anchor="middle">HTTPS</text>
+    <text x="540" y="138" text-anchor="middle" fill="#2563eb">/api/* · /actuator/*</text>
+    <text x="540" y="188" text-anchor="middle" fill="#2563eb">/api/v1/blob*</text>
+    <text x="540" y="280" text-anchor="middle">everything else</text>
+  </g>
+</svg>

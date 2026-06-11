@@ -1,0 +1,399 @@
+openapi: 3.0.3
+
+info:
+  title: document-service
+  version: 0.1.0
+  summary: HTTP gateway abstracting blob storage (test plans, data files, JTL results).
+  description: |
+    Owns persistence of every artifact the orchestrator fleet exchanges:
+    test plans (`.jmx`), data-files zips (`.zip`), and post-run JTL
+    uploads. The service abstracts over the storage backend — locally
+    it's a host-mounted directory; in cloud it's S3.
+
+    Two backends share this contract — selection is purely
+    deployment-time config (`DOCUMENT_SERVICE_BACKEND=local|s3`):
+    `LocalFsBlobStore` (default) bind-mounts a host directory;
+    `S3BlobStore` (`-Pcloud` Maven profile) targets any S3-compatible
+    service (AWS S3, LocalStack, MinIO, R2). Same REST surface; tags +
+    listings round-trip identically across both.
+  contact:
+    name: Performance Engineering
+  license:
+    name: Apache-2.0
+
+servers:
+  - url: http://localhost:8084
+    description: Local dev (default HTTP_PORT=8084)
+  - url: http://{host}:{port}
+    description: Cloud — host and port are deployment-specific
+    variables:
+      host: { default: document-service.jmetercloud.local }
+      port: { default: "8084" }
+
+tags:
+  - name: blob
+    description: Blob upload / download / metadata / delete.
+  - name: platform
+    description: Spring Boot Actuator endpoints.
+
+paths:
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Blob CRUD
+  # ────────────────────────────────────────────────────────────────────────
+  /api/v1/blob:
+    post:
+      tags: [blob]
+      summary: Upload a blob
+      description: |
+        Streams the request body into the configured backend, computing
+        sha256 and size on the fly via `DigestInputStream` (no in-memory
+        buffering — safe for 1-GB data zips). Returns a server-issued
+        ULID `blobId` plus computed `sizeBytes` and `sha256`.
+
+        **Uploader-supplied tagging.** Four optional headers:
+          * `X-Name` — human-readable label (the UI dropdown shows this).
+          * `X-Description` — free-form description.
+          * `X-Type` — one of `testPlan`, `dataFiles`, `result`, `other`.
+          * `X-Application` — application tag (Step 28). Trimmed; max 64
+            chars; empty header treated as null. Gates the launcher's
+            downstream test-plan / data-files pickers and feeds the
+            `GET /api/v1/applications` rollup.
+        Stored alongside the bytes (filesystem sidecar / S3 user-metadata)
+        and round-tripped on `GET /blob/{id}/metadata`.
+      parameters:
+        - { name: X-Name,        in: header, required: false, schema: { type: string } }
+        - { name: X-Description, in: header, required: false, schema: { type: string } }
+        - { name: X-Type,        in: header, required: false, schema: { type: string, enum: [testPlan, dataFiles, result, other] } }
+        - { name: X-Application, in: header, required: false, schema: { type: string, maxLength: 64 } }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+          application/zip:
+            schema: { type: string, format: binary }
+          application/xml:
+            schema: { type: string, format: binary }
+      responses:
+        "201":
+          description: Blob stored — body is the metadata record.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BlobMetadata" }
+        "500":
+          description: Backend I/O failure.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+    get:
+      tags: [blob]
+      summary: List stored blobs
+      description: |
+        Returns a paginated list of blob metadata, filtered by `type`
+        and / or `application` when provided. Filters AND together.
+        Newest-first. Used by the `/runs/new` launcher's test-plan /
+        data-files dropdowns and by the `/blobs` library page.
+      parameters:
+        - name: type
+          in: query
+          required: false
+          schema: { type: string, enum: [testPlan, dataFiles, result, other] }
+        - name: application
+          in: query
+          required: false
+          description: |
+            Filter to a single application's blobs. Empty string
+            (`?application=`) selects only blobs that have no
+            application tag (legacy uploads).
+          schema: { type: string, maxLength: 64 }
+        - { name: offset, in: query, required: false, schema: { type: integer, default: 0,  minimum: 0 } }
+        - { name: limit,  in: query, required: false, schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
+      responses:
+        "200":
+          description: Page of blob metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BlobListing" }
+
+  /api/v1/applications:
+    get:
+      tags: [blob]
+      summary: Distinct application tags + blob counts
+      description: |
+        Step 28 discovery endpoint. Returns one row per distinct
+        `application` tag across all stored blobs. Untagged blobs
+        appear under a row with `application = null`. Sorted by
+        `blobCount` DESC then by name. Polled by the launcher's
+        Application picker so newly-tagged apps surface without a
+        manual refresh.
+      responses:
+        "200":
+          description: Application rollup.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ApplicationSummary" }
+
+  /api/v1/blob/{blobId}:
+    parameters:
+      - { name: blobId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    get:
+      tags: [blob]
+      summary: Stream a blob's bytes
+      description: |
+        Returns the raw bytes with the original `Content-Type` round-tripped
+        from upload. The `X-blobId` and `X-sha256` response headers expose
+        identity + integrity for client-side verification.
+
+        When `?download=true` is set, the response carries
+        `Content-Disposition: attachment; filename="<inferred>"` so the
+        browser saves the bytes under a meaningful filename instead of
+        the bare ULID. The filename is built from the upload's `X-Name`
+        plus a type-conventional extension (`.jmx` for `testPlan`,
+        `.zip` for `dataFiles`, `.jtl.gz` for `result`, `.bin` for
+        `other`/unset); if `X-Name` already carries a `.` it is used as-is.
+        Without the flag the response stays inline so curl scripts and
+        the local-orchestrator's blob fetch are unaffected.
+      parameters:
+        - name: download
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: |
+            When `true`, the response sets
+            `Content-Disposition: attachment; filename="<name.ext>"` so the
+            browser saves the file under a meaningful name. Default `false`
+            keeps the inline behavior expected by curl + the orchestrator.
+      responses:
+        "200":
+          description: Blob bytes.
+          headers:
+            X-blobId:
+              schema: { type: string }
+              description: Echoed blobId for client verification.
+            X-sha256:
+              schema: { type: string }
+              description: Hex sha256 of the bytes.
+            Content-Disposition:
+              schema: { type: string }
+              description: |
+                Set to `attachment; filename="<name.ext>"` only when
+                `?download=true` is supplied; absent on the default
+                inline response.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "404":
+          description: blobId is unknown or malformed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+    delete:
+      tags: [blob]
+      summary: Delete a blob (idempotent)
+      description: |
+        Local-FS delete is hard. Cloud delete is soft — S3 versioning
+        leaves a delete marker for the operator to recover from.
+        Idempotent: deleting an unknown blobId still returns 204.
+      responses:
+        "204":
+          description: Deleted (or already gone).
+        "500":
+          description: Backend I/O failure.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/blob/run/{runId}/archive:
+    parameters:
+      - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    get:
+      tags: [blob]
+      summary: Download all of a run's saved results as one zip (Save Results)
+      description: |
+        Save Results — streams a single `application/zip` containing every
+        worker's result for the run, one entry per worker. Result blobs are
+        those uploaded with `X-Type=result` and a name shaped
+        `results-{runId}-{workerId}.jtl.gz`; this endpoint matches them by the
+        `results-{runId}-` name prefix (a runId is a hyphen-free ULID, so the
+        prefix is unambiguous) and zips them on the fly — no temp file, no
+        full-archive buffering.
+
+        Lives under `/api/v1/blob/...` so the UI's nginx proxy routes it
+        straight to document-service (the rest of `/api/v1` proxies to the
+        global-orchestrator). The run-detail page links to it as
+        "Download results" once a `saveResults` run is terminal.
+      responses:
+        "200":
+          description: Zip of the run's per-worker results (one `.jtl.gz` entry per worker).
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+              description: '`attachment; filename="results-{runId}.zip"`.'
+          content:
+            application/zip:
+              schema: { type: string, format: binary }
+        "404":
+          description: |
+            No saved results for this runId — the run wasn't launched with
+            `saveResults=true`, or no worker has uploaded yet. Empty body.
+
+  /api/v1/blob/{blobId}/metadata:
+    parameters:
+      - { name: blobId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    get:
+      tags: [blob]
+      summary: Blob metadata only
+      description: |
+        Returns the recorded metadata without opening the bytes. Useful
+        for clients that want to validate a sha256 before fetching.
+      responses:
+        "200":
+          description: Metadata record.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BlobMetadata" }
+        "404":
+          description: blobId is unknown or malformed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Spring Boot Actuator
+  # ────────────────────────────────────────────────────────────────────────
+  /actuator/health:
+    get:
+      tags: [platform]
+      summary: Aggregate health (Spring Boot Actuator)
+      responses:
+        "200":
+          description: UP
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /actuator/info:
+    get:
+      tags: [platform]
+      summary: Build / version info
+      responses:
+        "200":
+          description: Build info.
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /actuator/prometheus:
+    get:
+      tags: [platform]
+      summary: Prometheus exposition (text format)
+      responses:
+        "200":
+          description: Prometheus metrics.
+          content:
+            text/plain; version=0.0.4:
+              schema: { type: string }
+
+components:
+
+  schemas:
+
+    BlobMetadata:
+      type: object
+      description: Returned from POST /api/v1/blob and GET /api/v1/blob/{id}/metadata.
+      required: [blobId, sizeBytes, sha256, uploadedAt]
+      properties:
+        blobId:
+          type: string
+          description: ULID — server-issued, URL-safe (Crockford base32, 26 chars).
+          pattern: "^[0-9A-HJKMNP-TV-Z]{26}$"
+          example: "01HXC2VQK4M9N6P5T0YBX2WZ4Q"
+        sizeBytes:
+          type: integer
+          format: int64
+          example: 12345678
+        sha256:
+          type: string
+          description: Hex-encoded SHA-256 of the bytes.
+          example: "f3a2b1c4..."
+        contentType:
+          type: string
+          nullable: true
+          example: "application/zip"
+        uploadedAt:
+          type: string
+          format: date-time
+        owner:
+          type: string
+          nullable: true
+          description: Initiator identity for multi-tenancy use cases. Empty until auth lands.
+        name:
+          type: string
+          nullable: true
+          description: Human-readable label supplied via X-Name on upload.
+          example: "checkout-load-plan"
+        description:
+          type: string
+          nullable: true
+          description: Free-form description supplied via X-Description on upload.
+        type:
+          type: string
+          nullable: true
+          enum: [testPlan, dataFiles, result, other]
+          description: Purpose tag supplied via X-Type on upload.
+        application:
+          type: string
+          nullable: true
+          maxLength: 64
+          description: |
+            Application tag supplied via X-Application on upload (Step 28).
+            Gates the launcher's downstream test-plan / data-files
+            pickers. `null` for legacy blobs uploaded before tagging.
+          example: "checkout-svc"
+
+    ApplicationSummary:
+      type: object
+      description: One row in `GET /api/v1/applications`.
+      required: [application, blobCount]
+      properties:
+        application:
+          type: string
+          nullable: true
+          description: Application tag, or `null` for the untagged group.
+          example: "checkout-svc"
+        blobCount:
+          type: integer
+          format: int64
+          example: 12
+
+    BlobListing:
+      type: object
+      description: Paginated response from GET /api/v1/blob.
+      required: [items, total, offset, limit]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/BlobMetadata" }
+        total:
+          type: integer
+          description: Count of items matching the filter, before paging. -1 = unknown.
+        offset:
+          type: integer
+        limit:
+          type: integer
+
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [BLOB_NOT_FOUND, STORAGE_IO_ERROR]
+        message:
+          type: string

@@ -1,0 +1,70 @@
+# securityAlerts.yml — SECURITY S-0 abuse-signal alert rules.
+#
+# Loaded by prometheus.yml's `rule_files`. Evaluated every
+# `global.evaluation_interval` (15s). These surface in the Prometheus UI's
+# Alerts tab; there is NO alertmanager in the local stack, so they don't route
+# anywhere yet — wire an alertmanager (or a Grafana alert contact point /
+# webhook) in cloud. Thresholds are deliberately conservative starting points;
+# tune against real traffic. All metric names are the Micrometer→Prometheus
+# renderings (dots→underscores, counters get `_total`).
+#
+# Signals:
+#   • security_ratelimit_exceeded_total — RateLimitFilter rejections (S-1).
+#   • http_server_requests_seconds_count{outcome="CLIENT_ERROR"} — 4xx on the
+#     critical /api/v1 surface (input rejection / probing). Reused instead of a
+#     bespoke `security.input.rejected` counter — Micrometer already emits it,
+#     scoped to critical paths by the ObservationPredicate.
+#   • security_concurrentRuns — in-flight runs gauge (run-launch flood / stuck fleet).
+#   • security_upload_bytes_sum — accepted upload bytes (disk-fill / bandwidth burn).
+
+groups:
+  - name: security-abuse-signals
+    rules:
+      # Rate-limit rejections sustained > 100/min for 5m → someone is hammering
+      # a throttled endpoint (the limit is working; this is the heads-up).
+      - alert: RateLimitRejectionsHigh
+        expr: sum(rate(security_ratelimit_exceeded_total[5m])) * 60 > 100
+        for: 5m
+        labels:
+          severity: warning
+          signal: security
+        annotations:
+          summary: "Rate-limit rejections > 100/min for 5m"
+          description: "Sustained 429s from RateLimitFilter — a flood is hitting a throttled endpoint. Per-endpoint breakdown: security_ratelimit_exceeded_total by `endpoint`."
+
+      # Client errors (4xx) on the critical API sustained > 100/min for 5m →
+      # input-rejection abuse or id-spray probing.
+      - alert: ClientErrorRateHigh
+        expr: sum(rate(http_server_requests_seconds_count{outcome="CLIENT_ERROR"}[5m])) * 60 > 100
+        for: 5m
+        labels:
+          severity: warning
+          signal: security
+        annotations:
+          summary: "4xx rate > 100/min for 5m on the critical API"
+          description: "High client-error rate (bad/oversized/malformed input or id-spray). Break down by `status` and `uri` on http_server_requests_seconds_count{outcome=\"CLIENT_ERROR\"}."
+
+      # In-flight runs above a soft ceiling for 10m → run-launch flood or a fleet
+      # that isn't draining. 25 is a single-team starting point; re-key per
+      # tenant against tenantConfig.maxConcurrentRuns when S-4 lands.
+      - alert: ConcurrentRunsHigh
+        expr: max(security_concurrentRuns) > 25
+        for: 10m
+        labels:
+          severity: warning
+          signal: security
+        annotations:
+          summary: "Concurrent in-flight runs > 25 for 10m"
+          description: "Unusually many non-terminal runs — possible run-launch flood or stuck/undrained fleet. Current value: {{ $value }}."
+
+      # Accepted upload throughput sustained > 50 MB/s for 5m → disk-fill /
+      # bandwidth-burn via the blob endpoint.
+      - alert: UploadByteRateHigh
+        expr: sum(rate(security_upload_bytes_sum[5m])) > 52428800
+        for: 5m
+        labels:
+          severity: warning
+          signal: security
+        annotations:
+          summary: "Blob upload throughput > 50 MB/s for 5m"
+          description: "Sustained large-upload volume to document-service — disk-fill / bandwidth-burn risk. Inspect security_upload_bytes histogram percentiles."

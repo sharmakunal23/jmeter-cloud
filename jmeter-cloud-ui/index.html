@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- Chase octagon mark. ?v bust forces browsers to drop a stale cached
+         favicon (Chrome caches them in a separate, very sticky DB); bump the
+         version whenever the icons change. PNG fallbacks cover browsers that
+         skip the SVG and give Chrome a fresh resource set to re-fetch. -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=3" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon32.png?v=3" />
+    <link rel="icon" type="image/png" sizes="64x64" href="/favicon.png?v=3" />
+    <link rel="apple-touch-icon" href="/appleTouchIcon.png?v=3" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>jmeter-cloud</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

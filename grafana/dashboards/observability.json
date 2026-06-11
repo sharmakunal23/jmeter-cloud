@@ -1,0 +1,284 @@
+{
+  "title": "Observability — Critical Actions + HTTP",
+  "uid": "observability",
+  "tags": ["jmetercloud", "observability", "phase-g"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 7,
+  "refresh": "30s",
+  "time": { "from": "now-30m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "datasource": "Prometheus",
+        "description": "Source metric is jvm_memory_used_bytes so every Spring Boot service appears here even before it serves any HTTP traffic (metrics-consumer is Kafka-only — would otherwise be invisible until /api/v1/ingest is hit).",
+        "query": "label_values(jvm_memory_used_bytes, service)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Critical action latency — p95 (s)",
+      "description": "Per-action p95 over a Grafana-chosen rate interval ($__rate_interval adapts to zoom). Excludes `_active_seconds_bucket` (Micrometer in-flight observation timer) — mixing those into histogram_quantile produces NaN.",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 9 },
+      "datasource": "Prometheus",
+      "maxDataPoints": 500,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, __name__) (rate({__name__=~\"(globalOrchestrator|localOrchestrator|metricsConsumer)_.+_seconds_bucket\", __name__!~\".+_active_seconds_bucket\", service=~\"$service\"}[$__rate_interval])))",
+          "legendFormat": "{{__name__}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "lineInterpolation": "smooth", "fillOpacity": 10 }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": ["mean", "max", "lastNotNull"]
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Critical action latency — p99 (s)",
+      "description": "Per-action p99. p99 spikes that don't show in p95 mean a small fraction of requests are slow — outlier signal.",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 9 },
+      "datasource": "Prometheus",
+      "maxDataPoints": 500,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, __name__) (rate({__name__=~\"(globalOrchestrator|localOrchestrator|metricsConsumer)_.+_seconds_bucket\", __name__!~\".+_active_seconds_bucket\", service=~\"$service\"}[$__rate_interval])))",
+          "legendFormat": "{{__name__}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "lineInterpolation": "smooth", "fillOpacity": 10 }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": ["mean", "max", "lastNotNull"]
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "HTTP throughput by service (req/s) — per-endpoint",
+      "description": "Inbound /api/v1/** request rate per (service, uri) — one line per endpoint. Actuator + swagger + openapi paths excluded at the query level (uri=~\"/api/v1/.+\"); this both matches the Phase C critical-path policy AND filters out any actuator/* metrics that worker pods on older images may still emit.",
+      "gridPos": { "x": 0, "y": 9, "w": 12, "h": 9 },
+      "datasource": "Prometheus",
+      "maxDataPoints": 500,
+      "targets": [
+        {
+          "expr": "sum by (service, uri) (rate(http_server_requests_seconds_count{service=~\"$service\", uri=~\"/api/v1/.+\"}[$__rate_interval]))",
+          "legendFormat": "{{service}} {{uri}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "lineInterpolation": "linear", "fillOpacity": 10 }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": ["mean", "lastNotNull"]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "HTTP throughput (req/s) — service rollup",
+      "description": "Inbound /api/v1/** request rate summed per service — one line per service. Top-down view; drill into the per-endpoint panel for the breakdown.",
+      "gridPos": { "x": 12, "y": 9, "w": 12, "h": 9 },
+      "datasource": "Prometheus",
+      "maxDataPoints": 500,
+      "targets": [
+        {
+          "expr": "sum by (service) (rate(http_server_requests_seconds_count{service=~\"$service\", uri=~\"/api/v1/.+\"}[$__rate_interval]))",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "lineInterpolation": "linear", "fillOpacity": 10 }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": ["mean", "lastNotNull"]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "HTTP error rate — 4xx (req/s)",
+      "description": "Per-(service, uri, status) 4xx rate for /api/v1/** paths. Mostly client errors (404, 400, 401) — a burst hints at a UI regression or someone scanning.",
+      "gridPos": { "x": 0, "y": 18, "w": 12, "h": 9 },
+      "datasource": "Prometheus",
+      "maxDataPoints": 500,
+      "targets": [
+        {
+          "expr": "sum by (service, uri, status) (rate(http_server_requests_seconds_count{service=~\"$service\", status=~\"4..\", uri=~\"/api/v1/.+\"}[$__rate_interval]))",
+          "legendFormat": "{{service}} {{uri}} {{status}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "lineInterpolation": "linear", "fillOpacity": 10 }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": ["mean", "max", "lastNotNull"]
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "HTTP error rate — 5xx (req/s)",
+      "description": "Per-(service, uri, status) 5xx rate for /api/v1/** paths. 5xx is always server-side — any non-zero line warrants an investigation.",
+      "gridPos": { "x": 12, "y": 18, "w": 12, "h": 9 },
+      "datasource": "Prometheus",
+      "maxDataPoints": 500,
+      "targets": [
+        {
+          "expr": "sum by (service, uri, status) (rate(http_server_requests_seconds_count{service=~\"$service\", status=~\"5..\", uri=~\"/api/v1/.+\"}[$__rate_interval]))",
+          "legendFormat": "{{service}} {{uri}} {{status}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "lineInterpolation": "linear", "fillOpacity": 10 }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": ["mean", "max", "lastNotNull"]
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Slowest HTTP endpoints — last 5 min average",
+      "description": "Instant snapshot — /api/v1/** endpoints ranked by mean latency over the last 5 minutes. topk(100) at Prometheus + small cell height + compact panel height = Grafana's built-in pagination control appears at the panel footer when more rows exist than fit. URI filter excludes /actuator/** so old worker images don't pollute the list. Empty table means no /api/v1 traffic in the 5-min window (the `> 0` denominator filter drops NaN rows).",
+      "gridPos": { "x": 0, "y": 27, "w": 24, "h": 9 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "topk(100, sum by (service, uri, method) (rate(http_server_requests_seconds_sum{service=~\"$service\", uri=~\"/api/v1/.+\"}[5m])) / (sum by (service, uri, method) (rate(http_server_requests_seconds_count{service=~\"$service\", uri=~\"/api/v1/.+\"}[5m])) > 0))",
+          "legendFormat": "{{service}} {{method}} {{uri}}",
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": true,
+          "reducer": ["count"],
+          "fields": ""
+        },
+        "frameIndex": 0,
+        "sortBy": [
+          { "displayName": "Avg latency (s)", "desc": true }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "auto", "filterable": true }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Value" },
+            "properties": [
+              { "id": "displayName", "value": "Avg latency (s)" },
+              { "id": "unit", "value": "s" },
+              { "id": "decimals", "value": 4 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "service" },
+            "properties": [{ "id": "displayName", "value": "Service" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "method" },
+            "properties": [{ "id": "displayName", "value": "Method" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "uri" },
+            "properties": [{ "id": "displayName", "value": "HTTP Request" }]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "job": true,
+              "instance": true,
+              "role": true
+            },
+            "indexByName": {
+              "service": 0,
+              "method": 1,
+              "uri": 2,
+              "Value": 3
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

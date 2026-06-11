@@ -1,0 +1,39 @@
+# jmeter-local-orchestrator subsystem — Compose fragment.
+#
+# The static
+# `orchestrator-1` / `orchestrator-2` services are gone. Local-orchestrator
+# containers are now spun up dynamically per-application by the
+# global-orchestrator's `PodProvisioner` — operators add workers from the
+# Capacity UI (`/capacity/{appName}`) and they appear in `docker ps` as
+# `{appName}-{region}-worker-{n}`. The image
+# (`jmeter-local-orchestrator:dev`) still builds from this directory and
+# is consumed by the provisioner; this fragment exists to express the
+# build target for `docker compose build` / repo-wide bring-up.
+#
+# Container bakes Apache JMeter 5.6.3 + the orchestrator's fat JAR into
+# a single image. The orchestrator launches `/opt/jmeter/bin/jmeter` as
+# a child process (no sidecar, no master/slave RMI). PluginsManagerCMD
+# is installed without any plugin set so the image build stays self-
+# contained; operators needing jpgc-/bzm- plugins extend this Dockerfile
+# with a `RUN ${JMETER_HOME}/bin/PluginsManagerCMD.sh install …` step
+# and rebuild.
+
+services:
+
+  # --------------------------------------------------------------------
+  # Build-only stub. Compose `build` resolves this service so the image
+  # tag `jmeter-local-orchestrator:dev` is produced; the service itself
+  # never starts (the `manual` profile is never activated by default).
+  # PodProvisioner pulls the tag at runtime.
+  #
+  # If you want a one-off long-lived local-orch outside the per-app
+  # provisioner (debugging the image, e.g.), `docker compose --profile
+  # manual run --rm jmeter-local-orchestrator-image bash`.
+  # --------------------------------------------------------------------
+  jmeter-local-orchestrator-image:
+    build:
+      context: ..
+      dockerfile: jmeter-local-orchestrator/docker/Dockerfile
+    image: jmeter-local-orchestrator:dev
+    profiles: [manual]
+    command: ["true"]

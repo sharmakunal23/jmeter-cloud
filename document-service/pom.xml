@@ -1,0 +1,227 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.5.14</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.perf.documentservice</groupId>
+    <artifactId>document-service</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>document-service</name>
+    <description>
+        HTTP gateway that abstracts blob storage for the jmeter-cloud platform.
+        Backends: LocalFsBlobStore (local dev), S3BlobStore (cloud — under
+        -Pcloud profile). Step 7 ships the skeleton with stubbed endpoints;
+        full implementation tracks alongside the orchestrator's storage
+        backend follow-up.
+    </description>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+        <!-- OBSERVABILITY Phase B — distributed tracing.
+             micrometer-tracing-bridge-otel wires Spring Boot's
+             autoconfigured tracer onto the OpenTelemetry SDK.
+             opentelemetry-exporter-otlp ships spans to Jaeger over OTLP
+             HTTP (default transport — the bundled OkHttp sender keeps
+             us off netty/gRPC and saves ~3 MB per JAR). To switch to
+             gRPC later: set `management.otlp.tracing.transport=grpc`
+             and add `opentelemetry-exporter-sender-grpc-managed-channel`.
+             Both versions are BOM-managed by spring-boot-dependencies. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+        </dependency>
+
+        <!-- OBSERVABILITY Phase A — structured JSON logging.
+             logstash-logback-encoder version pinned explicitly:
+             spring-boot-dependencies 3.5.x does NOT manage this artifact
+             (only janino is BOM-managed). 7.4 matches the pin in the
+             jmeter-local-orchestrator + jmeter-global-orchestrator poms
+             so all services emit identical JSON record shapes. janino
+             powers the <if> conditional in logback-spring.xml that flips
+             between JSON (default) and Spring Boot's pretty pattern when
+             DEV_MODE_LOG=true (interactive dev only). -->
+        <dependency>
+            <groupId>net.logstash.logback</groupId>
+            <artifactId>logstash-logback-encoder</artifactId>
+            <version>7.4</version>
+        </dependency>
+        <dependency>
+            <groupId>org.codehaus.janino</groupId>
+            <artifactId>janino</artifactId>
+        </dependency>
+        <!-- Springdoc OpenAPI — Swagger UI at /swagger-ui.html serving the
+             hand-curated YAML bundled at static/openapi.yaml (see
+             <resources> below). -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>2.7.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>${project.artifactId}</finalName>
+        <!-- Bundle api/openapi.yaml into the JAR at static/openapi.yaml so
+             Spring Boot's static-resource handler serves it at the URL
+             /openapi.yaml (which Swagger UI is configured to load). -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <resource>
+                <directory>${project.basedir}/api</directory>
+                <targetPath>static</targetPath>
+                <includes>
+                    <include>openapi.yaml</include>
+                </includes>
+            </resource>
+        </resources>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <!-- Failsafe wires *IT.java behavior tests into `mvn verify`. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <!-- Cloud-only profile: enables the S3 blob-store backend. The
+             default fat JAR stays AWS-SDK-free so air-gapped local dev
+             doesn't carry an unused 12+ MB SDK. Mirrors the orchestrator's
+             -Pstorage-s3 pattern: source root src/main/java-cloud/ is
+             added by build-helper-maven-plugin only when this profile
+             is active. -->
+        <profile>
+            <id>cloud</id>
+            <dependencies>
+                <dependency>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>s3</artifactId>
+                    <version>2.25.50</version>
+                </dependency>
+                <dependency>
+                    <groupId>org.testcontainers</groupId>
+                    <artifactId>localstack</artifactId>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <groupId>org.testcontainers</groupId>
+                    <artifactId>junit-jupiter</artifactId>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>3.5.0</version>
+                        <executions>
+                            <execution>
+                                <id>add-cloud-source</id>
+                                <phase>generate-sources</phase>
+                                <goals><goal>add-source</goal></goals>
+                                <configuration>
+                                    <sources>
+                                        <source>${project.basedir}/src/main/java-cloud</source>
+                                    </sources>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>add-cloud-test-source</id>
+                                <phase>generate-test-sources</phase>
+                                <goals><goal>add-test-source</goal></goals>
+                                <configuration>
+                                    <sources>
+                                        <source>${project.basedir}/src/test/java-cloud</source>
+                                    </sources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <!-- SECURITY S-14 — OWASP dependency CVE gate. Inert by default so the
+             offline `mvn -o ...` flow is unaffected; activate online in CI:
+               mvn -P securityScan verify
+             First run downloads the NVD database (slow); speed it up with a key:
+               mvn -P securityScan -DnvdApiKey=$NVD_API_KEY verify
+             (request one at https://nvd.nist.gov/developers/request-an-api-key).
+             Fails the build on any dependency with CVSS >= 7 (high/critical).
+             NOTE: added offline — the scan itself has NOT been run in this
+             environment; verify (and bump the plugin version to latest) on the
+             first CI run. -->
+        <profile>
+            <id>securityScan</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.owasp</groupId>
+                        <artifactId>dependency-check-maven</artifactId>
+                        <version>9.2.0</version>
+                        <configuration>
+                            <failBuildOnCVSS>7</failBuildOnCVSS>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>check</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

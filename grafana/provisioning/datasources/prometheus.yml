@@ -1,0 +1,16 @@
+# Grafana datasource provisioning — Prometheus.
+#
+# Auto-loaded on Grafana boot. The default datasource flag means
+# panels created without an explicit datasource ref pick this one up.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      httpMethod: POST
+      manageAlerts: false

@@ -1,0 +1,4886 @@
+/* ── Step 16 — minimal hand-rolled CSS for the run-management UX. ──
+ *
+ * No CSS framework on the dep tree; the page count is small enough for
+ * inline styles to stay maintainable, and the Lighthouse perf budget
+ * (Phase 2 § Performance optimization P5) targets a 500 KB gzip
+ * bundle. We can swap in Tailwind / Mantine when Track B's later steps
+ * (active-runs polling, blob upload, log tail) start needing real
+ * components.
+ */
+
+:root {
+  /* Shared page content width. Fills ~95% of the viewport so big monitors
+     aren't left with wide empty gutters, capped so text/forms don't stretch
+     to unreadable line lengths on ultra-wide displays. One token drives
+     .appMain + every per-route width override so they stay in lockstep. */
+  --app-max-width: min(2400px, 95vw);
+  /* Height of the sticky-bottom signature footer. One token so the footer
+     and the toast overlay agree — toasts float ABOVE the footer (see .toast)
+     instead of overlapping it. */
+  --footer-height: 3rem;
+  --bg:        #f8fafc;
+  --surface:   #ffffff;
+  --border:    #e2e8f0;
+  --ink:       #0f172a;
+  --ink-soft:  #475569;
+
+  /* ── Brand (CCB Card Performance · Chase) ───────────────────────────
+     Chase Card palette: Chase blue + white. `--brand`/`--accent`/
+     `--brand-soft` were never defined before, so every `var(--brand, …)`
+     in this file fell back to a generic blue, and ~40 literal blue tints
+     were hardcoded. Both were normalised to the Chase-blue RGB `17,122,202`,
+     so this token block + the swept tints recolor the whole app from here.
+     `--brand` is the iconic Chase octagon blue (mark, chips, focus rings);
+     `--primary` is a slightly deeper shade so small link/button text keeps
+     WCAG-AA contrast on white. */
+  --brand:      #117aca;   /* Chase blue — octagon mark, accents, focus */
+  --brand-d:    #0e63a8;
+  --brand-soft: rgba(17, 122, 202, 0.10);
+  --accent:     #117aca;
+  --primary:    #0f6bbf;   /* link/button blue — AA-contrast on white */
+  --primary-d:  #0b5499;
+  --ok:        #10b981;
+  --warn:      #f59e0b;
+  --err:       #dc2626;
+  --info:      #0ea5e9;
+  --mono:      ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+   /* ── Typographic scale ──────────────────────────────────────────────
+     One ladder of sizes + weights for the whole app. Before this, headings
+     fell back to big bold browser defaults in some places and ad-hoc inline
+     `font-size`/`font-weight` overrides in others — the "bold and
+     inconsistent fonts" complaint. Base h1–h4 rules below consume these so
+     every heading is consistent without per-component overrides. Body stays
+     at 1rem (16px). */
+  --fs-2xl:   1.4rem;   /* page <h1> */
+  --fs-xl:    1.15rem;  /* prominent panel title */
+  --fs-lg:    1.05rem;  /* section <h2> */
+  --fs-md:    0.95rem;  /* sub-section <h3> */
+  --fs-sm:    0.85rem;  /* secondary / meta text */
+  --fs-xs:    0.78rem;  /* fine print, chips, table meta */
+  --fs-2xs:   0.72rem;  /* smallest used (timestamps under a cell) */
+
+  --weight-normal:   400;
+  --weight-medium:   500;
+  --weight-semibold: 600;  /* the default "emphasis" weight — headings + <strong> in tables */
+  --weight-bold:     700;  /* reserve for the brand + true call-outs */
+
+  /* UI-7 — three-tier utilization scale. Used by both UtilizationLegend
+     swatches and the per-region card stripes in NodeVisualizationPanel
+     so the legend always matches the cards. Tints (alpha < 1) are for
+     fills/backgrounds; the solid hex is for stripes + chips. WCAG AA
+     contrast on white background: ok/warn/err already pass for the
+     accompanying ink-color text. */
+  --util-low:       #10b981;
+  --util-low-soft:  rgba(16,185,129,0.18);
+  --util-mid:       #f59e0b;
+  --util-mid-soft:  rgba(245,158,11,0.20);
+  --util-high:      #dc2626;
+  --util-high-soft: rgba(220,38,38,0.16);
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  line-height: 1.5;
+}
+
+a { color: var(--primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ── Base headings ──────────────────────────────────────────────────
+   A single consistent ladder so headings don't render at the browser's
+   oversized 2em/1.5em bold defaults. Components that genuinely need a
+   different size can still override, but most should not — the scale is
+   tuned so the defaults are right. semibold (600), not bold (700), is the
+   house weight for headings; 700 is reserved for the brand + call-outs. */
+h1, h2, h3, h4, h5, h6 {
+  font-weight: var(--weight-semibold);
+  line-height: 1.25;
+  color: var(--ink);
+}
+h1 { font-size: var(--fs-2xl); }
+h2 { font-size: var(--fs-lg); }
+h3 { font-size: var(--fs-md); }
+h4 { font-size: var(--fs-sm); }
+
+/* ── App shell ─────────────────────────────────────────────────────── */
+
+.appShell {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.appHeader {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0.75rem 1.5rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.appBrand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--ink);
+}
+
+/* Chase octagon mark — inline SVG blue octagon + white pinwheel
+   (see BrandMark.tsx). Sized in em here so it tracks adjacent text; the
+   SVG ships zero image bytes. This is a RECREATION, not the official
+   Chase brand asset — drop the brand-approved SVG into BrandMark.tsx for
+   anything customer-facing. */
+.brandMark {
+  flex: none;
+  display: inline-block;
+  vertical-align: -0.18em;
+  width: 1.2em;
+  height: 1.2em;
+}
+.brandMark--lg { width: 1.8rem; height: 1.8rem; }
+
+/* ── App footer — team signature, site-wide (Layout wraps every route) ── */
+.appFooter {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  /* Signature sits flush right (meta strap removed). */
+  justify-content: flex-end;
+  /* Fixed height so the toast overlay can offset above it (see .toast). */
+  min-height: var(--footer-height);
+  gap: 0.5rem;
+  padding: 0 1.5rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  font-size: var(--fs-sm);
+  color: var(--ink-soft);
+}
+.appFooter__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+.appFooter__org { font-weight: var(--weight-bold); color: var(--brand-d); }
+.appFooter__sep { color: var(--border); }
+
+.appNav {
+  display: flex;
+  gap: 1rem;
+}
+
+.appNav a {
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  color: var(--ink-soft);
+}
+
+.appNav a.active {
+  color: var(--primary-d);
+  background: rgba(17, 122, 202, 0.08);
+}
+
+.appHeader__spacer { flex: 1; }
+
+.appHeader__link {
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+/* AUDIT-TRAIL — "Acting as <name>" header control. */
+.actorControl {
+  background: transparent;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+  border-radius: 999px;
+  padding: 0.2rem 0.7rem;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.actorControl strong { color: var(--ink); font-weight: 600; }
+.actorControl:hover { border-color: var(--accent, #117aca); }
+.actorControl--unset { color: var(--accent, #117aca); border-color: var(--accent, #117aca); }
+
+.appMain {
+  flex: 1;
+  padding: 1.5rem;
+  /* Every page (Metrics, Logs, Applications, Documents, …) shares the
+     same width via --app-max-width — ~95vw on big monitors so the graphs
+     and tables use the available real estate instead of leaving empty
+     gutters, capped for readability on ultra-wide displays. */
+  max-width: var(--app-max-width);
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* ── Buttons + badges ──────────────────────────────────────────────── */
+
+.btn {
+  display: inline-block;
+  /* One canonical button size for the whole app — every .btn (default,
+     ghost, primary, danger) matches unless it opts into .btn--sm. */
+  padding: 0.35rem 0.8rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-decoration: none;
+}
+.btn:hover:not([disabled]) { background: #f1f5f9; }
+.btn[disabled] { opacity: 0.55; cursor: not-allowed; }
+
+.btn--primary {
+  /* Size comes from the base .btn (canonical) — primary only sets colour, so
+     a primary button is exactly the same size as the default/ghost beside it. */
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+.btn--primary:hover:not([disabled]) { background: var(--primary-d); border-color: var(--primary-d); }
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.badge--ok   { background: rgba(16,185,129,0.12); color: var(--ok); }
+.badge--info { background: rgba(14,165,233,0.12); color: var(--info); }
+.badge--warn { background: rgba(245,158,11,0.15); color: var(--warn); }
+.badge--err  { background: rgba(220,38,38,0.12);  color: var(--err); }
+
+.text--error { color: var(--err); }
+.ink-soft    { color: var(--ink-soft); }
+
+/* ── UI-C1 — region badge (animated pill) ─────────────────────────── */
+
+.regionBadge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.1rem 0.6rem 0.1rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    background: rgba(0, 0, 0, 0.04);
+    color: var(--ink, #1f2937);
+    /* Subtle entrance — fade + tiny scale, 200ms. */
+    animation: regionBadge__in 200ms ease-out;
+}
+
+@keyframes regionBadge__in {
+    from { opacity: 0; transform: scale(0.92); }
+    to   { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .regionBadge { animation: none; }
+}
+
+.regionBadge__dot {
+    display: inline-block;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: currentColor;
+    /* Slight inset shadow for depth on light backgrounds. */
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5) inset;
+}
+
+.regionBadge__name {
+    font-variant-numeric: tabular-nums;
+    text-transform: lowercase;
+}
+
+.regionBadge--overflow {
+    background: rgba(0, 0, 0, 0.04);
+    color: var(--ink-soft, #6b7280);
+    text-transform: none;
+}
+
+/* 6-color palette — distinguishable hues, WCAG-AA against the soft pill bg.
+ * Deliberately NO green (would clash with the COMPLETED state badge using
+ * --ok) and NO red (would clash with FAILED using --err). The 6 hues here
+ * are visually distinct from the 4 state-badge tones in any pairing.
+ * `local-east-1` deterministically hashes to c5 (sky-blue), satisfying the
+ * common "east coast → blue" mental model. */
+.regionBadge--c0 { background: rgba(99, 102, 241, 0.12); color: #4338ca; }   /* indigo  */
+.regionBadge--c1 { background: rgba(20, 184, 166, 0.12); color: #0f766e; }   /* teal    */
+.regionBadge--c2 { background: rgba(245, 158, 11, 0.14); color: #b45309; }   /* amber   */
+.regionBadge--c3 { background: rgba(244, 63, 94, 0.12);  color: #be123c; }   /* rose    */
+.regionBadge--c4 { background: rgba(168, 85, 247, 0.12); color: #7e22ce; }   /* purple  */
+.regionBadge--c5 { background: rgba(2, 132, 199, 0.12);  color: #0369a1; }   /* sky-blue (was emerald — clashed with COMPLETED) */
+
+.regionBadgeList {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+}
+
+/* ── Track G (Step 28) — application picker ───────────────────────── */
+
+.appPicker__newRow {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.appPicker__newRow input {
+  flex: 1;
+  font: inherit;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.linkButton {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--primary);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}
+.linkButton:hover { color: var(--primary-d); }
+
+/* ── Two-column launcher layout (post-C2.b polish) ────────────────── */
+/*
+ * Was three columns (form | viz | overview) until UI-C2.b polish moved
+ * the Overview + Global Properties INTO the form column so the viewer
+ * gets the entire right half. Drives a bigger, more readable diagram
+ * on wide screens.
+ */
+
+.newRunLayout {
+  display: grid;
+  gap: 1rem;
+  /* Narrow viewports: stack everything. */
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    "header"
+    "form"
+    "viz";
+}
+.newRunLayout__header   { grid-area: header; }
+.newRunLayout__form     { grid-area: form; }
+.newRunLayout__viz      { grid-area: viz; }
+
+/* UX12 — let the launcher page use ~90% of the viewport width on big
+   screens. Overrides the global appMain max-width:1500 cap so the
+   reclaimed real estate goes to the diagram (right pane). The runForm
+   stays bounded inside its column. */
+:has(> .newRunLayout) {
+  /* When the launcher is the page's main content, widen .appMain via the
+     `:has()` parent selector. Falls back gracefully on browsers without
+     `:has()` support (Firefox older than 121); page is just narrower. */
+}
+.appMain:has(> .newRunLayout) {
+  max-width: var(--app-max-width);
+}
+
+/* ≥ 980 px — form on the left, diagram on the right.
+   UX17 — column heights are now viewport-bound. Both panes share the
+   same height (the second grid-template-rows track), and the form
+   column scrolls its overflow internally while the diagram pane
+   matches without adding its own scroll. */
+@media (min-width: 980px) {
+  .newRunLayout {
+    grid-template-columns: minmax(420px, 520px) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, calc(100vh - 200px));
+    grid-template-areas:
+      "header header"
+      "form   viz";
+  }
+  .newRunLayout__form {
+    overflow-y: auto;
+    /* Inset so the scrollbar doesn't sit flush against the form's
+       last field; keeps the visual rhythm consistent with the
+       diagram pane's padding. */
+    padding-right: 0.4rem;
+    /* Drop any trailing margin on the last form field so the column
+       ends right after its last item (no excess bottom space). */
+  }
+  .newRunLayout__form > *:last-child { margin-bottom: 0; }
+  /* UX21 — `.runForm` is `display: flex; flex-direction: column`, which
+     by default lets every child shrink to fit when total content
+     exceeds the column height. The FleetAllocationFormView has its own
+     `overflow: hidden`, so when global properties grew the form would
+     squeeze the allocation table down to zero height (operator's
+     "I can't see it at all"). Lock every immediate child to its
+     natural size so the column-level overflow-y: auto is the only
+     thing that gives, producing a scrollbar instead of squeezed
+     children. */
+  .newRunLayout__form > * { flex-shrink: 0; }
+  .newRunLayout__viz {
+    /* Diagram inherits the row height; the .fleetFlow inside takes
+       100% so the React Flow viewport fills the column. */
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  /* Hide Controls collapses the form column entirely so the diagram
+     fills the full width. */
+  .newRunLayout--controlsHidden {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "header"
+      "viz";
+  }
+  .newRunLayout--controlsHidden .newRunLayout__form { display: none; }
+}
+
+/* Header consolidation — title + status badge on the left, primary
+   submit + cancel on the right. Replaces the previous chip strip. */
+.newRunLayout__header--inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.newRunLayout__headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+}
+.newRunLayout__headerLeft h1 {
+  margin: 0;
+}
+.newRunLayout__headerRight {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.newRunLayout__backLink {
+  font-size: 0.85rem;
+  color: var(--ink-soft, #6b7280);
+  text-decoration: none;
+}
+.newRunLayout__backLink:hover {
+  color: var(--brand, #117aca);
+  text-decoration: underline;
+}
+
+.newRunLayout__statusBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--ink-soft, #6b7280);
+  border: 1px solid var(--border, #e5e7eb);
+}
+
+/* D-RunLauncher rework — application pill in the launcher header.
+   Sits between the page title and the status badge; click jumps back
+   to the per-app detail. */
+.newRunLayout__appPill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  background: rgba(17, 122, 202, 0.08);
+  color: var(--brand, #117aca);
+  border: 1px solid rgba(17, 122, 202, 0.22);
+  text-decoration: none;
+}
+.newRunLayout__appPill:hover {
+  background: rgba(17, 122, 202, 0.16);
+  text-decoration: none;
+}
+.newRunLayout__statusBadge--ready {
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+  border-color: rgba(16, 185, 129, 0.30);
+}
+.newRunLayout__statusBadge--needs {
+  background: rgba(245, 158, 11, 0.12);
+  color: #b45309;
+  border-color: rgba(245, 158, 11, 0.30);
+}
+.newRunLayout__statusBadge--error {
+  background: rgba(220, 38, 38, 0.12);
+  color: #b91c1c;
+  border-color: rgba(220, 38, 38, 0.30);
+}
+.newRunLayout__statusBadge--submitting {
+  background: rgba(17, 122, 202, 0.12);
+  color: #0e63a8;
+  border-color: rgba(17, 122, 202, 0.30);
+}
+
+/* On wide screens the page itself was clamped to 1100 px by
+   .appMain — bump it for /runs/new so the viewer can stretch and
+   the region cards + pod tiles don't get pinched. :has() lets us
+   scope this without route-aware JS. */
+/* Wider page chrome on the deep-work surfaces — keeps the diagram /
+   document tables comfortably wide on big monitors. The default
+   .appMain cap (1100 px) still applies everywhere else. */
+.appMain:has(.newRunLayout),
+.appMain:has(.documentsPage) {
+  max-width: var(--app-max-width);
+}
+
+/* ── UI-D1 stub pages (Applications detail, Templates, Automation, 404) ── */
+
+.stubPage {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+}
+.stubPage h1 { margin: 0; }
+.stubPage--notFound {
+  border-left: 3px solid var(--warn, #f59e0b);
+  padding-left: 1rem;
+}
+
+/* ── UI-D2 Documents tabs (Test Plans / Data Files / Results / Other) ── */
+
+.documentsPage {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.documentsTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  margin: 0;
+  padding: 0;
+}
+
+.documentsTabs__tab {
+  padding: 0.5rem 0.9rem;
+  border-radius: 6px 6px 0 0;
+  border: 1px solid transparent;
+  border-bottom: none;
+  color: var(--ink-soft, #6b7280);
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-decoration: none;
+  position: relative;
+  bottom: -1px;
+}
+.documentsTabs__tab:hover {
+  color: var(--ink, #1f2937);
+  background: rgba(15, 23, 42, 0.03);
+}
+.documentsTabs__tab--active {
+  background: var(--surface, #fff);
+  color: var(--brand, #117aca);
+  font-weight: 600;
+  border-color: var(--border, #e5e7eb);
+  border-bottom-color: var(--surface, #fff);
+}
+.documentsTabs__tab--active:hover {
+  background: var(--surface, #fff);
+}
+
+.blobRow__filename {
+  font-size: 0.72rem;
+  margin-top: 2px;
+}
+
+/* ── UI-D3 Applications list (cards) + Application detail (chips + table) ── */
+
+/* Standardization sweep (2026-05-13) — the original D-AppRegistry
+   .appCard / .appCardGrid / .appCard__link / .appCard__head rules
+   were deleted here; the canonical shell now lives further down with
+   the IA-list cards so all 5 sections share one set of rules.
+   Inner-element styles unique to Applications cards (stats, lastRun,
+   sealId, desc, etc.) are kept below. */
+
+.appCard__stats {
+  margin: 0 0 0.5rem;
+  display: flex;
+  gap: 1rem;
+  font-size: 0.85rem;
+}
+.appCard__stats div { display: flex; gap: 0.4rem; align-items: baseline; }
+.appCard__stats dt { color: var(--ink-soft, #6b7280); margin: 0; }
+.appCard__stats dd { margin: 0; font-weight: 600; }
+
+.appCard__hint {
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.appCard__lastRun {
+  margin: 0;
+  font-size: 0.78rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.appCard__active {
+  color: var(--brand, #117aca);
+}
+
+/* ── D-AppRegistry — header / view toggle / health badges / table ── */
+
+/* Shared right-side actions group for list-page headers (primary action +
+   view-mode toggle + any header buttons). Same flex shape the other list
+   tabs use for their totals group, so every tab's header lines up. */
+.pageHeader__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* HARD-DELETE — Active / Archived segmented control (runs + applications).
+   Mirrors .viewModeToggle so it reads as a sibling pill group and aligns
+   in line with List/Grid + the page's primary action. */
+.segmentedToggle {
+  display: inline-flex;
+  gap: 0.25rem;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  padding: 0.15rem;
+  background: var(--surface, #fff);
+}
+.segmentedToggle .btn {
+  padding: 0.3rem 0.7rem;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.82rem;
+}
+/* Standalone-row usage (e.g. above the runs table on the app-detail page),
+   where it isn't a flex sibling and needs its own bottom spacing. */
+.segmentedToggle--block {
+  margin-bottom: 0.75rem;
+}
+
+.viewModeToggle {
+  display: inline-flex;
+  gap: 0.25rem;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  padding: 0.15rem;
+  background: var(--surface, #fff);
+}
+.viewModeToggle .btn {
+  padding: 0.3rem 0.7rem;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.82rem;
+}
+
+/* .appCard__head is defined in the unified shell further down — the
+   pre-standardization version was deleted here to avoid two competing
+   rule sets. Keep .appCard__sealId/__desc since they're Applications-
+   specific inner-element rules. */
+.appCard__sealId {
+  font-size: 0.72rem;
+  margin-bottom: 0.4rem;
+}
+.appCard__desc {
+  margin: 0 0 0.5rem;
+  font-size: 0.82rem;
+  color: var(--ink, #1f2937);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.healthBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  border: 1px solid var(--border, #e5e7eb);
+  background: rgba(15, 23, 42, 0.04);
+  color: var(--ink-soft, #6b7280);
+  white-space: nowrap;
+}
+.healthBadge__dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.healthBadge--healthy {
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+  border-color: rgba(16, 185, 129, 0.30);
+}
+.healthBadge--degraded {
+  background: rgba(245, 158, 11, 0.12);
+  color: #b45309;
+  border-color: rgba(245, 158, 11, 0.30);
+}
+.healthBadge--unhealthy {
+  background: rgba(220, 38, 38, 0.12);
+  color: #b91c1c;
+  border-color: rgba(220, 38, 38, 0.30);
+}
+.healthBadge--unknown { /* default styling above */ }
+.healthBadge--compact {
+  font-size: 0.66rem;
+  padding: 0.1rem 0.45rem;
+}
+
+.applicationListTable th { white-space: nowrap; }
+.appListTable__desc {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink, #1f2937);
+}
+
+/* ── D5 Templates page — card grid + per-card chrome ─────────────── */
+
+.templateGrid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+.templateCard {
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 10px;
+  background: var(--surface, #fff);
+  padding: 0.9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.templateCard__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.templateCard__name {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--ink, #1f2937);
+}
+.templateCard__desc {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink, #1f2937);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.templateCard__stats {
+  margin: 0;
+  display: flex;
+  gap: 1rem;
+  font-size: 0.78rem;
+}
+.templateCard__stats div { display: flex; gap: 0.35rem; align-items: baseline; }
+.templateCard__stats dt { color: var(--ink-soft, #6b7280); margin: 0; }
+.templateCard__stats dd { margin: 0; font-weight: 600; }
+.templateCard__footer {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: auto;
+}
+
+/* ── D-Capacity v2 — per-app capacity card + dialog regions table ── */
+
+.capacityCard {
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 10px;
+  background: var(--surface, #fff);
+  padding: 1rem 1.1rem;
+  margin-bottom: 1rem;
+}
+.capacityCard__head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+  flex-wrap: wrap;
+}
+.capacityCard__name { margin: 0; font-size: 1.05rem; }
+
+.createApp__capacity {
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  padding: 0.8rem 1rem;
+  margin: 0.5rem 0 1rem;
+}
+.createApp__capacity legend {
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 0 0.4rem;
+}
+.createApp__capacityTable {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+}
+.createApp__capacityTable th {
+  text-align: left;
+  padding: 0.3rem 0.5rem;
+  color: var(--ink-soft, #6b7280);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.createApp__capacityTable td {
+  padding: 0.3rem 0.4rem;
+  vertical-align: top;
+}
+.createApp__capacityTable input { width: 100%; }
+
+/* ── CreateApplicationDialog form-specific styling. The modal shell
+   (.modal, .modal__overlay, .modal--application) lives in the modal
+   block below; only form-internal layout is scoped here. */
+
+.createApp .formField { margin-bottom: 1rem; }
+.createApp__endpoints {
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  padding: 0.8rem 1rem;
+  margin: 0.5rem 0 1rem;
+}
+.createApp__endpoints legend {
+  font-weight: var(--weight-semibold);
+  font-size: var(--fs-sm);
+  padding: 0 0.4rem;
+}
+.createApp__endpointRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+/* Match the URL input to the rest of the form's inputs (.formField input) —
+   it lives outside a .formField so it needs the chrome explicitly. */
+.createApp__endpointRow input[type="url"] {
+  width: 100%;
+  font: inherit;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+}
+.createApp__endpointRow input[type="url"]:focus {
+  outline: 2px solid rgba(17, 122, 202, 0.35);
+  outline-offset: 1px;
+  border-color: var(--primary);
+}
+.createApp__endpointRow input[type="url"][aria-invalid="true"] { border-color: var(--err); }
+/* Compact square "remove" button aligned to the input height. */
+.createApp__endpointRow .createApp__endpointRemove {
+  padding: 0;
+  width: 2.3rem;
+  height: 2.3rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.15rem;
+  line-height: 1;
+  color: var(--ink-soft);
+}
+.createApp__endpointRow .createApp__endpointRemove:hover:not([disabled]) { color: var(--err); }
+.createApp__endpointRow .text--error {
+  grid-column: 1 / -1;
+  font-size: var(--fs-xs);
+}
+.createApp__endpoints .createApp__addEndpoint { margin-top: 0.6rem; }
+
+/* ── UI-D4 Home page — summary chips + per-app cards ─────────────── */
+
+.homePage {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* Standardization sweep (2026-05-13) — Home page header now uses the
+   shared .pageHeader + .pageHeader__titleGroup so typography matches
+   the IA list pages. Bespoke .homePage__header / __refresh / __headerRight
+   classes were removed; the .chip family replaced .homeChip. */
+
+/* D-HomeRebuild polish — two-column grid: Applications left, Platform +
+   Schedule stacked on the right. Single column on narrow viewports. */
+.homeGrid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 1fr;
+}
+.homeGrid__right {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+@media (min-width: 980px) {
+  .homeGrid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+.homeGrid__apps { min-width: 0; }
+
+/* ── D-HomeRebuild — checklist sections (Platform / Apps / Schedule) ── */
+
+.checklist {
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 10px;
+  background: var(--surface, #fff);
+  padding: 1rem 1.1rem;
+}
+.checklist__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  flex-wrap: wrap;
+}
+.checklist__head h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+.checklist__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.checklistRow {
+  border-top: 1px solid var(--border, #e5e7eb);
+}
+.checklistRow:first-child { border-top: 0; }
+.checklistRow__link {
+  display: grid;
+  grid-template-columns: minmax(160px, 240px) 1fr auto;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.2rem;
+  text-decoration: none;
+  color: inherit;
+}
+.checklistRow__link:hover:not(.checklistRow__link--static) {
+  background: rgba(15, 23, 42, 0.02);
+}
+.checklistRow__link--static { cursor: default; }
+.checklistRow__label { font-weight: 600; }
+.checklistRow__detail { font-size: 0.78rem; }
+.checklistRow__badge { justify-self: end; }
+
+.emptyState--compact {
+  padding: 0.85rem 1rem;
+  text-align: left;
+}
+
+/* ── Home "Upcoming scheduled runs" — next-up call-out + compact list ──
+   Replaces the old paginated checklist that showed a broken "fires
+   -NNNs ago". The soonest fire is featured; the rest are a tight list. */
+.nextFire {
+  border: 1px solid var(--border, #e5e7eb);
+  border-left: 3px solid var(--primary, #117aca);
+  border-radius: 8px;
+  background: rgba(17, 122, 202, 0.04);
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.6rem;
+}
+.nextFire__eyebrow {
+  display: inline-block;
+  font-size: var(--fs-2xs);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--primary-d, #0e63a8);
+  margin-bottom: 0.2rem;
+}
+.nextFire__name {
+  font-weight: var(--weight-semibold);
+  font-size: var(--fs-sm);
+}
+.nextFire__when { font-size: var(--fs-sm); margin-top: 0.1rem; }
+.nextFire__cadence { font-size: var(--fs-xs); margin-top: 0.1rem; }
+
+.upcomingList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.upcomingList__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.4rem 0.2rem;
+  border-top: 1px solid var(--border, #e5e7eb);
+  font-size: var(--fs-sm);
+}
+.upcomingList__target { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upcomingList__when { white-space: nowrap; }
+.upcomingList__footer,
+.checklist__more {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border, #e5e7eb);
+  font-size: var(--fs-xs);
+}
+
+/* ── D-Capacity v2 Home rollup — per-region aggregate (Capacity section). */
+
+/* Home "Capacity" rollup — compact table that mirrors the Capacity tab. */
+.capacityRollupTable { margin-top: 0.25rem; }
+.capacityRollupTable th,
+.capacityRollupTable td { padding: 0.4rem 0.5rem; font-size: 0.8rem; white-space: nowrap; }
+.capacityRollupTable th.num,
+.capacityRollupTable td.num { text-align: right; }
+/* Utilization bar + % reuse the per-app detail page's .regionPanel__util /
+   .regionPanel__utilBar styling so the Home rollup renders identically. */
+.capacityRollup__footer {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border, #e5e7eb);
+  font-size: 0.78rem;
+}
+
+.homeAppGrid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-auto-rows: min-content;
+}
+
+.homeAppCard {
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 10px;
+  background: var(--surface, #fff);
+  transition: border-color 120ms ease, transform 120ms ease, box-shadow 120ms ease;
+}
+.homeAppCard:hover {
+  border-color: var(--brand, #117aca);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08);
+}
+.homeAppCard__link {
+  display: block;
+  padding: 1rem 1.1rem;
+  text-decoration: none;
+  color: inherit;
+}
+
+.homeAppCard__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+.homeAppCard__title {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.homeAppCard__name {
+  margin: 0;
+  font-size: 1.05rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--ink, #1f2937);
+}
+.homeAppCard__sealId { font-size: 0.7rem; }
+
+.homeAppCard__snapshot {
+  margin: 0.4rem 0;
+  padding: 0.55rem 0.7rem;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.03);
+}
+.homeAppCard__snapshot--active {
+  background: rgba(245, 158, 11, 0.10);
+  border-left: 3px solid var(--util-mid, #f59e0b);
+}
+.homeAppCard__snapshot--last {
+  background: rgba(15, 23, 42, 0.03);
+}
+.homeAppCard__snapshot--empty {
+  background: transparent;
+  padding: 0.4rem 0.1rem;
+}
+.homeAppCard__snapshotHead {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.4rem;
+  font-size: 0.82rem;
+}
+.homeAppCard__snapshotStats {
+  margin: 0;
+  display: flex;
+  gap: 1rem;
+  font-size: 0.78rem;
+}
+.homeAppCard__snapshotStats div { display: flex; gap: 0.35rem; align-items: baseline; }
+.homeAppCard__snapshotStats dt { color: var(--ink-soft, #6b7280); margin: 0; }
+.homeAppCard__snapshotStats dd { margin: 0; font-weight: 600; }
+.homeAppCard__runId { font-size: 0.72rem; }
+
+.homeAppCard__footer {
+  margin-top: 0.5rem;
+  font-size: 0.72rem;
+}
+
+/* ── D-Capacity Capacity Overview page ──────────────────────────── */
+
+.capacityPage {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.capacityChips { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+
+.capacityRow--warn td { background: rgba(245, 158, 11, 0.06); }
+.capacityRow--err  td { background: rgba(220, 38, 38, 0.07); }
+
+.capacityBar {
+  position: relative;
+  width: 100%;
+  min-width: 160px;
+  height: 14px;
+  background: rgba(15, 23, 42, 0.06);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.capacityBar > span {
+  display: block;
+  height: 100%;
+  background: var(--util-low, #10b981);
+  transition: width 200ms ease;
+}
+.capacityBar--warn > span { background: var(--util-mid, #f59e0b); }
+.capacityBar--err  > span { background: var(--util-high, #dc2626); }
+.capacityBar__pct {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  font-size: 0.65rem;
+  color: var(--ink, #1f2937);
+  text-shadow: 0 0 2px rgba(255, 255, 255, 0.7);
+}
+
+.appDetailChips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 0.4rem 0 1rem;
+}
+/* Action chips (Compare Results / Clear) reuse the chip shell so they
+   sit visually paired with Total runs / Active instead of breaking
+   the line with a button-styled action. */
+button.appDetailChip {
+  font-family: inherit;
+  cursor: pointer;
+  color: inherit;
+}
+button.appDetailChip:hover:not(:disabled) {
+  background: rgba(15, 23, 42, 0.07);
+}
+button.appDetailChip:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.appDetailChip--action {
+  font-weight: 600;
+}
+.appDetailChip--actionPrimary {
+  background: rgba(17, 122, 202, 0.10);
+  border-color: rgba(17, 122, 202, 0.30);
+  color: var(--brand, #117aca);
+}
+.appDetailChip--actionPrimary:hover:not(:disabled) {
+  background: rgba(17, 122, 202, 0.18);
+}
+.appDetailChip--danger {
+  background: rgba(220, 38, 38, 0.10);
+  border-color: rgba(220, 38, 38, 0.30);
+  color: var(--danger, #dc2626);
+}
+.appDetailChip--danger:hover:not(:disabled) {
+  background: rgba(220, 38, 38, 0.18);
+}
+.appDetailChip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.4rem 0.7rem;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.04);
+  border: 1px solid var(--border, #e5e7eb);
+  font-size: 0.85rem;
+}
+.appDetailChip__label { color: var(--ink-soft, #6b7280); }
+.appDetailChip__value { font-size: 1rem; }
+
+.emptyState {
+  border: 1px dashed var(--border, #e5e7eb);
+  border-radius: 10px;
+  padding: 1.5rem;
+  text-align: center;
+}
+.emptyState p { margin: 0.25rem 0; }
+
+/* Standardization sweep (2026-05-13) — shared toolbar + grid shell
+   used by every IA list page so the Filter / Counter / Grid|List
+   toggle live in a consistent layout. */
+.appListToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.7rem;
+  /* Filter row only (search + count). Sits tight to the page header
+     above and to the table below — the view-mode toggle moved to the
+     header right (2026-05-13 r2) so this row stays narrow. */
+  margin: -0.5rem 0 0.5rem;
+}
+.appListToolbar__search {
+  flex: 0 1 18rem;
+  min-width: 12rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+.appListToolbar__count { white-space: nowrap; }
+.appListToolbar__spacer { flex: 1 1 auto; }
+
+.appCardGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  /* Force every row to be the same height as the tallest content row,
+     so cards across different rows are the same size (operator feedback
+     2026-05-13). Combined with the LI's `align-items: stretch` default
+     and the card's flex-column layout, each card stretches to fill its
+     grid cell. */
+  grid-auto-rows: 1fr;
+  gap: 0.7rem;
+  margin: 0.4rem 0 0.6rem;
+  list-style: none;
+  padding: 0;
+}
+/* The LI is the grid item — its child <Link.appCard> needs to fill it
+   for the equal-height to take effect (otherwise the link would only be
+   as tall as its inner content, leaving dead space inside the LI). */
+.appCardGrid > li {
+  display: flex;
+}
+.appCard {
+  flex: 1 1 auto;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 10px;
+  padding: 0.7rem 0.8rem;
+  background: var(--surface, #fff);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  /* Baseline minimum so an empty/zero-data card (e.g. "no schedules")
+     doesn't collapse to a sliver before the row-stretch kicks in. */
+  min-height: 8rem;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 80ms ease-in-out, box-shadow 80ms ease-in-out;
+}
+.appCard:hover,
+.appCard:focus-visible {
+  border-color: var(--accent, #117aca);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  outline: none;
+}
+.appCard__head {
+  /* Stack name above status (operator feedback 2026-05-13) — long app
+     names + a status badge side-by-side were pushing the badge outside
+     the card box. Vertical stack is unambiguous regardless of name
+     length, and reads top-down naturally. */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+}
+.appCard__name {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+  /* Name takes the full card width; long names wrap onto the next line
+     instead of stretching the card. */
+  width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* Badges/chips inside the card head must shrink rather than overflow
+   the card edge if their own content (e.g., a long status string) is
+   wider than the card. */
+.appCard__head .badge,
+.appCard__head .chip,
+.appCard__head .healthBadge {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.appCard__body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  font-size: 0.82rem;
+  color: var(--ink-soft, #4b5563);
+}
+/* Pin footer to bottom of card so when the card stretches to row height
+   the extra space is whitespace above the footer, not awkwardly enlarged
+   chips. */
+.appCard__footer {
+  margin-top: auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.78rem;
+  color: var(--ink-soft, #6b7280);
+}
+
+/* Inline note banner — used by Phase IA-Automation to surface that the
+   D6-A backend hasn't shipped yet. Quieter than .emptyState (no dashed
+   border, left-aligned, smaller padding) so it sits above an empty
+   table without stealing the operator's eye from the table itself. */
+.emptyStateInline {
+  border-left: 3px solid var(--accent, #117aca);
+  background: var(--surface-soft, #f9fafb);
+  border-radius: 4px;
+  padding: 0.6rem 0.8rem;
+  margin: 0.3rem 0 0.85rem;
+  font-size: 0.85rem;
+}
+
+/* ── UI-D3 Paginator ──────────────────────────────────────────────── */
+
+.paginator {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-top: 0.85rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  font-size: 0.85rem;
+}
+.paginator--single { justify-content: flex-end; color: var(--ink-soft, #6b7280); }
+.paginator__count { color: var(--ink-soft, #6b7280); }
+.paginator__controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.paginator__pageOf {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink, #1f2937);
+}
+
+/* ── UI-5 — RunSummaryChips (top-of-page summary strip) ────────── */
+
+.runSummaryChips {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: stretch;
+}
+
+.runSummaryChip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.3rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.runSummaryChip__label {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.7rem;
+}
+
+.runSummaryChip__value {
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 14rem;
+}
+
+/* Status-chip colour variants — pill background tints (not just text)
+   so the operator's eye lands on the chip even in peripheral vision. */
+.runSummaryChip--ready {
+  background: rgba(16,185,129,0.10);
+  border-color: rgba(16,185,129,0.35);
+}
+.runSummaryChip--ready .runSummaryChip__value { color: var(--ok); }
+
+.runSummaryChip--needs {
+  background: #f1f5f9;
+  border-color: var(--border);
+}
+.runSummaryChip--needs .runSummaryChip__value { color: var(--ink-soft); }
+
+.runSummaryChip--error {
+  background: rgba(220,38,38,0.10);
+  border-color: rgba(220,38,38,0.4);
+}
+.runSummaryChip--error .runSummaryChip__value { color: var(--err); }
+
+.runSummaryChip--submitting {
+  background: rgba(14,165,233,0.10);
+  border-color: rgba(14,165,233,0.4);
+}
+.runSummaryChip--submitting .runSummaryChip__value { color: var(--info); }
+
+/* ── UI-6 — VizPanelToolbar (above NodeVisualizationPanel) ───────── */
+
+.vizPanelToolbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  flex-wrap: wrap;
+}
+
+.vizPanelToolbar__viewMode {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 0.3rem;
+  border-left: 1px solid var(--border);
+  padding-left: 0.5rem;
+}
+
+.vizPanelToolbar__modeToggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.vizPanelToolbar__modeToggle .btn {
+  border-radius: 0;
+  border: 0;
+  border-right: 1px solid var(--border);
+  padding: 0.25rem 0.7rem;
+  font-size: 0.85rem;
+}
+.vizPanelToolbar__modeToggle .btn:last-child { border-right: 0; }
+.vizPanelToolbar__modeToggle .btn--active {
+  background: var(--brand-soft, rgba(17,122,202,0.10));
+  color: var(--brand, #117aca);
+  font-weight: 600;
+}
+
+/* ── UI-C2.b — FleetFlowDiagram (data-flow diagram, replaces fleet
+   widget + viz panel) ────────────────────────────────────────────── */
+
+.fleetFlow {
+    margin: 0;
+    width: 100%;
+    /* UX17 — diagram fills the viz column, which is sized by the grid
+       row (viewport-bound). Falls back to a sensible min height on
+       narrow viewports where the grid switches to single-column. */
+    flex: 1;
+    min-height: 480px;
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 10px;
+    background: var(--surface, #fff);
+    overflow: hidden;
+    position: relative;
+}
+
+/* UX10 → UX16 — force the React Flow nodes above the edge paths. The
+   single-rule version (z-index on .react-flow__node + .react-flow__edge)
+   didn't win in practice because the library's DOM order put the edges
+   SVG and the nodes container in the same stacking context but with no
+   container-level z-index. We need to lift the *nodes container* AND
+   sink the *edges container* explicitly so the stacking holds against
+   whatever React Flow's internal layout settles on. !important is used
+   here because React Flow attaches inline styles on these elements at
+   runtime that would otherwise outrank the selector. */
+.fleetFlow .react-flow__edges,
+.fleetFlow .react-flow__connectionline {
+    z-index: 0 !important;
+}
+.fleetFlow .react-flow__nodes {
+    z-index: 5 !important;
+}
+.fleetFlow .react-flow__node {
+    z-index: 10 !important;
+}
+/* Belt-and-braces — every node tile carries an opaque background so the
+   edge SVG underneath is fully occluded even if a future React Flow
+   release tweaks the stacking order again. */
+.fleetFlow__region {
+    background: var(--surface, #fff);
+}
+.fleetFlow__podTile--node {
+    background: var(--surface, #fff);
+}
+
+.fleetFlow--loading,
+.fleetFlow--error,
+.fleetFlow--empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 220px;
+    padding: 1rem;
+    text-align: center;
+}
+
+/* Region node — header + capacity + inline stepper + pod grid, all in one card. */
+.fleetFlow__region {
+    width: 320px;
+    padding: 0.6rem 0.8rem;
+    border-radius: 10px;
+    border: 1px solid var(--border, #e5e7eb);
+    background: var(--surface, #fff);
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+    /* Tier stripe (low/mid/high — see utilizationTier) lives on the left edge
+       so the operator gets at-a-glance utilization without a legend. */
+    border-left: 8px solid var(--util-low, #10b981);
+}
+
+.fleetFlow__region--util-mid  { border-left-color: var(--util-mid, #f59e0b); }
+.fleetFlow__region--util-high { border-left-color: var(--util-high, #dc2626); }
+
+.fleetFlow__region--shortfall {
+    box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.35);
+}
+
+.fleetFlow__regionHead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.4rem;
+}
+
+.fleetFlow__regionName {
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: var(--ink, #1f2937);
+    font-variant-numeric: tabular-nums;
+}
+
+.fleetFlow__regionCapacity {
+    font-size: 0.75rem;
+    color: var(--ink-soft, #6b7280);
+    font-variant-numeric: tabular-nums;
+}
+
+.fleetFlow__regionCapacity--zero { color: var(--err, #dc2626); }
+
+.fleetFlow__regionLost {
+    color: var(--warn, #b45309);
+    font-weight: 600;
+}
+
+/* Stepper inside region nodes — −  N  + */
+.fleetFlow__stepper {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin-top: 0.2rem;
+}
+
+.fleetFlow__stepperBtn {
+    width: 1.7rem;
+    height: 1.7rem;
+    border-radius: 6px;
+    border: 1px solid var(--border, #e5e7eb);
+    background: #fff;
+    color: var(--ink, #1f2937);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.fleetFlow__stepperBtn:hover:not(:disabled) {
+    background: var(--brand-soft, rgba(17, 122, 202, 0.10));
+    border-color: var(--brand, #117aca);
+}
+
+.fleetFlow__stepperBtn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.fleetFlow__stepperInput {
+    width: 3rem;
+    height: 1.7rem;
+    text-align: center;
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 6px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    background: #fff;
+    /* Hide spinner buttons — the +/− buttons are the affordance. */
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+
+.fleetFlow__stepperInput::-webkit-outer-spin-button,
+.fleetFlow__stepperInput::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.fleetFlow__stepperInput:focus-visible {
+    outline: 2px solid var(--brand, #117aca);
+    outline-offset: 1px;
+}
+
+.fleetFlow__shortfall {
+    margin-top: 0.4rem;
+    padding: 0.3rem 0.5rem;
+    background: rgba(220, 38, 38, 0.08);
+    color: var(--err, #be123c);
+    border-radius: 6px;
+    font-size: 0.7rem;
+    line-height: 1.3;
+}
+
+/* Pod grid inside a region card. CSS auto-fit keeps tiles ≥ 92 px wide,
+   wrapping into rows so a 20-pod region doesn't overflow horizontally. */
+.fleetFlow__podGrid {
+    margin-top: 0.55rem;
+    padding-top: 0.55rem;
+    border-top: 1px dashed var(--border, #e5e7eb);
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+    gap: 6px;
+}
+
+.fleetFlow__podTile {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+    gap: 2px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border, #e5e7eb);
+    background: rgba(17, 122, 202, 0.05);
+    color: var(--ink, #1f2937);
+    cursor: pointer;
+    text-align: center;
+    transition: background 120ms ease, transform 120ms ease;
+    min-width: 0;  /* enable text-overflow on children */
+}
+
+.fleetFlow__podTile:hover {
+    background: rgba(17, 122, 202, 0.14);
+    transform: translateY(-1px);
+}
+
+.fleetFlow__podTile:focus-visible {
+    outline: 2px solid var(--brand, #117aca);
+    outline-offset: 1px;
+}
+
+/* UX7 — when the pod is its own React Flow node (not embedded in a card
+   grid), drop the embedded-cell defaults and let the inline width/height
+   styles in TS drive the box. Adds a subtle shadow + brand accent to
+   visually distinguish nodes from background. */
+.fleetFlow__podTile--node {
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+    border-color: rgba(17, 122, 202, 0.45);
+    background: rgba(17, 122, 202, 0.04);
+}
+.fleetFlow__podTile--node:hover {
+    box-shadow: 0 3px 6px rgba(15, 23, 42, 0.12);
+}
+.fleetFlow__podTile--node[data-status="UNHEALTHY"] {
+    border-color: var(--err, #dc2626);
+    background: rgba(220, 38, 38, 0.06);
+}
+.fleetFlow__podTile--node[data-status="DRAINING"] {
+    border-color: var(--util-mid, #f59e0b);
+}
+.fleetFlow__podTile--node[data-status="STOPPED"] {
+    border-color: var(--ink-soft, #6b7280);
+    opacity: 0.7;
+}
+
+.fleetFlow__podTileApp {
+    font-size: 0.62rem;
+    color: var(--ink-soft, #6b7280);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fleetFlow__podTileWorker {
+    font-weight: 600;
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--brand, #117aca);
+}
+
+/* Vertical dotted divider between region columns. Rendered as a
+   zero-width div so ReactFlow's auto-layout doesn't reserve extra
+   horizontal space; the visual line is the left border. */
+.fleetFlow__laneDivider {
+    width: 0;
+    border-left: 2px dotted var(--border, #cbd5e1);
+    pointer-events: none;
+}
+
+/* "max N" hint under the Add/Remove controls — passive cap reminder. */
+.fleetFlow__capHint {
+    margin-top: 0.3rem;
+    font-size: 0.7rem;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+/* UX1 — "+N workers not ready — spin on launch" chip inside the header
+   when allocated > IDLE-now. Same visual language as the form's
+   fleetForm__needsSpin chip. */
+.fleetFlow__needsSpin {
+    margin-top: 0.4rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 6px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    background: rgba(245, 158, 11, 0.15);
+    color: #92400e;
+    border: 1px solid rgba(245, 158, 11, 0.45);
+    text-align: center;
+}
+
+/* ── Add / Remove delta controls (UI-C2.b polish) ─────────────────── */
+
+.fleetFlow__delta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 0.2rem;
+}
+
+.fleetFlow__deltaBtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.fleetFlow__deltaLabel {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--ink, #1f2937);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.fleetFlow__deltaInput {
+    width: 2.6rem;
+    height: 1.6rem;
+    padding: 0 0.3rem;
+    text-align: center;
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 5px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    background: #fff;
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+.fleetFlow__deltaInput::-webkit-outer-spin-button,
+.fleetFlow__deltaInput::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+.fleetFlow__deltaInput:focus-visible {
+    outline: 2px solid var(--brand, #117aca);
+    outline-offset: 1px;
+}
+
+.fleetFlow__deltaCommit {
+    width: 1.6rem;
+    height: 1.6rem;
+    border-radius: 5px;
+    border: 1px solid var(--border, #e5e7eb);
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.fleetFlow__deltaCommit--add {
+    background: rgba(16, 185, 129, 0.12);
+    color: #047857;
+    border-color: rgba(16, 185, 129, 0.30);
+}
+.fleetFlow__deltaCommit--add:hover:not(:disabled) {
+    background: rgba(16, 185, 129, 0.22);
+}
+.fleetFlow__deltaCommit--remove {
+    background: rgba(220, 38, 38, 0.10);
+    color: #b91c1c;
+    border-color: rgba(220, 38, 38, 0.28);
+}
+.fleetFlow__deltaCommit--remove:hover:not(:disabled) {
+    background: rgba(220, 38, 38, 0.20);
+}
+.fleetFlow__deltaCommit:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* Worker status icon — small glyph in the top-left of each pod tile. */
+.fleetFlow__statusIcon {
+    align-self: flex-start;
+    line-height: 1;
+    font-size: 0.78rem;
+    margin-bottom: 2px;
+}
+.fleetFlow__statusIcon--ready      { color: var(--ink-soft, #94a3b8); }
+.fleetFlow__statusIcon--initiating { color: var(--brand, #117aca); }
+.fleetFlow__statusIcon--healthy    { color: #047857; }
+.fleetFlow__statusIcon--unhealthy  { color: #b91c1c; }
+.fleetFlow__statusIcon--draining   { color: #b45309; }
+.fleetFlow__statusIcon--stopped    { color: #475569; }
+
+/* ── Form view (table-style allocator, alternative to FleetFlowDiagram) ── */
+
+.fleetForm {
+    width: 100%;
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 10px;
+    background: var(--surface, #fff);
+    overflow: hidden;
+}
+
+.fleetForm--loading,
+.fleetForm--error,
+.fleetForm--empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 220px;
+    padding: 1rem;
+    text-align: center;
+}
+
+/* UX25 — RunStartProgress modal: 5-stage progress UI while a run starts. */
+.runStartProgress__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+.runStartProgress {
+  background: var(--surface, #fff);
+  border-radius: 12px;
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.25);
+  width: 100%;
+  max-width: 520px;
+  padding: 1.25rem 1.5rem 1.5rem;
+}
+.runStartProgress__head { margin-bottom: 1rem; }
+.runStartProgress__title { margin: 0 0 0.25rem; font-size: 1.1rem; font-weight: 600; }
+.runStartProgress__title--warn { color: var(--util-mid, #f59e0b); }
+.runStartProgress__subtitle { margin: 0; font-size: 0.85rem; }
+.runStartProgress__shortfallHint {
+  margin: 0.75rem 0 0;
+  font-size: 0.82rem;
+}
+.runStartProgress__shortfallTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+  margin: 0.75rem 0 0;
+}
+.runStartProgress__shortfallTable th,
+.runStartProgress__shortfallTable td {
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  text-align: left;
+}
+.runStartProgress__shortfallTable th {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft, #6b7280);
+  background: rgba(15, 23, 42, 0.02);
+}
+.runStartProgress__shortfallTable tbody tr:last-child td { border-bottom: 0; }
+.runStartProgress__shortfallGap { color: var(--err, #dc2626); font-weight: 600; }
+
+.runStartProgress__stages {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.runStartProgress__stage {
+  display: grid;
+  grid-template-columns: 24px 1fr auto;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.015);
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.runStartProgress__stage--active {
+  border-color: var(--brand, #117aca);
+  background: rgba(17, 122, 202, 0.06);
+}
+.runStartProgress__stage--done {
+  border-color: rgba(22, 163, 74, 0.45);
+  background: rgba(22, 163, 74, 0.05);
+}
+.runStartProgress__stage--failed {
+  border-color: var(--err, #dc2626);
+  background: rgba(220, 38, 38, 0.06);
+}
+.runStartProgress__stage--skipped { opacity: 0.6; }
+
+.runStartProgress__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px; height: 24px;
+}
+.runStartProgress__check { color: var(--ok, #16a34a); font-weight: 700; }
+.runStartProgress__cross { color: var(--err, #dc2626); font-weight: 700; }
+.runStartProgress__skip  { color: var(--ink-soft, #6b7280); font-weight: 700; }
+.runStartProgress__dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ink-soft, #6b7280); opacity: 0.4;
+}
+.runStartProgress__spinner {
+  width: 14px; height: 14px;
+  border: 2px solid rgba(17, 122, 202, 0.3);
+  border-top-color: var(--brand, #117aca);
+  border-radius: 50%;
+  animation: runStartProgress-spin 0.8s linear infinite;
+}
+@keyframes runStartProgress-spin { to { transform: rotate(360deg); } }
+
+.runStartProgress__label {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.runStartProgress__labelText { font-weight: 600; font-size: 0.92rem; }
+.runStartProgress__detail { font-size: 0.78rem; }
+.runStartProgress__statusText { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
+
+.runStartProgress__error {
+  margin-top: 1rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: 6px;
+  background: rgba(220, 38, 38, 0.08);
+  border: 1px solid var(--err, #dc2626);
+  font-size: 0.85rem;
+  color: var(--err, #dc2626);
+}
+.runStartProgress__actions {
+  margin-top: 1rem;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+/* UX13 — inline blob upload alongside the BlobSelect dropdown. */
+.blobPickerRow {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.blobPickerRow select { flex: 1; min-width: 0; }
+.blobPickerRow__upload { display: inline-flex; align-items: center; gap: 0.4rem; }
+.blobPickerRow__uploadBtn {
+  white-space: nowrap;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.7rem;
+}
+.blobPickerRow__uploadError {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.7rem;
+}
+
+/* UX5 — Hide / Show Controls toggle moved into the form's own header. */
+.fleetForm__header {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 0.4rem 0.6rem;
+    border-bottom: 1px solid var(--border, #e5e7eb);
+    background: rgba(15, 23, 42, 0.015);
+}
+.fleetForm__hideControls {
+    font-size: 0.78rem;
+    padding: 0.25rem 0.6rem;
+}
+
+/* UX1 — "ready now" hint next to the policy ceiling cell. */
+.fleetForm__readyNow {
+    font-size: 0.72rem;
+}
+
+/* UX1 — "+N to spin" chip when claimed > idlePods. */
+.fleetForm__needsSpin {
+    display: inline-block;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    background: rgba(245, 158, 11, 0.15);
+    color: #92400e;
+    border: 1px solid rgba(245, 158, 11, 0.45);
+}
+
+.fleetForm__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88rem;
+    /* UX24 — explicit column widths so the Region cell can grow with
+       the "+N to spin" chip without shoving Add/Remove around. The
+       Region cell fills whatever remains. */
+    table-layout: fixed;
+}
+.fleetForm__table th:nth-child(1),
+.fleetForm__table td:nth-child(1) { width: auto; }      /* Region — fills */
+.fleetForm__table th:nth-child(2),
+.fleetForm__table td:nth-child(2) { width: 110px; }     /* Add */
+.fleetForm__table th:nth-child(3),
+.fleetForm__table td:nth-child(3) { width: 110px; }     /* Remove */
+
+.fleetForm__table thead th {
+    text-align: left;
+    padding: 0.65rem 0.85rem;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--ink-soft, #6b7280);
+    border-bottom: 1px solid var(--border, #e5e7eb);
+    background: rgba(15, 23, 42, 0.02);
+}
+
+.fleetForm__table tbody td {
+    padding: 0.65rem 0.85rem;
+    border-bottom: 1px solid var(--border, #e5e7eb);
+    vertical-align: middle;
+}
+
+.fleetForm__table tbody tr:last-child td { border-bottom: 0; }
+
+.fleetForm__row--shortfall td {
+    background: rgba(220, 38, 38, 0.05);
+}
+
+.fleetForm__regionCell { font-weight: 600; }
+
+.fleetForm__lost {
+    color: var(--warn, #b45309);
+    font-weight: 600;
+}
+
+/* Form-view delta (Add/Remove) — same semantics as Flow's delta. */
+.fleetForm__delta {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.fleetForm__deltaInput {
+    width: 2.6rem;
+    height: 1.6rem;
+    padding: 0 0.3rem;
+    text-align: center;
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 5px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    background: #fff;
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+.fleetForm__deltaInput::-webkit-outer-spin-button,
+.fleetForm__deltaInput::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+.fleetForm__deltaInput:focus-visible {
+    outline: 2px solid var(--brand, #117aca);
+    outline-offset: 1px;
+}
+
+.fleetForm__deltaCommit {
+    width: 1.6rem;
+    height: 1.6rem;
+    border-radius: 5px;
+    border: 1px solid var(--border, #e5e7eb);
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.fleetForm__deltaCommit--add {
+    background: rgba(16, 185, 129, 0.12);
+    color: #047857;
+    border-color: rgba(16, 185, 129, 0.30);
+}
+.fleetForm__deltaCommit--add:hover:not(:disabled) {
+    background: rgba(16, 185, 129, 0.22);
+}
+.fleetForm__deltaCommit--remove {
+    background: rgba(220, 38, 38, 0.10);
+    color: #b91c1c;
+    border-color: rgba(220, 38, 38, 0.28);
+}
+.fleetForm__deltaCommit--remove:hover:not(:disabled) {
+    background: rgba(220, 38, 38, 0.20);
+}
+.fleetForm__deltaCommit:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.fleetForm__statusRollup {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+.fleetForm__statusChip {
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    background: rgba(15, 23, 42, 0.06);
+    color: var(--ink-soft, #6b7280);
+    text-transform: lowercase;
+}
+.fleetForm__statusChip--ready      { background: rgba(148, 163, 184, 0.18); color: #475569; }
+.fleetForm__statusChip--initiating { background: rgba(17, 122, 202, 0.14);  color: #0e63a8; }
+.fleetForm__statusChip--healthy    { background: rgba(16, 185, 129, 0.14); color: #047857; }
+.fleetForm__statusChip--unhealthy  { background: rgba(220, 38, 38, 0.14);  color: #b91c1c; }
+.fleetForm__statusChip--draining   { background: rgba(245, 158, 11, 0.16); color: #b45309; }
+.fleetForm__statusChip--stopped    { background: rgba(71, 85, 105, 0.18);  color: #334155; }
+
+.fleetForm__max {
+    font-size: 0.7rem;
+    font-variant-numeric: tabular-nums;
+    margin-left: 0.2rem;
+}
+
+.fleetForm__bar {
+    width: 100%;
+    height: 6px;
+    background: rgba(15, 23, 42, 0.06);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.fleetForm__bar > span {
+    display: block;
+    height: 100%;
+    background: var(--util-low, #10b981);
+    transition: width 120ms ease;
+}
+.fleetForm__bar--util-mid > span  { background: var(--util-mid, #f59e0b); }
+.fleetForm__bar--util-high > span { background: var(--util-high, #dc2626); }
+
+.fleetForm__shortfallCell {
+    color: var(--err, #be123c);
+    font-size: 0.78rem;
+    padding-top: 0 !important;
+}
+
+/* ── Global properties editor (UI-C2.b polish) ───────────────────── */
+
+.globalProps {
+    margin-top: 1rem;
+    padding: 0.85rem 1rem;
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 10px;
+    background: var(--surface, #fff);
+}
+
+/* Phase F3 — recycle policy editor on the Capacity detail page. */
+.recyclePolicy {
+    margin: 1rem 0;
+    padding: 0.85rem 1rem;
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 10px;
+    background: var(--surface, #fff);
+}
+.recyclePolicy__head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+.recyclePolicy__title {
+    margin: 0 0 0.15rem 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+.recyclePolicy__body {
+    margin-top: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+.recyclePolicy__radios {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    border: 0;
+    padding: 0;
+    margin: 0;
+}
+.recyclePolicy__radioRow {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    grid-template-areas: "radio label" ".     help";
+    gap: 0 0.5rem;
+    align-items: center;
+    padding: 0.3rem 0.4rem;
+    border-radius: 6px;
+}
+.recyclePolicy__radioRow:hover { background: rgba(15, 23, 42, 0.03); }
+.recyclePolicy__radioRow input[type="radio"] { grid-area: radio; }
+.recyclePolicy__radioLabel { grid-area: label; font-weight: 600; font-size: 0.88rem; }
+.recyclePolicy__radioRow > small { grid-area: help; font-size: 0.78rem; }
+.recyclePolicy__actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.globalProps__head {
+    /* UX22 — title-left, add-button-right two-column header. */
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+}
+.globalProps__headText {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+}
+.globalProps__addBtn {
+    flex-shrink: 0;
+    font-size: 0.82rem;
+    padding: 0.3rem 0.6rem;
+    white-space: nowrap;
+}
+
+.globalProps__title {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--ink, #1f2937);
+}
+
+.globalProps__empty {
+    text-align: center;
+    padding: 0.6rem;
+    font-size: 0.82rem;
+}
+
+.globalProps__rowError {
+    font-size: 0.78rem;
+}
+
+.globalProps__overrideHint {
+    margin: 0.5rem 0 0;
+    font-size: 0.78rem;
+}
+
+/* ScaleUpRunModal — read-only "Save results inherited from the run" note. */
+.scaleUp__inherited {
+    margin: 0.75rem 0 0;
+    font-size: 0.82rem;
+}
+
+/* ── HM-2 — TimeseriesChart (uPlot wrapper) ─────────────────────── */
+
+.timeseriesChart {
+  margin: 0 0 0.75rem 0;
+  /* Polish pass — uPlot's own padding (set in TimeseriesChart opts)
+     gives the canvas internal breathing room; the wrapper card adds
+     a small outer pad + soft shadow so the chart feels like a card,
+     not an inset diagram. */
+  padding: 0.4rem 0.75rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+/* Polish pass — make uPlot's title look like a chart card heading
+   instead of a default centered serif. */
+.timeseriesChart .u-title {
+  font: 600 0.95rem/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: var(--ink);
+  text-align: left;
+  padding: 0.25rem 0.25rem 0.5rem;
+}
+
+/* Tighten uPlot's built-in legend — default is a wide table that
+   eats vertical space disproportionate to its info content. */
+.timeseriesChart .u-legend {
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  margin-top: 0.25rem;
+}
+.timeseriesChart .u-legend th { padding-right: 0.4rem; }
+.timeseriesChart .u-legend td { padding-right: 0.6rem; }
+
+.timeseriesChart__canvas {
+  width: 100%;
+  /* uPlot draws its own canvas at the size we tell it via setSize();
+     the wrapper div just provides the layout slot + a width target
+     for the ResizeObserver. */
+}
+
+/* Visually-hidden helper used by the chart's a11y summary table. The
+   table is reachable to assistive tech but not painted on screen. The
+   `clip-path` + `clip` combo covers older + newer SR engines. */
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* UI-C2.c (2026-05-11): UtilizationLegend removed. Per-region tier-stripe
+   colors on the Map View cards survive — they're functional, not legend-bound. */
+
+/* Per-region card stripes (Map View) — supplemental to the existing
+   "(claimed / idle)" text so the colour is never the only signal. */
+.nodeMap__card--util-low  { border-left: 8px solid var(--util-low); }
+.nodeMap__card--util-mid  { border-left: 8px solid var(--util-mid); }
+.nodeMap__card--util-high { border-left: 8px solid var(--util-high); }
+
+/* List View leading-column chip. */
+.nodeList__utilChip {
+  display: inline-block;
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+.nodeList__utilChip--low  { background: var(--util-low); }
+.nodeList__utilChip--mid  { background: var(--util-mid); }
+.nodeList__utilChip--high { background: var(--util-high); }
+
+/* ── NodeVisualizationPanel ──────────────────────────────────────── */
+
+.nodeViz {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  min-height: 0;
+}
+
+.nodeViz__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.nodeViz__header h3 { margin: 0; font-size: 1rem; }
+
+.nodeViz__hint { margin: 0; font-size: 0.85rem; }
+
+.nodeViz__modeToggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.nodeViz__modeToggle .btn {
+  border: none;
+  border-radius: 0;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+}
+.nodeViz__modeToggle .btn--active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.nodeMap {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.6rem;
+}
+
+.nodeMap__card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.65rem 0.8rem;
+}
+
+.nodeMap__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.nodeMap__region {
+  font-weight: 600;
+  font-size: 0.9rem;
+  font-family: var(--mono);
+}
+
+.nodeMap__capacity {
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.nodeMap__capacity--zero { color: var(--warn); }
+
+.nodeMap__icons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  min-height: 1.6rem;
+}
+
+.nodeMap__empty { font-size: 0.78rem; }
+
+/* Load-generator icon — used both interactively (Map view) and
+   decoratively (List view glyphs, Overview legend). */
+.loadGen {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.05rem;
+  line-height: 1;
+  width: 1.4rem;
+  height: 1.4rem;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 4px;
+  padding: 0;
+}
+.loadGen--claimed {
+  color: var(--primary);
+  cursor: pointer;
+}
+.loadGen--claimed:hover {
+  border-color: var(--primary);
+  background: rgba(17, 122, 202, 0.06);
+}
+.loadGen--available {
+  color: var(--ink-soft);
+}
+.loadGen--lost {
+  color: var(--err);
+}
+
+.nodeList {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.nodeList th, .nodeList td {
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.nodeList th.num, .nodeList td.num {
+  text-align: right;
+}
+.nodeList__glyphs {
+  font-family: var(--mono);
+  letter-spacing: 0.1rem;
+  color: var(--primary);
+}
+
+/* ── AllocationOverview sidebar ──────────────────────────────────── */
+
+.overview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;          /* match .globalProps chrome (post-C2.b polish) */
+  padding: 0.85rem 1rem;
+  margin-top: 1rem;             /* breathing room from the editor above */
+}
+
+.overview__title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.overview__sectionHead {
+  margin: 0.3rem 0 0.2rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.overview__stats {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.25rem 0.6rem;
+  font-size: 0.9rem;
+}
+.overview__stats dt { color: var(--ink-soft); }
+.overview__stats dd { margin: 0; font-weight: 600; text-align: right; }
+
+.overview__regionList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.overview__regionLine {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+}
+
+.overview__regionName { font-size: 0.78rem; }
+
+.overview__bar {
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 0.2rem;
+}
+.overview__bar span {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+  transition: width 0.2s ease;
+}
+
+.overview__legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+.overview__legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* ── Modal — standardized dialog shell, centered, fade-in. ────────────
+   Phase 5d (2026-05-12) replaces the previous side-drawer pattern per
+   user direction: every confirmation / form dialog is now a centered
+   modal so the operator's eye stays on the action, not the page edge.
+   The old .drawer__* classes are gone — search the repo for those if
+   you find a stale reference. */
+
+.modal__overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 1.5rem;
+  animation: modalOverlayFadeIn 0.16s ease-out;
+}
+
+@keyframes modalOverlayFadeIn {
+  from { background: rgba(15, 23, 42, 0); }
+  to   { background: rgba(15, 23, 42, 0.5); }
+}
+
+.modal {
+  width: 100%;
+  max-width: 42rem;
+  max-height: calc(100vh - 3rem);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.20);
+  border-radius: 8px;
+  animation: modalEnter 0.18s ease-out;
+}
+
+@keyframes modalEnter {
+  from { opacity: 0; transform: translateY(-12px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0)     scale(1);    }
+}
+
+/* One comfortable width for every modal (operator preference — the schedule
+   modal's 42rem, applied across the board). The variant classes are kept as
+   styling hooks but all share the same width; the regions picker stays wider
+   for its interactive US-map. */
+.modal--wide,
+.modal--bulk,
+.modal--application,
+.modal--schedule,
+.modal--confirm { max-width: 42rem; }
+
+.modal__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+.modal__header h3 { margin: 0 0 0.15rem 0; font-size: 1rem; }
+
+.modal__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.modal__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.85rem 1.25rem;
+  border-top: 1px solid var(--border);
+}
+/* Keep dialog footers balanced: match the Cancel / secondary (and danger)
+   buttons to the primary submit so the pair stays the same height. */
+.modal__footer .btn {
+  padding: 0.35rem 0.8rem;
+  font-size: 0.85rem;
+}
+
+.propsEditor {
+  width: 100%;
+  border-collapse: collapse;
+}
+.propsEditor th {
+  text-align: left;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  border-bottom: 1px solid var(--border);
+}
+.propsEditor td {
+  padding: 0.3rem 0.4rem;
+  vertical-align: top;
+}
+.propsEditor td input {
+  width: 100%;
+  font: inherit;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.propsEditor__row--invalid td input {
+  border-color: var(--err);
+}
+.mono { font-family: var(--mono); font-size: 0.92em; }
+
+/* ── Home page cards ────────────────────────────────────────────────── */
+
+.homeCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.25rem;
+}
+
+.card h2 { margin-top: 0; font-size: 1.05rem; }
+
+.card--health pre {
+  background: #f1f5f9;
+  padding: 0.5rem;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  max-height: 14rem;
+  overflow: auto;
+}
+
+/* ── Page header ────────────────────────────────────────────────────── */
+
+.pageHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.pageHeader h1 { margin: 0; font-size: 1.4rem; }
+
+/* Title + a small status line ("Refreshed Xs ago") sit together on the
+   left side of the header; the page's primary action stays on the right. */
+.pageHeader__titleGroup {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+/* Group multiple actions on the right of the page header. The Link
+   (App settings drill-in) and <button> (App settings) render with
+   subtly different baselines and box sizing by default; forcing
+   `align-items: center` on the row plus `inline-flex` + center
+   alignment on the children normalises both so they line up exactly. */
+.appDetailPage__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.appDetailPage__actions .btn {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1.4;
+}
+
+/* Per-app detail page — header-left back link + H1 (matches the
+   `runDetail__headerLeft` pattern in RunDetailPage). */
+.applicationDetailPage__header {
+  align-items: center;
+}
+.applicationDetailPage__headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+}
+.applicationDetailPage__headerLeft h1 {
+  margin: 0;
+}
+.applicationDetailPage__backLink {
+  font-size: 0.85rem;
+  color: var(--ink-soft, #6b7280);
+  text-decoration: none;
+}
+.applicationDetailPage__backLink:hover {
+  color: var(--brand, #117aca);
+  text-decoration: underline;
+}
+
+/* ── Runs table ────────────────────────────────────────────────────── */
+
+.filterToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+  margin-bottom: 0.75rem;
+}
+
+.runsTable {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 0.92rem;
+}
+
+.runsTable th, .runsTable td {
+  padding: 0.55rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.runsTable thead {
+  background: #f1f5f9;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.runsTable tbody tr:last-child td { border-bottom: 0; }
+
+/* MID-TEST-SCALING Phase F — DRAINED rows render in a muted style so an
+   operator scanning the table can tell "completed naturally" (default
+   row), "force-killed" (ABORTED — left as-is), and "operator-drained"
+   (this rule) apart at a glance. */
+.runsTable__row--drained td {
+  opacity: 0.62;
+  background: var(--surface-muted, rgba(0, 0, 0, 0.02));
+}
+
+/* ── Run detail definitions ────────────────────────────────────────── */
+
+.defList {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.4rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin: 0 0 1.5rem 0;
+  font-size: 0.95rem;
+}
+
+.defList dt {
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+.defList dd { margin: 0; }
+
+.memberReason {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  background: #f1f5f9;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  display: inline-block;
+  max-width: 32rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Run launcher form ─────────────────────────────────────────────── */
+
+.formPage { max-width: 640px; }
+
+.runForm {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.5rem;
+}
+
+.formField {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.formField label {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.formField input,
+.formField textarea,
+.formField select,
+select.formSelect {
+  font: inherit;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+}
+
+.formField textarea { resize: vertical; }
+
+/* Native <select> defaults vary wildly across browsers/OSes (the operator's
+   "I don't like the dropdowns" — they didn't match the text inputs). Normalise
+   them: same box as inputs + a single consistent chevron, and reserve room for
+   it so long option text never collides with the arrow. */
+.formField select,
+select.formSelect {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 2rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%23475569' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.7rem center;
+  cursor: pointer;
+}
+
+.formField input:focus,
+.formField textarea:focus,
+.formField select:focus,
+select.formSelect:focus {
+  outline: 2px solid rgba(17,122,202,0.35);
+  outline-offset: 1px;
+  border-color: var(--primary);
+}
+.formField select:disabled,
+select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
+
+.formField small {
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+}
+
+/* ── ScheduleBuilder (Automation create dialogs) ─────────────────── */
+.scheduleBuilder {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.85rem;
+  background: var(--surface);
+}
+.scheduleBuilder__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.formLabel { font-weight: 600; font-size: 0.9rem; }
+.scheduleBuilder__modeToggle { display: inline-flex; gap: 0.3rem; }
+.scheduleBuilder__simple {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+.scheduleBuilder__simple .formField:only-child { grid-column: 1 / -1; }
+.scheduleBuilder__cronLabel { display: flex; align-items: center; gap: 0.4rem; }
+.infoIcon {
+  border: none;
+  background: transparent;
+  color: var(--primary);
+  cursor: pointer;
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 0 0.15rem;
+}
+.infoIcon:hover { color: var(--primary-d); }
+.cronExamples {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.cronExamples__pick {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  padding: 0.3rem 0.4rem;
+  border-radius: 4px;
+  font: inherit;
+}
+.cronExamples__pick:hover { background: #f1f5f9; }
+.cronExamples__pick code { color: var(--primary); }
+.schedulePreview {
+  border-top: 1px dashed var(--border);
+  padding-top: 0.6rem;
+  font-size: 0.85rem;
+}
+.schedulePreview__list {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  color: var(--ink-soft);
+}
+
+/* ── Automation tables — schedule + next-fire cells ───────────────── */
+.automationGroup { margin-bottom: 1.5rem; }
+.automationGroup__title { margin: 0.5rem 0; }
+
+/* Plain-language cadence over raw cron + zone (shared by per-app detail +
+   platform reports). The human line reads first; the raw cron + zone is
+   secondary so a cron-fluent operator can still verify the expression. */
+.scheduleCell { display: flex; flex-direction: column; gap: 0.1rem; line-height: 1.3; }
+.scheduleCell__human { font-size: var(--fs-sm); }
+.scheduleCell__meta { font-size: var(--fs-2xs); }
+.scheduleCell__meta code { font-size: inherit; }
+
+/* Absolute next fire (in the schedule's zone) stacked over a relative gloss. */
+.nextFireCell { display: flex; flex-direction: column; gap: 0.05rem; line-height: 1.3; }
+.nextFireCell > span { font-size: var(--fs-sm); }
+.nextFireCell small { font-size: var(--fs-2xs); }
+
+.platformSchedules { margin-bottom: 1.5rem; }
+.platformSchedules__head { margin-bottom: 0.5rem; }
+.platformSchedules__head h2 { margin: 0; }
+.platformSchedules__empty { font-size: var(--fs-sm); }
+.platformSchedules__recipients { font-size: var(--fs-xs); }
+
+/* ── Tab bar (Automation: Applications | Platform reports) ─────────── */
+.tabBar {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1rem;
+}
+.tabBar__tab {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 0.5rem 0.85rem;
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: var(--weight-medium);
+  color: var(--ink-soft);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.tabBar__tab:hover { color: var(--ink); }
+.tabBar__tab--active {
+  color: var(--primary-d);
+  border-bottom-color: var(--primary);
+  font-weight: var(--weight-semibold);
+}
+.tabBar__count {
+  font-size: var(--fs-2xs);
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--ink-soft);
+  border-radius: 999px;
+  padding: 0.05rem 0.4rem;
+  min-width: 1.2rem;
+  text-align: center;
+}
+.tabBar__tab--active .tabBar__count { background: rgba(17, 122, 202, 0.12); color: var(--primary-d); }
+
+/* ── Enabled/Disabled toggle pill (replaces the ENABLED column) ────── */
+.enableToggle {
+  appearance: none;
+  font: inherit;
+  font-size: var(--fs-xs);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.18rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--ink-soft);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.enableToggle__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--ink-soft);
+}
+.enableToggle--on {
+  border-color: rgba(16, 185, 129, 0.4);
+  background: rgba(16, 185, 129, 0.10);
+  color: #047857;
+}
+.enableToggle--on .enableToggle__dot { background: var(--ok); }
+.enableToggle--off { background: #f8fafc; }
+.enableToggle:hover:not(:disabled) { border-color: var(--ink-soft); }
+.enableToggle:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* ── Danger button + confirm dialog extras ────────────────────────── */
+/* Destructive confirm — clearly dangerous (red text + border on a light tint)
+   without being a solid block of red. Deepens on hover. */
+.btn--danger {
+  background: rgba(220, 38, 38, 0.08);
+  color: var(--err);
+  border-color: rgba(220, 38, 38, 0.45);
+  transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+.btn--danger:hover:not([disabled]) {
+  background: rgba(220, 38, 38, 0.16);
+  border-color: var(--err);
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
+}
+
+.confirmDialog__body { font-size: var(--fs-sm); line-height: 1.5; }
+.confirmDialog__check {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.confirmDialog__check input { margin-top: 0.15rem; }
+
+/* ── EmailPreviewModal ───────────────────────────────────────────── */
+.emailPreview { width: min(720px, 94vw); }
+.emailPreview__subject {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+}
+.emailPreview__subject .ink-soft { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; }
+.emailPreview__frame {
+  width: 100%;
+  height: 50vh;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.formError {
+  background: rgba(220,38,38,0.08);
+  border: 1px solid rgba(220,38,38,0.25);
+  color: var(--err);
+  padding: 0.6rem 0.8rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.formActions {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}
+
+/* Sticky variant — used at the top of the New Run form column so Start
+   stays in view as the operator scrolls through globalProps + overview.
+   Sits above the chips/header chrome via z-index; surface color +
+   bottom border keep the form fields underneath visually distinct. */
+.formActions--sticky {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin: 0 0 0.6rem 0;
+  padding: 0.6rem 0;
+  background: var(--bg, #fff);
+  border-bottom: 1px solid var(--border, #e5e7eb);
+}
+
+.formError__actions {
+  margin-top: 0.6rem;
+}
+
+/* ── Track F (Step 27) — fleet allocation widget ──────────────────── */
+
+.fleetAllocation {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  background: #fafbfc;
+}
+
+.fleetAllocation__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.fleetAllocation__header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.fleetAllocation__modeToggle {
+  display: inline-flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.fleetAllocation__modeToggle .btn {
+  border: none;
+  border-radius: 0;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+}
+
+.fleetAllocation__modeToggle .btn--active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.fleetAllocation__hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.fleetAllocation__footer {
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+  border-top: 1px dashed var(--border);
+  padding-top: 0.6rem;
+}
+
+.regionGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.6rem;
+}
+
+.regionCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.65rem 0.8rem;
+}
+
+.regionCard--shortfall {
+  border-color: var(--err);
+  background: rgba(220, 38, 38, 0.04);
+}
+
+.regionCard__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.regionCard__name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  font-family: var(--mono);
+}
+
+.regionCard__capacity {
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.regionCard__capacity--zero { color: var(--warn); }
+
+.regionCard__meter {
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.regionCard__meter span {
+  display: block;
+  height: 100%;
+  background: var(--ok);
+  transition: width 0.2s ease;
+}
+
+.regionCard__stepper {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.regionCard__stepper .btn {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+}
+
+.regionCard__count {
+  flex: 1;
+  text-align: center;
+  font: inherit;
+  padding: 0.35rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  -moz-appearance: textfield;
+}
+.regionCard__count::-webkit-outer-spin-button,
+.regionCard__count::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.regionCard__shortfall {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--err);
+}
+
+.regionCard__zero {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--warn);
+}
+
+.allocationFormRows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.allocationFormRow {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.allocationFormRow select {
+  flex: 1;
+  min-width: 160px;
+  font: inherit;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.allocationFormRow input {
+  width: 5rem;
+  font: inherit;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.allocationFormRow--shortfall select,
+.allocationFormRow--shortfall input {
+  border-color: var(--err);
+}
+
+.allocationFormRow__shortfall {
+  flex-basis: 100%;
+  font-size: 0.78rem;
+  color: var(--err);
+}
+
+/* ── Step 17 — runs toolbar (above the table) ─────────────────────── */
+
+.runsToolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.runsToolbar__spacer { flex: 1; }
+
+.runsToolbar__selected {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.runsToolbar__refreshed {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.runsTable__check { width: 1.5rem; padding-right: 0; }
+.runsTable__actions { text-align: right; white-space: nowrap; }
+
+.btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  text-decoration: underline;
+}
+
+.text--muted { color: var(--ink-soft); }
+
+/* ── Run detail — Grafana embed + refresh hint ────────────────────── */
+
+/* 2026-05-16 — header row carries the back link on the LEFT of the
+   H1, matching NewRunPage's "← Back · Title · Badge" pattern. */
+.runDetail__header {
+  align-items: center;
+}
+.runDetail__headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+}
+.runDetail__headerLeft h1 {
+  margin: 0;
+}
+.runDetail__backLink {
+  font-size: 0.85rem;
+  color: var(--ink-soft, #6b7280);
+  text-decoration: none;
+}
+.runDetail__backLink:hover {
+  color: var(--brand, #117aca);
+  text-decoration: underline;
+}
+
+.runDetail__refreshed {
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  margin-top: -0.5rem;
+  margin-bottom: 1rem;
+}
+
+.runDetail__embedHint {
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  margin-bottom: 0.4rem;
+}
+
+.grafanaEmbed {
+  width: 100%;
+  height: 720px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+/* ── Run comparison — side-by-side grid ───────────────────────────── */
+
+/* 2026-05-16 — header pattern mirrors RunDetailPage / ApplicationDetailPage:
+   back link on the LEFT of the H1, consistent across the app. */
+.runsCompare__header {
+  align-items: center;
+}
+.runsCompare__headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+}
+.runsCompare__headerLeft h1 {
+  margin: 0;
+}
+.runsCompare__backLink {
+  font-size: 0.85rem;
+  color: var(--ink-soft, #6b7280);
+  text-decoration: none;
+}
+.runsCompare__backLink:hover {
+  color: var(--brand, #117aca);
+  text-decoration: underline;
+}
+
+.compareGrid {
+  display: grid;
+  grid-template-columns: repeat(var(--compareCols, 2), minmax(0, 1fr));
+  gap: 1rem;
+}
+
+@media (max-width: 1000px) {
+  .compareGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.compareColumn {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0; /* allow children with intrinsic width to shrink */
+}
+
+.compareColumn__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+/* HM-7 — colored chip matching the chart series color for this run.
+   Lets the operator pair the column with its line on the panel below. */
+.compareColumn__swatch {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.compareColumn__link {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* HM-7 — spacing between the two-column header row and the
+   TwoRunMetricsPanel below. */
+.compareMetrics {
+  margin-top: 1rem;
+}
+
+.defList--compact {
+  padding: 0.6rem 0.8rem;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+/* ── Step 18 — blob library page ──────────────────────────────────── */
+
+.dropZone {
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  padding: 2rem 1.25rem;
+  text-align: center;
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 80ms ease, background 80ms ease;
+}
+
+.dropZone:hover { border-color: var(--primary); }
+
+.dropZone--over {
+  border-color: var(--primary);
+  background: rgba(17,122,202,0.06);
+}
+
+.dropZone--uploading {
+  cursor: default;
+  border-style: solid;
+  background: #f8fafc;
+}
+
+/* D-Documents polish — drop zone is gated on Application being picked.
+   Visually muted + cursor signals the gate; clicks surface an inline
+   error rather than opening the file picker. */
+.dropZone--gated {
+  cursor: not-allowed;
+  background: rgba(15, 23, 42, 0.02);
+  border-color: var(--border);
+  opacity: 0.7;
+}
+.dropZone--gated:hover { border-color: var(--border); }
+.dropZone__hint--gated {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+/* 2-column upload row — drop zone left, Application + Description stacked
+   on the right. Single column under 768 px. */
+.uploadRow {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+@media (min-width: 768px) {
+  .uploadRow {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: stretch;
+  }
+}
+.uploadRow__drop {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.uploadRow__meta {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+.uploadRow__meta label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--ink, #1f2937);
+}
+.uploadRow__meta input,
+.uploadRow__meta select {
+  width: 100%;
+}
+
+.dropZone__hint code {
+  font-family: var(--mono);
+  font-size: 0.92em;
+  background: #f1f5f9;
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+}
+
+.uploadProgress {
+  text-align: left;
+  cursor: default;
+}
+
+.uploadProgress__name {
+  font-size: 0.9rem;
+  margin-bottom: 0.4rem;
+}
+
+.uploadProgress__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  margin-top: 0.4rem;
+}
+
+.progressBar {
+  width: 100%;
+  height: 8px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progressBar__fill {
+  height: 100%;
+  background: var(--primary);
+  transition: width 100ms ease-out;
+}
+
+.dropZone__meta {
+  margin-top: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  background: var(--surface);
+}
+
+.dropZone__meta legend {
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  padding: 0 0.4rem;
+}
+
+/* Phase IA-Documents 2026-05-12 — Description textarea on the per-app
+   upload form. Flex-grows to match the left dropZone column height
+   (the parent .uploadRow uses align-items: stretch so both columns
+   have the same height; the textarea's flex:1 + min-height stretches
+   it to fill that height instead of sitting tiny at the top). */
+.uploadRow__meta--description {
+  margin-top: 0;          /* override .dropZone__meta's 1rem so it aligns with the dropZone */
+}
+
+.uploadRow__descriptionInput {
+  flex: 1 1 auto;
+  min-height: 9rem;
+  width: 100%;
+  resize: vertical;
+  padding: 0.6rem 0.75rem;
+  font: inherit;
+  font-size: 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  line-height: 1.4;
+}
+.uploadRow__descriptionInput:focus {
+  outline: 2px solid rgba(14, 165, 233, 0.4);
+  outline-offset: 1px;
+  border-color: rgba(14, 165, 233, 0.6);
+}
+
+.dropZone__metaGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.dropZone__metaGrid label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.dropZone__metaGrid input,
+.dropZone__metaGrid select {
+  font: inherit;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.dropZone__metaWide { grid-column: span 2; }
+
+.hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 1.5rem 0;
+}
+
+.blobRow__desc {
+  font-size: 0.8rem;
+  margin-top: 0.15rem;
+}
+
+.blobRow__id { font-size: 0.78rem; }
+.blobRow__sha { font-size: 0.7rem; }
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+  font-size: 0.9rem;
+}
+
+/* ── Step 19 — log tail panel ─────────────────────────────────────── */
+
+.logTail {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  margin-bottom: 1rem;
+  overflow: hidden;
+}
+
+.logTail__header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  background: #f1f5f9;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.logTail__header .btn {
+  padding: 0.15rem 0.4rem;
+  font-size: 0.95rem;
+}
+
+.logTail__status {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+  flex: 1;
+  min-width: 0;
+}
+
+.logTail__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  background: #f8fafc;
+  font-size: 0.85rem;
+  flex-wrap: wrap;
+}
+
+.logTail__toolbar input[type="text"],
+.logTail__toolbar select,
+.logTail__toolbar input[type="number"] {
+  font: inherit;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff;
+}
+
+.logTail__spacer { flex: 1; }
+
+.logTail__regexError {
+  margin: 0;
+  padding: 0.4rem 0.75rem;
+  background: rgba(220,38,38,0.06);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+
+.logTail__pane {
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  background: #0f172a;
+  color: #e2e8f0;
+  height: 360px;
+  overflow: auto;
+  white-space: pre;          /* preserve formatting; no soft-wrap */
+  outline: none;
+}
+
+.logTail__pane:focus-visible {
+  box-shadow: inset 0 0 0 2px rgba(17,122,202,0.55);
+}
+
+.logTail__title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+
+.logTail__inactiveHint {
+  font-size: 0.78rem;
+  font-style: italic;
+}
+
+.logTail__sourceTag {
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+  background: #fff;
+}
+
+/* ── UI-3 — RunStreamsPanel (Metrics / Console / Logs tabs) ───────── */
+
+.runStreams {
+  margin-top: 1.5rem;
+}
+
+.runStreams__tabStrip {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1rem;
+}
+
+/* Run-detail top tab bar — section tabs on the left, the run-level
+   "Open in Grafana" action right-aligned on the same row. The bar owns
+   the bottom border (so it spans the full width); the inner tab strip
+   drops its own so the underline reads as one continuous rule. */
+.runDetail__tabBar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1rem;
+}
+.runDetail__tabBar .runStreams__tabStrip {
+  border-bottom: 0;
+  margin-bottom: 0;
+}
+/* Right-aligned run-level actions (Download results · Open in Grafana). */
+.runDetail__tabBarActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+  margin-bottom: 0.4rem;
+}
+
+.runStreams__tab {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin: 0 0 -1px 0;
+  padding: 0.6rem 1rem;
+  font: inherit;
+  font-size: 0.95rem;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.runStreams__tab:hover { color: var(--ink); }
+
+.runStreams__tab:focus-visible {
+  outline: 2px solid rgba(17,122,202,0.55);
+  outline-offset: -2px;
+}
+
+.runStreams__tab--active {
+  color: var(--brand);
+  border-bottom-color: var(--brand);
+  font-weight: 600;
+}
+
+.runStreams__panel {
+  outline: none;
+}
+
+.streamPanel__workerBar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.streamPanel__workerBar select {
+  font: inherit;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff;
+}
+
+.metricsPanel {
+  position: relative;
+}
+
+/* HM-3 — header sits above the chart grid: a description block on the
+   left and the operator actions (Refresh + Open in Grafana) on the
+   right. Wraps to a stack on narrow viewports. */
+.metricsPanel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.metricsPanel__headerInfo {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.metricsPanel__status {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.metricsPanel__headerActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.metricsPanel__emptyHint {
+  padding: 1rem;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+/* HM-3 — 4-chart grid. Two layout variants picked by the header
+   toggle and persisted in localStorage:
+   - Grid: 2 columns at ≥ 980 px (compact "all four at a glance")
+   - Stacked: single column always (taller charts; detailed view).
+   Both fall back to single column below 980 px so narrow viewports
+   look the same regardless of preference. */
+.metricsPanel__chartGrid {
+  display: grid;
+  gap: 0.75rem;
+  /* minmax(0, 1fr) — NOT plain 1fr. The uPlot canvas has an intrinsic
+     width, so a `1fr` track inherits a min-width of min-content and the
+     grid refuses to shrink below the charts' current size. When the AI
+     insights column opens beside the charts, that would overflow the
+     flex slot and overlap the column. minmax(0, …) lets the tracks
+     shrink to zero, so the charts reflow (via the canvas ResizeObserver)
+     to fit the narrower space instead. */
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 980px) {
+  .metricsPanel__chartGrid--grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  /* Stacked is single column at every width — no override needed. */
+}
+
+/* Layout toggle — segmented control matching the existing
+   .vizPanelToolbar__modeToggle pattern from UI-6. */
+.metricsPanel__layoutToggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.metricsPanel__layoutToggle .btn {
+  border-radius: 0;
+  border: 0;
+  border-right: 1px solid var(--border);
+  padding: 0.25rem 0.7rem;
+  font-size: 0.85rem;
+}
+.metricsPanel__layoutToggle .btn:last-child { border-right: 0; }
+.metricsPanel__layoutToggle .btn--active {
+  background: rgba(17,122,202,0.10);
+  color: #117aca;
+  font-weight: 600;
+}
+
+/* Time-window picker — uses the app's standard styled <select>
+   (select.formSelect) so it matches every other dropdown; the wrapper
+   just keeps it inline with the header's buttons/toggles. */
+.metricsPanel__windowPicker {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Split-by-region toggle — a standalone on/off button (not a segmented
+   control), so it carries its own active treatment matching the
+   layout toggle's blue tint when engaged. */
+.metricsPanel__regionToggle--active {
+  background: rgba(17,122,202,0.10);
+  border-color: rgba(17,122,202,0.35);
+  color: #117aca;
+  font-weight: 600;
+}
+
+/* HM-6 — two-run comparison panel. Single full-width column of three
+   stacked charts (TPS, Avg RT, Error %). Reuses .metricsPanel__layoutToggle
+   for the elapsed/absolute toggle, plus the per-run color-legend chips. */
+.twoRunMetricsPanel {
+  position: relative;
+}
+
+.twoRunMetricsPanel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.twoRunMetricsPanel__headerInfo {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.twoRunMetricsPanel__status {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.twoRunMetricsPanel__headerActions {
+  display: inline-flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.twoRunMetricsPanel__legend {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  display: inline-flex;
+  gap: 0.9rem;
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+.twoRunMetricsPanel__legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.twoRunMetricsPanel__swatch {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.twoRunMetricsPanel__chartStack {
+  display: grid;
+  /* minmax(0, 1fr): same reasoning as .metricsPanel__chartGrid — lets the
+     stacked charts shrink when the "Explain the delta" column opens beside
+     them, rather than overflowing into it. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+/* Two-run compare: charts left, "Explain the delta" column right (mirrors the
+   single-run Metrics tab's .metricsPanel__body). */
+.twoRunMetricsPanel__body {
+  display: flex;
+  gap: 1rem;
+  align-items: stretch;
+}
+.twoRunMetricsPanel__charts {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Same reason as .metricsPanel__charts: clip the canvas overshoot while
+     the charts reflow, so they never paint over the insights column. */
+  overflow: hidden;
+}
+@media (max-width: 860px) {
+  .twoRunMetricsPanel__body { flex-direction: column; }
+}
+
+.twoRunMetricsPanel__emptyHint {
+  padding: 1rem;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+/* ── Capacity operator surface ──────────────
+   Per-region panel showing live pod list + Spin Up / Restart / Drain.
+   Reuses existing .capacityCard, .capacityBar, .capacityChips. */
+
+.regionPanel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  background: var(--surface);
+  margin-top: 0.75rem;
+}
+.regionPanel--warn { border-color: rgba(245, 158, 11, 0.4); }
+.regionPanel--err  { border-color: rgba(220, 38, 38, 0.45); }
+
+.regionPanel__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+.regionPanel__title {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.regionPanel__region {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+/* Compact inline utilization bar in the region header (replaces the old
+   full-width bar that sat below it). */
+.regionPanel__util {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+}
+.regionPanel__utilBar {
+  width: 90px;
+  min-width: 90px;
+  height: 8px;
+}
+.regionPanel__maxInput {
+  width: 5rem;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+.regionPanel__empty {
+  margin-top: 0.5rem;
+  padding: 0.6rem 0.8rem;
+  background: var(--surface-2, #f8fafc);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+/* Generic pill-shaped chip — reused for state badges + counters. */
+.chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  background: #f1f5f9;
+  border: 1px solid var(--border);
+  font-size: 0.78rem;
+  line-height: 1.2;
+  color: var(--ink);
+}
+.chip--ok   { background: rgba(16,185,129,0.10); border-color: rgba(16,185,129,0.35); color: var(--ok); }
+.chip--warn { background: rgba(245,158,11,0.10); border-color: rgba(245,158,11,0.4);  color: #b45309; }
+.chip--err  { background: rgba(220,38,38,0.10);  border-color: rgba(220,38,38,0.4);   color: var(--err); }
+
+/* Pod table inside the region panel. */
+.podTable { margin-top: 0.6rem; }
+.podTable th,
+.podTable td { padding: 0.45rem 0.6rem; font-size: 0.85rem; }
+.podRow__actions {
+  display: flex;
+  gap: 0.4rem;
+  justify-content: flex-end;
+}
+
+.btn--inline {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.78rem;
+}
+/* Smaller variant for compact toolbars (state filter chips, per-row Drain). */
+.btn--sm {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.78rem;
+}
+.btn--danger {
+  color: var(--err);
+}
+.btn--danger:hover:not(:disabled) {
+  background: rgba(220,38,38,0.08);
+  border-color: rgba(220,38,38,0.4);
+}
+
+/* MID-TEST-SCALING smoke-fix-2 (2026-05-15) — Worker Fleet tab toolbar +
+   bulk-selection bar. The toolbar holds the state filter chips on the
+   left and action buttons (Add workers, Stop test) on the right; the
+   bulk bar appears beneath when the operator checks ≥1 row. */
+.fleetTab {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.fleetTab__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  padding: 0.4rem 0;
+}
+.fleetTab__filterChips {
+  display: flex;
+  gap: 0.25rem;
+}
+.fleetTab__spacer {
+  flex: 1 1 auto;
+}
+.fleetTab__bulkBar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(56, 122, 240, 0.08);
+  border: 1px solid rgba(56, 122, 240, 0.25);
+  border-radius: 6px;
+  font-size: 0.88rem;
+}
+
+/* Toast for capacity actions — a compact floating overlay pinned to the
+   bottom-right corner (not a full-width banner). Click to dismiss;
+   auto-dismiss in 6s. */
+.toast {
+  position: fixed;
+  right: 1.25rem;
+  /* Float above the signature footer instead of overlapping it. */
+  bottom: calc(var(--footer-height) + 1rem);
+  z-index: 1000;
+  max-width: min(360px, calc(100vw - 2.5rem));
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  animation: toastIn 0.18s ease-out;
+}
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast { animation: none; }
+}
+.toast--ok   { border-color: rgba(16,185,129,0.45); background: rgba(16,185,129,0.10); }
+.toast--warn { border-color: rgba(245,158,11,0.45); background: rgba(245,158,11,0.10); }
+.toast--err  { border-color: rgba(220,38,38,0.45);  background: rgba(220,38,38,0.10); }
+.toast strong { font-size: 0.86rem; }
+.toast__detail {
+  margin-top: 0.2rem;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+
+/* ── Phase 5b — Capacity LIST page (rebuilt to match Applications IA) ─── */
+
+.capacityPage__regionTotals {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.capacityListToolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin: 0.75rem 0 0.5rem;
+}
+.capacityListToolbar__search {
+  flex: 0 1 18rem;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.capacityListTable th { white-space: nowrap; }
+.capacityListTable th.num,
+.capacityListTable td.num { text-align: right; }
+.capacityListTable .capacityBar { width: 8rem; }
+.capacityListRow--warn td { background: rgba(245, 158, 11, 0.05); }
+.capacityListRow--err  td { background: rgba(220, 38, 38, 0.06); }
+.capacityListRow__name { font-weight: 600; }
+
+.sortHeader {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  /* Some browsers (Safari) reset text-transform + letter-spacing on
+     <button>; restore explicitly so SortHeader buttons match the
+     uppercase / wide-tracking look of the surrounding `<th>` cells. */
+  text-transform: inherit;
+  letter-spacing: inherit;
+}
+.sortHeader:hover { text-decoration: underline; }
+.sortHeader--active { color: var(--ink); font-weight: 600; }
+.sortHeader__arrow { font-size: 0.7em; margin-left: 0.2rem; }
+
+/* ── Phase 5b — Capacity DETAIL page (drill-in) ──────────────────────── */
+
+.capacityDetail__title {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0;
+}
+
+.regionPanel__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.provisionGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.provisionGroup__count {
+  width: 4rem;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.bulkToolbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid rgba(14, 165, 233, 0.4);
+  background: rgba(14, 165, 233, 0.06);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+.bulkToolbar__count {
+  font-weight: 600;
+  margin-right: 0.5rem;
+}
+
+.podTable__check { width: 2rem; text-align: center; }
+.podRow--selected { background: rgba(14, 165, 233, 0.05); }
+
+/* Bulk-action confirmation modal — width override lives on .modal--bulk
+   in the modal block above. */
+.bulkActionList {
+  margin-bottom: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2, #f8fafc);
+}
+.bulkActionList--skip {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.05);
+}
+.bulkActionList__title {
+  margin: 0 0 0.4rem 0;
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+.bulkActionList__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+}
+.bulkActionList__items li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+/* ── Phase 5c — Capacity polish (clickable rows, skeleton, toast CTA) ── */
+
+.capacityListRow--clickable {
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+.capacityListRow--clickable:hover td,
+.capacityListRow--clickable:focus td {
+  background: rgba(14, 165, 233, 0.06);
+}
+.capacityListRow--clickable:focus {
+  outline: 2px solid rgba(14, 165, 233, 0.6);
+  outline-offset: -2px;
+}
+
+/* Detail-page navigation buttons (Open Application / Launch a Run). */
+.capacityDetail__nav {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+/* Toast CTA — the optional follow-up link rendered below the toast text in
+   the compact overlay. */
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+.toast__body { flex: 1 1 100%; cursor: pointer; }
+.toast__cta {
+  flex: 0 0 auto;
+  padding: 0.3rem 0.7rem;
+  border-radius: 4px;
+  background: rgba(14, 165, 233, 0.12);
+  border: 1px solid rgba(14, 165, 233, 0.4);
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.toast__cta:hover { background: rgba(14, 165, 233, 0.18); }
+
+/* Loading skeleton — shimmer placeholder used while initial fetch resolves. */
+@keyframes skeletonShimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.skeleton {
+  display: inline-block;
+  background: linear-gradient(
+    90deg,
+    rgba(0,0,0,0.05) 25%,
+    rgba(0,0,0,0.10) 50%,
+    rgba(0,0,0,0.05) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeletonShimmer 1.4s ease-in-out infinite;
+  border-radius: 4px;
+  height: 1em;
+  vertical-align: middle;
+}
+.skeleton--text { min-width: 3rem; }
+.skeleton--chip {
+  width: 6rem;
+  height: 1.4em;
+  border-radius: 999px;
+}
+.skeleton--bar {
+  width: 8rem;
+  height: 0.5rem;
+  border-radius: 999px;
+}
+.capacityListRow--skeleton { cursor: default; }
+.capacityListRow--skeleton:hover td,
+.capacityListRow--skeleton:focus td { background: transparent; }
+
+/* ── Region picker (Capacity tab) — USA map + checklist ──────────────── */
+
+.modal--regions { max-width: 700px; width: 94vw; }
+.regionPicker { display: flex; flex-direction: column; gap: 0.9rem; }
+
+/* App name shown inline next to a modal title (lighter than the title). */
+.modal__titleApp {
+  font-weight: 500;
+  font-size: 0.92em;
+  color: var(--ink-soft);
+}
+.modal__titleApp::before { content: "· "; }
+
+.regionMap {
+  width: 100%;
+  height: auto;
+  background: var(--surface-2, #f8fafc);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.regionMap__land {
+  fill: rgba(15, 23, 42, 0.06);
+  stroke: rgba(15, 23, 42, 0.28);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.regionPin { cursor: pointer; }
+.regionPin:focus { outline: none; }
+.regionPin__halo {
+  fill: rgba(14, 165, 233, 0.14);
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.regionPin:hover .regionPin__halo,
+.regionPin:focus .regionPin__halo,
+.regionPin--on .regionPin__halo { opacity: 1; }
+.regionPin__dot {
+  fill: var(--surface);
+  stroke: rgba(15, 23, 42, 0.5);
+  stroke-width: 2.5;
+  transition: fill 150ms ease, stroke 150ms ease;
+}
+.regionPin--on .regionPin__dot {
+  fill: var(--accent, #0ea5e9);
+  stroke: var(--accent, #0ea5e9);
+}
+.regionPin__label {
+  text-anchor: middle;
+  font-size: 22px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.regionPin__id {
+  text-anchor: middle;
+  font-size: 17px;
+  fill: var(--ink-soft);
+  font-family: var(--mono);
+}
+.regionPin__lock { text-anchor: middle; font-size: 15px; }
+
+.regionChecklist {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem;
+}
+.regionChecklist__row {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.regionChecklist__row label {
+  display: flex; align-items: center; gap: 0.5rem; flex: 1; cursor: pointer;
+}
+.regionChecklist__row.is-selected {
+  border-color: rgba(14, 165, 233, 0.4);
+  background: rgba(14, 165, 233, 0.06);
+}
+.regionChecklist__label { font-weight: 600; font-size: 0.85rem; }
+.regionChecklist__id { font-size: 0.74rem; }
+
+.regionPicker__legacy { display: flex; flex-direction: column; gap: 0.4rem; }
+.regionPicker__legacyChips { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.regionPicker__legacyChips .chip { cursor: pointer; }
+
+.regionPicker__summary {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  padding-top: 0.5rem; border-top: 1px solid var(--border);
+  font-size: 0.8rem;
+}
+
+@media (max-width: 560px) {
+  .regionChecklist { grid-template-columns: 1fr; }
+}
+
+/* ── AI insights panels ─────────────────────────────────
+   Shared by RunInsightsPanel (single-run) and CompareInsightsPanel (two-run).
+   Sits below the metrics charts; severity / verdict chips reuse the .badge
+   palette so colours match the rest of the app. */
+.aiPanel {
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.aiPanel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.aiPanel__title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+.aiPanel__actions {
+  display: flex;
+  gap: 0.4rem;
+}
+.aiPanel__loading {
+  margin: 0.6rem 0 0;
+  color: var(--ink-soft);
+  font-style: italic;
+}
+.aiPanel__quota {
+  margin: 0.6rem 0 0;
+  color: var(--warn);
+}
+.aiPanel__body {
+  margin-top: 0.6rem;
+}
+.aiPanel__summary {
+  margin: 0 0 0.6rem;
+  line-height: 1.5;
+}
+.aiPanel__findings {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.aiPanel__finding {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.aiPanel__finding .badge {
+  flex: 0 0 auto;
+  text-transform: capitalize;
+}
+.aiPanel__findingText {
+  line-height: 1.45;
+}
+.aiPanel__findingDetail {
+  color: var(--ink-soft);
+}
+.aiPanel__meta {
+  margin: 0.4rem 0 0;
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+}
+.aiPanel__disclaimer {
+  margin: 0.25rem 0 0;
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+  font-style: italic;
+}
+
+/* AI insights as a right-hand column on the run-detail Metrics tab
+   (toggled next to "Split by region"). The column is height-matched to the
+   chart area and scrolls internally so opening it never grows the page — the
+   whole view stays on one screen. The two-run CompareInsightsPanel keeps the
+   plain full-width .aiPanel below its charts (unchanged). */
+.metricsPanel__body {
+  display: flex;
+  gap: 1rem;
+  align-items: stretch;
+}
+.metricsPanel__charts {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Clip while the uPlot canvases catch up: the flex row reserves the
+     column's width instantly, but each canvas keeps its old (wider) pixel
+     size until its throttled ResizeObserver fires (~100ms). Without this,
+     the oversized canvas paints OVER the insights column for that frame.
+     Clipping hides the brief overshoot; the charts reflow to fit a moment
+     later. */
+  overflow: hidden;
+}
+.aiPanel--side {
+  margin-top: 0;
+  flex: 0 0 420px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 78vh;   /* safety cap: a long summary never overflows the viewport */
+}
+/* Ease the column in so its appearance + the charts' reflow read as one
+   smooth motion rather than a pop. Honoured only when the user hasn't asked
+   to reduce motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .aiPanel--side {
+    animation: aiPanelSlideIn 160ms ease-out;
+  }
+}
+@keyframes aiPanelSlideIn {
+  from { opacity: 0; transform: translateX(8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.aiPanel--side .aiPanel__scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin-top: 0.4rem;
+}
+.aiPanel__close {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 1.15rem;
+  line-height: 1;
+  color: var(--ink-soft);
+  padding: 0 0.2rem;
+}
+.aiPanel__close:hover { color: var(--ink); }
+.aiPanel__hint {
+  margin: 0.6rem 0 0;
+  color: var(--ink-soft);
+  font-style: italic;
+}
+/* Narrow screens: drop the side column below the charts (scroll is acceptable here). */
+@media (max-width: 860px) {
+  .metricsPanel__body { flex-direction: column; }
+  .aiPanel--side { flex-basis: auto; max-height: 420px; }
+}

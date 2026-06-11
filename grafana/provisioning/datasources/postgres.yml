@@ -1,0 +1,28 @@
+# Grafana datasource provisioning — Postgres.
+#
+# Connects to the metrics database as metricsReader (the read-only user
+# from the Step 9 GRANT split). The perTestLiveMetrics dashboard runs
+# SQL queries against metrics."workerMetric" through this datasource.
+#
+# Cloud equivalent: AWS RDS endpoint, IAM-DB authentication. The
+# username + password fields go away in cloud and are replaced by an
+# IAM-assumed role.
+
+apiVersion: 1
+
+datasources:
+  - name: Postgres
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    user: metricsReader
+    secureJsonData:
+      password: localdev
+    jsonData:
+      database: jmetercloud_metrics
+      sslmode: disable
+      maxOpenConns: 5
+      maxIdleConns: 2
+      connMaxLifetime: 14400
+      postgresVersion: 1600
+      timescaledb: false

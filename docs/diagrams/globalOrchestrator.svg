@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 440" font-family="-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 z" fill="#475569"/></marker>
+  </defs>
+  <rect width="1120" height="440" fill="#ffffff"/>
+  <text x="30" y="34" font-size="19" font-weight="700" fill="#0f172a">jmeter-global-orchestrator — fan-out &amp; run management</text>
+  <text x="30" y="56" font-size="12.5" fill="#64748b">Claims IDLE pods for the app with SELECT … FOR UPDATE SKIP LOCKED, then fans out the start envelope.</text>
+
+  <g font-size="12.5">
+    <rect x="30" y="100" width="150" height="64" rx="8" fill="#f1f5f9" stroke="#475569" stroke-width="1.5"/>
+    <text x="105" y="128" text-anchor="middle" font-weight="600" fill="#1e293b">UI / client</text>
+    <text x="105" y="147" text-anchor="middle" font-size="10.5" fill="#64748b" font-family="monospace">POST /api/v1/runs</text>
+
+    <rect x="240" y="92" width="200" height="80" rx="8" fill="#dbeafe" stroke="#1e40af" stroke-width="1.5"/>
+    <text x="340" y="120" text-anchor="middle" font-weight="600" fill="#1e3a8a">RunService</text>
+    <text x="340" y="139" text-anchor="middle" font-size="10.5" fill="#2563eb">validate · create runId</text>
+    <text x="340" y="156" text-anchor="middle" font-size="10.5" fill="#2563eb">@Transactional claim</text>
+
+    <rect x="240" y="240" width="200" height="84" rx="8" fill="#dbeafe" stroke="#1e40af" stroke-width="1.5"/>
+    <text x="340" y="266" text-anchor="middle" font-weight="600" fill="#1e3a8a">Pod registry</text>
+    <text x="340" y="285" text-anchor="middle" font-size="10.5" fill="#2563eb">register · heartbeat (30s)</text>
+    <text x="340" y="302" text-anchor="middle" font-size="10.5" fill="#2563eb">sweep LOST (&gt;90s)</text>
+    <text x="340" y="318" text-anchor="middle" font-size="10.5" fill="#2563eb">PodProvisioner (docker)</text>
+
+    <!-- storage -->
+    <rect x="520" y="240" width="220" height="84" rx="8" fill="#d1fae5" stroke="#059669" stroke-width="1.5"/>
+    <text x="630" y="266" text-anchor="middle" font-weight="600" fill="#065f46">jmetercloud_globalrun</text>
+    <text x="630" y="285" text-anchor="middle" font-size="10.5" fill="#047857">run · runFleetMember · pod</text>
+    <text x="630" y="302" text-anchor="middle" font-size="10.5" fill="#047857">application · capacity</text>
+    <text x="630" y="318" text-anchor="middle" font-size="10.5" fill="#047857" font-family="monospace">Postgres :5432</text>
+
+    <rect x="520" y="100" width="220" height="64" rx="8" fill="#d1fae5" stroke="#059669" stroke-width="1.5"/>
+    <text x="630" y="128" text-anchor="middle" font-weight="600" fill="#065f46">jmetercloud_metrics</text>
+    <text x="630" y="147" text-anchor="middle" font-size="10.5" fill="#047857">read rollup for run detail</text>
+
+    <!-- workers -->
+    <rect x="800" y="92" width="250" height="120" rx="8" fill="#f0fdfa" stroke="#5eead4" stroke-dasharray="6 4"/>
+    <text x="925" y="112" text-anchor="middle" font-size="11" font-weight="700" fill="#0f766e">claimed worker pods (app, region)</text>
+    <rect x="818" y="126" width="100" height="34" rx="6" fill="#ccfbf1" stroke="#0d9488"/>
+    <text x="868" y="148" text-anchor="middle" font-size="10.5" fill="#115e59">local-orch</text>
+    <rect x="932" y="126" width="100" height="34" rx="6" fill="#ccfbf1" stroke="#0d9488"/>
+    <text x="982" y="148" text-anchor="middle" font-size="10.5" fill="#115e59">local-orch</text>
+    <rect x="818" y="168" width="100" height="34" rx="6" fill="#ccfbf1" stroke="#0d9488"/>
+    <text x="868" y="190" text-anchor="middle" font-size="10.5" fill="#115e59">local-orch</text>
+    <rect x="932" y="168" width="100" height="34" rx="6" fill="#ccfbf1" stroke="#0d9488"/>
+    <text x="982" y="190" text-anchor="middle" font-size="10.5" fill="#115e59">… ×N</text>
+  </g>
+
+  <g stroke="#475569" stroke-width="1.6" fill="none" marker-end="url(#a)">
+    <line x1="180" y1="132" x2="238" y2="132"/>
+    <!-- runservice -> claim registry -->
+    <path d="M330,172 V238"/>
+    <!-- registry <-> globalrun -->
+    <line x1="440" y1="282" x2="518" y2="282"/>
+    <!-- runservice -> metrics read -->
+    <path d="M440,120 H518"/>
+    <!-- runservice -> fan out workers -->
+    <path d="M440,116 Q620,70 800,116"/>
+  </g>
+
+  <g font-size="10.5" fill="#64748b">
+    <text x="335" y="208" text-anchor="middle">claim IDLE pods</text>
+    <text x="479" y="274" text-anchor="middle">SKIP LOCKED</text>
+    <text x="479" y="136" text-anchor="middle">read</text>
+    <text x="700" y="90" text-anchor="middle" fill="#1e293b">fan-out POST /api/v1/test · poll status</text>
+  </g>
+</svg>

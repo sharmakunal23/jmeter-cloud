@@ -1,0 +1,54 @@
+spring:
+  application:
+    name: document-service
+  profiles:
+    default: local
+
+server:
+  port: ${HTTP_PORT:8084}
+  address: ${HTTP_BIND_ADDRESS:0.0.0.0}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always
+  # OBSERVABILITY Phase B — distributed tracing.
+  # See jmeter-global-orchestrator/application.yml for the locked-in
+  # decisions on sampling rate (0.01 default) + OTLP transport (HTTP at
+  # 4318, gRPC swap is a single config flip).
+  tracing:
+    sampling:
+      probability: ${MANAGEMENT_TRACING_SAMPLING_PROBABILITY:0.01}
+  otlp:
+    tracing:
+      endpoint: ${MANAGEMENT_OTLP_TRACING_ENDPOINT:http://jaeger:4318/v1/traces}
+      transport: http
+
+# Swagger UI — points at the hand-curated /openapi.yaml served from the
+# JAR's static/ root (api/openapi.yaml is mapped there by the pom's
+# <resources> block). Visitors land on /swagger-ui.html and Swagger UI
+# fetches the spec from /openapi.yaml.
+springdoc:
+  swagger-ui:
+    url: /openapi.yaml
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+
+documentService:
+  # local: LocalFsBlobStore (default, always built).
+  # s3:    S3BlobStore (compiled only under -Pcloud profile — see pom.xml).
+  backend: ${DOCUMENT_SERVICE_BACKEND:local}
+  localFs:
+    rootPath: ${DOCUMENT_SERVICE_LOCAL_FS_ROOT:/var/lib/document-service/blobs}
+  s3:
+    bucket:    ${DOCUMENT_SERVICE_S3_BUCKET:}
+    region:    ${DOCUMENT_SERVICE_S3_REGION:}
+    # endpoint / pathStyle accommodate non-AWS S3 implementations
+    # (LocalStack, MinIO, Cloudflare R2). Leave both unset for real AWS S3.
+    endpoint:  ${DOCUMENT_SERVICE_S3_ENDPOINT:}
+    pathStyle: ${DOCUMENT_SERVICE_S3_PATH_STYLE:false}

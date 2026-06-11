@@ -1,0 +1,31 @@
+# ── Secrets / environment ───────────────────────────────────────
+# .env carries a real key locally (ANTHROPIC_API_KEY) — never commit it.
+# Clone-and-run path: `cp .env.example .env`, then fill in any secrets.
+.env
+.env.local
+**/.env.local
+
+# ── Build output (regenerable) ──────────────────────────────────
+**/target/
+**/dist/
+**/node_modules/
+node_modules/
+
+# ── IDE / editor ────────────────────────────────────────────────
+.idea/
+**/.idea/
+*.iml
+.vscode/
+
+# ── OS cruft ────────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+
+# ── Runtime / logs / diagnostics ────────────────────────────────
+**/.runtime/
+jmeter-local-orchestrator/tmp/
+**/heapdumps/
+*.log
+
+# ── Local backups / snapshots ───────────────────────────────────
+*.checkpoint.*.tar.gz

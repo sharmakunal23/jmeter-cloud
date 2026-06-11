@@ -1,0 +1,199 @@
+openapi: 3.0.3
+
+info:
+  title: jmeter-metrics-consumer
+  version: 1.0.0
+  summary: Spring Kafka consumer that lands WorkerMetricBatch envelopes into Postgres.
+  description: |
+    Consumes Avro-encoded `WorkerMetricBatch` envelopes from
+    `jmeter.metrics.perSecond` and writes per-row aggregates into
+    `metrics."workerMetric"` via multi-row INSERT with `ON CONFLICT DO NOTHING`.
+
+    **Operating model.** The Kafka path is the primary ingest. The
+    HTTP `/api/v1/ingest` endpoint exists as the K-4 fallback path used by
+    the local-orchestrator's `MetricsDispatcher` (K-5)
+    when Kafka is unreachable. Both paths share the same writer +
+    idempotency contract: the Postgres PK
+    `(runId, workerId, label, windowSecond)` absorbs duplicates from a
+    Kafka recovery race.
+
+    **Local dev posture.** No auth (matches the platform's local profile).
+    Cloud profile gates `/api/v1/ingest` behind bearer-JWT (S-4).
+  contact:
+    name: Performance Engineering
+  license:
+    name: Apache-2.0
+
+servers:
+  - url: http://localhost:8083
+    description: Local dev (binds to HTTP_PORT, default 8083).
+  - url: http://{host}:{port}
+    description: Pod / instance — host and port are deployment-specific.
+    variables:
+      host:
+        default: jmeter-metrics-consumer
+      port:
+        default: "8083"
+
+tags:
+  - name: ingest
+    description: HTTP fallback ingest path (K-4). Used when Kafka send fails.
+  - name: actuator
+    description: Spring Boot Actuator — health, info, Prometheus metrics.
+
+paths:
+
+  /api/v1/ingest:
+    post:
+      tags: [ingest]
+      summary: Ingest a single WorkerMetricBatch envelope (HTTP fallback).
+      description: |
+        Used by the local-orchestrator's `MetricsDispatcher` (K-5) when a
+        Kafka send fails. Body is raw Avro binary — no Schema Registry
+        consultation; the `WorkerMetricBatch` schema is fixed at deploy
+        time per the K-0 hard-cutover decision.
+
+        The internal write path is identical to the Kafka path —
+        `WorkerMetricWriter.writeBatch(List.of(envelope))` — so the
+        idempotency contract `(runId, workerId, label, windowSecond)` PK
+        absorbs duplicates from a Kafka recovery race.
+
+        **Body size cap** is `metricsConsumer.ingest.maxBodyBytes` (default
+        2 MB). Checked before Avro deserialise so an oversize garbage payload
+        can't pin reader memory.
+      operationId: ingestEnvelope
+      requestBody:
+        description: Avro-binary `WorkerMetricBatch`. See `kafka/schemas/WorkerMetricBatch.avsc`.
+        required: true
+        content:
+          application/avro:
+            schema:
+              type: string
+              format: binary
+              description: Raw Avro binary encoding of WorkerMetricBatch.
+      responses:
+        '202':
+          description: Accepted. `rowsInserted` may be less than entry count if duplicates collapsed on the PK.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResponse'
+              examples:
+                happyPath:
+                  summary: 200-entry envelope, 200 fresh rows
+                  value:
+                    rowsInserted: 200
+                    code: ACCEPTED
+                    message: null
+                idempotent:
+                  summary: All entries collided with existing PKs
+                  value:
+                    rowsInserted: 0
+                    code: ACCEPTED
+                    message: null
+        '400':
+          description: |
+            Body could not be deserialised as `WorkerMetricBatch`. The
+            dispatcher should NOT retry — payload is corrupt.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResponse'
+              example:
+                rowsInserted: 0
+                code: INVALID_AVRO
+                message: "Malformed data. Length is negative: -56"
+        '413':
+          description: |
+            Body exceeded `metricsConsumer.ingest.maxBodyBytes`. Defense
+            in depth — checked before Avro deserialise.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResponse'
+              example:
+                rowsInserted: 0
+                code: PAYLOAD_TOO_LARGE
+                message: "body 3500000 bytes exceeds maxBodyBytes 2097152"
+        '503':
+          description: |
+            Postgres unreachable (`DataAccessException`). The dispatcher
+            SHOULD retry via the K-5 retry sweeper.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResponse'
+              example:
+                rowsInserted: 0
+                code: POSTGRES_UNAVAILABLE
+                message: "Connection to postgres:5432 refused"
+
+  /actuator/health:
+    get:
+      tags: [actuator]
+      summary: Aggregate health — DB connectivity + Kafka reachability.
+      description: |
+        DOWN if Postgres is unreachable or the Kafka broker is unreachable
+        (the `KafkaHealthIndicator` probes the broker on every health check).
+      responses:
+        '200':
+          description: UP — service can read/write Postgres and reach Kafka.
+        '503':
+          description: DOWN — Postgres or Kafka is unreachable.
+
+  /actuator/info:
+    get:
+      tags: [actuator]
+      summary: Build info exposed by Spring Boot Actuator.
+      responses:
+        '200':
+          description: Build / version metadata.
+
+  /actuator/prometheus:
+    get:
+      tags: [actuator]
+      summary: Prometheus-format metrics scrape endpoint.
+      description: |
+        Exposes Micrometer counters / gauges including:
+
+        - `metricsConsumer.records.{consumed,inserted,duplicates,failures}` — Kafka path
+        - `metricsConsumer.envelopes.consumed` — Kafka envelope grain
+        - `metricsConsumer.batch.duration` — wall-time per Kafka batch
+        - `metricsConsumer.ingest.{envelopesAccepted,rejectedBadRequest,rejectedTooLarge,rejectedDbDown}` — HTTP fallback path (K-4)
+        - `kafka.consumer.*` — kafka-clients consumer metrics
+        - `hikaricp.*` — Postgres connection pool
+        - `jvm.*`, `process.*`, `system.*` — standard Spring Boot Actuator metrics
+      responses:
+        '200':
+          description: Prometheus exposition format.
+
+components:
+  schemas:
+    IngestResponse:
+      type: object
+      description: Response shape for `POST /api/v1/ingest`.
+      required: [rowsInserted, code]
+      properties:
+        rowsInserted:
+          type: integer
+          description: |
+            Rows actually written to `metrics."workerMetric"`. May be less
+            than the envelope's entry count if duplicates collapsed via
+            `ON CONFLICT DO NOTHING`.
+          example: 200
+        code:
+          type: string
+          enum: [ACCEPTED, INVALID_AVRO, PAYLOAD_TOO_LARGE, POSTGRES_UNAVAILABLE]
+          description: |
+            Short status code.
+
+            - `ACCEPTED` — happy path (HTTP 202)
+            - `INVALID_AVRO` — body could not be deserialised (HTTP 400; do not retry)
+            - `PAYLOAD_TOO_LARGE` — body exceeded `maxBodyBytes` (HTTP 413; do not retry)
+            - `POSTGRES_UNAVAILABLE` — DB unreachable (HTTP 503; retry)
+          example: ACCEPTED
+        message:
+          type: string
+          nullable: true
+          description: Human-readable detail; null on success.
+          example: null

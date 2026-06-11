@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Bounded async appender stack for the metrics-consumer.
+
+  Why this exists: a downstream client that misbehaves (sends bad Avro,
+  hits a 4xx path repeatedly, dead-letters every batch) can produce
+  thousands of WARN lines per second. Without bounds on the in-flight
+  log queue, those lines pile up in heap until the JVM gets OOM-killed
+  (incident 2026-05-15). The pairing here:
+
+  - RateLimitedLogger (com.perf.metricsconsumer.util) caps the *rate*
+    at the call site to one line per second per error key.
+  - This logback config caps the *buffer* downstream of the call sites:
+    the AsyncAppender's bounded queue + discardingThreshold means a
+    burst above the rate-limiter still can't exhaust heap.
+
+  Layered safety: the call-site rate limit handles steady-state spam;
+  the queue bound handles a sudden burst before the rate limit converges.
+
+  OBSERVABILITY Phase A (2026-05-25): swapped the plaintext encoder for
+  logstash-logback-encoder so every line ships as a single JSON record
+  with the MDC keys populated by the upcoming TracingFilter (Phase C)
+  promoted to top-level fields. The async bound + discardingThreshold
+  apply identically to the JSON path; encoder swap is upstream of the
+  queue, so the OOM-safety guarantees are preserved. Operators who want
+  the original pretty plaintext during interactive dev set DEV_MODE_LOG=true.
+-->
+<configuration>
+
+    <!-- Reuse Spring Boot's default console layout for parity with other
+         services. defaults.xml gives us CONSOLE_LOG_PATTERN. -->
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+    <springProperty scope="context" name="appName"
+                    source="spring.application.name"
+                    defaultValue="jmeter-metrics-consumer"/>
+
+    <appender name="CONSOLE_TEXT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${CONSOLE_LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <appender name="CONSOLE_JSON" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeMdcKeyName>traceId</includeMdcKeyName>
+            <includeMdcKeyName>spanId</includeMdcKeyName>
+            <includeMdcKeyName>runId</includeMdcKeyName>
+            <includeMdcKeyName>applicationId</includeMdcKeyName>
+            <includeMdcKeyName>workerId</includeMdcKeyName>
+            <includeMdcKeyName>actor</includeMdcKeyName>
+            <includeMdcKeyName>errorContext</includeMdcKeyName>
+            <includeMdcKeyName>topic</includeMdcKeyName>
+            <includeMdcKeyName>partition</includeMdcKeyName>
+            <includeMdcKeyName>offset</includeMdcKeyName>
+            <!-- OBSERVABILITY Phase E — access-log MDC keys. -->
+            <includeMdcKeyName>method</includeMdcKeyName>
+            <includeMdcKeyName>path</includeMdcKeyName>
+            <includeMdcKeyName>status</includeMdcKeyName>
+            <includeMdcKeyName>latencyMs</includeMdcKeyName>
+            <includeMdcKeyName>clientIp</includeMdcKeyName>
+            <includeMdcKeyName>userAgent</includeMdcKeyName>
+            <customFields>{"service":"${appName}"}</customFields>
+        </encoder>
+    </appender>
+
+    <!--
+      Bounded async wrapper — wraps whichever sync appender is active
+      so the OOM-safety guarantees hold for both the JSON and plaintext
+      paths. The appender-ref is resolved at queue-attach time; the <if>
+      below picks which sync appender feeds it.
+
+      - queueSize=2048: at ~0.5 KB per line, ~1 MB worst-case heap pinned
+        by the queue. Bounds the OOM blast radius.
+      - discardingThreshold=20: when the queue is 80%+ full, Logback drops
+        TRACE/DEBUG/INFO and only keeps WARN/ERROR. Diagnostic survives;
+        verbose noise is the first to go.
+      - neverBlock=true: when even WARN/ERROR can't fit, drop instead of
+        blocking the producing thread. The dropped count is exposed via
+        the AsyncAppender's mbean for ops to alert on.
+        (Trade-off: lose a few lines under extreme spam, vs hang the
+        consumer's hot path. Liveness > log fidelity.)
+      - includeCallerData=false: the default; collecting caller info is
+        ~30x slower per line — never worth it on the async path.
+    -->
+    <if condition='"true".equals(System.getenv("DEV_MODE_LOG"))'>
+        <then>
+            <appender name="ASYNC_CONSOLE" class="ch.qos.logback.classic.AsyncAppender">
+                <queueSize>2048</queueSize>
+                <discardingThreshold>20</discardingThreshold>
+                <neverBlock>true</neverBlock>
+                <includeCallerData>false</includeCallerData>
+                <appender-ref ref="CONSOLE_TEXT"/>
+            </appender>
+        </then>
+        <else>
+            <appender name="ASYNC_CONSOLE" class="ch.qos.logback.classic.AsyncAppender">
+                <queueSize>2048</queueSize>
+                <discardingThreshold>20</discardingThreshold>
+                <neverBlock>true</neverBlock>
+                <includeCallerData>false</includeCallerData>
+                <appender-ref ref="CONSOLE_JSON"/>
+            </appender>
+        </else>
+    </if>
+
+    <root level="INFO">
+        <appender-ref ref="ASYNC_CONSOLE"/>
+    </root>
+
+    <!-- Quiet a couple of overly-chatty libraries that pre-Spring-Boot
+         defaults would let through at INFO. Keeps the Async queue
+         predominantly carrying our own diagnostic lines. -->
+    <logger name="org.apache.kafka.clients.NetworkClient" level="WARN"/>
+    <logger name="org.apache.kafka.clients.consumer.internals.ConsumerCoordinator" level="WARN"/>
+    <logger name="org.apache.kafka.clients.consumer.internals.SubscriptionState" level="WARN"/>
+    <logger name="org.apache.kafka.clients.consumer.internals.ConsumerUtils" level="WARN"/>
+    <logger name="org.apache.kafka.clients.consumer.internals.AbstractCoordinator" level="WARN"/>
+    <logger name="org.apache.kafka.clients.admin.internals.AdminMetadataManager" level="WARN"/>
+    <logger name="org.apache.kafka.clients.Metadata" level="WARN"/>
+
+</configuration>

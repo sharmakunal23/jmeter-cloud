@@ -1,0 +1,158 @@
+# jmeter-global-orchestrator subsystem — Compose fragment.
+
+services:
+
+  global-orchestrator:
+    build:
+      context: .
+    image: jmeter-global-orchestrator:dev
+    profiles: [default]
+    # Reliability: self-heal on crash/OOM
+    # or host reboot. The control plane (run fan-out, pod registry, sweeper)
+    # must come back automatically.
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      flyway-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    ports:
+      - "${GLOBAL_ORCHESTRATOR_HTTP_PORT:-8082}:8082"
+    # Phase 1 of the capacity rework: PodProvisioner drives the host docker
+    # daemon to spin up per-app local-orchestrator containers
+    # ({appName}-{region}-worker-{n}) on demand. The mount is a privilege
+    # concession scoped to the local stack only — the cloud counterpart
+    # (K8s API + ServiceAccount with create/delete pods RBAC) will sit
+    # behind the same PodProvisioner interface, no socket mount required.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # docker.sock on the host is typically root:docker (660). The image's
+    # default USER `app` cannot read it — and there's no portable docker
+    # group GID we can pre-add to the image (Mac Docker Desktop, Linux
+    # native, and CI runners each pick a different one). Running as root
+    # inside the container is the simplest local-only fix; the cloud
+    # K8sApiPodProvisioner uses a ServiceAccount + RBAC instead, so this
+    # override doesn't carry over.
+    user: root
+    environment:
+      HTTP_PORT:                "8082"
+      HTTP_BIND_ADDRESS:        0.0.0.0
+      # Two datasources, two role identities. metrics = read-only rollups;
+      # globalrun = run-state writes. Wired by config/DataSourceConfig.java
+      # (Step 14 closed the Step 9 follow-up of splitting the datasources).
+      POSTGRES_METRICS_URL:                   jdbc:postgresql://postgres:5432/jmetercloud_metrics
+      POSTGRES_USER:                          ${POSTGRES_METRICS_READER_USER:-metricsReader}
+      POSTGRES_PASSWORD:                      ${POSTGRES_METRICS_READER_PASSWORD:-localdev}
+      POSTGRES_GLOBALRUN_URL:                 jdbc:postgresql://postgres:5432/jmetercloud_globalrun
+      POSTGRES_GLOBALRUN_WRITER_USER:         ${POSTGRES_GLOBALRUN_WRITER_USER:-globalOrchestratorWriter}
+      POSTGRES_GLOBALRUN_WRITER_PASSWORD:     ${POSTGRES_GLOBALRUN_WRITER_PASSWORD:-localdev}
+      # Phase 6: LOCAL_ORCHESTRATOR_URLS removed. Worker discovery is
+      # via the runtime pod registry (Step 15) and PodProvisioner
+      # creates per-app workers on demand; the static URL list is dead.
+      GLOBAL_ORCHESTRATOR_REGION:             ${GLOBAL_ORCHESTRATOR_REGION:-us-east-1}
+      GLOBAL_ORCHESTRATOR_FANOUT_THREADS:     ${GLOBAL_ORCHESTRATOR_FANOUT_THREADS:-8}
+      # Phase 1 PodProvisioner config. Each key is consumed by
+      # application.yml's globalOrchestrator.podProvisioner.* placeholders.
+      # Defaults are the local docker-compose values — operators override
+      # for non-default networks (e.g. running the global-orchestrator from
+      # the IDE against a stack with a different COMPOSE_PROJECT_NAME).
+      PODPROVISIONER_DOCKER_HOST:             ${PODPROVISIONER_DOCKER_HOST:-unix:///var/run/docker.sock}
+      # docker-java's DefaultDockerClientConfig reads the standard DOCKER_HOST
+      # env var natively. Setting it here too (in addition to our typed
+      # PODPROVISIONER_DOCKER_HOST) bypasses any precedence quirk in the
+      # builder's withProperties() call.
+      DOCKER_HOST:                            ${PODPROVISIONER_DOCKER_HOST:-unix:///var/run/docker.sock}
+      PODPROVISIONER_NETWORK:                 ${PODPROVISIONER_NETWORK:-jmeter-cloud_default}
+      PODPROVISIONER_IMAGE:                   ${PODPROVISIONER_IMAGE:-jmeter-local-orchestrator:dev}
+      PODPROVISIONER_LOCAL_ORCHESTRATOR_PORT: ${PODPROVISIONER_LOCAL_ORCHESTRATOR_PORT:-8080}
+      # Reliability: hard memory limit
+      # (MiB) for each spawned worker container — fits the orchestrator JVM
+      # (-Xmx1g + native ≈ 1.5 GiB) + JMeter child (-Xmx2g + native ≈ 2.5 GiB)
+      # + ~2 GiB page-cache headroom for the multi-GB JTL of a 12 h /
+      # 200-250 rps / ~100-endpoint run. Raised 4096 → 6144 alongside the
+      # JMeter child heap bump (1g → 2g); 4096 left no headroom once the
+      # child grew and workers OOM'd near the 1-hour mark.
+      PODPROVISIONER_WORKER_MEMORY_MB:        ${PODPROVISIONER_WORKER_MEMORY_MB:-6144}
+      # RELIABILITY Round 8 — aggregator late-arrival grace (s) stamped onto each
+      # spawned worker as GRACE_PERIOD_SECONDS. 10s captures slow samples written
+      # late to the JTL instead of dropping them as late; per-run override wins.
+      PODPROVISIONER_GRACE_PERIOD_SECONDS:    ${PODPROVISIONER_GRACE_PERIOD_SECONDS:-10}
+      GLOBAL_ORCHESTRATOR_URL:                ${GLOBAL_ORCHESTRATOR_URL:-http://global-orchestrator:8082}
+      KAFKA_BROKERS_INTERNAL:                 ${KAFKA_BROKERS_INTERNAL:-kafka:29092}
+      SCHEMA_REGISTRY_URL_INTERNAL:           ${SCHEMA_REGISTRY_URL_INTERNAL:-http://schema-registry:8081}
+      DOCUMENT_SERVICE_URL:                   ${DOCUMENT_SERVICE_URL:-http://document-service:8084}
+      # CACHE C-0 (2026-05-26) — shared Redis cache. Consumed by
+      # application.yml's spring.data.redis.* placeholders.
+      REDIS_HOST:                             ${REDIS_HOST:-redis}
+      REDIS_PORT:                             ${REDIS_PORT:-6379}
+      # AUTOMATION Phase E — SMTP target for report emails (MailHog in dev).
+      MAIL_HOST:                              ${MAIL_HOST:-mailhog}
+      MAIL_PORT:                              ${MAIL_PORT:-1025}
+      # Phase E (2026-05-16): default per-pod KAFKA_TOPIC env points at
+      # the placeholder topic. The global-orch overrides this per-run via
+      # the kafkaTopic field on the start-test envelope (Phase C) for
+      # registered-app runs; only legacy unregistered-app code paths
+      # would fall through to this default.
+      KAFKA_TOPIC:                            ${KAFKA_TOPIC:-jmeter.metrics.placeholder}
+      # OBSERVABILITY Phase B — distributed tracing.
+      # Local dev override: 100% sampling so every operator action shows up
+      # in Jaeger (the production default of 1% is in application.yml).
+      # Endpoint defaults to the Jaeger sidecar over OTLP HTTP at 4318.
+      MANAGEMENT_TRACING_SAMPLING_PROBABILITY:    ${MANAGEMENT_TRACING_SAMPLING_PROBABILITY:-1.0}
+      MANAGEMENT_OTLP_TRACING_ENDPOINT:           ${MANAGEMENT_OTLP_TRACING_ENDPOINT:-http://jaeger:4318/v1/traces}
+      # PodProvisioner threads these through to every spawned local-orch
+      # container — Phase B for the dynamic worker fleet. Read by
+      # ProvisionerConfig's @Value chain and emitted in buildEnv().
+      PODPROVISIONER_TRACING_SAMPLING_PROBABILITY: ${PODPROVISIONER_TRACING_SAMPLING_PROBABILITY:-1.0}
+      PODPROVISIONER_OTLP_TRACING_ENDPOINT:        ${PODPROVISIONER_OTLP_TRACING_ENDPOINT:-http://jaeger:4318/v1/traces}
+      # AI analysis — server-side Claude proxy. The key lives in
+      # the repo-root .env (a local secret — do NOT commit it) and is forwarded
+      # here. Empty default → AI disabled (503 AI_DISABLED; the UI hides its
+      # buttons), so the stack boots fine without a key. Model + daily cap are
+      # tunable from .env without a rebuild. Consumed by application.yml's
+      # globalOrchestrator.ai.* placeholders.
+      ANTHROPIC_API_KEY:        ${ANTHROPIC_API_KEY:-}
+      AI_MODEL:                 ${AI_MODEL:-claude-sonnet-4-6}
+      AI_DAILY_INVOCATION_CAP:  ${AI_DAILY_INVOCATION_CAP:-200}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # CACHE C-0 (2026-05-26) — shared cache backing store. The
+  # global-orchestrator's @Cacheable / @CacheEvict layer (Spring Cache over
+  # spring-data-redis) reads/writes here so every orchestrator instance shares
+  # one cache. Local dev runs a single unauthenticated KRaft-style instance,
+  # mirroring the no-auth-locally posture of kafka/postgres; the cloud
+  # deployment swaps in a managed Redis (ElastiCache) via REDIS_HOST/REDIS_PORT
+  # with no code change. AOF persistence is off — the cache is rebuildable from
+  # Postgres on restart, so durability buys nothing here.
+  redis:
+    image: redis:7-alpine
+    profiles: [default]
+    restart: unless-stopped   # Reliability (Round 5): self-heal — the cache is rebuildable from Postgres on restart.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  # AUTOMATION Phase E — local SMTP sink for the daily report emails. MailHog
+  # accepts SMTP on 1025 and exposes a web UI + REST API on 8025 so the full
+  # email path is testable locally (the cloud deployment swaps SmtpEmailSender
+  # for SesEmailSender via -Pcloud + AUTOMATION_EMAIL_BACKEND=ses — no MailHog).
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    profiles: [default]
+    restart: unless-stopped
+    ports:
+      - "${MAILHOG_SMTP_PORT:-1025}:1025"
+      - "${MAILHOG_UI_PORT:-8025}:8025"

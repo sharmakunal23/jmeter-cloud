@@ -1,0 +1,156 @@
+spring:
+  application:
+    name: jmeter-metrics-consumer
+  profiles:
+    default: local
+  kafka:
+    bootstrap-servers: ${KAFKA_BROKERS:kafka:29092}
+  datasource:
+    # Improvement #5 (2026-05-16) — Postgres JDBC URL params. The hot path
+    # already uses multi-row VALUES (see WorkerMetricWriter#buildInsertSql)
+    # which is the wire-shape `reWriteBatchedInserts=true` would emit, so
+    # the rewrite flag is a no-op for our hot path. We set it anyway because:
+    #   (a) it's free defense-in-depth — any future code that uses
+    #       JDBC `addBatch()/executeBatch()` (e.g. Spring's batchUpdate) gets
+    #       collapsed into the binary protocol path automatically;
+    #   (b) `assumeMinServerVersion=16` skips a version-detection round-trip
+    #       at connection-create time (we know the cluster is PG 16).
+    # The headline throughput improvement comes from #6 (smaller batches +
+    # bounded fetch), not this URL change.
+    url: ${POSTGRES_METRICS_URL:jdbc:postgresql://postgres:5432/jmetercloud_metrics?reWriteBatchedInserts=true&assumeMinServerVersion=16}
+    username: ${POSTGRES_USER:jmetercloud}
+    password: ${POSTGRES_PASSWORD:localdev}
+    hikari:
+      pool-name: metricsConsumerWriterPool
+      maximum-pool-size: 8
+      minimum-idle: 2
+
+server:
+  port: ${HTTP_PORT:8083}
+  address: ${HTTP_BIND_ADDRESS:0.0.0.0}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always
+      # Reliability — split liveness from
+      # readiness so the idle-staleness indicator (kafkaConsumerProgress, which
+      # flips DOWN after 5 min with no batch — e.g. the quiet window right after
+      # a 12 h test ends) can NEVER trip a liveness probe. On Kubernetes/ECS a
+      # liveness probe pointed at the aggregate /actuator/health would kill +
+      # restart the consumer during every idle gap, re-creating "metrics died
+      # after the test" in the cloud. Probe paths:
+      #   liveness  → /actuator/health/liveness   (process up only)
+      #   readiness → /actuator/health/readiness  (DB reachable)
+      # Readiness deliberately does NOT include a broker indicator: there is no
+      # Spring-Boot 'kafka' health contributor in this app (group-membership
+      # validation rejects it), and broker reachability is already surfaced by
+      # the custom kafkaConsumerProgress indicator on the aggregate. A broker
+      # blip must NOT pull the consumer from rotation — spring-kafka reconnects
+      # on its own. The aggregate /actuator/health STILL includes
+      # kafkaConsumerProgress for the human / Grafana / alerting view.
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState,db
+  health:
+    db:
+      enabled: true
+    # NOTE: there is NO Spring-Boot auto-configured Kafka health
+    # contributor in this app — `management.health.kafka.*` is a no-op here
+    # (confirmed by actuator group-membership validation, which rejects a
+    # group that references a non-existent `kafka` contributor). Broker
+    # reachability is surfaced by the custom `kafkaConsumerProgress` indicator
+    # (ConsumerHeartbeatHealthIndicator) on the aggregate /actuator/health.
+  # OBSERVABILITY Phase B — distributed tracing.
+  # See jmeter-global-orchestrator/application.yml for the locked-in
+  # decisions on sampling rate + OTLP transport. Spring Kafka 3.x
+  # auto-instruments the consumer once the tracing bridge is on the
+  # classpath: every poll becomes a span carrying the producer's
+  # traceparent (from the per-pod local-orch's WorkerMetric publish).
+  tracing:
+    sampling:
+      probability: ${MANAGEMENT_TRACING_SAMPLING_PROBABILITY:0.01}
+  otlp:
+    tracing:
+      endpoint: ${MANAGEMENT_OTLP_TRACING_ENDPOINT:http://jaeger:4318/v1/traces}
+      transport: http
+
+# Springdoc / Swagger UI — point the bundled UI at the hand-curated YAML
+# (bundled into the JAR via the pom's resource mapping). Visitors hit
+# /swagger-ui.html → /swagger-ui/index.html → fetches /openapi.yaml.
+# The auto-generated /v3/api-docs (Spring-MVC-introspected spec) stays
+# enabled as a sanity check — diff against /openapi.yaml to catch a
+# controller change that wasn't reflected in the curated YAML.
+springdoc:
+  swagger-ui:
+    url: /openapi.yaml
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+
+metricsConsumer:
+  # KAFKA-PER-APP Phase D — pattern subscription replaces the single-topic
+  # `topic` key. Matches `jmeter.metrics.<applicationName>` for any
+  # registered app; the `[^.]+` clamp excludes DLT topics (`....DLT`)
+  # which carry an extra dot-segment. Pre-Phase-A `jmeter.metrics.perSecond`
+  # ALSO matches this pattern, so the legacy single-topic stream is still
+  # consumed during the cutover until Phase E retires it.
+  topicPattern: ${KAFKA_TOPIC_PATTERN:jmeter\.metrics\.[^.]+$}
+  # Separate listener pattern for DLT topics — drains to a counter +
+  # log line for operator audit. Full DLT-replay UX lives in the
+  # DlqReplayer; this pattern is for the always-on
+  # observability listener.
+  dltTopicPattern: ${KAFKA_DLT_TOPIC_PATTERN:jmeter\.metrics\..+\.DLT$}
+  groupId: ${KAFKA_GROUP_ID:jmeter-metrics-consumer}
+  schemaRegistryUrl: ${SCHEMA_REGISTRY_URL:http://schema-registry:8081}
+  # K-2: 4 listener threads per consumer instance. Per-app topic-pattern
+  # rebalances now happen across the cluster's full topic set. With 100
+  # apps × 3 partitions = 300 partitions and 1 consumer instance, 4
+  # threads each get ~75 partitions. Bump for higher throughput; cap at
+  # the Hikari pool size (8) since each listener thread holds one DB
+  # connection during its INSERT.
+  concurrency: ${KAFKA_CONCURRENCY:4}
+  # K-2 grain shift: maxPollRecords is at envelope grain now (was per-row in
+  # K-1 and earlier). Improvement #6 (2026-05-16) — dropped from 50 to 20
+  # envelopes (~4k rows post-explode at 200 entries/envelope). Smaller
+  # batches = faster offset commits = faster recovery from a slow Postgres
+  # or a deserialise hiccup. Throughput cost is negligible (the writer
+  # still does one INSERT per poll).
+  maxPollRecords: ${KAFKA_MAX_POLL_RECORDS:20}
+  # Improvement #6 (2026-05-16) — explicit per-partition fetch cap so a
+  # single oversized envelope (or a misbehaving producer pushing 10 MB
+  # records) can't blow consumer heap on the next poll. Apache Kafka
+  # default is 1 MiB; pinning here makes the value visible.
+  maxPartitionFetchBytes: ${KAFKA_MAX_PARTITION_FETCH_BYTES:1048576}
+  # Writer's per-INSERT chunk size — defense in depth against giant polls.
+  # 5000 keeps Postgres parse time + bind buffer bounded.
+  maxRowsPerInsert: ${METRICS_MAX_ROWS_PER_INSERT:5000}
+  fetchMaxWaitMs: ${KAFKA_FETCH_MAX_WAIT_MS:1000}
+  # KAFKA-PER-APP Phase D — pattern-subscription rediscovery cadence.
+  # 30 s gives ~30 s pickup latency for newly-registered apps without
+  # flooding the broker's metadata path. Default Kafka client value is
+  # 5 min; that's the right tradeoff for static-topic deployments but
+  # wrong for the per-app flow.
+  metadataMaxAgeMs: ${KAFKA_METADATA_MAX_AGE_MS:30000}
+  # DLQ replayer (CommandLineRunner — only fires when this flag flips).
+  # Targets a single concrete DLT topic; per-app DLT replay is future
+  # work.
+  dlqReplay: ${DLQ_REPLAY:false}
+  dlqTopic: ${DLQ_TOPIC:jmeter.metrics.perSecond.DLT}
+  # Improvement #4 (2026-05-16) — heartbeat + health indicator config.
+  # `intervalMs`: cadence for the periodic INFO heartbeat log line.
+  # `staleAfterSeconds`: ConsumerHeartbeatHealthIndicator flips DOWN
+  #   when no batch has been processed in this many seconds. 5 min is
+  #   wider than typical idle-between-runs gaps; tune up if running
+  #   longer-than-5-min gaps.
+  heartbeat:
+    intervalMs: ${HEARTBEAT_INTERVAL_MS:30000}
+    staleAfterSeconds: ${HEARTBEAT_STALE_AFTER_SECONDS:300}

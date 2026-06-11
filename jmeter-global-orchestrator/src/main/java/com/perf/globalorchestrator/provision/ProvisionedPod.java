@@ -1,0 +1,27 @@
+package com.perf.globalorchestrator.provision;
+
+import java.time.Instant;
+
+/**
+ * A container the provisioner currently sees in the docker daemon. Returned
+ * by {@link PodProvisioner#listFor(String, String)} during reconciliation,
+ * not derived from the {@code globalOrchestrator.pod} registry table.
+ *
+ * <p>{@link #status()} is the raw docker container state (e.g. {@code running},
+ * {@code exited}, {@code created}). The reconciler maps this to whether the
+ * registry row should exist or not.
+ */
+public record ProvisionedPod(
+        String podName,
+        String applicationId,
+        String region,
+        String status,
+        Instant startedAt,
+        String imageDigest) {
+
+    /** Back-compat factory for call sites that don't surface the image digest. */
+    public ProvisionedPod(String podName, String applicationId, String region,
+                          String status, Instant startedAt) {
+        this(podName, applicationId, region, status, startedAt, null);
+    }
+}

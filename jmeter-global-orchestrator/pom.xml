@@ -1,0 +1,324 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.5.14</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.perf.globalorchestrator</groupId>
+    <artifactId>jmeter-global-orchestrator</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>jmeter-global-orchestrator</name>
+    <description>
+        Fan-out layer that drives many jmeter-local-orchestrators across
+        regions/clusters. Owns run-state, coordinates fleet-wide test
+        starts, and reads aggregated metrics from the Postgres replica.
+    </description>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <!-- CACHE C-0 (2026-05-26) — shared cache layer. starter-cache pulls
+             the Spring Cache abstraction (@EnableCaching, @Cacheable,
+             @CacheEvict); starter-data-redis backs it with a RedisCacheManager
+             so every global-orchestrator instance reads the SAME cache (the
+             operator's "scalable at each layer + all instances share the
+             cache" requirement). Provider is chosen by spring.cache.type:
+             `redis` at runtime, `simple` in tests (ConcurrentMapCacheManager —
+             no Redis needed; the terminal-vs-active gating is provider-agnostic).
+             Both BOM-managed by spring-boot-dependencies. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-cache</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+        <!-- OBSERVABILITY Phase D — AOP for @Observed annotation-driven spans.
+             spring-boot-starter-aop pulls aspectjweaver + spring-aop. The
+             ObservedAspect bean we register in ObservationConfig uses Spring
+             AOP proxies (not load-time weaving) — proxies are created when
+             a @Component / @Service is wired, so the dep adds ~1 MB to the
+             JAR with no startup overhead. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
+
+        <!-- OBSERVABILITY Phase B — distributed tracing.
+             micrometer-tracing-bridge-otel wires Spring Boot's
+             autoconfigured tracer onto the OpenTelemetry SDK.
+             opentelemetry-exporter-otlp ships spans to Jaeger over OTLP
+             HTTP (default transport — the bundled OkHttp sender keeps
+             us off netty/gRPC and saves ~3 MB per JAR). To switch to
+             gRPC later: set `management.otlp.tracing.transport=grpc`
+             and add `opentelemetry-exporter-sender-grpc-managed-channel`.
+             Both versions are BOM-managed by spring-boot-dependencies. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+        </dependency>
+
+        <!-- OBSERVABILITY Phase A — structured JSON logging.
+             logstash-logback-encoder emits one JSON record per log line
+             with `traceId` / `spanId` / `runId` / `actor` MDC keys promoted
+             to top-level fields for log-search indexing. Version pinned
+             explicitly: spring-boot-dependencies 3.5.x does NOT manage
+             this artifact (only janino is BOM-managed). 7.4 matches the
+             jmeter-local-orchestrator pin so all services emit identical
+             JSON record shapes. janino powers the <if> conditional in
+             logback-spring.xml that flips between JSON (default) and
+             Spring Boot's pretty pattern when DEV_MODE_LOG=true (dev only). -->
+        <dependency>
+            <groupId>net.logstash.logback</groupId>
+            <artifactId>logstash-logback-encoder</artifactId>
+            <version>7.4</version>
+        </dependency>
+        <dependency>
+            <groupId>org.codehaus.janino</groupId>
+            <artifactId>janino</artifactId>
+        </dependency>
+        <!-- Springdoc OpenAPI — Swagger UI at /swagger-ui.html serving the
+             hand-curated YAML bundled at static/openapi.yaml (see
+             <resources> below). -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>2.7.0</version>
+        </dependency>
+        <!-- Phase 1 of the capacity rework: PodProvisioner drives the Docker
+             daemon over the mounted /var/run/docker.sock. docker-java's
+             zerodep transport is the simplest path that *just works* with
+             unix sockets across all platforms — no JNI, no external Apache
+             HttpClient version conflict (Spring Boot 3.5.14's BOM pins
+             httpclient5 to a version that breaks docker-java's unix-socket
+             routing; switching transports sidesteps the whole issue). -->
+        <dependency>
+            <groupId>com.github.docker-java</groupId>
+            <artifactId>docker-java-core</artifactId>
+            <version>3.4.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.docker-java</groupId>
+            <artifactId>docker-java-transport-zerodep</artifactId>
+            <version>3.4.0</version>
+        </dependency>
+        <!-- KAFKA-PER-APP Phase B — AdminClient drives per-app topic create
+             / delete on POST/DELETE /api/v1/applications. Pinned to 3.9.2
+             to match jmeter-local-orchestrator + jmeter-metrics-consumer
+             (all three services share the kafka-clients line so the wire
+             protocol + serializer SPI versions stay aligned across the
+             producer / admin / consumer trio). -->
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+            <version>3.9.2</version>
+        </dependency>
+        <!-- AUTOMATION Phase E — JavaMailSender for the daily report emails.
+             Local/default backend talks SMTP to a MailHog container; the cloud
+             profile swaps in AWS SES (src/main/java-cloud, -Pcloud). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- OBSERVABILITY Phase D — TestObservationRegistry + assertions
+             for unit-testing @Observed-driven span recording without
+             booting a full SpringBootTest. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-observation-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Step 14 IT — Testcontainers Postgres + Flyway migration replay
+             + WireMock to stub the per-pod local-orchestrator's
+             POST /api/v1/test response. Spring Boot 3.5.14's BOM pins
+             testcontainers at 1.21.4 — don't pull testcontainers-bom. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- KAFKA-PER-APP Phase B — Testcontainers Kafka (KRaft single-broker
+             on a random port) lets ApplicationRegistryIT assert the topic
+             create/delete contract end-to-end against a real broker. Spring
+             Boot 3.5.14's BOM pins testcontainers at 1.21.4 — same line as
+             postgresql + junit-jupiter above. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>kafka</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.wiremock</groupId>
+            <artifactId>wiremock-standalone</artifactId>
+            <version>3.9.1</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>${project.artifactId}</finalName>
+        <!-- Bundle api/openapi.yaml into the JAR at static/openapi.yaml so
+             Spring Boot's static-resource handler serves it at the URL
+             /openapi.yaml (which Swagger UI is configured to load). -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <resource>
+                <directory>${project.basedir}/api</directory>
+                <targetPath>static</targetPath>
+                <includes>
+                    <include>openapi.yaml</include>
+                </includes>
+            </resource>
+        </resources>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <!-- Failsafe wires *IT.java behavior tests into `mvn verify`. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <!-- AUTOMATION Phase E — cloud email backend. The default fat JAR stays
+             AWS-SDK-free (local dev sends to MailHog over SMTP). -Pcloud adds the
+             AWS SES SDK and the src/main/java-cloud source root holding
+             SesEmailSender, mirroring document-service's -Pcloud / S3 pattern. -->
+        <profile>
+            <id>cloud</id>
+            <dependencies>
+                <dependency>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>ses</artifactId>
+                    <version>2.25.50</version>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>3.5.0</version>
+                        <executions>
+                            <execution>
+                                <id>add-cloud-source</id>
+                                <phase>generate-sources</phase>
+                                <goals><goal>add-source</goal></goals>
+                                <configuration>
+                                    <sources>
+                                        <source>${project.basedir}/src/main/java-cloud</source>
+                                    </sources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <!-- SECURITY S-14 — OWASP dependency CVE gate. Inert by default so the
+             offline `mvn -o ...` flow is unaffected; activate online in CI:
+               mvn -P securityScan verify
+             First run downloads the NVD database (slow); speed it up with a key:
+               mvn -P securityScan -DnvdApiKey=$NVD_API_KEY verify
+             (request one at https://nvd.nist.gov/developers/request-an-api-key).
+             Fails the build on any dependency with CVSS >= 7 (high/critical).
+             NOTE: added offline — the scan itself has NOT been run in this
+             environment; verify (and bump the plugin version to latest) on the
+             first CI run. -->
+        <profile>
+            <id>securityScan</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.owasp</groupId>
+                        <artifactId>dependency-check-maven</artifactId>
+                        <version>9.2.0</version>
+                        <configuration>
+                            <failBuildOnCVSS>7</failBuildOnCVSS>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>check</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

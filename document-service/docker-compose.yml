@@ -1,0 +1,42 @@
+# document-service subsystem — Compose fragment.
+#
+# Step 7 skeleton: endpoints are stubbed to 501 NOT_IMPLEMENTED. The service
+# boots, /actuator/health returns UP, and the local-FS blob store mount
+# is in place for when the backend implementation lands.
+#
+# Standalone:
+#   docker compose -f document-service/docker-compose.yml up
+
+services:
+
+  document-service:
+    build:
+      context: .
+    image: document-service:dev
+    profiles: [default]
+    restart: unless-stopped   # Self-heal on crash/OOM/reboot.
+    ports:
+      - "${DOCUMENT_SERVICE_HTTP_PORT:-8084}:8084"
+    environment:
+      HTTP_PORT:                       "8084"
+      HTTP_BIND_ADDRESS:               0.0.0.0
+      DOCUMENT_SERVICE_BACKEND:        local
+      DOCUMENT_SERVICE_LOCAL_FS_ROOT:  /var/lib/document-service/blobs
+      # OBSERVABILITY Phase B — distributed tracing.
+      # Local dev override: 100% sampling so every operator action shows up
+      # in Jaeger (the production default of 1% is in application.yml).
+      MANAGEMENT_TRACING_SAMPLING_PROBABILITY: ${MANAGEMENT_TRACING_SAMPLING_PROBABILITY:-1.0}
+      MANAGEMENT_OTLP_TRACING_ENDPOINT:        ${MANAGEMENT_OTLP_TRACING_ENDPOINT:-http://jaeger:4318/v1/traces}
+    volumes:
+      # In local mode the document service mounts host ./testPlans,
+      # ./dataFiles, ./results so artifacts are inspectable from the IDE.
+      # For now, host-mount a single blob root
+      # under .runtime/. Subdirectories will be created by the service when
+      # the LocalFsBlobStore lands.
+      - ${DOCUMENT_SERVICE_HOST_ROOT:-./.runtime/document-service}:/var/lib/document-service/blobs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8084/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s

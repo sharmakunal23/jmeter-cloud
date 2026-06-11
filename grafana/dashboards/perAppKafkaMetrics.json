@@ -1,0 +1,910 @@
+{
+  "title": "Kafka \u2014 Per-App Metrics Topics",
+  "uid": "perAppKafkaMetrics",
+  "description": "Per-application Kafka stream health for the jmeter.metrics.<applicationName> topics. Top rows always visible (overview \u2192 paired produce vs consume \u2192 lag + heartbeat \u2192 write quality). Failure-mode + producer-buffer + partition/group facts are tucked into collapsible rows below \u2014 open them on demand.",
+  "tags": [
+    "jmetercloud",
+    "kafka",
+    "perApp"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 3,
+  "refresh": "30s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "topic",
+        "type": "query",
+        "datasource": "Prometheus",
+        "label": "Topic",
+        "query": "label_values(kafka_topic_partitions{topic=~\"jmeter\\\\.metrics\\\\..+\"}, topic)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "sort": 1
+      },
+      {
+        "name": "consumerGroup",
+        "type": "query",
+        "datasource": "Prometheus",
+        "label": "Consumer group",
+        "query": "label_values(kafka_consumergroup_lag, consumergroup)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "text": "jmeter-metrics-consumer",
+          "value": "jmeter-metrics-consumer"
+        },
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Apps with topics",
+      "description": "Distinct application topics matching jmeter.metrics.<applicationName>.",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(count by (topic) (kafka_topic_partitions{topic=~\"jmeter\\\\.metrics\\\\..+\"}))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Per-app partitions (cluster-wide)",
+      "description": "Sum of partitions across all jmeter.metrics.* topics. Per Phase B convention each app gets 3.",
+      "gridPos": {
+        "x": 4,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(kafka_topic_partitions{topic=~\"jmeter\\\\.metrics\\\\..+\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Cluster produce rate",
+      "description": "Sum of per-second envelope-publish rate across every per-app topic. Wire grain = WorkerMetricBatch envelopes/s.",
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 8,
+        "h": 4
+      },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(kafka_topic_partition_current_offset{topic=~\"jmeter\\\\.metrics\\\\..+\"}[$__rate_interval]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "decimals": 2
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Cluster consume rate",
+      "description": "Sum of per-second envelope-commit rate across every per-app topic for the main consumer group. Should track produce-rate within metadata.max.age.ms.",
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 8,
+        "h": 4
+      },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(kafka_consumergroup_current_offset{topic=~\"jmeter\\\\.metrics\\\\..+\",consumergroup=\"jmeter-metrics-consumer\"}[$__rate_interval]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "decimals": 2
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Messages produced per topic (rate)",
+      "description": "Per-topic envelope publish rate from the local-orchestrator's KafkaMetricPublisher (Phase C). Sum across the topic's partitions.",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (topic) (rate(kafka_topic_partition_current_offset{topic=~\"$topic\"}[$__rate_interval]))",
+          "legendFormat": "{{topic}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "lastNotNull"
+          ]
+        }
+      },
+      "maxDataPoints": 500
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Messages consumed per topic (rate)",
+      "description": "Per-topic commit-rate from the metrics-consumer's pattern subscription (Phase D). Steady-state should overlay produced-rate within metadata.max.age.ms.",
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (topic) (rate(kafka_consumergroup_current_offset{topic=~\"$topic\",consumergroup=~\"$consumerGroup\"}[$__rate_interval]))",
+          "legendFormat": "{{topic}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "lastNotNull"
+          ]
+        }
+      },
+      "maxDataPoints": 500
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Consumer lag per topic (envelopes)",
+      "description": "Number of envelopes published but not yet committed by the consumer. Steady > 0 with non-zero produce-rate signals consumer is behind.",
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (topic) (kafka_consumergroup_lag{topic=~\"$topic\",consumergroup=~\"$consumerGroup\"})",
+          "legendFormat": "{{topic}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 100
+              },
+              {
+                "color": "red",
+                "value": 1000
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "lastNotNull"
+          ]
+        }
+      },
+      "maxDataPoints": 500
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Consumer last-batch age (seconds)",
+      "description": "From the heartbeat (Improvement #4). Seconds since the consumer last successfully committed a batch. Health flips DOWN at staleAfterSeconds (default 300).",
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "metricsConsumer_lastBatchAgeSeconds",
+          "legendFormat": "lastBatchAgeSeconds"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 60
+              },
+              {
+                "color": "red",
+                "value": 300
+              }
+            ]
+          },
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "area"
+            }
+          }
+        }
+      },
+      "options": {
+        "tooltip": {
+          "mode": "single"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "maxDataPoints": 500
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Postgres rows inserted (rate)",
+      "description": "Successful INSERTs in metrics.\"workerMetric\". Row-grain post-explode (one envelope \u2192 N entries \u2192 N rows).",
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(metricsConsumer_records_inserted_total[$__rate_interval])",
+          "legendFormat": "inserted"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      },
+      "options": {
+        "tooltip": {
+          "mode": "single"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "maxDataPoints": 500
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Duplicates collapsed by ON CONFLICT (rate)",
+      "description": "Rows the writer attempted but the (runId, workerId, label, windowSecond) PK rejected. Steady > 0 with low producer-side retry counters can indicate consumer rebalance loops.",
+      "gridPos": {
+        "x": 12,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(metricsConsumer_records_duplicates_total[$__rate_interval])",
+          "legendFormat": "duplicates"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      },
+      "options": {
+        "tooltip": {
+          "mode": "single"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "maxDataPoints": 500
+    },
+    {
+      "id": 100,
+      "type": "row",
+      "title": "Failure modes (collapsed by default)",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "id": 11,
+          "type": "timeseries",
+          "title": "Batch failures (rate)",
+          "description": "Envelope batches that failed to insert. Routed to DLT after FixedBackOff retries (3 \u00d7 1s).",
+          "gridPos": {
+            "x": 0,
+            "y": 29,
+            "w": 8,
+            "h": 8
+          },
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "rate(metricsConsumer_records_failures_total[$__rate_interval])",
+              "legendFormat": "failures"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.001
+                  }
+                ]
+              }
+            }
+          },
+          "options": {
+            "tooltip": {
+              "mode": "single"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "maxDataPoints": 500
+        },
+        {
+          "id": 12,
+          "type": "timeseries",
+          "title": "DLT envelopes received per topic (rate)",
+          "description": "From DltSkeletonListener (Phase D) \u2014 per-app dead-letter activity. Tagged by topic so the operator can spot which app is poison-pilling.",
+          "gridPos": {
+            "x": 8,
+            "y": 29,
+            "w": 8,
+            "h": 8
+          },
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (topic) (rate(metricsConsumer_dlt_received_total[$__rate_interval]))",
+              "legendFormat": "{{topic}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops"
+            }
+          },
+          "options": {
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            },
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "mean",
+                "lastNotNull"
+              ]
+            }
+          },
+          "maxDataPoints": 500
+        },
+        {
+          "id": 13,
+          "type": "timeseries",
+          "title": "/ingest rejects (HTTP fallback) per cause (rate)",
+          "description": "K-5 HTTP fallback path rejects. badRequest = malformed Avro (most common). dbDown = Postgres unreachable. tooLarge = body > maxBodyBytes.",
+          "gridPos": {
+            "x": 16,
+            "y": 29,
+            "w": 8,
+            "h": 8
+          },
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "rate(metricsConsumer_ingest_rejectedBadRequest_total[$__rate_interval])",
+              "legendFormat": "badRequest"
+            },
+            {
+              "refId": "B",
+              "expr": "rate(metricsConsumer_ingest_rejectedDbDown_total[$__rate_interval])",
+              "legendFormat": "dbDown"
+            },
+            {
+              "refId": "C",
+              "expr": "rate(metricsConsumer_ingest_rejectedTooLarge_total[$__rate_interval])",
+              "legendFormat": "tooLarge"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops"
+            }
+          },
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            },
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "mean",
+                "lastNotNull"
+              ]
+            }
+          },
+          "maxDataPoints": 500
+        }
+      ]
+    },
+    {
+      "id": 101,
+      "type": "row",
+      "title": "Producer disk-buffer health (collapsed by default)",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 29,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "id": 14,
+          "type": "timeseries",
+          "title": "Producer disk-buffer depth (envelopes)",
+          "description": "Local-orch's K-3 disk buffer \u2014 envelopes pending Kafka send. Steady > 0 means producer is dropping or Kafka send is failing.",
+          "gridPos": {
+            "x": 0,
+            "y": 30,
+            "w": 12,
+            "h": 8
+          },
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "metricsBuffer_depth_envelopes",
+              "legendFormat": "{{instance}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 100
+                  },
+                  {
+                    "color": "red",
+                    "value": 1000
+                  }
+                ]
+              }
+            }
+          },
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            },
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "mean",
+                "lastNotNull"
+              ]
+            }
+          },
+          "maxDataPoints": 500
+        },
+        {
+          "id": 15,
+          "type": "timeseries",
+          "title": "Producer disk-buffer drops by reason (rate)",
+          "description": "K-3 buffer drops. age = TTL expired before publish. cap = ring-buffer cap hit. lowDisk = host disk pressure. oversize = single envelope > maxBytes.",
+          "gridPos": {
+            "x": 12,
+            "y": 30,
+            "w": 12,
+            "h": 8
+          },
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(rate(metricsBuffer_dropsForAge_total[$__rate_interval]))",
+              "legendFormat": "age"
+            },
+            {
+              "refId": "B",
+              "expr": "sum(rate(metricsBuffer_dropsForCap_total[$__rate_interval]))",
+              "legendFormat": "cap"
+            },
+            {
+              "refId": "C",
+              "expr": "sum(rate(metricsBuffer_dropsForLowDisk_total[$__rate_interval]))",
+              "legendFormat": "lowDisk"
+            },
+            {
+              "refId": "D",
+              "expr": "sum(rate(metricsBuffer_dropsForOversize_total[$__rate_interval]))",
+              "legendFormat": "oversize"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.001
+                  }
+                ]
+              }
+            }
+          },
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            },
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "mean",
+                "lastNotNull"
+              ]
+            }
+          },
+          "maxDataPoints": 500
+        }
+      ]
+    },
+    {
+      "id": 102,
+      "type": "row",
+      "title": "Partition + consumer-group facts (collapsed by default)",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "id": 16,
+          "type": "timeseries",
+          "title": "Partition end offset per topic (cumulative)",
+          "description": "Latest offset on each per-app topic. Monotonic; rising == data is being produced. Use for capacity-planning relative to retention.ms.",
+          "gridPos": {
+            "x": 0,
+            "y": 31,
+            "w": 12,
+            "h": 6
+          },
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (topic) (kafka_topic_partition_current_offset{topic=~\"$topic\"})",
+              "legendFormat": "{{topic}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            }
+          },
+          "options": {
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            },
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "lastNotNull"
+              ]
+            }
+          },
+          "maxDataPoints": 500
+        },
+        {
+          "id": 17,
+          "type": "bargauge",
+          "title": "Partitions per topic",
+          "description": "Per-topic partition count. Phase B locks this at 3 per topic at < 100 ev/s/app; bump for hotter apps.",
+          "gridPos": {
+            "x": 12,
+            "y": 31,
+            "w": 12,
+            "h": 6
+          },
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "kafka_topic_partitions{topic=~\"$topic\"}",
+              "legendFormat": "{{topic}}",
+              "instant": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            }
+          },
+          "options": {
+            "displayMode": "lcd",
+            "orientation": "horizontal",
+            "showUnfilled": true
+          }
+        },
+        {
+          "id": 18,
+          "type": "stat",
+          "title": "Consumer-group members",
+          "description": "Active consumer instances per group. 0 = consumer is down or in rebalance limbo.",
+          "gridPos": {
+            "x": 0,
+            "y": 37,
+            "w": 12,
+            "h": 6
+          },
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "kafka_consumergroup_members{consumergroup=~\"$consumerGroup\"}",
+              "legendFormat": "{{consumergroup}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "green",
+                    "value": 1
+                  }
+                ]
+              }
+            }
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "none"
+          }
+        },
+        {
+          "id": 19,
+          "type": "timeseries",
+          "title": "Consumer-group committed offset per topic (cumulative)",
+          "description": "Sum of committed offsets across the topic's partitions for the selected consumer group. Tracks produce-side end-offset closely in healthy state.",
+          "gridPos": {
+            "x": 12,
+            "y": 37,
+            "w": 12,
+            "h": 6
+          },
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (topic, consumergroup) (kafka_consumergroup_current_offset{topic=~\"$topic\",consumergroup=~\"$consumerGroup\"})",
+              "legendFormat": "{{topic}} ({{consumergroup}})"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            }
+          },
+          "options": {
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            },
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "lastNotNull"
+              ]
+            }
+          },
+          "maxDataPoints": 500
+        }
+      ]
+    }
+  ]
+}

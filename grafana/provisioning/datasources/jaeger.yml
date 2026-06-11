@@ -1,0 +1,30 @@
+# Grafana datasource provisioning — Jaeger.
+#
+# OBSERVABILITY Phase G — registers Jaeger as a queryable data source
+# inside Grafana so:
+#   • The observability dashboard can drop a "Search traces" panel.
+#   • A trace ID found in a JSON log line can be pasted into Grafana's
+#     Explore view and the cross-service waterfall renders inline.
+#
+# Local URL is the container DNS name; the Jaeger UI on
+# http://localhost:16686 is for direct browser access (operators still
+# get that link from the observability dashboard's instructions panel).
+#
+# Cloud equivalent: AWS X-Ray data source via the AWS plugin; same
+# wire shape (Grafana's Tempo/X-Ray panels both accept a {traceId}
+# variable).
+
+apiVersion: 1
+
+datasources:
+  - name: Jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    isDefault: false
+    jsonData:
+      # When a future Loki / CloudWatch logs data source lands, set
+      # `tracesToLogsV2` here so Grafana renders a one-click "logs
+      # for this trace" button on every trace.
+      nodeGraph:
+        enabled: true

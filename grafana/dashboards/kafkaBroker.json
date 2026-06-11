@@ -1,0 +1,144 @@
+{
+  "title": "Kafka Broker",
+  "uid": "kafkaBroker",
+  "tags": ["jmetercloud", "kafka"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 2,
+  "refresh": "30s",
+  "time": { "from": "now-30m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "topic",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(kafka_topic_partitions, topic)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Brokers up",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 5 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "refId": "A", "expr": "count(kafka_brokers)" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Topics",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 5 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "refId": "A", "expr": "count(count by (topic) (kafka_topic_partitions))" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Total partitions",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 5 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "refId": "A", "expr": "sum(kafka_topic_partitions)" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Under-replicated partitions",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 5 },
+      "datasource": "Prometheus",
+      "description": "Should be 0. Non-zero in Phase 2+ deployments means an in-sync replica is unhealthy and acks=all writes will block.",
+      "targets": [
+        { "refId": "A", "expr": "sum(kafka_topic_partition_under_replicated_partition)" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 1,    "color": "red" }
+            ]
+          }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Messages produced per topic (rate)",
+      "gridPos": { "x": 0, "y": 5, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "maxDataPoints": 500,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (topic) (rate(kafka_topic_partition_current_offset{topic=~\"$topic\"}[$__rate_interval]))",
+          "legendFormat": "{{topic}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "mps" } },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Consumer-group lag",
+      "gridPos": { "x": 12, "y": 5, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "maxDataPoints": 500,
+      "description": "Sum of per-partition lag for each consumer group. Watch for growth — sustained increase means the consumer can't keep up with producers.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (consumergroup, topic) (kafka_consumergroup_lag{topic=~\"$topic\"})",
+          "legendFormat": "{{consumergroup}} → {{topic}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Partition end offsets per topic",
+      "gridPos": { "x": 0, "y": 13, "w": 24, "h": 8 },
+      "datasource": "Prometheus",
+      "maxDataPoints": 500,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (topic) (kafka_topic_partition_current_offset{topic=~\"$topic\"})",
+          "legendFormat": "{{topic}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] }
+      }
+    }
+  ]
+}

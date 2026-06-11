@@ -1,0 +1,348 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.5.14</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.perf.metricsconsumer</groupId>
+    <artifactId>jmeter-metrics-consumer</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>jmeter-metrics-consumer</name>
+    <description>
+        Consumes WorkerMetric Avro records from the jmeter.metrics.perSecond
+        Kafka topic and writes per-second rows into Postgres for query by
+        the global orchestrator and Grafana. Includes a DLQ handler for
+        deserialisation / write failures. Step 7 ships the consumer skeleton;
+        the real Postgres schema lands in Step 9.
+    </description>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <kafka.version>3.9.2</kafka.version>
+        <confluent.version>7.6.0</confluent.version>
+        <avro.version>1.11.4</avro.version>
+        <snappy.java.version>1.1.10.7</snappy.java.version>
+    </properties>
+
+    <repositories>
+        <repository>
+            <id>confluent</id>
+            <url>https://packages.confluent.io/maven/</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+    </repositories>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Force Apache upstream kafka-clients (3.9.2) over Confluent's -ccs rebuild. -->
+            <dependency>
+                <groupId>org.apache.kafka</groupId>
+                <artifactId>kafka-clients</artifactId>
+                <version>${kafka.version}</version>
+            </dependency>
+            <!-- Pin Avro at the CVE-2024-47561-clear version. -->
+            <dependency>
+                <groupId>org.apache.avro</groupId>
+                <artifactId>avro</artifactId>
+                <version>${avro.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.xerial.snappy</groupId>
+                <artifactId>snappy-java</artifactId>
+                <version>${snappy.java.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.apache.kafka</groupId>
+                    <artifactId>kafka-clients</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.avro</groupId>
+            <artifactId>avro</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.confluent</groupId>
+            <artifactId>kafka-avro-serializer</artifactId>
+            <version>${confluent.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.apache.kafka</groupId>
+                    <artifactId>kafka-clients</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+        <!-- OBSERVABILITY Phase D — AOP for @Observed annotation-driven spans.
+             See jmeter-global-orchestrator/pom.xml for the rationale.
+             Used by WorkerMetricWriter.writeBatch to surface per-batch
+             span boundaries in Jaeger. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
+
+        <!-- OBSERVABILITY Phase B — distributed tracing.
+             micrometer-tracing-bridge-otel wires Spring Boot's
+             autoconfigured tracer onto the OpenTelemetry SDK; Spring
+             Kafka 3.x auto-instruments the consumer (each poll becomes
+             a span carrying the producer's traceparent) once this
+             bridge is on the classpath. opentelemetry-exporter-otlp
+             ships spans to Jaeger over OTLP HTTP (default transport —
+             OkHttp sender keeps us off netty/gRPC and saves ~3 MB per
+             JAR). Both versions are BOM-managed by spring-boot-dependencies. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+        </dependency>
+
+        <!-- OBSERVABILITY Phase A — structured JSON logging.
+             logstash-logback-encoder version pinned explicitly:
+             spring-boot-dependencies 3.5.x does NOT manage this artifact
+             (only janino is BOM-managed). 7.4 matches the pin in the
+             jmeter-local-orchestrator + jmeter-global-orchestrator +
+             document-service poms so all services emit identical JSON
+             record shapes. The encoder layers onto the existing
+             AsyncAppender + bounded-queue stack in logback-spring.xml
+             (the OOM-safety layer from incident 2026-05-15 is preserved).
+             janino powers the <if> conditional that flips between JSON
+             (default) and Spring Boot's pretty pattern when DEV_MODE_LOG=true. -->
+        <dependency>
+            <groupId>net.logstash.logback</groupId>
+            <artifactId>logstash-logback-encoder</artifactId>
+            <version>7.4</version>
+        </dependency>
+        <dependency>
+            <groupId>org.codehaus.janino</groupId>
+            <artifactId>janino</artifactId>
+        </dependency>
+        <!-- springdoc-openapi — serves Swagger UI at /swagger-ui.html and the
+             OpenAPI JSON at /v3/api-docs (auto-generated from @RestController
+             annotations). The hand-curated YAML lives at api/openapi.yaml and
+             is bundled into the JAR via the <resource> mapping in <build>;
+             springdoc.swagger-ui.url=/openapi.yaml in application.yml points
+             the UI at the curated spec. Per the cross-component contract,
+             every REST-bearing service ships this. -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>2.7.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Testcontainers Postgres + Kafka for the behavior IT.
+             Spring Boot 3.5.14's BOM pins testcontainers at 1.21.4 — don't
+             also import testcontainers-bom (first-declared-wins shadows it
+             and silently picks a different Kafka image). -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>kafka</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- MockSchemaRegistryClient lives in kafka-schema-registry-client,
+             which kafka-avro-serializer already pulls transitively at
+             compile scope. Don't redeclare it here as test-scope —
+             "nearer wins" would shadow the transitive compile resolution
+             and the runtime JAR loses RestClientException. -->
+        <!-- Flyway, used by the IT to apply the canonical metrics migration
+             into the Testcontainers Postgres before the consumer connects. -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>${project.artifactId}</finalName>
+        <!-- Bundle api/openapi.yaml into the JAR at static/openapi.yaml so
+             Spring Boot's static-resource handler serves it at /openapi.yaml
+             (which Swagger UI is configured to load via application.yml). -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <resource>
+                <directory>${project.basedir}/api</directory>
+                <targetPath>static</targetPath>
+                <includes>
+                    <include>openapi.yaml</include>
+                </includes>
+            </resource>
+        </resources>
+        <plugins>
+            <!-- Avro codegen reads the canonical schema from the sibling
+                 kafka/ subsystem so producer + consumer share one definition. -->
+            <plugin>
+                <groupId>org.apache.avro</groupId>
+                <artifactId>avro-maven-plugin</artifactId>
+                <version>${avro.version}</version>
+                <executions>
+                    <execution>
+                        <id>schema</id>
+                        <phase>generate-sources</phase>
+                        <goals><goal>schema</goal></goals>
+                        <configuration>
+                            <sourceDirectory>${project.basedir}/../kafka/schemas</sourceDirectory>
+                            <outputDirectory>${project.build.directory}/generated-sources/avro</outputDirectory>
+                            <stringType>String</stringType>
+                            <createSetters>true</createSetters>
+                            <fieldVisibility>private</fieldVisibility>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>build-helper-maven-plugin</artifactId>
+                <version>3.5.0</version>
+                <executions>
+                    <execution>
+                        <id>add-avro-generated-sources</id>
+                        <phase>generate-sources</phase>
+                        <goals><goal>add-source</goal></goals>
+                        <configuration>
+                            <sources>
+                                <source>${project.build.directory}/generated-sources/avro</source>
+                            </sources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <!-- Failsafe runs the *IT.java behavior tests against
+                 Testcontainers Postgres + Kafka under `mvn verify`. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <!-- SECURITY S-14 — OWASP dependency CVE gate. Inert by default so the
+             offline `mvn -o ...` flow is unaffected; activate online in CI:
+               mvn -P securityScan verify
+             First run downloads the NVD database (slow); speed it up with a key:
+               mvn -P securityScan -DnvdApiKey=$NVD_API_KEY verify
+             (request one at https://nvd.nist.gov/developers/request-an-api-key).
+             Fails the build on any dependency with CVSS >= 7 (high/critical).
+             NOTE: added offline — the scan itself has NOT been run in this
+             environment; verify (and bump the plugin version to latest) on the
+             first CI run. -->
+        <profile>
+            <id>securityScan</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.owasp</groupId>
+                        <artifactId>dependency-check-maven</artifactId>
+                        <version>9.2.0</version>
+                        <configuration>
+                            <failBuildOnCVSS>7</failBuildOnCVSS>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>check</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

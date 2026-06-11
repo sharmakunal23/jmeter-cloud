@@ -1,0 +1,303 @@
+spring:
+  application:
+    name: jmeter-global-orchestrator
+  profiles:
+    default: local
+  # Two datasources are wired manually in DataSourceConfig — one R/W
+  # against jmetercloud_globalrun (run-state) and one read-only against
+  # jmetercloud_metrics (metrics rollup). Spring Boot's auto-config bows
+  # out because both beans are explicit. The spring.datasource.* keys
+  # below feed the metrics datasource via @Value placeholders to keep
+  # parity with the other services' env-var conventions.
+  datasource:
+    url: ${POSTGRES_METRICS_URL:jdbc:postgresql://postgres:5432/jmetercloud_metrics}
+    username: ${POSTGRES_USER:metricsReader}
+    password: ${POSTGRES_PASSWORD:localdev}
+  # Surface ISO-8601 Instants on the wire (default Spring Boot config).
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+  # AUTOMATION Phase E — SMTP for the daily report emails. Local/default points
+  # at the MailHog container; JavaMailSender connects lazily, so a missing
+  # MailHog never fails boot — only an actual send would error.
+  mail:
+    host: ${MAIL_HOST:mailhog}
+    port: ${MAIL_PORT:1025}
+  # CACHE C-0 (2026-05-26) — shared Redis cache so every orchestrator
+  # instance reads the same data (the operator's "scalable at each layer"
+  # requirement). Provider is pinned to redis at runtime; the test-only
+  # application-local.yml flips this to `simple` so ITs need no Redis.
+  # Per-cache TTLs + serializer live in config/CacheConfig.java.
+  cache:
+    type: redis
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}
+      # Lettuce connects lazily; a short command timeout keeps a cache
+      # lookup from stalling an HTTP request if Redis is briefly slow.
+      timeout: ${REDIS_TIMEOUT:2s}
+
+server:
+  port: ${HTTP_PORT:8082}
+  address: ${HTTP_BIND_ADDRESS:0.0.0.0}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always
+  health:
+    db:
+      # /actuator/health includes the Postgres connection in its aggregate;
+      # if Postgres goes DOWN, /actuator/health flips to DOWN.
+      enabled: true
+  # OBSERVABILITY Phase B — distributed tracing.
+  # Sampling: 0.01 default (1% of all spans) — operator-initiated actions are bumped
+  # to 100% by the TracingFilter (Phase C). Local dev override lives in
+  # the docker-compose env so single-pod stacks see every trace.
+  # OTLP endpoint defaults to Jaeger over HTTP (port 4318 — /v1/traces is
+  # the standard OTLP HTTP path). gRPC (4317) is a single config flip
+  # away: add `opentelemetry-exporter-sender-grpc-managed-channel` to the
+  # pom + flip `tracing.transport` to grpc.
+  tracing:
+    sampling:
+      probability: ${MANAGEMENT_TRACING_SAMPLING_PROBABILITY:0.01}
+  otlp:
+    tracing:
+      endpoint: ${MANAGEMENT_OTLP_TRACING_ENDPOINT:http://jaeger:4318/v1/traces}
+      transport: http
+
+# Swagger UI — points at the hand-curated /openapi.yaml served from the
+# JAR's static/ root (api/openapi.yaml is mapped there by the pom's
+# <resources> block). Visitors land on /swagger-ui.html and Swagger UI
+# fetches the spec from /openapi.yaml.
+springdoc:
+  swagger-ui:
+    url: /openapi.yaml
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+
+# AUTOMATION — base URL of document-service. The scheduler's
+# DocumentServiceClient fetches a saved Template's JSON body here at fire time.
+# DOCUMENT_SERVICE_URL already flows from the compose env (it also feeds the
+# PodProvisioner's per-pod documentServiceUrl).
+documentService:
+  baseUrl: ${DOCUMENT_SERVICE_URL:http://document-service:8084}
+
+# Per-run timeseries (GET /runs/{id}/timeseries) trailing-edge trim. On a LIVE
+# run the newest `settleSeconds` of data are still in flight — each worker holds
+# a per-second window open for its close-grace (~2 s, up to GRACE_PERIOD_SECONDS)
+# and the metrics-consumer adds Kafka fetch-wait + batch-INSERT lag before the
+# rows land in Postgres. Until then those seconds are partially aggregated, so a
+# run polled every 5 s shows a wobbling trailing edge that the auto-scaled chart
+# rescales around. CachingMetricsService drops them for live runs (stable
+# poll-to-poll); terminal runs ignore this — their rows are immutable + fully
+# ingested. 5 s covers the worst-case end-to-end lag with headroom for
+# cross-worker clock skew. See MetricsTimeseriesRepository#timeseries(...,int).
+metrics:
+  timeseries:
+    settleSeconds: ${METRICS_TIMESERIES_SETTLE_SECONDS:5}
+
+globalOrchestrator:
+  # Comma-separated list of local-orchestrator base URLs the fan-out layer
+  # talks to. Local-mode default points at orchestrator-1 (multi-region
+  # adds orchestrator-2). Step 15 introduces registry-driven pod claiming;
+  # this static list is the v1 of pod selection.
+  localOrchestratorUrls: ${LOCAL_ORCHESTRATOR_URLS:http://orchestrator-1:8080}
+  # Region label written into globalOrchestrator.run.originRegion.
+  region: ${GLOBAL_ORCHESTRATOR_REGION:us-east-1}
+  # Bounded thread pool sized to the local-orchestrator's HTTP_MAX_THREADS;
+  # production fleets > 100 pods should switch to a reactive WebClient.
+  fanoutThreads: ${GLOBAL_ORCHESTRATOR_FANOUT_THREADS:8}
+  # Run-state DB is separate from metrics — owns writes via the
+  # globalOrchestratorWriter least-privilege role.
+  runStateUrl:      ${POSTGRES_GLOBALRUN_URL:jdbc:postgresql://postgres:5432/jmetercloud_globalrun}
+  runStateUser:     ${POSTGRES_GLOBALRUN_WRITER_USER:globalOrchestratorWriter}
+  runStatePassword: ${POSTGRES_GLOBALRUN_WRITER_PASSWORD:localdev}
+
+  # HARD-DELETE / purge — a SEPARATE read-write
+  # connection to the metrics DB used ONLY to DELETE a purged run's per-second
+  # rows. Connects as the dedicated metricsPurger role (SELECT + DELETE); the
+  # hot metrics read pool above stays read-only. statement_timeout is generous
+  # (120 s) because a run-scoped DELETE scans every weekly partition.
+  metricsPurgeUrl:               ${POSTGRES_METRICS_URL:jdbc:postgresql://postgres:5432/jmetercloud_metrics}
+  metricsPurgeUser:              ${POSTGRES_METRICS_PURGER_USER:metricsPurger}
+  metricsPurgePassword:          ${POSTGRES_METRICS_PURGER_PASSWORD:localdev}
+  metricsPurgeStatementTimeoutMs: ${METRICS_PURGE_STATEMENT_TIMEOUT_MS:120000}
+
+  # ── Phase 1 capacity rework: PodProvisioner config ────────────────
+  # Drives the host docker daemon over a mounted /var/run/docker.sock to
+  # spin up per-app local-orchestrator containers
+  # ({appName}-{region}-worker-{n}) on demand. Defaults mirror the static
+  # orchestrator-1 / orchestrator-2 compose env so a provisioned pod is
+  # bit-for-bit identical to a statically-declared one. The cloud
+  # counterpart (K8sApiPodProvisioner) will sit behind the same
+  # PodProvisioner interface and ignore these.
+  podProvisioner:
+    dockerHost:            ${PODPROVISIONER_DOCKER_HOST:unix:///var/run/docker.sock}
+    network:               ${PODPROVISIONER_NETWORK:jmeter-cloud_default}
+    image:                 ${PODPROVISIONER_IMAGE:jmeter-local-orchestrator:dev}
+    localOrchestratorPort: ${PODPROVISIONER_LOCAL_ORCHESTRATOR_PORT:8080}
+    globalOrchestratorUrl: ${GLOBAL_ORCHESTRATOR_URL:http://global-orchestrator:8082}
+    kafkaBrokers:          ${KAFKA_BROKERS_INTERNAL:kafka:29092}
+    schemaRegistryUrl:     ${SCHEMA_REGISTRY_URL_INTERNAL:http://schema-registry:8081}
+    documentServiceUrl:    ${DOCUMENT_SERVICE_URL:http://document-service:8084}
+    # Phase E (2026-05-16): default per-pod KAFKA_TOPIC env points at the
+    # placeholder topic. RunService.fanOut overrides this per-run for
+    # registered-app runs (Phase C); only legacy unregistered-app code
+    # paths fall through to this default.
+    kafkaTopic:            ${KAFKA_TOPIC:jmeter.metrics.placeholder}
+    # OBSERVABILITY Phase B — tracing env vars propagated to each spawned
+    # local-orch container so its OTLP exporter reaches the same Jaeger.
+    # Sampling defaults to 1% (production); the compose env overrides to
+    # 100% so single-pod dev shows every span.
+    tracingSamplingProbability: ${PODPROVISIONER_TRACING_SAMPLING_PROBABILITY:0.01}
+    otlpTracingEndpoint:        ${PODPROVISIONER_OTLP_TRACING_ENDPOINT:http://jaeger:4318/v1/traces}
+    # Reliability — hard Docker memory limit (MiB) per spawned worker container.
+    # Round 6 (2026-05-31) raised 4096 → 6144 alongside the JMeter child heap bump
+    # (1g → 2g, OrchestratorConfig.JMETER_JVM_ARGS). 6144 fits the orchestrator JVM
+    # (-Xmx1g + ~0.5 GiB native ≈ 1.5 GiB) + the JMeter child (-Xmx2g + ~0.5 GiB
+    # native ≈ 2.5 GiB) + ~2 GiB page-cache headroom for the multi-GB JTL of a 12 h /
+    # 200-250 rps / ~100-endpoint run. 4096 was the Round-5 figure for a 1g JMeter
+    # child and left no headroom once the child grew — workers OOM'd near the 1-hour
+    # mark. memory-swap == memory (set in DockerSocketPodProvisioner) keeps swap off
+    # so a runaway fails fast inside the cgroup.
+    workerMemoryMb:             ${PODPROVISIONER_WORKER_MEMORY_MB:6144}
+    # RELIABILITY Round 8 — aggregator late-arrival grace (seconds) stamped onto
+    # each spawned worker as GRACE_PERIOD_SECONDS. 10s lets slow samples (JMeter
+    # writes a sample at completion but timestamps it at start, so a slow row
+    # lands in the JTL out of order) record into their correct 1-second window
+    # instead of being dropped as "late" (which biases p95/p99 low). Trades a
+    # ~grace-second reporting lag for completeness; per-run POST /test
+    # gracePeriodSeconds still overrides.
+    gracePeriodSeconds:         ${PODPROVISIONER_GRACE_PERIOD_SECONDS:10}
+
+  # ── Save Results reconciliation (ResultsSavedSweeper) ──────────────
+  # A worker's JTL upload finishes AFTER the run goes terminal, and the
+  # run-detail UI stops polling /status at that point — so the per-worker
+  # RESULTS_SAVED audit event (which the events timeline shows) would never
+  # be recorded without a background sweep. This sweeper drives refreshAndGet
+  # on COMPLETED + saveResults runs still missing an event, so the upload is
+  # observed regardless of whether a UI is open. Idempotent + durably deduped.
+  run:
+    # 15 s: the upload lands within seconds of completion; poll soon, before
+    # the pod is reused for the next run (which resets its uploadState).
+    resultsSavedSweepIntervalMs:     ${RESULTS_SAVED_SWEEP_INTERVAL_MS:15000}
+    resultsSavedSweepInitialDelayMs: ${RESULTS_SAVED_SWEEP_INITIAL_DELAY_MS:20000}
+    # 1 h look-back bounds the candidate set: a run whose upload never lands
+    # (e.g. a worker died right after COMPLETED) stops being polled instead of
+    # being chased forever.
+    resultsSavedLookbackMs:          ${RESULTS_SAVED_LOOKBACK_MS:3600000}
+
+  # ── KAFKA-PER-APP Phase B: AdminClient + per-app topic lifecycle ────
+  # AdminClient wired in KafkaAdminConfig. Topic naming convention pinned
+  # in kafka/README.md: jmeter.metrics.<applicationName> (+ .DLT).
+  # Defaults below are the LOCAL profile values (single-broker KRaft, no
+  # auth). The `cloud` profile block overrides replicationFactor +
+  # retentionMs + deleteTopicsOnAppDelete to production-safe values.
+  kafka:
+    brokers:                    ${KAFKA_BROKERS_INTERNAL:kafka:29092}
+    topicPartitions:            ${KAFKA_TOPIC_PARTITIONS:3}
+    topicReplicationFactor:     ${KAFKA_TOPIC_REPLICATION_FACTOR:1}
+    # 7 days = 604800000 ms — local default. Cloud profile bumps to 14 d.
+    topicRetentionMs:           ${KAFKA_TOPIC_RETENTION_MS:604800000}
+    # AdminClient request timeout. 15 s leaves budget for a slow MSK metadata
+    # round-trip without holding the request thread indefinitely.
+    adminTimeoutMs:             ${KAFKA_ADMIN_TIMEOUT_MS:15000}
+    # When true, DELETE /applications/{id} also removes the per-app topic
+    # + DLT. Default true locally (clean dev cycles); default false in
+    # cloud (audit policy may require retention beyond app lifetime).
+    deleteTopicsOnAppDelete:    ${KAFKA_DELETE_TOPICS_ON_APP_DELETE:true}
+
+  # ── AUTOMATION Phase A+B: DB-claim CRON scheduler ──────────────────
+  # CronJobScheduler runs a single @Scheduled tick that claims due cronJob
+  # rows via FOR UPDATE SKIP LOCKED and fires each. HA-safe by construction:
+  # N replicas can run this — each due schedule fires exactly once. Tests
+  # disable the sweep by setting a huge initialDelay (like the pod sweeper).
+  automation:
+    # How often to poll for due schedules. 30 s gives sub-minute fire
+    # latency; a cron's finest grain here is one minute (unix cron).
+    sweepIntervalMs:      ${AUTOMATION_SWEEP_INTERVAL_MS:30000}
+    # Delay before the first sweep — lets the context + datasources settle.
+    sweepInitialDelayMs:  ${AUTOMATION_SWEEP_INITIAL_DELAY_MS:15000}
+    # Max schedules claimed (and fired) per tick. Bounds a thundering-herd if
+    # many schedules come due at the same minute; the rest fire next tick.
+    maxDueBatch:          ${AUTOMATION_MAX_DUE_BATCH:50}
+
+    # ── Phase E: report emails (INFRA_READINESS now; DAILY_REPORT in Phase D) ──
+    email:
+      # local → SmtpEmailSender (MailHog in dev compose). cloud profile flips
+      # this to `ses` (SesEmailSender, -Pcloud build).
+      backend:   ${AUTOMATION_EMAIL_BACKEND:local}
+      from:      ${AUTOMATION_EMAIL_FROM:jmeter-cloud@localhost}
+    # Comma-separated fallback recipients when a report schedule carries none.
+    reportRecipients: ${AUTOMATION_REPORT_RECIPIENTS:}
+
+  # ── AI — Anthropic-backed run analysis ──────────
+  # The API key lives ONLY here (server-side proxy); the browser never sees
+  # it. With no key the AI endpoints return 503 AI_DISABLED and the UI hides
+  # its buttons (GET /api/v1/ai/status), so local dev without a key still
+  # boots green. Model is one constant — bump AI_MODEL to change it. The
+  # daily cap is an in-memory, per-instance runaway-cost backstop.
+  ai:
+    apiKey:             ${ANTHROPIC_API_KEY:}
+    model:              ${AI_MODEL:claude-sonnet-4-6}
+    baseUrl:            ${ANTHROPIC_BASE_URL:https://api.anthropic.com}
+    # 512 comfortably fits the terse summary + 2-4 findings and caps per-call
+    # cost; bump AI_MAX_TOKENS if a future prompt needs more room.
+    maxTokens:          ${AI_MAX_TOKENS:512}
+    dailyInvocationCap: ${AI_DAILY_INVOCATION_CAP:200}
+    # PII redaction is a Phase-1 backlog item — flag stubbed here, no-op in v1
+    # (local data is synthetic). Cloud flips it true once the redaction pass lands.
+    redactPii:          ${AI_REDACT_PII:false}
+
+# SECURITY S-1 (2026-05-31) — per-(IP, endpoint-class) rate-limit filter
+# (RateLimitFilter), the in-process backstop behind nginx's limit_req.
+# DISABLED by default so the local IDE-on-loopback workflow is untouched;
+# the `cloud` profile block below flips it on. A local dev can
+# set SECURITY_RATE_LIMIT_ENABLED=true to exercise the 429 path.
+security:
+  rateLimit:
+    enabled:           ${SECURITY_RATE_LIMIT_ENABLED:false}
+    # Key on the leftmost X-Forwarded-For hop instead of the direct peer.
+    # Enable ONLY behind a LB that overwrites the header — otherwise a client
+    # can forge it and evade or poison another client's bucket.
+    trustForwardedFor: ${SECURITY_RATE_LIMIT_TRUST_XFF:false}
+    # Caffeine maximumSize for the per-key bucket map (bounds memory under IP churn).
+    maxTrackedClients: ${SECURITY_RATE_LIMIT_MAX_CLIENTS:100000}
+
+---
+spring:
+  config:
+    activate:
+      on-profile: cloud
+# SECURITY S-1 — on by default in cloud. trustForwardedFor=true assumes the
+# deployment sits behind an ALB/nginx that OVERWRITES X-Forwarded-For; if a
+# future cloud topology exposes the service without such a proxy, set
+# SECURITY_RATE_LIMIT_TRUST_XFF=false so the spoofable header is ignored.
+security:
+  rateLimit:
+    enabled:           ${SECURITY_RATE_LIMIT_ENABLED:true}
+    trustForwardedFor: ${SECURITY_RATE_LIMIT_TRUST_XFF:true}
+globalOrchestrator:
+  automation:
+    email:
+      # MSK-style cloud default — AWS SES. Region from AWS_REGION (SDK default);
+      # credentials via the instance-profile / IRSA default provider chain.
+      backend: ${AUTOMATION_EMAIL_BACKEND:ses}
+  kafka:
+    # MSK minimum broker count is 3 → RF=3 with min.insync.replicas=2 is
+    # the cloud safety floor. Override locally via env var if needed.
+    topicReplicationFactor:  ${KAFKA_TOPIC_REPLICATION_FACTOR:3}
+    # 14 days in cloud — long enough for replay-from-DLT exercises +
+    # extended-incident review windows.
+    topicRetentionMs:        ${KAFKA_TOPIC_RETENTION_MS:1209600000}
+    # Topic-delete is irreversible + audit may need retained metrics
+    # past app deletion → default OFF in cloud. Operator opts in by
+    # setting the env var explicitly.
+    deleteTopicsOnAppDelete: ${KAFKA_DELETE_TOPICS_ON_APP_DELETE:false}

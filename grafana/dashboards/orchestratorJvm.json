@@ -1,0 +1,139 @@
+{
+  "title": "Orchestrator JVM",
+  "uid": "orchestratorJvm",
+  "description": "JVM health for the platform services: global-orchestrator, document-service, jmeter-metrics-consumer. The $service dropdown is gated by role!=\"localOrchestrator\" so dynamically-spawned worker pods are excluded — those live on the separate Worker Pod JVM dashboard.",
+  "tags": ["jmetercloud", "jvm", "spring-boot"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 3,
+  "refresh": "30s",
+  "time": { "from": "now-30m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(jvm_memory_used_bytes{role!=\"localOrchestrator\"}, service)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "JVM heap used (bytes)",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "maxDataPoints": 500,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (service) (jvm_memory_used_bytes{service=~\"$service\", area=\"heap\"})",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "JVM threads (live)",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "maxDataPoints": 500,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "jvm_threads_live_threads{service=~\"$service\"}",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "GC pause time — avg (s)",
+      "description": "Average GC pause = rate(jvm_gc_pause_seconds_sum) / rate(jvm_gc_pause_seconds_count). The original title said p99; it's actually the rolling average.",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "maxDataPoints": 500,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(jvm_gc_pause_seconds_sum{service=~\"$service\"}[$__rate_interval]) / rate(jvm_gc_pause_seconds_count{service=~\"$service\"}[$__rate_interval])",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "HTTP request rate (req/s) — Spring MVC",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "maxDataPoints": 500,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (service) (rate(http_server_requests_seconds_count{service=~\"$service\"}[$__rate_interval]))",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "lastNotNull"] }
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Application uptime",
+      "gridPos": { "x": 0, "y": 16, "w": 8, "h": 4 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "process_uptime_seconds{service=~\"$service\"}",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Process CPU usage",
+      "gridPos": { "x": 8, "y": 16, "w": 16, "h": 4 },
+      "datasource": "Prometheus",
+      "maxDataPoints": 500,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "process_cpu_usage{service=~\"$service\"}",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit" } },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }
+      }
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Chase octagon favicon — mirrors src/components/BrandMark.tsx. Favicons
+     can't read CSS vars, so Chase blue (#117aca) is inlined here. Keep this
+     in sync with BrandMark if the mark changes. RECREATION of the Chase
+     mark, not the official brand asset. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <polygon points="31,2 69,2 98,31 98,69 69,98 31,98 2,69 2,31" fill="#117aca"/>
+  <g fill="#ffffff">
+    <rect x="50" y="51.5" width="48" height="5" transform="rotate(0 50 50)"/>
+    <rect x="50" y="51.5" width="48" height="5" transform="rotate(90 50 50)"/>
+    <rect x="50" y="51.5" width="48" height="5" transform="rotate(180 50 50)"/>
+    <rect x="50" y="51.5" width="48" height="5" transform="rotate(270 50 50)"/>
+    <rect x="42" y="42" width="16" height="16"/>
+  </g>
+</svg>
