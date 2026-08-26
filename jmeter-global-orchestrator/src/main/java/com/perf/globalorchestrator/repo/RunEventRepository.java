@@ -17,7 +17,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * AUDIT-TRAIL — persistence for {@code globalOrchestrator.runEvent}. Uses the
+ * Persistence for {@code globalOrchestrator.runEvent}. Uses the
  * <strong>same</strong> runState datasource as {@link RunRepository} so an
  * {@link #insert(RunEvent)} call from inside a {@code @Transactional} run
  * mutation commits (or rolls back) atomically with the mutation — a

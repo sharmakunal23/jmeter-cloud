@@ -1,6 +1,9 @@
-# UI-D6 — Automation (CRON jobs)
+# Automation (CRON jobs)
 
-This doc captures the design for the Automation track.
+The design record for the platform's scheduled-run feature, which has shipped.
+Read the status block for what landed and how it differs from the plan below —
+the sections after it are the original design, kept because the reasoning still
+explains the shape.
 
 ## Status (last updated 2026-05-27)
 
@@ -122,7 +125,7 @@ exists in document-service, name unique within the application.
 
 ## UI
 
-The existing stub `<AutomationPage>` slot becomes:
+The Automation pages carry:
 
 - **Header** — title + a "+ New schedule" primary CTA → modal that
   picks application → template → cron (with a small "next 5 fires"
@@ -135,11 +138,9 @@ The existing stub `<AutomationPage>` slot becomes:
 - **Empty state** — "No schedules yet. Pick a template + a cron
   expression to set one up."
 
-Home page's "Upcoming scheduled runs" section already has the
-pagination plumbing — when the backend ships, swap the empty stub for
-a `cronJobsApi.list({ enabled: true, limit: 25 })` sorted by
-`nextFireAt` ascending. One-line edit per the comment in
-`<HomePage>`'s `<ScheduleChecklist>`.
+Home's "Upcoming scheduled runs" reads
+`cronJobsApi.list({ enabled: true, limit: 25 })` sorted by `nextFireAt`
+ascending.
 
 ## Failure handling
 
@@ -167,11 +168,9 @@ on FAILED, optional Slack integration.
 
 ## Phasing
 
-- **D6-A** — Backend table + REST CRUD + Quartz scheduler + 1 IT (round-trip + fire-now stub).
-- **D6-B** — Frontend list page + modal create + Home wiring.
-- **D6-C** — Operator UX polish: cron-expression preview ("next 5 fires"),
-   timezone picker, fire-history audit table.
-- **D6-D** — Webhook notifications (deferred until there's demand).
-
-D6-A + D6-B are the MVP slice; D6-C/D layer on as needed. None of this
-is in flight today — the page is a stub.
+- **Backend** — table + REST CRUD + scheduler + IT. ✅ Shipped, with a
+  **DB-claim poller rather than Quartz** (see the Scheduler section).
+- **Frontend** — list page, create modal, Home wiring. ✅ Shipped.
+- **Operator polish** — cron-expression preview, timezone picker, fire-history
+  audit table. Partly shipped; the rest is open.
+- **Webhook notifications** — deferred until there is demand.

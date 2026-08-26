@@ -60,7 +60,7 @@ export function CreateApplicationDialog({
   const [sealId, setSealId] = useState(initial?.sealId ?? "");
   const [description, setDescription] = useState(initial?.description ?? "");
   const [healthEndpoints, setHealthEndpoints] = useState<string[]>(initial?.healthEndpoints ?? []);
-  // AUTOMATION Phase C — when true, scheduled DRAIN_REGION jobs skip this app.
+  // When true, scheduled DRAIN_REGION jobs skip this app.
   const [alwaysOn, setAlwaysOn] = useState<boolean>(initial?.alwaysOn ?? false);
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);

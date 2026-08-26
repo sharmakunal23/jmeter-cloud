@@ -1,5 +1,5 @@
 /**
- * UI-D3 — URL-driven paginator. Drives the Applications-detail runs
+ * URL-driven paginator. Drives the Applications-detail runs
  * list and is intended to be reused by any other table that needs
  * page navigation. {@code page} is 1-based for human readability.
  *

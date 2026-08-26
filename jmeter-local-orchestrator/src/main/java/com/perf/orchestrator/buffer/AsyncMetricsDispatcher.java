@@ -1,10 +1,7 @@
 package com.perf.orchestrator.buffer;
 
-import com.perf.orchestrator.WorkerMetricBatch;
-import com.perf.orchestrator.kafka.KafkaMetricPublisher;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.Gauge;
-import io.micrometer.core.instrument.MeterRegistry;
+import com.perf.orchestrator.model.WorkerMetricBatch;
+import com.perf.orchestrator.observability.WarningThrottle;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -14,45 +11,27 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Async impl of {@link MetricsDispatcher} — single background thread + bounded
- * in-memory queue. Solves K-3's two non-negotiables:
+ * Single background thread plus a bounded queue, so the aggregator's poll thread
+ * never blocks on disk or network: {@link #offer(WorkerMetricBatch)} is a
+ * sub-microsecond CAS and the dispatch thread does the gzip, the atomic rename
+ * and the POST.
  *
- * <ol>
- *   <li><b>Async constraint:</b> aggregator's poll thread must never block on
- *       disk I/O. {@link #offer(WorkerMetricBatch)} is a sub-microsecond CAS;
- *       the dispatch thread does the gzip + atomic-rename + publish.</li>
- *   <li><b>Reliability constraint:</b> envelopes survive Kafka outages and
- *       process crashes. The dispatch thread always persists to the buffer
- *       <em>before</em> publishing — failed publishes leave the file on disk
- *       for the retry sweeper to re-attempt.</li>
- * </ol>
+ * <p><b>It always persists to the buffer before publishing</b>, which is what
+ * makes envelopes survive a consumer outage or a process crash — a failed
+ * publish simply leaves the file on disk for the retry sweeper.
  *
- * <h2>Loop semantics</h2>
- * <pre>
- *   loop:
- *     incoming = queue.poll(retryIntervalMs)        [blocks on empty queue]
- *     if (incoming != null) handleNew(incoming)     [persist + publish]
- *     retryOldestStale()                             [re-publish oldest if stale]
- * </pre>
+ * <p>Response handling maps directly onto the consumer's contract: {@code 202}
+ * deletes from the buffer; {@code 400}/{@code 413} also delete but WARN and bump
+ * {@link #failedCount()}, since keeping a malformed envelope would waste space
+ * forever; anything else — 5xx, network, timeout — leaves it on disk to retry.
  *
- * <p>Retry runs on every iteration so even under steady ingest a backlog
- * (Kafka momentarily down) drains naturally as the queue empties.
- *
- * <h2>Duplicate-publish safety</h2>
- * The retry path may double-publish an envelope already in flight from a
- * recent {@code handleNew}. Both paths are safe because:
- * <ul>
- *   <li>{@link KafkaMetricPublisher} uses idempotent producer config —
- *       broker-side dedup of producer retries.</li>
- *   <li>The consumer's INSERT is idempotent on
- *       {@code (runId, workerId, label, windowSecond)} via {@code ON CONFLICT
- *       DO NOTHING}.</li>
- *   <li>{@link MetricsBuffer#delete} is idempotent — double-deletes are no-ops.</li>
- * </ul>
+ * <p>The loop retries the oldest stale envelope on every iteration, not only
+ * when idle, so a backlog drains even under steady ingest.
  */
 public final class AsyncMetricsDispatcher implements MetricsDispatcher {
 
@@ -68,57 +47,44 @@ public final class AsyncMetricsDispatcher implements MetricsDispatcher {
     public static final Duration DEFAULT_RETRY_AFTER = Duration.ofSeconds(5);
 
     private final MetricsBuffer buffer;
-    private final KafkaMetricPublisher publisher;
-    private final HttpFallbackClient httpFallback;     // K-5 — nullable (null = no fallback)
+    private final HttpIngestClient ingestClient;
     private final Clock clock;
-    private final ArrayBlockingQueue<Pending> queue;
+    private final ArrayBlockingQueue<WorkerMetricBatch> queue;
     private final Duration retryInterval;
     private final Duration retryAfter;
     private final Thread workerThread;
     private volatile boolean shutdown = false;
 
     /**
-     * In-memory queue carrier — pairs the envelope with its destination
-     * topic so the dispatch thread can route per-app instead of using a
-     * boot-time default.
+     * SLIMDOWN D-4: a backpressure drop is silent data loss and the WARN is
+     * its only signal. Throttled (burst 5 / 60 s window + suppressed-count
+     * summary) because a wedged dispatch thread would otherwise emit one
+     * line per second for the whole outage. Single caller — the
+     * aggregator's poll thread — matching WarningThrottle's contract.
      */
-    private record Pending(WorkerMetricBatch envelope, String topic) {}
+    private final WarningThrottle backpressureWarnings = new WarningThrottle();
 
-    private final Counter cOffered;
-    private final Counter cDropsForBackpressure;
-    private final Counter cRetried;
-    private final Counter cFallbackAccepted;
-    private final Counter cFallbackTerminalReject;
-    private final Counter cFallbackRetry;
+    /** Envelopes accepted (202) by the consumer — exposed via {@link #publishedCount()}. */
+    private final LongAdder published = new LongAdder();
+
+    /** Envelopes terminally rejected (400/413) — exposed via {@link #failedCount()}. */
+    private final LongAdder failed = new LongAdder();
 
     public AsyncMetricsDispatcher(MetricsBuffer buffer,
-                                  KafkaMetricPublisher publisher,
-                                  MeterRegistry meterRegistry) {
-        this(buffer, publisher, null, meterRegistry, Clock.systemUTC(),
+                                  HttpIngestClient ingestClient) {
+        this(buffer, ingestClient, Clock.systemUTC(),
                 DEFAULT_QUEUE_CAPACITY, DEFAULT_RETRY_INTERVAL, DEFAULT_RETRY_AFTER);
     }
 
     public AsyncMetricsDispatcher(MetricsBuffer buffer,
-                                  KafkaMetricPublisher publisher,
-                                  HttpFallbackClient httpFallback,
-                                  MeterRegistry meterRegistry) {
-        this(buffer, publisher, httpFallback, meterRegistry, Clock.systemUTC(),
-                DEFAULT_QUEUE_CAPACITY, DEFAULT_RETRY_INTERVAL, DEFAULT_RETRY_AFTER);
-    }
-
-    public AsyncMetricsDispatcher(MetricsBuffer buffer,
-                                  KafkaMetricPublisher publisher,
-                                  HttpFallbackClient httpFallback,
-                                  MeterRegistry meterRegistry,
+                                  HttpIngestClient ingestClient,
                                   Clock clock,
                                   int queueCapacity,
                                   Duration retryInterval,
                                   Duration retryAfter) {
         this.buffer = Objects.requireNonNull(buffer, "buffer cannot be null");
-        this.publisher = Objects.requireNonNull(publisher, "publisher cannot be null");
-        this.httpFallback = httpFallback; // nullable — null = no fallback (K-5 disabled)
+        this.ingestClient = Objects.requireNonNull(ingestClient, "ingestClient cannot be null");
         this.clock = Objects.requireNonNull(clock, "clock cannot be null");
-        Objects.requireNonNull(meterRegistry, "meterRegistry cannot be null");
         if (queueCapacity < 1) {
             throw new IllegalArgumentException("queueCapacity must be >= 1, got: " + queueCapacity);
         }
@@ -132,54 +98,33 @@ public final class AsyncMetricsDispatcher implements MetricsDispatcher {
         this.retryInterval = retryInterval;
         this.retryAfter = retryAfter;
 
-        this.cOffered = Counter.builder("metricsDispatch.offered")
-                .description("Envelopes accepted onto the in-memory dispatch queue.")
-                .register(meterRegistry);
-        this.cDropsForBackpressure = Counter.builder("metricsDispatch.dropsForBackpressure")
-                .description("Envelopes dropped because the in-memory dispatch queue was full — load-shedding signal.")
-                .register(meterRegistry);
-        this.cRetried = Counter.builder("metricsDispatch.retried")
-                .description("Buffered envelopes re-published by the retry sweeper after a prior failure / Kafka outage.")
-                .register(meterRegistry);
-        this.cFallbackAccepted = Counter.builder("httpFallback.accepted")
-                .description("Envelopes successfully accepted by the K-4 HTTP fallback after Kafka send failed.")
-                .register(meterRegistry);
-        this.cFallbackTerminalReject = Counter.builder("httpFallback.terminalRejects")
-                .description("Envelopes the consumer rejected as malformed (HTTP 400/413). Data is lost; investigate.")
-                .register(meterRegistry);
-        this.cFallbackRetry = Counter.builder("httpFallback.retry")
-                .description("HTTP fallback returned a retryable status (5xx, network error). Envelope stays on disk.")
-                .register(meterRegistry);
-        Gauge.builder("metricsDispatch.queue.depth", queue, q -> (double) q.size())
-                .description("In-memory queue depth — should be near-zero under healthy operation.")
-                .register(meterRegistry);
-
         this.workerThread = new Thread(this::runLoop, "metrics-dispatcher");
         this.workerThread.setDaemon(true);
         this.workerThread.start();
     }
 
     @Override
-    public boolean offer(WorkerMetricBatch envelope, String topic) {
+    public boolean offer(WorkerMetricBatch envelope) {
         Objects.requireNonNull(envelope, "envelope cannot be null");
-        if (topic == null || topic.isBlank()) {
-            throw new IllegalArgumentException("topic must be non-blank");
-        }
-        boolean accepted = queue.offer(new Pending(envelope, topic));
-        if (accepted) {
-            cOffered.increment();
-        } else {
-            cDropsForBackpressure.increment();
+        boolean accepted = queue.offer(envelope);
+        if (!accepted) {
+            backpressureWarnings.record(
+                    () -> LOG.warning(() -> String.format(
+                            "Dispatch queue full (%d) — envelope for runId=%s windowSecond=%d DROPPED (backpressure; data lost)",
+                            queue.size(), envelope.runId(), envelope.windowSecond())),
+                    suppressed -> LOG.warning(() -> String.format(
+                            "Dispatch queue backpressure: %d further envelope drops suppressed in the last minute",
+                            suppressed)));
         }
         return accepted;
     }
 
     @Override
-    public int offerAll(Collection<WorkerMetricBatch> envelopes, String topic) {
+    public int offerAll(Collection<WorkerMetricBatch> envelopes) {
         Objects.requireNonNull(envelopes, "envelopes cannot be null");
         int accepted = 0;
         for (WorkerMetricBatch env : envelopes) {
-            if (!offer(env, topic)) {
+            if (!offer(env)) {
                 break;
             }
             accepted++;
@@ -204,13 +149,23 @@ public final class AsyncMetricsDispatcher implements MetricsDispatcher {
         return true;
     }
 
+    @Override
+    public long publishedCount() {
+        return published.sum();
+    }
+
+    @Override
+    public long failedCount() {
+        return failed.sum();
+    }
+
     private void runLoop() {
         LOG.info(() -> String.format(
                 "AsyncMetricsDispatcher started — queueCapacity=%d retryInterval=%s retryAfter=%s",
                 queue.remainingCapacity(), retryInterval, retryAfter));
         while (!shutdown) {
             try {
-                Pending incoming = queue.poll(retryInterval.toMillis(), TimeUnit.MILLISECONDS);
+                WorkerMetricBatch incoming = queue.poll(retryInterval.toMillis(), TimeUnit.MILLISECONDS);
                 if (incoming != null) {
                     handleNew(incoming);
                 }
@@ -226,12 +181,12 @@ public final class AsyncMetricsDispatcher implements MetricsDispatcher {
         LOG.info("AsyncMetricsDispatcher stopped");
     }
 
-    private void handleNew(Pending pending) {
-        Optional<BufferedEnvelope> handle = buffer.enqueue(pending.envelope(), pending.topic());
+    private void handleNew(WorkerMetricBatch envelope) {
+        Optional<BufferedEnvelope> handle = buffer.enqueue(envelope);
         if (handle.isEmpty()) {
             return;
         }
-        publishAsync(handle.get(), false);
+        publishAsync(handle.get());
     }
 
     private void retryOldestStale() {
@@ -240,74 +195,19 @@ public final class AsyncMetricsDispatcher implements MetricsDispatcher {
         BufferedEnvelope env = opt.get();
         Instant cutoff = clock.instant().minus(retryAfter);
         if (env.enqueuedAt().isAfter(cutoff)) return;
-        if (env.topic() == null) {
-            // Carryover from a pre-Phase-G build that didn't persist topic —
-            // drop rather than guess. Logged once per stale entry it surfaces.
-            LOG.warning(() -> String.format(
-                    "Retry sweep: envelope %s has no topic sidecar (pre-Phase-G carryover) — dropping",
-                    env.id()));
-            buffer.delete(env);
-            return;
-        }
-        cRetried.increment();
-        publishAsync(env, true);
+        publishAsync(env);
     }
 
-    private void publishAsync(BufferedEnvelope handle, boolean isRetry) {
-        if (handle.topic() == null) {
-            // Defense-in-depth — handleNew always sets topic; only the retry
-            // path can encounter a null topic and that path drops first.
-            LOG.warning(() -> String.format(
-                    "publishAsync: envelope %s missing topic — dropping", handle.id()));
-            buffer.delete(handle);
-            return;
-        }
+    private void publishAsync(BufferedEnvelope handle) {
         try {
-            publisher.publishBatchAsync(handle.envelope(), handle.topic())
-                    .whenComplete((sr, kafkaEx) -> {
-                        if (kafkaEx == null) {
-                            buffer.delete(handle);
-                            return;
-                        }
-                        // Kafka failed. Try HTTP fallback per envelope (K-5).
-                        // If no fallback configured, leave on disk for K-3 retry.
-                        if (httpFallback == null) {
-                            if (LOG.isLoggable(Level.FINE)) {
-                                LOG.fine(() -> String.format(
-                                        "Kafka publish failed (isRetry=%s) for envelope %s; no HTTP fallback — leaving on disk: %s",
-                                        isRetry, handle.id(), kafkaEx.getMessage()));
-                            }
-                            return;
-                        }
-                        attemptHttpFallback(handle, kafkaEx);
-                    });
-        } catch (Exception e) {
-            LOG.log(Level.WARNING, "AsyncMetricsDispatcher: synchronous publish failure", e);
-        }
-    }
-
-    /**
-     * K-5 — invoked when {@link KafkaMetricPublisher#publishBatchAsync} failed.
-     * Maps the consumer's response codes onto buffer transitions:
-     * <ul>
-     *   <li>202 (ACCEPTED) → delete from buffer.</li>
-     *   <li>400/413 (TERMINAL_REJECT) → delete from buffer + bump rejection
-     *       counter. Keeping malformed envelopes on disk would just waste
-     *       space; the counter surfaces the loss for operator review.</li>
-     *   <li>5xx / network / timeout (RETRY) → leave on disk for K-3 sweeper.</li>
-     * </ul>
-     */
-    private void attemptHttpFallback(BufferedEnvelope handle, Throwable kafkaEx) {
-        try {
-            httpFallback.send(handle.envelope())
-                    .whenComplete((result, fallbackEx) -> {
-                        if (fallbackEx != null || result == null) {
-                            // Defensive — JdkHttpFallbackClient never throws via the future,
+            ingestClient.send(handle.envelope())
+                    .whenComplete((result, ex) -> {
+                        if (ex != null || result == null) {
+                            // Defensive — JdkHttpIngestClient never throws via the future,
                             // but if a custom impl does, treat as RETRY.
-                            cFallbackRetry.increment();
                             if (LOG.isLoggable(Level.FINE)) {
                                 LOG.fine(() -> String.format(
-                                        "HTTP fallback threw for envelope %s — leaving on disk",
+                                        "Ingest send threw for envelope %s — leaving on disk",
                                         handle.id()));
                             }
                             return;
@@ -315,28 +215,26 @@ public final class AsyncMetricsDispatcher implements MetricsDispatcher {
                         switch (result.outcome()) {
                             case ACCEPTED -> {
                                 buffer.delete(handle);
-                                cFallbackAccepted.increment();
+                                published.increment();
                             }
                             case TERMINAL_REJECT -> {
                                 buffer.delete(handle);
-                                cFallbackTerminalReject.increment();
+                                failed.increment();
                                 LOG.warning(() -> String.format(
-                                        "HTTP fallback rejected envelope %s as malformed (status=%d, %s) — DELETED from buffer (data lost)",
+                                        "Ingest rejected envelope %s as malformed (status=%d, %s) — DELETED from buffer (data lost)",
                                         handle.id(), result.statusCode(), result.detail()));
                             }
                             case RETRY -> {
-                                cFallbackRetry.increment();
                                 if (LOG.isLoggable(Level.FINE)) {
                                     LOG.fine(() -> String.format(
-                                            "HTTP fallback returned retry status (status=%d, %s) for envelope %s — staying on disk",
+                                            "Ingest returned retry status (status=%d, %s) for envelope %s — staying on disk",
                                             result.statusCode(), result.detail(), handle.id()));
                                 }
                             }
                         }
                     });
         } catch (Exception e) {
-            cFallbackRetry.increment();
-            LOG.log(Level.WARNING, "AsyncMetricsDispatcher: synchronous HTTP fallback failure", e);
+            LOG.log(Level.WARNING, "AsyncMetricsDispatcher: synchronous ingest failure", e);
         }
     }
 

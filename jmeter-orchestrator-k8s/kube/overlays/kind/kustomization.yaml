@@ -1,0 +1,26 @@
+# KUBE-8 — kind overlay: base only. Everything kind-specific (cluster
+# creation, compose-network join, k8srun DB + migrations, image builds +
+# side-loads, the compose-bridge Services) is imperative and lives in
+# kube/local/bootstrap.sh — which applies THIS overlay for the manifests.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  # STATIC-FLEET (2026-07-27): the platform default is STATIC, but this
+  # cluster exists to VALIDATE provisioning — the kind smoke spins workers
+  # through the K8sPodProvisioner. Pin DYNAMIC here so the base can carry
+  # the production-correct default without breaking the smoke.
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: jmeter-orchestrator-k8s
+      spec:
+        template:
+          spec:
+            containers:
+              - name: orchestrator
+                env:
+                  - name: PROVISIONING_MODE
+                    value: DYNAMIC

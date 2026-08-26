@@ -48,6 +48,21 @@ export interface CapacitySnapshot {
   pods: PodView[];
 }
 
+/** STATIC-FLEET Phase 7 — response to declaring an operator-deployed worker. */
+export interface DeclaredWorkerResponse {
+  podName: string;
+  applicationId: string;
+  region: string;
+  baseUrl: string;
+  source: "STATIC";
+  /** False only when `force` was used — the worker did not answer. */
+  reachable: boolean;
+  /** Declared workers for this (application, region) after the call. */
+  declared: number;
+  /** Derived capacity written — always equal to `declared` in static mode. */
+  maxAvailable: number;
+}
+
 export interface ApplicationCapacityRow {
   applicationId: string;
   region: string;
@@ -159,12 +174,41 @@ export const capacityApi = {
       signal,
     ),
 
-  /** DELETE /capacity/{region}/pods/{name} — drain. 409 + blockedBy if in use. */
+  /**
+   * DELETE /capacity/{region}/pods/{name} — release a worker. 409 + blockedBy
+   * if in use. In DYNAMIC mode this drains (container stopped + removed); in
+   * STATIC mode it undeclares (registry row removed, the operator's worker
+   * left running) — `containerStopped` in the response says which happened.
+   */
   drainPod: (applicationId: string, region: string, podName: string, signal?: AbortSignal) =>
-    request<{ podName: string; drained: boolean }>(
+    request<{ podName: string; drained: boolean; containerStopped?: boolean }>(
       "DELETE",
       `${base(applicationId, region)}/pods/${encodeURIComponent(podName)}`,
       undefined,
+      signal,
+    ),
+
+  /**
+   * PUT /capacity/{region}/pods/{name} — STATIC-FLEET Phase 7: declare an
+   * operator-deployed worker. Static-mode only (409 PROVISIONING_REQUIRES_STATIC
+   * otherwise). Idempotent: re-declaring the same name updates its address.
+   *
+   * `force` skips the reachability probe, for a worker that is deployed but
+   * not up yet; without it an unreachable address is refused 400
+   * WORKER_UNREACHABLE so a typo fails here rather than at the next run.
+   */
+  declareWorker: (
+    applicationId: string,
+    region: string,
+    podName: string,
+    baseUrl: string,
+    force = false,
+    signal?: AbortSignal,
+  ) =>
+    request<DeclaredWorkerResponse>(
+      "PUT",
+      `${base(applicationId, region)}/pods/${encodeURIComponent(podName)}${force ? "?force=true" : ""}`,
+      { baseUrl },
       signal,
     ),
 

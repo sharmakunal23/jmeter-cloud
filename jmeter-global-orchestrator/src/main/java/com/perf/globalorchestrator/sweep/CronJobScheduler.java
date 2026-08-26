@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * AUTOMATION — the DB-claim scheduler. A single {@code @Scheduled} tick claims
+ * The DB-claim scheduler. A single {@code @Scheduled} tick claims
  * the due schedules (HA-safe via {@code FOR UPDATE SKIP LOCKED} in
  * {@link CronFireService#claimDue()}) and fires each.
  *

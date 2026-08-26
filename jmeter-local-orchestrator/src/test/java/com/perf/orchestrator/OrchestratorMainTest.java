@@ -3,8 +3,8 @@ package com.perf.orchestrator;
 import com.perf.orchestrator.config.OrchestratorBeans;
 import com.perf.orchestrator.config.OrchestratorConfig;
 import com.perf.orchestrator.http.BuildInfo;
+import com.perf.orchestrator.buffer.MetricsDispatcher;
 import com.perf.orchestrator.http.ReadinessProbe;
-import com.perf.orchestrator.kafka.MetricPublisher;
 import com.perf.orchestrator.lifecycle.ArtifactStager;
 import com.perf.orchestrator.lifecycle.CurrentRun;
 import com.perf.orchestrator.lifecycle.TestRunGate;
@@ -12,7 +12,7 @@ import com.perf.orchestrator.lifecycle.TestRunManager;
 import com.perf.orchestrator.logs.LogTail;
 import com.perf.orchestrator.metrics.CountersSupplier;
 import com.perf.orchestrator.metrics.JmxMetricsCollector;
-import com.perf.orchestrator.metrics.KafkaReachabilityProbe;
+import com.perf.orchestrator.metrics.IngestReachabilityProbe;
 import com.perf.orchestrator.storage.ArtifactSource;
 import com.perf.orchestrator.storage.ResultSink;
 import org.junit.jupiter.api.DisplayName;
@@ -53,14 +53,14 @@ class OrchestratorMainTest {
     class ReadinessPrecedence {
 
         @Test
-        @DisplayName("UP when Kafka is reachable and disk is above threshold — the documented happy path")
+        @DisplayName("UP when the consumer is reachable and disk is above threshold — the documented happy path")
         void up_when_both_healthy() {
             ReadinessProbe.Snapshot s = OrchestratorMain.composeReadinessSnapshot(
-                    KafkaReachabilityProbe.Snapshot.up(),
+                    IngestReachabilityProbe.Snapshot.up(),
                     FIVE_GB, ONE_GB, "RUNNING");
 
             assertSoftly(softly -> {
-                softly.assertThat(s.kafkaReachable()).isTrue();
+                softly.assertThat(s.ingestReachable()).isTrue();
                 softly.assertThat(s.diskFreeBytes()).isEqualTo(FIVE_GB);
                 softly.assertThat(s.testState())
                         .as("testState surfaced for diagnostics — never gates the verdict")
@@ -72,46 +72,90 @@ class OrchestratorMainTest {
         }
 
         @Test
-        @DisplayName("DOWN with the Kafka reason when the broker probe is unreachable — Kafka beats disk")
-        void down_when_kafka_unreachable() {
+        @DisplayName("DOWN with the ingest reason when the consumer probe is unreachable — ingest beats disk")
+        void down_when_ingest_unreachable() {
             ReadinessProbe.Snapshot s = OrchestratorMain.composeReadinessSnapshot(
-                    KafkaReachabilityProbe.Snapshot.down("kafka_unreachable"),
+                    IngestReachabilityProbe.Snapshot.down("ingest_unreachable"),
                     FIVE_GB, ONE_GB, "IDLE");
 
             assertSoftly(softly -> {
-                softly.assertThat(s.kafkaReachable()).isFalse();
-                softly.assertThat(s.reason()).isEqualTo("kafka_unreachable");
+                softly.assertThat(s.ingestReachable()).isFalse();
+                softly.assertThat(s.reason()).isEqualTo("ingest_unreachable");
             });
         }
 
         @Test
-        @DisplayName("DOWN with disk_pressure when Kafka is up but disk is below the configured threshold")
+        @DisplayName("DOWN with disk_pressure when the consumer is up but disk is below the configured threshold")
         void down_when_disk_below_threshold() {
             // 800 MB free, threshold 1 GB → DOWN
             ReadinessProbe.Snapshot s = OrchestratorMain.composeReadinessSnapshot(
-                    KafkaReachabilityProbe.Snapshot.up(),
+                    IngestReachabilityProbe.Snapshot.up(),
                     800L * 1024 * 1024, ONE_GB, "IDLE");
 
             assertSoftly(softly -> {
-                softly.assertThat(s.kafkaReachable())
-                        .as("kafkaReachable still TRUE — disk pressure does not contradict the Kafka signal")
+                softly.assertThat(s.ingestReachable())
+                        .as("ingestReachable still TRUE — disk pressure does not contradict the ingest signal")
                         .isTrue();
                 softly.assertThat(s.reason()).isEqualTo("disk_pressure");
             });
         }
 
         @Test
-        @DisplayName("Kafka failure wins over disk failure when both are bad — operators see the more severe cause first")
-        void kafka_reason_wins_over_disk() {
+        @DisplayName("an unresolved orphan JMeter flips the worker DOWN so "
+                + "a poisoned host stops being handed runs")
+        void down_when_orphan_unresolved() {
             ReadinessProbe.Snapshot s = OrchestratorMain.composeReadinessSnapshot(
-                    KafkaReachabilityProbe.Snapshot.down("kafka_unreachable"),
+                    IngestReachabilityProbe.Snapshot.up(),
+                    FIVE_GB, ONE_GB, "IDLE",
+                    "orphanJmeterProcess: pid(s) [4242] survived SIGTERM and SIGKILL");
+
+            assertSoftly(softly -> {
+                softly.assertThat(s.isUp()).isFalse();
+                softly.assertThat(s.ingestReachable())
+                        .as("the consumer is fine — don't report a false negative for it")
+                        .isTrue();
+                softly.assertThat(s.reason()).contains("orphanJmeterProcess");
+            });
+        }
+
+        @Test
+        @DisplayName("a cleared orphan leaves the worker UP — the reaper's normal path kills the "
+                + "process and clears the signal, so a healthy worker never flaps")
+        void up_when_orphan_resolved() {
+            ReadinessProbe.Snapshot s = OrchestratorMain.composeReadinessSnapshot(
+                    IngestReachabilityProbe.Snapshot.up(), FIVE_GB, ONE_GB, "IDLE", null);
+
+            assertThat(s.isUp()).isTrue();
+            assertThat(s.reason()).isNull();
+        }
+
+        @Test
+        @DisplayName("ingest and disk both outrank the orphan signal — the worker being unreachable "
+                + "or out of space is the more severe cause")
+        void severe_causes_outrank_orphan() {
+            ReadinessProbe.Snapshot ingestDown = OrchestratorMain.composeReadinessSnapshot(
+                    IngestReachabilityProbe.Snapshot.down("ingest_unreachable"),
+                    FIVE_GB, ONE_GB, "IDLE", "orphanJmeterProcess: pid(s) [1]");
+            assertThat(ingestDown.reason()).isEqualTo("ingest_unreachable");
+
+            ReadinessProbe.Snapshot diskDown = OrchestratorMain.composeReadinessSnapshot(
+                    IngestReachabilityProbe.Snapshot.up(),
+                    100L * 1024 * 1024, ONE_GB, "IDLE", "orphanJmeterProcess: pid(s) [1]");
+            assertThat(diskDown.reason()).isEqualTo("disk_pressure");
+        }
+
+        @Test
+        @DisplayName("Ingest failure wins over disk failure when both are bad — operators see the more severe cause first")
+        void ingest_reason_wins_over_disk() {
+            ReadinessProbe.Snapshot s = OrchestratorMain.composeReadinessSnapshot(
+                    IngestReachabilityProbe.Snapshot.down("ingest_unreachable"),
                     100L * 1024 * 1024, ONE_GB, "IDLE");
 
             assertSoftly(softly -> {
-                softly.assertThat(s.kafkaReachable()).isFalse();
+                softly.assertThat(s.ingestReachable()).isFalse();
                 softly.assertThat(s.reason())
-                        .as("kafka_unreachable beats disk_pressure")
-                        .isEqualTo("kafka_unreachable");
+                        .as("ingest_unreachable beats disk_pressure")
+                        .isEqualTo("ingest_unreachable");
             });
         }
 
@@ -120,10 +164,10 @@ class OrchestratorMainTest {
         void zero_threshold_disables_disk_gate() {
             // 1 byte free, threshold 0 → still UP because the gate is disabled
             ReadinessProbe.Snapshot s = OrchestratorMain.composeReadinessSnapshot(
-                    KafkaReachabilityProbe.Snapshot.up(),
+                    IngestReachabilityProbe.Snapshot.up(),
                     1L, 0L, "IDLE");
 
-            assertThat(s.kafkaReachable()).isTrue();
+            assertThat(s.ingestReachable()).isTrue();
             assertThat(s.reason()).isNull();
         }
 
@@ -131,17 +175,17 @@ class OrchestratorMainTest {
         @DisplayName("disk equal to threshold is UP — strict less-than comparison avoids edge-case flapping")
         void disk_equal_threshold_is_up() {
             ReadinessProbe.Snapshot s = OrchestratorMain.composeReadinessSnapshot(
-                    KafkaReachabilityProbe.Snapshot.up(),
+                    IngestReachabilityProbe.Snapshot.up(),
                     ONE_GB, ONE_GB, "IDLE");
 
             assertThat(s.reason()).isNull();
         }
 
         @Test
-        @DisplayName("startup_in_progress reason from the Kafka probe propagates through to /ready response")
+        @DisplayName("startup_in_progress reason from the ingest probe propagates through to /ready response")
         void startup_in_progress_propagates() {
             ReadinessProbe.Snapshot s = OrchestratorMain.composeReadinessSnapshot(
-                    KafkaReachabilityProbe.Snapshot.down("startup_in_progress"),
+                    IngestReachabilityProbe.Snapshot.down("startup_in_progress"),
                     FIVE_GB, ONE_GB, "IDLE");
 
             assertThat(s.reason()).isEqualTo("startup_in_progress");
@@ -157,13 +201,12 @@ class OrchestratorMainTest {
      * double-close them — the orchestrator's shutdown hook owns that
      * ordering.
      *
-     * <p>{@link KafkaReachabilityProbe} and {@link MetricPublisher} are
-     * mocked via the {@link MockOverrides} {@code @TestConfiguration}: the
-     * production {@code @Bean} factories try to build a real
-     * {@code AdminClient} / {@code KafkaProducer} which would attempt
-     * (failed) DNS resolution against the env-var-configured broker, slowing
-     * the test for no observability gain. The mock pair lets us assert the
-     * close-not-called invariant on real {@link Closeable} beans.
+     * <p>{@link IngestReachabilityProbe} is mocked via the
+     * {@link MockOverrides} {@code @TestConfiguration}: the production
+     * {@code @Bean} factory starts a daemon probe thread that OPTIONS-polls
+     * an unreachable consumer URL, slowing the test for no observability
+     * gain. The mock also lets us assert the close-not-called invariant on
+     * a verifiable {@link Closeable} bean.
      */
     @Nested
     @DisplayName("bootSpringContext — @Bean-factory wiring")
@@ -184,24 +227,20 @@ class OrchestratorMainTest {
             props.put("RUN_ID",              "test-run-id");
             props.put("JTL_PATH",            "/results/results.jtl");
             props.put("SENTINEL_PATH",       "/results/.done");
-            props.put("KAFKA_BROKERS",       "kafka:9092");
-            props.put("SCHEMA_REGISTRY_URL", "http://schema-registry:8081");
-            props.put("KAFKA_TOPIC",         "jmeter.metrics.perSecond");
             // Ephemeral port keeps these tests hermetic.
             props.put("HTTP_PORT",           "0");
             // Tomcat property defaults (mirror OrchestratorMain.bootSpringContext).
             props.put("server.port", 0);
             props.put("server.address", "127.0.0.1");
-            props.put("management.endpoints.web.exposure.include", "health,info,prometheus");
+            props.put("management.endpoints.web.exposure.include", "health,info");
             props.put("management.endpoint.health.show-details", "always");
             return props;
         }
 
         /**
          * Boots a fresh Spring context backed by {@link OrchestratorBeans}
-         * plus a {@link MockOverrides} that swaps out the Kafka-touching
-         * beans for mocks. The returned context is the caller's
-         * responsibility to close.
+         * plus a {@link MockOverrides} that swaps out the probe bean for a
+         * mock. The returned context is the caller's responsibility to close.
          */
         private static ConfigurableApplicationContext bootForTest() {
             // MockOverrides is supplied as a SOURCE after OrchestratorBeans;
@@ -233,14 +272,14 @@ class OrchestratorMainTest {
                     softly.assertThat(ctx.getBean(JmxMetricsCollector.class)).isNotNull();
                     softly.assertThat(ctx.getBean(ResultSink.class)).isNotNull();
                     softly.assertThat(ctx.getBean(ArtifactSource.class)).isNotNull();
-                    softly.assertThat(ctx.getBean(KafkaReachabilityProbe.class)).isNotNull();
+                    softly.assertThat(ctx.getBean(IngestReachabilityProbe.class)).isNotNull();
                     softly.assertThat(ctx.getBean(TestRunManager.class)).isNotNull();
                     softly.assertThat(ctx.getBean(TestRunGate.class))
                             .as("TestRunGate resolves to the testRunManager bean by polymorphism")
                             .isSameAs(ctx.getBean(TestRunManager.class));
                     softly.assertThat(ctx.getBean(ReadinessProbe.class)).isNotNull();
                     softly.assertThat(ctx.getBean(CountersSupplier.class)).isNotNull();
-                    softly.assertThat(ctx.getBean(MetricPublisher.class)).isNotNull();
+                    softly.assertThat(ctx.getBean(MetricsDispatcher.class)).isNotNull();
                 });
             }
         }
@@ -275,17 +314,15 @@ class OrchestratorMainTest {
         @DisplayName("context close does NOT call close() on long-lived Closeable beans — orchestrator shutdown hook owns lifecycle")
         void close_does_not_close_long_lived_beans() throws java.io.IOException {
             ConfigurableApplicationContext ctx = bootForTest();
-            KafkaReachabilityProbe probe = ctx.getBean(KafkaReachabilityProbe.class);
-            MetricPublisher publisher = ctx.getBean(MetricPublisher.class);
+            IngestReachabilityProbe probe = ctx.getBean(IngestReachabilityProbe.class);
 
             ctx.close();
 
-            // probe and publisher are mocks supplied by MockOverrides — the
-            // production beans sit on Closeable. With destroyMethod = ""
-            // on each @Bean, context close must NOT cascade close() onto
-            // them; the orchestrator shutdown hook owns that ordering.
+            // probe is a mock supplied by MockOverrides — the production
+            // bean sits on Closeable. With destroyMethod = "" on each
+            // @Bean, context close must NOT cascade close() onto it; the
+            // orchestrator shutdown hook owns that ordering.
             verify(probe, never()).close();
-            verify(publisher, never()).close();
         }
 
         @Test
@@ -312,13 +349,10 @@ class OrchestratorMainTest {
      *       {@code @Bean} reads {@code System.getenv()}, which is
      *       unwriteable in-process; the {@code @ConditionalOnMissingBean}
      *       on the production factory lets this one win).</li>
-     *   <li>Mocks for the two beans whose production factories construct
-     *       real Kafka clients ({@link KafkaReachabilityProbe} via
-     *       {@code AdminClient.create}, {@link MetricPublisher} via
-     *       {@code DefaultKafkaProducerFactory}). The mocks let
-     *       close-not-called assertions land on a verifiable surface, and
-     *       avoid the multi-second DNS-resolution waits that an unreachable
-     *       broker hostname triggers in {@code AdminClient}.</li>
+     *   <li>A mock for the probe bean whose production factory starts a
+     *       daemon OPTIONS-polling thread against an unreachable consumer
+     *       URL. The mock lets close-not-called assertions land on a
+     *       verifiable surface and keeps the test quiet.</li>
      * </ul>
      */
     @TestConfiguration
@@ -326,8 +360,8 @@ class OrchestratorMainTest {
         // Bean names match the production @Bean method names so that
         // spring.main.allow-bean-definition-overriding lets these REPLACE
         // (not merely shadow) the production beans. The production
-        // factories are never invoked, so System.getenv() and
-        // AdminClient.create / KafkaProducer construction never run in tests.
+        // factories are never invoked, so System.getenv() and the probe's
+        // daemon thread never run in tests.
 
         @Bean(name = "orchestratorConfig")
         OrchestratorConfig orchestratorConfig() {
@@ -336,10 +370,7 @@ class OrchestratorMainTest {
                     "TEST_REGION",         "us-east-1",
                     "RUN_ID",              "test-run-id",
                     "JTL_PATH",            "/results/results.jtl",
-                    "SENTINEL_PATH",       "/results/.done",
-                    "KAFKA_BROKERS",       "kafka:9092",
-                    "SCHEMA_REGISTRY_URL", "http://schema-registry:8081",
-                    "KAFKA_TOPIC",         "jmeter.metrics.perSecond"
+                    "SENTINEL_PATH",       "/results/.done"
             ));
             env.put("HTTP_PORT", "0");
             // Steer the metrics buffer (K-3) at a writable temp dir so the
@@ -350,21 +381,14 @@ class OrchestratorMainTest {
             return OrchestratorConfig.from(env);
         }
 
-        @Bean(name = "kafkaReachabilityProbe", destroyMethod = "")
-        KafkaReachabilityProbe kafkaReachabilityProbe() {
-            KafkaReachabilityProbe probe = mock(KafkaReachabilityProbe.class);
+        @Bean(name = "ingestReachabilityProbe", destroyMethod = "")
+        IngestReachabilityProbe ingestReachabilityProbe() {
+            IngestReachabilityProbe probe = mock(IngestReachabilityProbe.class);
             // Default mock returns a null Snapshot — wire a sane default so
             // ReadinessProbe.snapshot().reachable() doesn't NPE on first poll.
             org.mockito.Mockito.when(probe.snapshot())
-                    .thenReturn(KafkaReachabilityProbe.Snapshot.up());
+                    .thenReturn(IngestReachabilityProbe.Snapshot.up());
             return probe;
-        }
-
-        @Bean(name = "metricPublisher", destroyMethod = "")
-        com.perf.orchestrator.kafka.KafkaMetricPublisher metricPublisher() {
-            // Mock as the concrete type so the metricsDispatcher factory
-            // (which takes KafkaMetricPublisher) can inject this.
-            return mock(com.perf.orchestrator.kafka.KafkaMetricPublisher.class);
         }
     }
 }

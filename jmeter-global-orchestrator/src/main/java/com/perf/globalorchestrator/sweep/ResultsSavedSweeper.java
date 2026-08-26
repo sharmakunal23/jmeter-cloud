@@ -1,8 +1,6 @@
 package com.perf.globalorchestrator.sweep;
 
 import com.perf.globalorchestrator.service.RunService;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -44,17 +42,12 @@ public class ResultsSavedSweeper {
 
     private final RunService runService;
     private final Duration lookback;
-    private final Counter runsReconciledCounter;
 
     public ResultsSavedSweeper(
             RunService runService,
-            MeterRegistry meterRegistry,
             @Value("${globalOrchestrator.run.resultsSavedLookbackMs:3600000}") long lookbackMs) {
         this.runService = runService;
         this.lookback = Duration.ofMillis(lookbackMs);
-        this.runsReconciledCounter = Counter.builder("globalOrchestrator.resultsSaved.runsReconciled")
-                .description("COMPLETED saveResults runs swept to record per-worker RESULTS_SAVED events.")
-                .register(meterRegistry);
     }
 
     @Scheduled(fixedDelayString = "${globalOrchestrator.run.resultsSavedSweepIntervalMs:15000}",
@@ -63,7 +56,6 @@ public class ResultsSavedSweeper {
         try {
             int n = runService.reconcileResultsSaved(lookback);
             if (n > 0) {
-                runsReconciledCounter.increment(n);
                 LOG.debug("ResultsSavedSweeper reconciled {} run(s) awaiting RESULTS_SAVED", n);
             }
         } catch (Exception e) {

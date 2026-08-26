@@ -4,8 +4,8 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.perf.globalorchestrator.domain.Pod;
 import com.perf.globalorchestrator.domain.RegionCapacity;
 import com.perf.globalorchestrator.repo.PodRepository;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -27,22 +27,12 @@ import java.util.Map;
 @RequestMapping("/api/v1")
 public class PodController {
 
-    private final PodRepository pods;
-    private final Counter registrations;
-    private final Counter heartbeats;
-    private final Counter unknownHeartbeats;
+    private static final Logger LOG = LoggerFactory.getLogger(PodController.class);
 
-    public PodController(PodRepository pods, MeterRegistry meterRegistry) {
+    private final PodRepository pods;
+
+    public PodController(PodRepository pods) {
         this.pods = pods;
-        this.registrations = Counter.builder("globalOrchestrator.pods.registrations")
-                .description("Successful POST /registerPod calls.")
-                .register(meterRegistry);
-        this.heartbeats = Counter.builder("globalOrchestrator.pods.heartbeats")
-                .description("Successful POST /heartbeat calls.")
-                .register(meterRegistry);
-        this.unknownHeartbeats = Counter.builder("globalOrchestrator.pods.unknownHeartbeats")
-                .description("Heartbeats from podIds the registry doesn't know — caller likely needs to re-register.")
-                .register(meterRegistry);
     }
 
     @PostMapping("/registerPod")
@@ -61,7 +51,6 @@ public class PodController {
         // is NOT NULL as of migration V16.
         String applicationId = req.applicationId();
         pods.register(req.podId(), region, req.baseUrl(), applicationId);
-        registrations.increment();
         Map<String, Object> body = new java.util.LinkedHashMap<>();
         body.put("podId",         req.podId());
         body.put("region",        region);
@@ -80,15 +69,16 @@ public class PodController {
         }
         int updated = pods.heartbeat(req.podId());
         if (updated == 0) {
-            // Caller's registry record is gone (e.g., DB reset). Tell them
-            // to re-register; surfacing as a counter helps catch this in
-            // production.
-            unknownHeartbeats.increment();
+            // Caller's registry record is gone (e.g., DB reset). Tell them to
+            // re-register. SLIMDOWN SL-E (D-4): the unknownHeartbeats counter
+            // was the only server-side signal of this — now a WARN (rare by
+            // construction: one per pod per registry wipe until it re-registers).
+            LOG.warn("Heartbeat from unregistered podId={} — instructing caller to re-register",
+                    req.podId());
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
                     "code",    "POD_NOT_REGISTERED",
                     "message", "podId=" + req.podId() + " is not registered — call POST /registerPod first"));
         }
-        heartbeats.increment();
         return ResponseEntity.ok(Map.of("podId", req.podId(), "state", "IDLE"));
     }
 

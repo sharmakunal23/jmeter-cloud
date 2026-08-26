@@ -1,29 +1,21 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 
 /**
- * Drop-in replacement for {@link import("./useInterval").useInterval} that
- * pauses the polling timer when any of four gates closes:
+ * Drop-in replacement for `useInterval` that pauses the timer when any of four
+ * gates closes: `delayMs === null` (caller's hard stop, e.g. a terminal run),
+ * an explicit `paused` toggle, a backgrounded tab, or — when `targetRef` is
+ * given — the element scrolling out of the viewport.
  *
- * 1. `delayMs === null`         — caller-driven hard stop (terminal run state).
- * 2. `opts.paused === true`     — operator's explicit pause toggle.
- * 3. `document.hidden`          — browser tab is not in the foreground.
- * 4. `targetRef` !intersecting  — wrapped element scrolled out of viewport
- *                                 (only when `targetRef` is provided).
+ * It exists because at 50-100 pods the run-detail Console and Logs tabs would
+ * otherwise fan a request per stream regardless of what the operator is
+ * actually looking at.
  *
- * Designed for the run-detail Console / Logs tabs: at fleet scale (50-100
- * pods) we only want to poll the actively-viewed stream and stop fanning
- * requests out the moment the operator's attention moves elsewhere.
+ * Returns `{isPaused, pauseReason}` so the UI can say *why* it stopped —
+ * "did the panel break, or did I just minimize the window?" Precedence runs
+ * most-user-meaningful first: manual, delayNull, documentHidden, offscreen.
  *
- * Returns `{isPaused, pauseReason}` so the UI can render a small badge
- * explaining *why* the timer is stopped — invaluable when the operator
- * wonders "did the panel break, or did I just minimize the window?"
- *
- * Precedence of `pauseReason` (most user-meaningful first):
- *   manual → delayNull → documentHidden → offscreen → null (running).
- *
- * The hook never fires the callback synchronously on mount — initial
- * fetches stay the caller's responsibility (typically a sibling
- * `useEffect`). The interval is purely the *refresh* cadence.
+ * <p>The callback never fires synchronously on mount; the interval is only the
+ * refresh cadence, so the initial fetch stays the caller's job.
  */
 export type PauseReason =
   | "manual"

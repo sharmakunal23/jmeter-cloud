@@ -4,7 +4,7 @@ import { runsApi, type MetricsTimeseriesBatch, type RunState } from "../api/runs
 import { useVisiblePolling, type PauseReason } from "./useVisiblePolling";
 
 /**
- * HM-6 — fetches the batched timeseries for two runs and re-polls
+ * Fetches the batched timeseries for two runs and re-polls
  * every {@link POLL_INTERVAL_MS} as long as <i>at least one</i> of the
  * two runs is non-terminal. Once both runs have settled the polling
  * stops — comparing two finished runs is a static view.

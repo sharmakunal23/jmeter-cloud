@@ -18,8 +18,8 @@ platform is* and how the pieces fit together, see [`README.md`](./README.md).
 | Need | Why |
 |------|-----|
 | Docker Engine + Compose v2 (`docker compose`, not `docker-compose`) | Everything runs as containers, composed from per-subsystem fragments via `include:`. |
-| ~6 GB free RAM for Docker | Kafka + Postgres + 4 Spring services + Grafana/Prometheus + worker pods. |
-| Ports free on the host | See the port table below — mainly `3000`, `5432`, `8081–8086`, `9090`, `9092`, `16686`. |
+| ~5 GB free RAM for Docker | Postgres + Redis + 4 Spring services + Grafana + worker pods. |
+| Ports free on the host | See the port table below — mainly `3000`, `5432`, `8082–8086`. |
 
 No JDK, Maven, or Node is required to *run* the stack — images build inside Docker. You only
 need those to develop a single service outside its container.
@@ -38,21 +38,20 @@ throwaway local credentials, fine as-is.
 ## 3. Bring the stack up
 
 ```bash
-# Full stack (default profile): kafka + schema-registry + postgres + the 4 services + UI + observability
+# Full stack (default profile): postgres + redis + the 4 services + UI + observability
 docker compose up -d --build
 ```
 
 First build is ~5 min cold; subsequent starts ~30 s. Compose starts things in dependency
-order and waits on health checks, so a one-shot `up` is safe — services that depend on Kafka
-or Postgres wait until those are healthy.
+order and waits on health checks, so a one-shot `up` is safe — services that depend on
+Postgres wait until it is healthy.
 
 ![Boot order](./docs/diagrams/bootOrder.svg)
 
 **Variants:**
 
 ```bash
-docker compose --profile minimal up -d --build      # Kafka core only (broker + schema-registry + topic-init)
-docker compose up -d --build kafka postgres flyway-migrate   # just the data substrate
+docker compose up -d --build postgres flyway-migrate   # just the data substrate
 docker compose ps                                   # health of every container
 docker compose logs -f global-orchestrator          # follow one service's logs
 ```
@@ -63,23 +62,24 @@ the global-orchestrator owns worker lifecycle so pods can scale per (app, region
 
 ## 4. Service endpoints & ports
 
-| Service | URL | Health check |
-|---------|-----|--------------|
-| **UI** | http://localhost:8086 | `GET /healthz` |
-| global-orchestrator | http://localhost:8082 | `GET /actuator/health` |
-| metrics-consumer | http://localhost:8083 | `GET /actuator/health` |
-| document-service | http://localhost:8084 | `GET /actuator/health` |
-| Grafana | http://localhost:3000 | login `admin` / `admin` (from `.env`) |
-| Prometheus | http://localhost:9090 | `/-/healthy` |
-| Jaeger (traces) | http://localhost:16686 | — |
-| Kafka UI | http://localhost:8085 | — |
-| Schema Registry | http://localhost:8081 | `GET /subjects` |
-| Kafka broker | `localhost:9092` (host) / `kafka:29092` (in-network) | — |
-| Postgres | `localhost:5432` (`jmetercloud` / `localdev`) | `pg_isready` |
-| MailHog (dev SMTP) | http://localhost:8025 | — |
+**This table is the canonical port allocation** — no two services may claim the
+same host port. Ports are configurable in `.env`.
 
-Ports are configurable in `.env`; the canonical allocation lives in
-[`jmeter-local-orchestrator/README.md`](./jmeter-local-orchestrator/README.md) (Network Ports).
+| Port | Service | URL | Health check |
+|------|---------|-----|--------------|
+| `3000` | Grafana | http://localhost:3000 | login `admin` / `admin` (from `.env`) |
+| `5432` | Postgres | `localhost:5432` (`jmetercloud` / `localdev`) | `pg_isready` |
+| `8025` | MailHog (dev SMTP) | http://localhost:8025 | — |
+| `8080` | Worker HTTP API (`jmeter-local-orchestrator`) | http://localhost:8080 | `GET /actuator/health` |
+| `8082` | global-orchestrator | http://localhost:8082 | `GET /actuator/health` |
+| `8083` | metrics-consumer | http://localhost:8083 | `GET /actuator/health` |
+| `8084` | document-service | http://localhost:8084 | `GET /actuator/health` |
+| `8086` | **UI** | http://localhost:8086 | `GET /healthz` |
+| `8088` | jmeter-orchestrator-k8s (via port-forward / NodePort) | — | `GET /actuator/health` |
+| `9999` | JMX, worker → its JMeter child | `localhost` only, never off-host | — |
+
+`8087` is reserved for the future ec2-orchestrator. Overrides: `HTTP_PORT` on
+each service, `JMX_PORT` for the JMX bridge.
 
 ## 5. Run your first test
 
@@ -104,16 +104,16 @@ The metric pipeline behind that run:
 ## 6. Watch it
 
 - **Live per-run charts:** the UI run-detail **Metrics** tab (Postgres-backed uPlot), or Grafana's
-  `perTestLiveMetrics` dashboard at http://localhost:3000 (the `runId` variable is auto-populated).
-- **Infra dashboards:** orchestrator JVM, JMeter JVM, Kafka broker, Postgres (all provisioned).
-- **Traces:** Jaeger at http://localhost:16686 (critical `/api/v1/**` paths only).
+  Application Performance dashboard (`perTestLiveMetrics`) at http://localhost:3000 (the `runId`
+  variable is auto-populated). It's the only provisioned dashboard — the infra dashboards and
+  Jaeger tracing retired with the SLIMDOWN track (2026-07-21; hosting infra provides observability).
 - **Logs:** `docker compose logs -f <service>` — JSON, one record per line, each carrying
-  `traceId` / `runId` / `actor`.
+  `runId` / `actor`.
 
 ## 7. Tear down
 
 ```bash
-docker compose down        # stop + remove containers; Postgres/Kafka volumes PERSIST
+docker compose down        # stop + remove containers; Postgres volumes PERSIST
 docker compose down -v     # also delete volumes — full reset (wipes all runs + metrics)
 docker compose stop        # pause without removing containers
 ```
@@ -124,18 +124,80 @@ To rebuild one service after a code change:
 docker compose up -d --build global-orchestrator
 ```
 
-## 8. Troubleshooting
+## 8. Run it on Kubernetes (kind)
+
+The whole platform also runs in-cluster — every service ships Kustomize
+manifests in its `kube/` folder (base + `kind`/`privateCloud` overlays),
+composed by the umbrella at `infra/deploy/k8s/` (conventions + the full
+image inventory live in that directory's README). **Service names match
+compose names exactly**, so every inter-service URL default works unchanged.
+
+```bash
+# 0. Prereqs: kind + kubectl installed; images built locally.
+#    --provenance=false is REQUIRED for kind side-loading (BuildKit
+#    attestations break the containerd import).
+kind create cluster --name jmeter-cloud
+
+docker build --provenance=false -t jmeter-cloud-flyway:dev postgres/
+docker build --provenance=false -t jmeter-metrics-consumer:dev jmeter-metrics-consumer/
+docker build --provenance=false -t document-service:dev document-service/
+docker build --provenance=false -t jmeter-global-orchestrator:dev jmeter-global-orchestrator/
+docker build --provenance=false -t jmeter-cloud-ui:dev jmeter-cloud-ui/
+docker build --provenance=false -t jmeter-local-orchestrator:dev \
+  -f jmeter-local-orchestrator/docker/Dockerfile .
+
+kind load docker-image --name jmeter-cloud \
+  jmeter-cloud-flyway:dev jmeter-metrics-consumer:dev document-service:dev \
+  jmeter-global-orchestrator:dev jmeter-cloud-ui:dev jmeter-local-orchestrator:dev
+# (postgres:16 / grafana / mailhog are public multi-arch images — the
+# kubelet pulls them; multi-arch images won't side-load anyway.)
+
+# 1. Boot everything (namespace jmeter-cloud + all services):
+kubectl apply -k infra/deploy/k8s/kind
+
+# 2. Reach it (no host ports on kind — port-forward):
+kubectl -n jmeter-cloud port-forward svc/jmeter-cloud-ui 8086:80  # UI
+kubectl -n jmeter-cloud port-forward svc/grafana 3000:3000        # Grafana
+
+# 3. Tear down:
+kubectl delete namespace jmeter-cloud   # stack only (PVCs included)
+kind delete cluster --name jmeter-cloud # whole cluster
+```
+
+**Boot expectations:** Kubernetes has no `depends_on` — pods start
+concurrently and converge via readiness gates. A restart or two on the
+Java services while postgres starts and the Flyway Job applies
+migrations is **normal** (a from-scratch boot converges in well under a
+minute); don't "fix" it with ordering hacks. In-cluster, worker pods are
+provisioned by the global-orchestrator's `K8sPodProvisioner`
+(`PODPROVISIONER_SUBSTRATE=k8s` — set in its kube manifests; the compose
+stack keeps the docker substrate).
+
+For a real private cloud use `kubectl apply -k infra/deploy/k8s/privateCloud`
+after creating the credential Secrets out-of-band (each service's
+`overlays/privateCloud/kustomization.yaml` documents its exact command)
+and setting the registry/Ingress placeholders — then work through
+`infra/deploy/k8s/privateCloudHardening.md` (KUBE-11: secrets sourcing,
+password rotation, NetworkPolicies, Ingress TLS, storage/backup, the
+log-based alerting obligation, and the auth exposure gate).
+
+The sibling `jmeter-orchestrator-k8s` track deploys separately into its
+own isolated namespace via `jmeter-orchestrator-k8s/kube/local/bootstrap.sh`
+— the two coexist on one cluster.
+
+## 9. Troubleshooting
 
 | Symptom | Likely cause / fix |
 |---------|--------------------|
-| A service is `unhealthy` in `docker compose ps` | Check its logs: `docker compose logs <svc>`. Java services have `restart: unless-stopped` and self-heal; one-shot jobs (`topic-init`, `flyway-migrate`) should exit `0`. |
+| A service is `unhealthy` in `docker compose ps` | Check its logs: `docker compose logs <svc>`. Java services have `restart: unless-stopped` and self-heal; the one-shot `flyway-migrate` job should exit `0`. |
 | Workers go `unreachable` mid-run after a rebuild | Rebuilding `jmeter-local-orchestrator:dev` while a run is live triggers an image-mismatch drain by the PodRecycler — looks like an OOM but isn't. Don't rebuild the worker image during a run. |
-| No metrics on the chart | Confirm `metrics-consumer` is healthy and the run actually claimed a pod (Capacity tab shows BUSY). Check `kafka-ui` (http://localhost:8085) for traffic on `jmeter.metrics.perSecond`. |
+| No metrics on the chart | Confirm `metrics-consumer` is healthy (its `ingestProgress` health key goes DOWN after 5 idle minutes — that's normal between runs) and the run actually claimed a pod (Capacity tab shows BUSY). On the worker, `GET /api/v1/ready` should show `ingestReachable: true`. |
 | Port already in use on `up` | Edit the offending `*_PORT` in `.env` and re-run `docker compose up -d`. |
 | AI tabs missing in the UI | `ANTHROPIC_API_KEY` is blank in `.env` (expected default). Paste a key and restart `global-orchestrator`. |
 | Want a clean slate | `docker compose down -v` then `docker compose up -d --build`. |
+| (kind) Run FAILED with "worker lost: no heartbeat within 90000 ms" but the worker pod is alive and the test completed | Docker Desktop can pause its Linux VM when the host is idle (Resource Saver) — the ENTIRE kind cluster freezes, heartbeats stop, and on wake the PodSweeper sees >90 s staleness and fails the run's members. Not a platform bug: keep the session active during runs (e.g. poll `GET /api/v1/runs/{runId}/status`), or disable Resource Saver in Docker Desktop settings. The pod re-heartbeats back to READY on its own. Also note: `GET /runs/{runId}` returns the STORED row; only `/runs/{runId}/status` triggers the lazy refresh that detects completion. |
 
-## 9. Where to go next
+## 10. Where to go next
 
 - System map & architecture diagram → [`README.md`](./README.md)
 - Per-subsystem behavior → each subsystem's own `README.md`

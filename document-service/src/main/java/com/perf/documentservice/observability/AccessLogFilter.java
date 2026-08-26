@@ -17,9 +17,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * OBSERVABILITY Phase E — emits one structured access-log record per
- * critical request. Mirrors the global-orchestrator's AccessLogFilter;
- * see that class's Javadoc for the full design rationale.
+ * Emits one structured access-log record per critical request, carrying method,
+ * path, status, latency, client IP and user agent.
+ *
+ * <p>Scoped by {@link CriticalPaths}, so actuator and springdoc traffic is not
+ * logged.
  */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 20)

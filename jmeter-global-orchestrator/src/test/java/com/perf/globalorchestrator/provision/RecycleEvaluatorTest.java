@@ -41,11 +41,41 @@ class RecycleEvaluatorTest {
     @Test
     @DisplayName("Image mismatch — wins over policy thresholds (correctness > QoS)")
     void imageMismatchWinsOverPolicy() {
-        Pod pod = pod("p1", 0, daysAgo(0), STALE_IMAGE);
+        // Provisioned a day ago — well past the multi-instance grace window.
+        Pod pod = pod("p1", 0, daysAgo(1), STALE_IMAGE);
         // Even REUSE recycles on image mismatch.
         Application app = app(RecyclePolicy.REUSE, null, null);
         assertThat(evaluator.decide(pod, app, CURRENT_IMAGE))
                 .isEqualTo(RecycleReason.IMAGE_MISMATCH);
+    }
+
+    @Test
+    @DisplayName("Image mismatch — grace window: a freshly-provisioned pod is left alone "
+            + "(MULTI-INSTANCE rollout ping-pong guard); null provisionedAt keeps old behavior")
+    void imageMismatchGraceWindow() {
+        Application app = app(RecyclePolicy.REUSE, null, null);
+
+        // 2 min old — inside the 10-min default grace: not recycled this tick.
+        assertThat(evaluator.decide(
+                pod("p1", 0, NOW.minusSeconds(120), STALE_IMAGE), app, CURRENT_IMAGE))
+                .as("inside grace").isEqualTo(RecycleReason.NONE);
+
+        // Just past the 600 s default grace: recycles.
+        assertThat(evaluator.decide(
+                pod("p2", 0, NOW.minusSeconds(601), STALE_IMAGE), app, CURRENT_IMAGE))
+                .as("past grace").isEqualTo(RecycleReason.IMAGE_MISMATCH);
+
+        // Null provisionedAt (adopted row before back-fill) — grace can't be
+        // evaluated; the mismatch recycle stays allowed.
+        assertThat(evaluator.decide(
+                pod("p3", 0, null, STALE_IMAGE), app, CURRENT_IMAGE))
+                .as("null provisionedAt").isEqualTo(RecycleReason.IMAGE_MISMATCH);
+
+        // Custom window via the test seam: 0 ms grace = pre-change behavior.
+        RecycleEvaluator noGrace = new RecycleEvaluator(fixedClock, 0L);
+        assertThat(noGrace.decide(
+                pod("p4", 0, NOW, STALE_IMAGE), app, CURRENT_IMAGE))
+                .as("zero grace window").isEqualTo(RecycleReason.IMAGE_MISMATCH);
     }
 
     @Test
@@ -153,7 +183,8 @@ class RecycleEvaluatorTest {
         return new Pod(id, "us-east", "http://" + id + ":8080",
                 PodState.IDLE,
                 NOW, NOW.minusSeconds(60), "appId",
-                runsServed, imageDigest, provisionedAt);
+                runsServed, imageDigest, provisionedAt,
+                com.perf.globalorchestrator.domain.PodSource.DYNAMIC);
     }
 
     private Application app(RecyclePolicy policy, Integer maxRuns, Integer maxAgeHours) {

@@ -15,7 +15,7 @@ import {
 } from "./charts/TimeseriesChart";
 
 /**
- * HM-6 — two-run comparison panel for {@code RunsComparePage}. Renders
+ * Two-run comparison panel for {@code RunsComparePage}. Renders
  * three native uPlot charts (Total TPS, Response Time, Error %)
  * with both runs overlaid as separate series. Replaces the side-by-side
  * Grafana iframes — operators can finally read the delta directly
@@ -98,7 +98,7 @@ export function TwoRunMetricsPanel({
   // override the cursor x would render as time-of-day (uPlot's
   // `time: true` default) which is meaningless for elapsed.
   // Note: the chart wrapper today doesn't expose a cursor-x formatter;
-  // for HM-6 we accept the default (the visible x-axis labels show the
+  // we accept the default (the visible x-axis labels show the
   // operator the elapsed time, and the per-series y values are what
   // matters in the hover legend). Revisit if operators ask.
 

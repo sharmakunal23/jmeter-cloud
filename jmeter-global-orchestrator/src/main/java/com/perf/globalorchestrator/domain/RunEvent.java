@@ -4,7 +4,7 @@ import java.time.Instant;
 import java.util.Map;
 
 /**
- * AUDIT-TRAIL — one append-only audit event for a state-changing operator
+ * One append-only audit event for a state-changing operator
  * action against a run. Persisted to {@code globalOrchestrator.runEvent} by
  * {@link com.perf.globalorchestrator.repo.RunEventRepository}.
  *

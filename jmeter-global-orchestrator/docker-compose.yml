@@ -23,9 +23,11 @@ services:
     # Phase 1 of the capacity rework: PodProvisioner drives the host docker
     # daemon to spin up per-app local-orchestrator containers
     # ({appName}-{region}-worker-{n}) on demand. The mount is a privilege
-    # concession scoped to the local stack only — the cloud counterpart
-    # (K8s API + ServiceAccount with create/delete pods RBAC) will sit
-    # behind the same PodProvisioner interface, no socket mount required.
+    # concession scoped to the local stack only — the K8s counterpart
+    # shipped in KUBE-5 (2026-07-22): K8sPodProvisioner (fabric8) behind
+    # the same interface, selected by PODPROVISIONER_SUBSTRATE=k8s with a
+    # ServiceAccount + pods-only Role instead of a socket mount (see
+    # kube/). This compose stack keeps substrate=docker (the default).
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     # docker.sock on the host is typically root:docker (660). The image's
@@ -53,6 +55,17 @@ services:
       # creates per-app workers on demand; the static URL list is dead.
       GLOBAL_ORCHESTRATOR_REGION:             ${GLOBAL_ORCHESTRATOR_REGION:-us-east-1}
       GLOBAL_ORCHESTRATOR_FANOUT_THREADS:     ${GLOBAL_ORCHESTRATOR_FANOUT_THREADS:-8}
+      # STATIC-FLEET — whether this deployment may create workers at all.
+      # STATIC is the platform default (2026-07-27): workers are deployed and
+      # owned by the operator, spin / restart / teardown answer 409, and the
+      # reconciler + recycler are not wired.
+      # NOTE FOR LOCAL DEV: that means the Capacity tab's Spin button does
+      # nothing on a stock `docker compose up`. To get the old spin-a-worker
+      # loop back, put PROVISIONING_MODE=DYNAMIC in your .env.
+      # PROVISIONING_REGIONS is the deployment's region (= data center) list;
+      # empty leaves the UI on its own defaults.
+      PROVISIONING_MODE:                      ${PROVISIONING_MODE:-STATIC}
+      PROVISIONING_REGIONS:                   ${PROVISIONING_REGIONS:-}
       # Phase 1 PodProvisioner config. Each key is consumed by
       # application.yml's globalOrchestrator.podProvisioner.* placeholders.
       # Defaults are the local docker-compose values — operators override
@@ -80,8 +93,9 @@ services:
       # late to the JTL instead of dropping them as late; per-run override wins.
       PODPROVISIONER_GRACE_PERIOD_SECONDS:    ${PODPROVISIONER_GRACE_PERIOD_SECONDS:-10}
       GLOBAL_ORCHESTRATOR_URL:                ${GLOBAL_ORCHESTRATOR_URL:-http://global-orchestrator:8082}
-      KAFKA_BROKERS_INTERNAL:                 ${KAFKA_BROKERS_INTERNAL:-kafka:29092}
-      SCHEMA_REGISTRY_URL_INTERNAL:           ${SCHEMA_REGISTRY_URL_INTERNAL:-http://schema-registry:8081}
+      # The PodProvisioner stamps this onto every spawned worker as
+      # METRICS_INGEST_URL.
+      PODPROVISIONER_METRICS_INGEST_URL:      ${PODPROVISIONER_METRICS_INGEST_URL:-http://metrics-consumer:8083/api/v1/ingest}
       DOCUMENT_SERVICE_URL:                   ${DOCUMENT_SERVICE_URL:-http://document-service:8084}
       # CACHE C-0 (2026-05-26) — shared Redis cache. Consumed by
       # application.yml's spring.data.redis.* placeholders.
@@ -90,23 +104,9 @@ services:
       # AUTOMATION Phase E — SMTP target for report emails (MailHog in dev).
       MAIL_HOST:                              ${MAIL_HOST:-mailhog}
       MAIL_PORT:                              ${MAIL_PORT:-1025}
-      # Phase E (2026-05-16): default per-pod KAFKA_TOPIC env points at
-      # the placeholder topic. The global-orch overrides this per-run via
-      # the kafkaTopic field on the start-test envelope (Phase C) for
-      # registered-app runs; only legacy unregistered-app code paths
-      # would fall through to this default.
-      KAFKA_TOPIC:                            ${KAFKA_TOPIC:-jmeter.metrics.placeholder}
-      # OBSERVABILITY Phase B — distributed tracing.
-      # Local dev override: 100% sampling so every operator action shows up
-      # in Jaeger (the production default of 1% is in application.yml).
-      # Endpoint defaults to the Jaeger sidecar over OTLP HTTP at 4318.
-      MANAGEMENT_TRACING_SAMPLING_PROBABILITY:    ${MANAGEMENT_TRACING_SAMPLING_PROBABILITY:-1.0}
-      MANAGEMENT_OTLP_TRACING_ENDPOINT:           ${MANAGEMENT_OTLP_TRACING_ENDPOINT:-http://jaeger:4318/v1/traces}
-      # PodProvisioner threads these through to every spawned local-orch
-      # container — Phase B for the dynamic worker fleet. Read by
-      # ProvisionerConfig's @Value chain and emitted in buildEnv().
-      PODPROVISIONER_TRACING_SAMPLING_PROBABILITY: ${PODPROVISIONER_TRACING_SAMPLING_PROBABILITY:-1.0}
-      PODPROVISIONER_OTLP_TRACING_ENDPOINT:        ${PODPROVISIONER_OTLP_TRACING_ENDPOINT:-http://jaeger:4318/v1/traces}
+      # SLIMDOWN SL-E (2026-07-22): the MANAGEMENT_TRACING_* / MANAGEMENT_OTLP_*
+      # / PODPROVISIONER_TRACING_* env left with the tracing machinery — the
+      # service emits JSON logs only (hosting infra provides observability).
       # AI analysis — server-side Claude proxy. The key lives in
       # the repo-root .env (a local secret — do NOT commit it) and is forwarded
       # here. Empty default → AI disabled (503 AI_DISABLED; the UI hides its
@@ -127,7 +127,7 @@ services:
   # global-orchestrator's @Cacheable / @CacheEvict layer (Spring Cache over
   # spring-data-redis) reads/writes here so every orchestrator instance shares
   # one cache. Local dev runs a single unauthenticated KRaft-style instance,
-  # mirroring the no-auth-locally posture of kafka/postgres; the cloud
+  # mirroring the no-auth-locally posture of postgres; the cloud
   # deployment swaps in a managed Redis (ElastiCache) via REDIS_HOST/REDIS_PORT
   # with no code change. AOF persistence is off — the cache is rebuildable from
   # Postgres on restart, so durability buys nothing here.
@@ -147,8 +147,8 @@ services:
 
   # AUTOMATION Phase E — local SMTP sink for the daily report emails. MailHog
   # accepts SMTP on 1025 and exposes a web UI + REST API on 8025 so the full
-  # email path is testable locally (the cloud deployment swaps SmtpEmailSender
-  # for SesEmailSender via -Pcloud + AUTOMATION_EMAIL_BACKEND=ses — no MailHog).
+  # email path is testable locally. SMTP is the only backend — a cloud
+  # deployment points spring.mail at its own relay instead of MailHog.
   mailhog:
     image: mailhog/mailhog:v1.0.1
     profiles: [default]

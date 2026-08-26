@@ -179,7 +179,6 @@ describe("CreateApplicationDialog — soft-delete (edit mode)", () => {
     expect(screen.getByText(/remove it from the applications list/i)).toBeInTheDocument();
     expect(screen.getByText(/run history, metrics, and uploaded files/i)).toBeInTheDocument();
     // No implementation-detail / behavior-detail copy the operator doesn't need.
-    expect(screen.queryByText(/delete its Kafka topics/i)).toBeNull();
     expect(screen.queryByText(/is freed/i)).toBeNull();
     expect(screen.queryByText(/reserve the name/i)).toBeNull();
     // Confirmation replaced the form — no submit/name field anymore.

@@ -1,0 +1,42 @@
+# KUBE-1 — privateCloud overlay: the real hosting target.
+#
+# CREDENTIALS (required before first apply): the postgres-credentials
+# Secret is created out-of-band — real values never enter git:
+#   kubectl -n jmeter-cloud create secret generic postgres-credentials \
+#     --from-literal=postgresUser=jmetercloud \
+#     --from-literal=postgresPassword=<generated>
+# (Or via external-secrets/sealed-secrets — the KUBE-11 sourcing
+# decision. NOTE: initdb also hardcodes 'localdev' for the per-app users
+# metricsWriter/metricsReader/metricsPurger/globalOrchestratorWriter —
+# rotate them post-boot with ALTER USER; tracked under KUBE-11.)
+#
+# MANAGED POSTGRES ALTERNATIVE: if the private cloud offers a managed
+# Postgres, drop statefulSet/service/initdb from the picture by replacing
+# the `postgres` Service with an ExternalName pointing at the endpoint —
+# service-name parity keeps every JDBC URL unchanged:
+#   apiVersion: v1
+#   kind: Service
+#   metadata: { name: postgres }
+#   spec: { type: ExternalName, externalName: pg.internal.example.com }
+# (Run the initdb SQL once by hand there; keep the flyway Job.)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+
+# Private-registry rewrite — set the real registry, then uncomment:
+# images:
+#   - name: jmeter-cloud-flyway
+#     newName: registry.internal.example.com/jmeter-cloud/jmeter-cloud-flyway
+#     newTag: "1.0.0"
+
+# Mandated storageClass / larger volume — adjust, then uncomment:
+# patches:
+#   - target: { kind: StatefulSet, name: postgres }
+#     patch: |-
+#       - op: add
+#         path: /spec/volumeClaimTemplates/0/spec/storageClassName
+#         value: <storage-class>
+#       - op: replace
+#         path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+#         value: 100Gi

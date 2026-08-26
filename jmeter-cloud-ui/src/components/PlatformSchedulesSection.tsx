@@ -10,7 +10,7 @@ import { formatInZone } from "../lib/cron";
 import { formatRelative } from "../lib/time";
 
 /**
- * AUTOMATION Phase E — platform-wide report schedules (INFRA_READINESS +
+ * Platform-wide report schedules (INFRA_READINESS +
  * DAILY_REPORT). These have no application, so they live on the Automation list
  * page's "Platform reports" tab. Full lifecycle: create / edit / send-now /
  * skip-next / enable-disable / delete, mirroring the per-app detail page.

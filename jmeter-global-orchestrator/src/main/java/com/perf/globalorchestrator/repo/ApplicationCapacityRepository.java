@@ -18,32 +18,26 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * D-Capacity v2 — persistence for {@code globalOrchestrator.applicationCapacity}.
+ * Persistence for {@code globalOrchestrator.applicationCapacity} — one row per
+ * (applicationId, region), foreign-keyed to {@code application} with
+ * {@code ON DELETE CASCADE}.
  *
- * <p>One row per (applicationId, region). Foreign-keyed back to
- * {@code application} with ON DELETE CASCADE so deleting an app
- * automatically clears its capacity grants.
+ * <p>The grid is orchestrator-owned and slow-moving, so the list reads are
+ * cached and <b>every mutating method evicts the whole cache</b>: write-through
+ * invalidation means a capacity change shows on the next read with no TTL wait.
+ * The eviction is {@code allEntries} because one (app, region) write
+ * invalidates both the per-app and the grouped-by-app entries, and writes are
+ * infrequent enough that clearing wholesale is simpler and always correct.
+ * Annotating here covers every caller automatically.
  *
- * <h2>Caching (CACHE C-EVICT, 2026-05-26)</h2>
- * The capacity grid is orchestrator-owned and slow-moving, so the two
- * list-returning reads are cached ({@link CacheConfig#CACHE_APPLICATION_CAPACITY})
- * and <b>every mutating method evicts the whole cache</b> — write-through
- * invalidation, so a capacity change is reflected on the next read with no TTL
- * wait. {@code allEntries = true} because a single (app, region) write
- * invalidates both the per-app entry ({@link #findByApplicationId}) and the
- * grouped-by-app entry ({@link #findAllGroupedByApp}); capacity writes are
- * infrequent, so clearing the small cache wholesale is simpler and always
- * correct. Annotating at the repository level means every caller —
- * {@code CapacityController}, {@code ApplicationController}, {@code RunService},
- * and any future one — is covered automatically. The <b>one</b> write that
- * bypasses this class is app retirement: {@code ApplicationController.delete}
- * soft-deletes the app and deliberately RETAINS its capacity rows (no
- * {@code ON DELETE CASCADE} fires), so it carries its own matching
- * {@code @CacheEvict} to clear the cached entry for the retired app.
+ * <p><b>One write bypasses this class:</b> app retirement soft-deletes the
+ * application and deliberately retains its capacity rows, so no cascade fires —
+ * {@code ApplicationController.delete} carries its own matching
+ * {@code @CacheEvict}.
  *
- * <p>{@link #find} (single row) and {@link #countActivePodsForAppRegion} (reads
- * the live pod/run tables) are deliberately NOT cached — the latter is
- * fast-changing and must never be stale at run-launch.
+ * <p>{@link #find} and {@link #countActivePodsForAppRegion} are deliberately not
+ * cached; the latter reads live pod and run state and must never be stale at
+ * run-launch.
  */
 @Repository
 public class ApplicationCapacityRepository {

@@ -1,7 +1,7 @@
 package com.perf.globalorchestrator.domain;
 
 /**
- * AUDIT-TRAIL — the kinds of state-changing operator actions captured in
+ * The kinds of state-changing operator actions captured in
  * {@code globalOrchestrator.runEvent}. Stored as the constant {@code name()};
  * see {@link com.perf.globalorchestrator.repo.RunEventRepository}.
  *

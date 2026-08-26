@@ -1,16 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  OBSERVABILITY Phase A — structured JSON logging.
+  Structured JSON logging — one record per line on stdout, which is the whole
+  observability surface this service ships (SLIMDOWN, 2026-07-22). Set
+  DEV_MODE_LOG=true for Spring Boot's plaintext during interactive dev; the
+  janino-powered <if> below swaps the root appender at config-load time.
 
-  Defaults to JSON on stdout (one record per line) so log search by
-  traceId/runId works out of the box once tracing wires in (Phase B).
-  Operators who want Spring Boot's pretty plaintext during interactive
-  dev set DEV_MODE_LOG=true; the janino-powered <if> below flips the
-  root appender at config-load time.
-
-  MDC keys (traceId, spanId, runId, applicationId, workerId, actor,
-  errorContext) are populated at request entry by the TracingFilter
-  (Phase C). They surface here as top-level JSON fields when present.
+  MdcEnrichmentFilter and AccessLogFilter populate the MDC keys listed below at
+  request entry, and they surface as top-level JSON fields when present.
+  traceId/spanId are inert leftovers — nothing has populated them since tracing
+  was removed.
 -->
 <configuration>
 
@@ -37,7 +35,7 @@
             <includeMdcKeyName>actor</includeMdcKeyName>
             <includeMdcKeyName>errorContext</includeMdcKeyName>
             <includeMdcKeyName>blobId</includeMdcKeyName>
-            <!-- OBSERVABILITY Phase E — access-log MDC keys. -->
+            <!-- Access-log keys, set by AccessLogFilter. -->
             <includeMdcKeyName>method</includeMdcKeyName>
             <includeMdcKeyName>path</includeMdcKeyName>
             <includeMdcKeyName>status</includeMdcKeyName>

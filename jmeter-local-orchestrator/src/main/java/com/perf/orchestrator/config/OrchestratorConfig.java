@@ -6,15 +6,13 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Immutable configuration for the orchestrator process.
+ * Immutable configuration, built once at startup from the environment.
  *
- * <p>Constructed once at startup. All required variables are validated eagerly
- * so the orchestrator fails with a clear error rather than a NullPointerException
- * twenty minutes into a test run. All missing variables are reported in a
- * single exception — not one-at-a-time — so the operator can fix everything
- * in one restart cycle.
- *
- * <p>Optional variables fall back to safe production defaults when absent.
+ * <p>Required variables are validated eagerly and **every** missing one is
+ * reported in a single exception, so the operator fixes them all in one restart
+ * rather than discovering them one failure at a time — or twenty minutes into a
+ * run as a NullPointerException. Optional variables fall back to production-safe
+ * defaults.
  */
 public final class OrchestratorConfig {
 
@@ -27,9 +25,6 @@ public final class OrchestratorConfig {
     private final String runId;
     private final String jtlPath;
     private final String sentinelPath;
-    private final String kafkaBrokers;
-    private final String schemaRegistryUrl;
-    private final String kafkaTopic;
 
     // -----------------------------------------------------------------------
     // Optional — sensible defaults applied when absent
@@ -116,7 +111,7 @@ public final class OrchestratorConfig {
 
     // Metrics-buffer write-ahead queue (K-3).
     // The buffer persists envelopes to disk under metricsBufferPath BEFORE
-    // they're published, so envelopes survive Kafka outages + crashes.
+    // they're published, so envelopes survive consumer outages + crashes.
     // Caps are JMeter-considerate: the buffer never starves the JTL writer.
     private final String metricsBufferPath;
     private final long metricsBufferMaxBytes;
@@ -124,11 +119,11 @@ public final class OrchestratorConfig {
     private final long metricsBufferMinFreeDiskBytes;
     private final int metricsBufferMaxAgeHours;
 
-    // K-5 — HTTP fallback to metrics-consumer's /api/v1/ingest when Kafka send fails.
-    private final boolean metricsHttpFallbackEnabled;
-    private final String metricsHttpFallbackUrl;
-    private final int metricsHttpFallbackConnectTimeoutMs;
-    private final int metricsHttpFallbackRequestTimeoutMs;
+    // The metrics-consumer's /api/v1/ingest endpoint is THE
+    // publish path (JSON over HTTP since JSON-INGEST; began life as the K-5 fallback).
+    private final String metricsIngestUrl;
+    private final int metricsIngestConnectTimeoutMs;
+    private final int metricsIngestRequestTimeoutMs;
 
     // Upload limits — guard against zip-bombs and accidental DoS
     private final int maxPlanSizeMb;
@@ -149,7 +144,7 @@ public final class OrchestratorConfig {
     private final int    orchestratorShutdownGraceSeconds;
 
     /**
-     * MID-TEST-SCALING Phase C — seconds since {@code run.startedAt} at which
+     * Seconds since {@code run.startedAt} at which
      * this worker joined. {@code 0} for original-fleet; {@code > 0} for
      * mid-test scale-up joiners. Forwarded onto every published
      * {@code WorkerMetricBatch}. Source: {@code JOINED_AT_SECOND} env var
@@ -157,6 +152,17 @@ public final class OrchestratorConfig {
      * {@link com.perf.orchestrator.lifecycle.StartTestRequest} body).
      */
     private final long   joinedAtSecond;
+
+    /**
+     * Worker hygiene for pods that are never
+     * recycled. On a control-plane-provisioned worker a bad state is fixed
+     * by replacing the container; an operator-declared worker runs for
+     * weeks, so it has to clean up after itself.
+     */
+    private final String orphanJmeterPolicy;
+    private final int    orphanJmeterScanIntervalSeconds;
+    private final int    runArtifactRetentionCount;
+    private final int    runArtifactRetentionDays;
 
     // Storage backend selection
     private final Backend artifactSource;
@@ -174,8 +180,8 @@ public final class OrchestratorConfig {
 
     // Observability
     private final int logBufferLines;
-    private final int kafkaHealthCheckIntervalMs;
-    private final int kafkaHealthCheckTimeoutMs;
+    private final int ingestHealthCheckIntervalMs;
+    private final int ingestHealthCheckTimeoutMs;
     private final int minFreeDiskMb;
 
     // -----------------------------------------------------------------------
@@ -187,10 +193,7 @@ public final class OrchestratorConfig {
             "TEST_REGION",
             "RUN_ID",
             "JTL_PATH",
-            "SENTINEL_PATH",
-            "KAFKA_BROKERS",
-            "SCHEMA_REGISTRY_URL",
-            "KAFKA_TOPIC"
+            "SENTINEL_PATH"
     );
 
     // -----------------------------------------------------------------------
@@ -206,9 +209,6 @@ public final class OrchestratorConfig {
         this.runId             = env.get("RUN_ID");
         this.jtlPath           = env.get("JTL_PATH");
         this.sentinelPath      = env.get("SENTINEL_PATH");
-        this.kafkaBrokers      = env.get("KAFKA_BROKERS");
-        this.schemaRegistryUrl = env.get("SCHEMA_REGISTRY_URL");
-        this.kafkaTopic        = env.get("KAFKA_TOPIC");
 
         this.gracePeriodSeconds      = parsePositiveInt(env, "GRACE_PERIOD_SECONDS",      2);
         this.pollIntervalMs          = parsePositiveInt(env, "POLL_INTERVAL_MS",          100);
@@ -256,12 +256,12 @@ public final class OrchestratorConfig {
                 1024L * 1024L * 1024L);          // 1 GB — JMeter wins
         this.metricsBufferMaxAgeHours       = parsePositiveInt(env, "METRICS_BUFFER_MAX_AGE_HOURS", 6);
 
-        // K-5 — HTTP fallback knobs.
-        this.metricsHttpFallbackEnabled            = parseBoolean(env, "METRICS_HTTP_FALLBACK_ENABLED", true);
-        this.metricsHttpFallbackUrl                = env.getOrDefault("METRICS_HTTP_FALLBACK_URL",
+        // Ingest endpoint knobs (previously the K-5 fallback's
+        // METRICS_HTTP_FALLBACK_* keys; renamed when HTTP became the only path).
+        this.metricsIngestUrl                = env.getOrDefault("METRICS_INGEST_URL",
                 "http://metrics-consumer:8083/api/v1/ingest");
-        this.metricsHttpFallbackConnectTimeoutMs   = parsePositiveInt(env, "METRICS_HTTP_FALLBACK_CONNECT_TIMEOUT_MS", 2_000);
-        this.metricsHttpFallbackRequestTimeoutMs   = parsePositiveInt(env, "METRICS_HTTP_FALLBACK_REQUEST_TIMEOUT_MS", 5_000);
+        this.metricsIngestConnectTimeoutMs   = parsePositiveInt(env, "METRICS_INGEST_CONNECT_TIMEOUT_MS", 2_000);
+        this.metricsIngestRequestTimeoutMs   = parsePositiveInt(env, "METRICS_INGEST_REQUEST_TIMEOUT_MS", 5_000);
 
         this.maxPlanSizeMb      = parsePositiveInt(env, "MAX_PLAN_SIZE_MB",      32);
         this.maxDataZipSizeMb   = parsePositiveInt(env, "MAX_DATA_ZIP_SIZE_MB",  512);
@@ -271,7 +271,7 @@ public final class OrchestratorConfig {
 
         this.jmeterHome    = env.getOrDefault("JMETER_HOME",     "/opt/jmeter");
         this.jmeterBin     = env.getOrDefault("JMETER_BIN",       this.jmeterHome + "/bin/jmeter");
-        // RELIABILITY Round 6 — JMeter child heap raised 1g → 2g (and fail-fast on
+        // JMeter child heap raised 1g → 2g (and fail-fast on
         // OOM). 1g was undersized for the platform's real workload: a 12 h run at
         // 200-250 rps across ~100 unique endpoints accumulates enough per-host
         // connection/cookie/DNS state (plus any plan-level listeners/assertions) to
@@ -307,7 +307,7 @@ public final class OrchestratorConfig {
         // so the orchestrator (PID 1) is NEVER the one reaped. Without this the cgroup
         // OOM killer picks by oom_badness; if the orchestrator's heap + the multi-GB
         // JTL page-cache it tails made IT the fattest process, PID 1 dies, the whole
-        // pod vanishes, in-flight Kafka batches are lost, and the global-orchestrator
+        // pod vanishes, in-flight metric envelopes are lost, and the global-orchestrator
         // can't tell it apart from an IMAGE_MISMATCH drain. Raising the child's
         // /proc/<pid>/oom_score_adj (unprivileged when raising) guarantees the child
         // dies first → the orchestrator always survives to roll the run FAILED and
@@ -316,7 +316,7 @@ public final class OrchestratorConfig {
         this.jmeterOomScoreAdj = parseIntInRange(env, "JMETER_OOM_SCORE_ADJ",
                 1000, -1000, 1000);
         this.jmxPort       = parsePositiveInt(env, "JMX_PORT",   9999);
-        // MID-TEST-SCALING Phase B — JMeter's TCP shutdown port. JMeter in
+        // JMeter's TCP shutdown port. JMeter in
         // non-GUI mode listens on this port (when launched with
         // -Jjmeterengine.nongui.port=N) for graceful "Shutdown" / forceful
         // "StopTestNow" commands. Kept distinct from JMX_PORT so observability
@@ -329,17 +329,40 @@ public final class OrchestratorConfig {
                 "JMETER_DRAIN_TIMEOUT_S", 60);
         this.jmeterTerminationGraceSeconds = parsePositiveInt(env,
                 "JMETER_TERMINATION_GRACE_S", 120);
-        // MID-TEST-SCALING Phase C — non-negative; 0 means original-fleet.
+        // Non-negative; 0 means original-fleet.
         this.joinedAtSecond = parseNonNegativeLong(env, "JOINED_AT_SECOND", 0L);
         // Total budget the JVM shutdown hook gives the orchestrator to
-        // drain in-flight work (SIGTERM JMeter, drain pipeline, flush
-        // Kafka) before forcing executors with shutdownNow(). Decoupled
+        // drain in-flight work (SIGTERM JMeter, drain pipeline, drain the
+        // dispatch queue) before forcing executors with shutdownNow(). Decoupled
         // from JMETER_TERMINATION_GRACE_S so K8s
         // terminationGracePeriodSeconds can stay small for the common
         // idle-pod case while operators of long-test deployments raise
         // both env vars and terminationGracePeriodSeconds together.
         this.orchestratorShutdownGraceSeconds = parsePositiveInt(env,
                 "ORCHESTRATOR_SHUTDOWN_GRACE_S", 30);
+
+        // Worker hygiene.
+        // ORPHAN_JMETER_POLICY: KILL (default) terminates a JMeter child that
+        // outlived its run; REPORT leaves it running but flags the worker NOT
+        // READY so it stops being handed work. KILL is the default because a
+        // leftover child holds its full heap (-Xmx2g) and would degrade every
+        // later run on a worker that is never recycled.
+        this.orphanJmeterPolicy = env.getOrDefault("ORPHAN_JMETER_POLICY", "KILL")
+                .trim().toUpperCase(java.util.Locale.ROOT);
+        if (!this.orphanJmeterPolicy.equals("KILL") && !this.orphanJmeterPolicy.equals("REPORT")) {
+            throw new OrchestratorConfigException(
+                    "ORPHAN_JMETER_POLICY must be KILL or REPORT; got '" + this.orphanJmeterPolicy + "'");
+        }
+        this.orphanJmeterScanIntervalSeconds =
+                parsePositiveInt(env, "ORPHAN_JMETER_SCAN_INTERVAL_S", 60);
+        // Retention bounds for preserved run artifacts. The post-run sweep
+        // deliberately KEEPS results/ + logs/ for FAILED / ABORTED runs and for
+        // failed uploads (an operator replays those from disk), which is
+        // unbounded on a worker that never goes away. Newest N survive; anything
+        // older than M days goes regardless. 0 disables that bound; both 0
+        // disables the sweep entirely for a debugging session.
+        this.runArtifactRetentionCount = parseNonNegativeInt(env, "RUN_ARTIFACT_RETENTION_COUNT", 5);
+        this.runArtifactRetentionDays  = parseNonNegativeInt(env, "RUN_ARTIFACT_RETENTION_DAYS",  7);
 
         this.artifactSource    = Backend.parseArtifactSource(env.getOrDefault("ARTIFACT_SOURCE", "HTTP_UPLOAD"));
         this.resultSink        = Backend.parseResultSink(env.getOrDefault("RESULT_SINK",         "HTTP_UPLOAD"));
@@ -352,9 +375,9 @@ public final class OrchestratorConfig {
 
         this.s3Region = env.getOrDefault("S3_REGION", "");
 
-        this.logBufferLines             = parsePositiveInt(env, "LOG_BUFFER_LINES",             1000);
-        this.kafkaHealthCheckIntervalMs = parsePositiveInt(env, "KAFKA_HEALTH_CHECK_INTERVAL_MS", 30_000);
-        this.kafkaHealthCheckTimeoutMs  = parsePositiveInt(env, "KAFKA_HEALTH_CHECK_TIMEOUT_MS",  5_000);
+        this.logBufferLines              = parsePositiveInt(env, "LOG_BUFFER_LINES",             1000);
+        this.ingestHealthCheckIntervalMs = parsePositiveInt(env, "INGEST_HEALTH_CHECK_INTERVAL_MS", 30_000);
+        this.ingestHealthCheckTimeoutMs  = parsePositiveInt(env, "INGEST_HEALTH_CHECK_TIMEOUT_MS",  5_000);
         // 0 disables the threshold so /ready never returns 503 due to disk —
         // the documented default. Operators who want the gate set a positive
         // MB value; external disk monitoring (Prometheus alert, CloudWatch)
@@ -569,9 +592,6 @@ public final class OrchestratorConfig {
     public String getRunId()                { return runId; }
     public String getJtlPath()              { return jtlPath; }
     public String getSentinelPath()         { return sentinelPath; }
-    public String getKafkaBrokers()         { return kafkaBrokers; }
-    public String getSchemaRegistryUrl()    { return schemaRegistryUrl; }
-    public String getKafkaTopic()           { return kafkaTopic; }
     public int    getGracePeriodSeconds()   { return gracePeriodSeconds; }
     public int    getPollIntervalMs()       { return pollIntervalMs; }
     public int    getFileWaitPollIntervalMs(){ return fileWaitPollIntervalMs; }
@@ -597,16 +617,19 @@ public final class OrchestratorConfig {
     public String getDataFilesDir()                  { return dataFilesDir; }
     public String getResultsDir()                    { return resultsDir; }
     public String getLogsDir()                       { return logsDir; }
+    public String getOrphanJmeterPolicy()            { return orphanJmeterPolicy; }
+    public int    getOrphanJmeterScanIntervalSeconds() { return orphanJmeterScanIntervalSeconds; }
+    public int    getRunArtifactRetentionCount()     { return runArtifactRetentionCount; }
+    public int    getRunArtifactRetentionDays()      { return runArtifactRetentionDays; }
     public String getRunStateFile()                  { return runStateFile; }
     public String getMetricsBufferPath()             { return metricsBufferPath; }
     public long getMetricsBufferMaxBytes()           { return metricsBufferMaxBytes; }
     public long getMetricsBufferMaxFileBytes()       { return metricsBufferMaxFileBytes; }
     public long getMetricsBufferMinFreeDiskBytes()   { return metricsBufferMinFreeDiskBytes; }
     public int  getMetricsBufferMaxAgeHours()        { return metricsBufferMaxAgeHours; }
-    public boolean isMetricsHttpFallbackEnabled()    { return metricsHttpFallbackEnabled; }
-    public String  getMetricsHttpFallbackUrl()       { return metricsHttpFallbackUrl; }
-    public int     getMetricsHttpFallbackConnectTimeoutMs() { return metricsHttpFallbackConnectTimeoutMs; }
-    public int     getMetricsHttpFallbackRequestTimeoutMs() { return metricsHttpFallbackRequestTimeoutMs; }
+    public String  getMetricsIngestUrl()              { return metricsIngestUrl; }
+    public int     getMetricsIngestConnectTimeoutMs() { return metricsIngestConnectTimeoutMs; }
+    public int     getMetricsIngestRequestTimeoutMs() { return metricsIngestRequestTimeoutMs; }
 
     public int getMaxPlanSizeMb()                    { return maxPlanSizeMb; }
     public int getMaxDataZipSizeMb()                 { return maxDataZipSizeMb; }
@@ -637,20 +660,20 @@ public final class OrchestratorConfig {
     public String getS3Region()                      { return s3Region; }
 
     public int getLogBufferLines()                   { return logBufferLines; }
-    public int getKafkaHealthCheckIntervalMs()       { return kafkaHealthCheckIntervalMs; }
-    public int getKafkaHealthCheckTimeoutMs()        { return kafkaHealthCheckTimeoutMs; }
+    public int getIngestHealthCheckIntervalMs()      { return ingestHealthCheckIntervalMs; }
+    public int getIngestHealthCheckTimeoutMs()       { return ingestHealthCheckTimeoutMs; }
     public int getMinFreeDiskMb()                    { return minFreeDiskMb; }
 
     @Override
     public String toString() {
-        // Intentionally omits nothing sensitive — Kafka brokers and registry URLs
-        // are not secrets. Do not add credentials here if they are ever added.
+        // Intentionally omits nothing sensitive — the ingest URL is not a
+        // secret. Do not add credentials here if they are ever added.
         return "OrchestratorConfig{" +
                 "podName='" + podName + '\'' +
                 ", testRegion='" + testRegion + '\'' +
                 ", runId='" + runId + '\'' +
                 ", jtlPath='" + jtlPath + '\'' +
-                ", kafkaTopic='" + kafkaTopic + '\'' +
+                ", metricsIngestUrl='" + metricsIngestUrl + '\'' +
                 ", gracePeriodSeconds=" + gracePeriodSeconds +
                 ", pollIntervalMs=" + pollIntervalMs +
                 '}';

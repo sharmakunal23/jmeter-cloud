@@ -1,7 +1,7 @@
 package com.perf.globalorchestrator.domain;
 
 /**
- * AUTOMATION — the outcome of a single CRON fire attempt. Recorded on the
+ * The outcome of a single CRON fire attempt. Recorded on the
  * {@code cronJob.lastFireStatus} column and as one row in
  * {@code cronJobFireHistory}.
  *

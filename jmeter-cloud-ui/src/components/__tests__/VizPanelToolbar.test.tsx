@@ -61,7 +61,7 @@ describe("VizPanelToolbar — Hide / Show Controls", () => {
   });
 });
 
-// UX3 hybrid view — Flow / Form toggle removed. The form + diagram now
+// Flow / Form toggle removed. The form + diagram now
 // render side-by-side always. The toolbar only owns Hide / Show Controls.
 
 describe("VizPanelToolbar — accessibility", () => {

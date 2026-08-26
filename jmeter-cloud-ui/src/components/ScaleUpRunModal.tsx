@@ -17,7 +17,7 @@ import { GlobalPropertiesEditor } from "./GlobalPropertiesEditor";
 import { RunStartProgress, type Stage } from "./RunStartProgress";
 
 /**
- * MID-TEST-SCALING Phase E — modal for adding workers to a RUNNING run.
+ * Modal for adding workers to a RUNNING run.
  *
  * <p>Operator picks per-region counts via the same {@link FleetAllocationFormView}
  * widget the launcher uses, and edits the fleet-wide JMeter global properties

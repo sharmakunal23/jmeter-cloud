@@ -5,7 +5,7 @@ import { LogTailPanel } from "./LogTailPanel";
 import { MetricsTabPanel } from "./MetricsTabPanel";
 
 /**
- * UI-3 — Tabbed run-detail streams pane. Replaces the previous
+ * Tabbed run-detail streams pane. Replaces the previous
  * stacked-per-pod log panels + Grafana iframe layout with a single
  * tab strip:
  *
@@ -25,7 +25,7 @@ import { MetricsTabPanel } from "./MetricsTabPanel";
  * their useEffects + timers don't run — at 100 pods, the page polls
  * exactly one stream at a time (the active worker × active tab) instead
  * of fanning 100 requests per pod every 2 s. Combined with the
- * visibility-aware polling hook (UI-2), the network goes silent the
+ * visibility-aware polling hook, the network goes silent the
  * moment the operator's attention moves away.
  */
 type TabId = "metrics" | "console" | "logs";
@@ -178,7 +178,7 @@ function StreamTabPanel({
     return defaultWorkerId;
   });
 
-  // Keep the selection valid as the fleet evolves (e.g. Step 32 adds /
+  // Keep the selection valid as the fleet evolves (mid-run scale-up adds /
   // drains members mid-run).
   useEffect(() => {
     if (workerId && fleetMembers.some((m) => m.workerId === workerId)) return;
@@ -193,7 +193,7 @@ function StreamTabPanel({
   // COMPLETED / FAILED / ABORTED, its log file and stdout ring buffer
   // are frozen, so further polling fetches the same bytes forever. Stop
   // the timer for that pod even if the run-level state is still RUNNING
-  // (e.g. mid-run drain in Step 32).
+  // (e.g. a mid-run drain).
   const selectedMember = fleetMembers.find((m) => m.workerId === workerId);
   const memberTerminal = selectedMember
     ? isTerminalMemberState(selectedMember.state)

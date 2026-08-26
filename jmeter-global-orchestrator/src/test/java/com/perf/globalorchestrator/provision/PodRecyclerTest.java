@@ -11,7 +11,6 @@ import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.PodRepository;
 import com.perf.globalorchestrator.repo.RunRepository;
 import com.perf.globalorchestrator.service.RunAuditWriter;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -58,7 +57,7 @@ class PodRecyclerTest {
         runs = mock(RunRepository.class);
         audit = mock(RunAuditWriter.class);
         recycler = new PodRecycler(pods, apps, provisioner, spinService, localClient,
-                evaluator, runs, audit, new SimpleMeterRegistry());
+                evaluator, runs, audit);
 
         when(provisioner.currentImageDigest()).thenReturn("img-current");
         when(apps.findById("appId")).thenReturn(Optional.of(app(RecyclePolicy.DRAIN_AFTER_RUN)));
@@ -106,7 +105,8 @@ class PodRecyclerTest {
     private Pod pod(long runsServed) {
         return new Pod(POD, "us-east-1", "http://" + POD + ":8080",
                 PodState.IDLE, NOW, NOW.minusSeconds(60), "appId",
-                runsServed, "img-current", NOW.minusSeconds(600));
+                runsServed, "img-current", NOW.minusSeconds(600),
+                com.perf.globalorchestrator.domain.PodSource.DYNAMIC);
     }
 
     private Application app(RecyclePolicy policy) {

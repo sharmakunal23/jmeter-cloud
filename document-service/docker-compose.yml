@@ -22,11 +22,8 @@ services:
       HTTP_BIND_ADDRESS:               0.0.0.0
       DOCUMENT_SERVICE_BACKEND:        local
       DOCUMENT_SERVICE_LOCAL_FS_ROOT:  /var/lib/document-service/blobs
-      # OBSERVABILITY Phase B — distributed tracing.
-      # Local dev override: 100% sampling so every operator action shows up
-      # in Jaeger (the production default of 1% is in application.yml).
-      MANAGEMENT_TRACING_SAMPLING_PROBABILITY: ${MANAGEMENT_TRACING_SAMPLING_PROBABILITY:-1.0}
-      MANAGEMENT_OTLP_TRACING_ENDPOINT:        ${MANAGEMENT_OTLP_TRACING_ENDPOINT:-http://jaeger:4318/v1/traces}
+      # SLIMDOWN (2026-07-21): the MANAGEMENT_TRACING_* / MANAGEMENT_OTLP_*
+      # env is gone — the service no longer carries Micrometer/OTel.
     volumes:
       # In local mode the document service mounts host ./testPlans,
       # ./dataFiles, ./results so artifacts are inspectable from the IDE.

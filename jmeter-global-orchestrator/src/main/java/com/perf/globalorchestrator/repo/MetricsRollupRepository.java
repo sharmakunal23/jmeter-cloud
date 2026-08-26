@@ -8,13 +8,28 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Read-only access to {@code metrics."workerMetric"} for the per-run
+ * Read-only access to {@code metrics."runLabel"} for the per-run
  * rollup endpoint. Connected via the {@code metricsReader} datasource
  * (read-only Hikari).
  *
- * <p>For Step 14 the rollup is a simple GROUP BY label across the fleet
- * for the given runId. Cross-worker percentile aggregation faithful to
- * JMeter's HDRHistogram model is a future enhancement.
+ * <p>The rollup is a per-label view across the fleet for the given runId.
+ * Cross-worker percentile aggregation faithful to JMeter's HDRHistogram model
+ * is still a future enhancement — see the note on {@link #runAggregate}.
+ *
+ * <h2>Why this reads a rollup table</h2>
+ * SCHEMA-OPT Phase 1. Both queries here are whole-test aggregates, so against
+ * {@code metrics."workerMetric"} they scanned every row a run ever produced
+ * (~154M at 20 workers × 200 labels × 15 h) and crossed the read pool's 30 s
+ * {@code statement_timeout} — meaning {@code GET /runs/{id}/metrics}, the
+ * {@code runTrend} snapshot taken at completion and AI insights did not merely
+ * slow down, they failed. {@code metrics."runLabel"} holds one already-folded
+ * row per (runId, label): 200 rows for that same run.
+ *
+ * <p>It stores BOTH unweighted and throughput-weighted percentile numerators
+ * because this class reads percentiles both ways — {@link #rollupByLabel}
+ * reports an unweighted mean per label, {@link #runAggregate} a
+ * throughput-weighted one. Carrying both reproduces the pre-rollup numbers
+ * exactly rather than quietly changing a figure an operator has been reading.
  */
 @Repository
 public class MetricsRollupRepository {
@@ -26,30 +41,32 @@ public class MetricsRollupRepository {
     }
 
     public List<Map<String, Object>> rollupByLabel(String runId) {
+        // One row per label already, so no GROUP BY — the divisions reproduce
+        // exactly what the pre-rollup query computed: avg("pNN") over the run's
+        // raw rows is sum("pNN") / count(*), i.e. "sumPNN" / "rowCount".
         return jdbc.queryForList(
                 "SELECT \"label\", "
-                + "       sum(\"throughput\")  AS \"totalThroughput\", "
-                + "       sum(\"errorCount\")  AS \"totalErrors\", "
-                + "       CASE WHEN sum(\"throughput\") > 0 "
-                + "            THEN sum(\"errorCount\")::double precision / sum(\"throughput\") "
-                + "            ELSE 0 END     AS \"errorRate\", "
-                + "       avg(\"p50Ms\")       AS \"avgP50Ms\", "
-                + "       avg(\"p95Ms\")       AS \"avgP95Ms\", "
-                + "       avg(\"p99Ms\")       AS \"avgP99Ms\", "
-                + "       max(\"maxMs\")       AS \"maxMs\", "
-                + "       max(\"activeThreads\") AS \"maxActiveThreads\", "
-                + "       min(\"windowSecond\") AS \"firstSecond\", "
-                + "       max(\"windowSecond\") AS \"lastSecond\", "
-                + "       count(*)             AS \"rowCount\" "
-                + "FROM metrics.\"workerMetric\" "
+                + "       \"samples\"          AS \"totalThroughput\", "
+                + "       \"errors\"           AS \"totalErrors\", "
+                + "       CASE WHEN \"samples\" > 0 "
+                + "            THEN \"errors\"::double precision / \"samples\" "
+                + "            ELSE 0 END      AS \"errorRate\", "
+                + "       \"sumP50\" / \"rowCount\" AS \"avgP50Ms\", "
+                + "       \"sumP95\" / \"rowCount\" AS \"avgP95Ms\", "
+                + "       \"sumP99\" / \"rowCount\" AS \"avgP99Ms\", "
+                + "       \"maxMs\", "
+                + "       \"maxActiveThreads\", "
+                + "       \"firstSecond\", "
+                + "       \"lastSecond\", "
+                + "       \"rowCount\" "
+                + "FROM metrics.\"runLabel\" "
                 + "WHERE \"runId\" = ? "
-                + "GROUP BY \"label\" "
                 + "ORDER BY \"label\"",
                 runId);
     }
 
     /**
-     * AUTOMATION Phase F — a single run-level aggregate across the whole fleet
+     * A single run-level aggregate across the whole fleet
      * (all labels, all workers, all per-second windows) for the runTrend
      * snapshot. The percentiles are throughput-weighted means of the per-window
      * percentiles — a sample-count-aware approximation (a true cross-fleet
@@ -63,23 +80,32 @@ public class MetricsRollupRepository {
      * snapshot for an empty run rather than recording a misleading zeros row.
      */
     public RunAggregate runAggregate(String runId) {
+        // Folds the per-label rollup rows into one run-level row. Each expression
+        // is the same arithmetic the pre-rollup query ran against raw rows:
+        // sum("rowCount") is count(*), and the ELSE branch's
+        // sum("sumPNN")/sum("rowCount") is avg("pNN"). NULLIF guards the
+        // zero-row case, which COALESCE then reports as 0 so the caller sees
+        // rowCount = 0 and skips the snapshot.
         RunAggregate agg = jdbc.queryForObject(
                 "SELECT "
-                + "  count(*)                       AS \"rowCount\", "
-                + "  COALESCE(sum(\"throughput\"),0) AS \"totalThroughput\", "
-                + "  COALESCE(sum(\"errorCount\"),0) AS \"totalErrors\", "
-                + "  COALESCE(min(\"windowSecond\"),0) AS \"firstSecond\", "
-                + "  COALESCE(max(\"windowSecond\"),0) AS \"lastSecond\", "
-                + "  CASE WHEN sum(\"throughput\") > 0 "
-                + "       THEN sum(\"p50Ms\" * \"throughput\") / sum(\"throughput\") "
-                + "       ELSE COALESCE(avg(\"p50Ms\"),0) END AS \"p50Ms\", "
-                + "  CASE WHEN sum(\"throughput\") > 0 "
-                + "       THEN sum(\"p95Ms\" * \"throughput\") / sum(\"throughput\") "
-                + "       ELSE COALESCE(avg(\"p95Ms\"),0) END AS \"p95Ms\", "
-                + "  CASE WHEN sum(\"throughput\") > 0 "
-                + "       THEN sum(\"p99Ms\" * \"throughput\") / sum(\"throughput\") "
-                + "       ELSE COALESCE(avg(\"p99Ms\"),0) END AS \"p99Ms\" "
-                + "FROM metrics.\"workerMetric\" "
+                + "  COALESCE(sum(\"rowCount\"),0)   AS \"rowCount\", "
+                + "  COALESCE(sum(\"samples\"),0)    AS \"totalThroughput\", "
+                + "  COALESCE(sum(\"errors\"),0)     AS \"totalErrors\", "
+                + "  COALESCE(min(\"firstSecond\"),0) AS \"firstSecond\", "
+                + "  COALESCE(max(\"lastSecond\"),0)  AS \"lastSecond\", "
+                + "  CASE WHEN sum(\"samples\") > 0 "
+                + "       THEN sum(\"sumP50Weighted\") / sum(\"samples\") "
+                + "       ELSE COALESCE(sum(\"sumP50\") / NULLIF(sum(\"rowCount\"),0),0) "
+                + "       END AS \"p50Ms\", "
+                + "  CASE WHEN sum(\"samples\") > 0 "
+                + "       THEN sum(\"sumP95Weighted\") / sum(\"samples\") "
+                + "       ELSE COALESCE(sum(\"sumP95\") / NULLIF(sum(\"rowCount\"),0),0) "
+                + "       END AS \"p95Ms\", "
+                + "  CASE WHEN sum(\"samples\") > 0 "
+                + "       THEN sum(\"sumP99Weighted\") / sum(\"samples\") "
+                + "       ELSE COALESCE(sum(\"sumP99\") / NULLIF(sum(\"rowCount\"),0),0) "
+                + "       END AS \"p99Ms\" "
+                + "FROM metrics.\"runLabel\" "
                 + "WHERE \"runId\" = ?",
                 (rs, n) -> {
                     long rowCount = rs.getLong("rowCount");

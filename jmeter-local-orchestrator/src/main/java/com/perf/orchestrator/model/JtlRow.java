@@ -28,7 +28,7 @@ public record JtlRow(
         /** Total elapsed time in milliseconds for this request (start to last byte received). */
         long elapsedMs,
 
-        /** JMeter sampler label — the primary grouping key for all aggregation and Kafka routing. */
+        /** JMeter sampler label — the primary grouping key for all aggregation. */
         String label,
 
         /**

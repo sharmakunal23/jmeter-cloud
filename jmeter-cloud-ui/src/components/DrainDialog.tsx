@@ -8,37 +8,19 @@ import {
 } from "../api/runs";
 
 /**
- * MID-TEST-SCALING Phase F + smoke-fix-2 (2026-05-15) — unified drain
- * confirmation dialog. Replaces the original {@code DrainWorkerDialog}
- * (single-worker only) so the UI ships ONE drain modal that scales
- * from 1 worker → N selected → "stop the entire test".
+ * The single drain confirmation dialog, scaling from one worker to N selected
+ * to stopping the whole test. All three modes post to the same
+ * `POST /api/v1/runs/{runId}/scaleDown` with a `workerIds` list, which the
+ * backend treats idempotently — only the copy differs.
  *
- * <p>Modes (all use the same {@code POST /api/v1/runs/{runId}/scaleDown}
- * endpoint with a {@code workerIds} list — backend already supports
- * multi-workerIds idempotently):
- * <ul>
- *   <li><b>single</b> — per-row "Drain" click. Title "Drain worker?",
- *       body singular, button "Drain worker".</li>
- *   <li><b>bulk</b> — operator selected ≥ 2 rows via checkboxes.
- *       Title "Drain N workers?", body counts the selection +
- *       remaining live workers, button "Drain N workers".</li>
- *   <li><b>stopTest</b> — operator clicked "Stop test"; targets the
- *       full live-worker set. Title "Stop the test?", body explains
- *       run will end COMPLETED when all members terminate, button
- *       "Stop test".</li>
- * </ul>
+ * Draining is graceful: JMeter's TCP shutdown port lets in-flight samplers
+ * finish and each worker lands `DRAINED`, or `ABORTED` with reason
+ * `drainTimeoutExpired` if the budget elapses.
  *
- * <p>The drain itself is graceful — JMeter's TCP shutdown port lets
- * in-flight samplers complete; each worker lands in {@code DRAINED}
- * (or {@code ABORTED} with reason {@code drainTimeoutExpired} if the
- * drain budget elapses, default 60 s on the local-orch).
- *
- * <p>Run state stays {@code RUNNING} during drain — terminates only
- * when ALL members are terminal. {@code stopTest} mode targets every
- * live worker so the run rolls up to terminal once they all DRAINED.
- *
- * <p>On success, {@code onSuccess(updatedRun)} is called so the page
- * can replace its state without waiting for the next poll.
+ * **The run stays RUNNING throughout** and turns terminal only once every
+ * member is — which is why `stopTest` targets the full live-worker set. On
+ * success `onSuccess(updatedRun)` lets the page update without awaiting the
+ * next poll.
  */
 export type DrainMode = "single" | "bulk" | "stopTest";
 

@@ -64,42 +64,17 @@
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
-        <dependency>
-            <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-registry-prometheus</artifactId>
-        </dependency>
-        <!-- OBSERVABILITY Phase D — AOP for @Observed annotation-driven spans.
-             spring-boot-starter-aop pulls aspectjweaver + spring-aop. The
-             ObservedAspect bean we register in ObservationConfig uses Spring
-             AOP proxies (not load-time weaving) — proxies are created when
-             a @Component / @Service is wired, so the dep adds ~1 MB to the
-             JAR with no startup overhead. -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-aop</artifactId>
-        </dependency>
+        <!-- SLIMDOWN SL-E (2026-07-22): micrometer-registry-prometheus,
+             spring-boot-starter-aop (@Observed was its only consumer, S-6
+             grep-verified), micrometer-tracing-bridge-otel and
+             opentelemetry-exporter-otlp removed — hosting infra provides
+             observability. KEEP the JSON-logging deps below: logs are the
+             debug/RCA surface. Don't reintroduce a metrics registry or
+             tracer here. -->
 
-        <!-- OBSERVABILITY Phase B — distributed tracing.
-             micrometer-tracing-bridge-otel wires Spring Boot's
-             autoconfigured tracer onto the OpenTelemetry SDK.
-             opentelemetry-exporter-otlp ships spans to Jaeger over OTLP
-             HTTP (default transport — the bundled OkHttp sender keeps
-             us off netty/gRPC and saves ~3 MB per JAR). To switch to
-             gRPC later: set `management.otlp.tracing.transport=grpc`
-             and add `opentelemetry-exporter-sender-grpc-managed-channel`.
-             Both versions are BOM-managed by spring-boot-dependencies. -->
-        <dependency>
-            <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-tracing-bridge-otel</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.opentelemetry</groupId>
-            <artifactId>opentelemetry-exporter-otlp</artifactId>
-        </dependency>
-
-        <!-- OBSERVABILITY Phase A — structured JSON logging.
+        <!-- Structured JSON logging (KEPT by SLIMDOWN — the RCA surface).
              logstash-logback-encoder emits one JSON record per log line
-             with `traceId` / `spanId` / `runId` / `actor` MDC keys promoted
+             with `runId` / `actor` MDC keys promoted
              to top-level fields for log-search indexing. Version pinned
              explicitly: spring-boot-dependencies 3.5.x does NOT manage
              this artifact (only janino is BOM-managed). 7.4 matches the
@@ -141,20 +116,20 @@
             <artifactId>docker-java-transport-zerodep</artifactId>
             <version>3.4.0</version>
         </dependency>
-        <!-- KAFKA-PER-APP Phase B — AdminClient drives per-app topic create
-             / delete on POST/DELETE /api/v1/applications. Pinned to 3.9.2
-             to match jmeter-local-orchestrator + jmeter-metrics-consumer
-             (all three services share the kafka-clients line so the wire
-             protocol + serializer SPI versions stay aligned across the
-             producer / admin / consumer trio). -->
+        <!-- KUBE-5 Option A (2026-07-22) — K8sPodProvisioner drives worker
+             Pods via the cluster API when
+             globalOrchestrator.podProvisioner.substrate=k8s (the private-cloud
+             deployment; docker stays the compose default). Ported from
+             jmeter-orchestrator-k8s. Not managed by the Boot BOM, so pinned
+             explicitly (same pattern as the docker-java pins above). -->
         <dependency>
-            <groupId>org.apache.kafka</groupId>
-            <artifactId>kafka-clients</artifactId>
-            <version>3.9.2</version>
+            <groupId>io.fabric8</groupId>
+            <artifactId>kubernetes-client</artifactId>
+            <version>7.3.1</version>
         </dependency>
         <!-- AUTOMATION Phase E — JavaMailSender for the daily report emails.
-             Local/default backend talks SMTP to a MailHog container; the cloud
-             profile swaps in AWS SES (src/main/java-cloud, -Pcloud). -->
+             SMTP is the single backend: a MailHog container in dev compose,
+             the deploy environment's relay in production. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-mail</artifactId>
@@ -162,38 +137,6 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <!-- OBSERVABILITY Phase D — TestObservationRegistry + assertions
-             for unit-testing @Observed-driven span recording without
-             booting a full SpringBootTest. -->
-        <dependency>
-            <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-observation-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <!-- Step 14 IT — Testcontainers Postgres + Flyway migration replay
-             + WireMock to stub the per-pod local-orchestrator's
-             POST /api/v1/test response. Spring Boot 3.5.14's BOM pins
-             testcontainers at 1.21.4 — don't pull testcontainers-bom. -->
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>postgresql</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>junit-jupiter</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <!-- KAFKA-PER-APP Phase B — Testcontainers Kafka (KRaft single-broker
-             on a random port) lets ApplicationRegistryIT assert the topic
-             create/delete contract end-to-end against a real broker. Spring
-             Boot 3.5.14's BOM pins testcontainers at 1.21.4 — same line as
-             postgresql + junit-jupiter above. -->
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>kafka</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -206,10 +149,13 @@
             <artifactId>flyway-database-postgresql</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- KUBE-5 Option A — fabric8 CRUD mock server
+             (@EnableKubernetesMockClient) for K8sPodProvisionerTest: an
+             in-process API server, no cluster needed. -->
         <dependency>
-            <groupId>org.wiremock</groupId>
-            <artifactId>wiremock-standalone</artifactId>
-            <version>3.9.1</version>
+            <groupId>io.fabric8</groupId>
+            <artifactId>kubernetes-server-mock</artifactId>
+            <version>7.3.1</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -237,57 +183,15 @@
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
             <!-- Failsafe wires *IT.java behavior tests into `mvn verify`. -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-failsafe-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>integration-test</goal>
-                            <goal>verify</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
         </plugins>
     </build>
 
     <profiles>
-        <!-- AUTOMATION Phase E — cloud email backend. The default fat JAR stays
-             AWS-SDK-free (local dev sends to MailHog over SMTP). -Pcloud adds the
-             AWS SES SDK and the src/main/java-cloud source root holding
-             SesEmailSender, mirroring document-service's -Pcloud / S3 pattern. -->
-        <profile>
-            <id>cloud</id>
-            <dependencies>
-                <dependency>
-                    <groupId>software.amazon.awssdk</groupId>
-                    <artifactId>ses</artifactId>
-                    <version>2.25.50</version>
-                </dependency>
-            </dependencies>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.codehaus.mojo</groupId>
-                        <artifactId>build-helper-maven-plugin</artifactId>
-                        <version>3.5.0</version>
-                        <executions>
-                            <execution>
-                                <id>add-cloud-source</id>
-                                <phase>generate-sources</phase>
-                                <goals><goal>add-source</goal></goals>
-                                <configuration>
-                                    <sources>
-                                        <source>${project.basedir}/src/main/java-cloud</source>
-                                    </sources>
-                                </configuration>
-                            </execution>
-                        </executions>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
+        <!-- The -Pcloud profile (AWS SES + the src/main/java-cloud source
+             root) was removed: SMTP is the one email backend; the deploy
+             environment's relay is configured via the existing spring.mail
+             env vars, and SES itself offers an SMTP endpoint. This matches
+             the twin orchestrator, which dropped it first. -->
         <!-- SECURITY S-14 — OWASP dependency CVE gate. Inert by default so the
              offline `mvn -o ...` flow is unaffected; activate online in CI:
                mvn -P securityScan verify

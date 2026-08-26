@@ -3,12 +3,9 @@ package com.perf.orchestrator.metrics;
 /**
  * Supplier seam for {@link OrchestratorCounters}.
  *
- * <p>Wired in {@code OrchestratorMain} from a small lambda that pulls
- * counters from {@code CurrentRun}'s snapshot plus a disk-free probe.
- * The interface keeps {@code ObservabilityController} and
- * {@code PrometheusExporter} unaware of how the counters are sourced —
- * future steps can swap the supplier (e.g. for one driven by the
- * streaming pipeline directly) without touching the HTTP layer.
+ * <p>Wired from a lambda that pulls counters out of {@code CurrentRun}'s
+ * snapshot plus a disk-free probe, so the HTTP layer stays unaware of where
+ * they come from and the supplier can be swapped without touching it.
  */
 @FunctionalInterface
 public interface CountersSupplier {

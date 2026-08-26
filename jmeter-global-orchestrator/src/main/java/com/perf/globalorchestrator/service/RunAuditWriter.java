@@ -13,7 +13,7 @@ import java.time.Instant;
 import java.util.Map;
 
 /**
- * AUDIT-TRAIL — the single place that appends a {@code runEvent}. Shared by
+ * The single place that appends a {@code runEvent}. Shared by
  * {@link RunService} (operator-initiated run mutations + run-terminal events)
  * and {@link com.perf.globalorchestrator.provision.PodRecycler} (system-driven
  * worker recycle), so the serialise-payload-then-insert primitive lives once.
@@ -44,9 +44,22 @@ public class RunAuditWriter {
      */
     public void record(String runId, RunEventType type, Actor actor,
                        Object payloadRecord, String result) {
+        record(Ulid.generate(), runId, type, actor, payloadRecord, result);
+    }
+
+    /**
+     * Same as
+     * {@link #record(String, RunEventType, Actor, Object, String)} but with a
+     * caller-supplied <b>deterministic</b> eventId. Use for singleton-per-fact
+     * system events (e.g. one {@code RESULTS_SAVED} per (run, worker)): every
+     * replica computes the same id, so the PK's {@code ON CONFLICT DO NOTHING}
+     * dedups across instances, not just same-id retries.
+     */
+    public void record(String eventId, String runId, RunEventType type, Actor actor,
+                       Object payloadRecord, String result) {
         Map<String, Object> payload = json.convertValue(payloadRecord, MAP_TYPE);
         repo.insert(new RunEvent(
-                Ulid.generate(), runId, type, actor.name(), actor.source(),
+                eventId, runId, type, actor.name(), actor.source(),
                 payload, result, Instant.now()));
     }
 }

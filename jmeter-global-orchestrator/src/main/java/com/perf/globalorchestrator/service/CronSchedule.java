@@ -10,7 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * AUTOMATION — cron parsing + next-fire math, built on Spring's
+ * Cron parsing + next-fire math, built on Spring's
  * {@link CronExpression} so we add no scheduler dependency (no Quartz).
  *
  * <p>Operators write either the familiar <b>5-field unix</b> cron

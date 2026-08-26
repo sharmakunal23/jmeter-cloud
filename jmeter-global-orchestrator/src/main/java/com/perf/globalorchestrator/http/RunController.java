@@ -33,7 +33,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import com.perf.globalorchestrator.observability.TracingFilter;
+import com.perf.globalorchestrator.observability.MdcEnrichmentFilter;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -74,13 +74,13 @@ public class RunController {
     public ResponseEntity<Run> startRun(
             @RequestBody StartRunRequest request,
             @RequestParam(name = "bestEffort", required = false, defaultValue = "false") boolean bestEffort,
-            @RequestHeader(value = TracingFilter.HEADER_ACTOR, required = false) String actorHeader) {
+            @RequestHeader(value = MdcEnrichmentFilter.HEADER_ACTOR, required = false) String actorHeader) {
         Run run = runs.startRun(request, bestEffort, Actor.fromHeader(actorHeader));
         return ResponseEntity.status(HttpStatus.CREATED).body(run);
     }
 
     /**
-     * MID-TEST-SCALING Phase A — adds workers to a RUNNING run. The
+     * Adds workers to a RUNNING run. The
      * original run's testPlan + dataFiles blob IDs are sourced from the
      * persisted run row, so the request body only carries the per-region
      * allocation (and optional perNodeProperties for the new workers).
@@ -96,14 +96,14 @@ public class RunController {
             @RequestBody ScaleUpRunRequest request,
             @RequestParam(name = "bestEffort", required = false, defaultValue = "false") boolean bestEffort,
             @RequestParam(name = "spinShortfall", required = false, defaultValue = "false") boolean spinShortfall,
-            @RequestHeader(value = TracingFilter.HEADER_ACTOR, required = false) String actorHeader) {
+            @RequestHeader(value = MdcEnrichmentFilter.HEADER_ACTOR, required = false) String actorHeader) {
         ScaleUpRunResponse response =
                 runs.scaleUpRun(runId, request, bestEffort, spinShortfall, Actor.fromHeader(actorHeader));
         return ResponseEntity.status(HttpStatus.OK).body(response);
     }
 
     /**
-     * MID-TEST-SCALING Phase B — drains workers from a RUNNING run via
+     * Drains workers from a RUNNING run via
      * graceful drain (JMeter's TCP shutdown port → in-flight samplers
      * complete → DRAINED). Body supplies exactly one of:
      * <ul>
@@ -120,7 +120,7 @@ public class RunController {
     public ResponseEntity<ScaleDownRunResponse> scaleDownRun(
             @PathVariable String runId,
             @RequestBody ScaleDownRunRequest request,
-            @RequestHeader(value = TracingFilter.HEADER_ACTOR, required = false) String actorHeader) {
+            @RequestHeader(value = MdcEnrichmentFilter.HEADER_ACTOR, required = false) String actorHeader) {
         ScaleDownRunResponse response = runs.scaleDownRun(runId, request, Actor.fromHeader(actorHeader));
         return ResponseEntity.status(HttpStatus.OK).body(response);
     }
@@ -143,7 +143,7 @@ public class RunController {
     public ResponseEntity<Run> abortRun(
             @PathVariable String runId,
             @RequestBody(required = false) AbortRunRequest request,
-            @RequestHeader(value = TracingFilter.HEADER_ACTOR, required = false) String actorHeader) {
+            @RequestHeader(value = MdcEnrichmentFilter.HEADER_ACTOR, required = false) String actorHeader) {
         String reason = request == null ? null : request.reason();
         Run run = runs.abortRun(runId, Actor.fromHeader(actorHeader), reason);
         return ResponseEntity.ok(run);
@@ -164,7 +164,7 @@ public class RunController {
     public ResponseEntity<Run> deleteRun(
             @PathVariable String runId,
             @RequestBody(required = false) DeleteRunRequest request,
-            @RequestHeader(value = TracingFilter.HEADER_ACTOR, required = false) String actorHeader) {
+            @RequestHeader(value = MdcEnrichmentFilter.HEADER_ACTOR, required = false) String actorHeader) {
         String reason = request == null ? null : request.reason();
         Run run = runs.deleteRun(runId, Actor.fromHeader(actorHeader), reason);
         return ResponseEntity.ok(run);
@@ -189,7 +189,7 @@ public class RunController {
     public ResponseEntity<Map<String, Object>> purgeRun(
             @PathVariable String runId,
             @RequestBody(required = false) DeleteRunRequest request,
-            @RequestHeader(value = TracingFilter.HEADER_ACTOR, required = false) String actorHeader) {
+            @RequestHeader(value = MdcEnrichmentFilter.HEADER_ACTOR, required = false) String actorHeader) {
         String reason = request == null ? null : request.reason();
         PurgeResult result = runPurge.purgeRun(runId, Actor.fromHeader(actorHeader), reason);
         Map<String, Object> body = new LinkedHashMap<>();
@@ -227,7 +227,7 @@ public class RunController {
     }
 
     /**
-     * AUDIT-TRAIL — the run's audit timeline (who started / scaled / drained,
+     * The run's audit timeline (who started / scaled / drained,
      * when, and with what result), newest first. Paginated since a
      * long-running test can accumulate many events: {@code ?offset=N&limit=25}
      * with the total count on the {@code X-Total-Count} header (body stays a
@@ -290,7 +290,7 @@ public class RunController {
                     .body("podBaseUrl not recorded for member " + workerId);
         }
         int safeTail = Math.max(1, Math.min(tail, 10_000));
-        // CACHE C-5 — cached when the member is terminal (its log buffer is
+        // Cached when the member is terminal (its log buffer is
         // frozen), otherwise re-fetched live. Keyed on (runId, workerId,
         // stream, tail) so a reused pod's later run can't collide.
         boolean memberTerminal = member.state() != null && member.state().isTerminal();
@@ -321,7 +321,7 @@ public class RunController {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("runId", run.runId());
         body.put("state", run.state().name());
-        // CACHE C-1 — cached when run is terminal, straight to SQL otherwise.
+        // Cached when run is terminal, straight to SQL otherwise.
         body.put("byLabel", metrics.rollupByLabel(runId, run.state()));
         return ResponseEntity.ok(body);
     }
@@ -342,7 +342,7 @@ public class RunController {
         // on miss, mapped to 404 by the existing handler — same shape
         // as /metrics so the UI's error path is consistent.
         Run run = runs.getRun(runId);
-        // CACHE C-1 — cached when run is terminal, straight to SQL otherwise.
+        // Cached when run is terminal, straight to SQL otherwise.
         // byRegion=true adds the per-region breakdown (the UI's "Split by
         // region" toggle); default false keeps the aggregate-only payload.
         // window restricts to the last 5m/10m/30m/1h/2h/4h of the run (or
@@ -410,7 +410,7 @@ public class RunController {
         for (String id : ids) {
             try {
                 Run run = runs.getRun(id);  // throws RunNotFoundException on miss
-                // CACHE C-1 — per-id terminal gating: comparing two finished
+                // Per-id terminal gating: comparing two finished
                 // runs hits zero SQL after the first request; a still-active
                 // run in the pair always re-queries. The compare view is
                 // aggregate-only, whole-test — no region split, no window.

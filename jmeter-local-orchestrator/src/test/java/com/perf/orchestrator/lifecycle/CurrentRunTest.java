@@ -72,7 +72,7 @@ class CurrentRunTest {
         void terminal_failure_and_abort_record_reason() {
             CurrentRun fail = CurrentRun.load(tempDir.resolve("fail.json"), Clock.systemUTC());
             fail.beginRun("r1", "us-east-1");
-            fail.recordFailure("kafka_unreachable");
+            fail.recordFailure("ingest_unreachable");
 
             CurrentRun abort = CurrentRun.load(tempDir.resolve("abort.json"), Clock.systemUTC());
             abort.beginRun("r2", "us-east-1");
@@ -80,7 +80,7 @@ class CurrentRunTest {
 
             assertSoftly(softly -> {
                 softly.assertThat(fail.state()).isEqualTo(TestState.FAILED);
-                softly.assertThat(fail.snapshot().failureReason()).isEqualTo("kafka_unreachable");
+                softly.assertThat(fail.snapshot().failureReason()).isEqualTo("ingest_unreachable");
                 softly.assertThat(fail.snapshot().completedAt()).isNotNull();
                 softly.assertThat(abort.state()).isEqualTo(TestState.ABORTED);
                 softly.assertThat(abort.snapshot().failureReason()).isEqualTo("aborted_by_request");
@@ -116,7 +116,7 @@ class CurrentRunTest {
                 softly.assertThat(snap.jmeterPid()).isEqualTo(7777L);
                 softly.assertThat(snap.rowsIngested()).isEqualTo(1234L);
                 softly.assertThat(snap.windowsPublished()).isEqualTo(56L);
-                softly.assertThat(snap.lastKafkaAckMs()).isEqualTo(1700000000000L);
+                softly.assertThat(snap.lastPublishAckMs()).isEqualTo(1700000000000L);
             });
         }
 

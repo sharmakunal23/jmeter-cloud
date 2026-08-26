@@ -17,7 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * OBSERVABILITY Phase E — emits one structured access-log record per
+ * Emits one structured access-log record per
  * critical request. Mirrors the global-orchestrator's AccessLogFilter;
  * see that class's Javadoc for the full design rationale.
  */

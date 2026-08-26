@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { automationReportsApi, type CronJobKind, type ReportPreview } from "../api/automation";
 
 /**
- * AUTOMATION — modal that shows what a report email will actually look like, so a
+ * Modal that shows what a report email will actually look like, so a
  * report is never sent blind. Fetches the rendered preview (subject + HTML) from
  * the backend and shows the HTML in a sandboxed `<iframe srcDoc>` so the email's
  * inline styles can't leak into (or inherit from) the app.

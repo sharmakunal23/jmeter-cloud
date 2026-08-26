@@ -18,7 +18,7 @@ import { RunStartProgress, type Stage } from "../components/RunStartProgress";
 import { SaveTemplateDialog } from "../components/SaveTemplateDialog";
 import { templatesApi, type TemplateBody } from "../api/templates";
 import { deriveStatus, type SubmitChipState } from "../components/RunSummaryChips";
-// UX5 — VizPanelToolbar removed from the launcher; Hide Controls is now
+// VizPanelToolbar removed from the launcher; Hide Controls is now
 // hosted by FleetAllocationFormView. The view-mode toggle (Flow/Form)
 // is also gone — both render together as a hybrid view.
 import { useInterval } from "../hooks/useInterval";
@@ -54,7 +54,7 @@ type RegionsState =
 // (D-RunLauncher rework — applications-fetch + ApplicationsState removed;
 //  the launcher's app comes from the URL now.)
 
-// UI-6 — view-mode + controls-hidden state lifted out of the panel.
+// View-mode + controls-hidden state lifted out of the panel.
 // localStorage keys reuse the existing one for view mode (so prior
 // selections still apply) and add a new key for the form-pane toggle.
 const CONTROLS_HIDDEN_STORAGE_KEY = "jmeterCloud.newRun.controlsHidden";
@@ -64,7 +64,7 @@ function readStoredControlsHidden(): boolean {
   catch { return false; }
 }
 
-// UX2 / UX29 — summarizeShortfall removed; the shortfall is now
+// SummarizeShortfall removed; the shortfall is now
 // rendered as a table inside the RunStartProgress modal, not as a
 // string in the in-page error pane.
 
@@ -95,13 +95,13 @@ export function NewRunPage() {
   const [labelFilter, setLabelFilter] = useState("");
   const [saveResults, setSaveResults] = useState(false);
   const [submit, setSubmit] = useState<SubmitState>({ status: "idle" });
-  // UX25 — multi-stage progress modal shown while a run starts. Null
+  // Multi-stage progress modal shown while a run starts. Null
   // means the modal is closed.
   const [progressStages, setProgressStages] = useState<Stage[] | null>(null);
   const [progressError, setProgressError] = useState<string | null>(null);
   const [blobs, setBlobs] = useState<BlobsState>({ status: "ok", testPlans: [], dataFiles: [] });
   const [regions, setRegions] = useState<RegionsState>({ status: "loading" });
-  // UX1 — per-region maxAvailable for the URL-bound app. Drives the +/-
+  // Per-region maxAvailable for the URL-bound app. Drives the +/-
   // ceiling so the operator can pick up to the policy cap (not just the
   // currently-IDLE count). Stays null until the apps list loads.
   const [appCapacityMap, setAppCapacityMap] = useState<Record<string, number> | null>(null);
@@ -118,7 +118,7 @@ export function NewRunPage() {
   const blobsClearedOnAppChangeRef = useRef(false);
 
   /**
-   * UX13 — re-loadable blob fetch. The initial-mount effect calls this
+   * Re-loadable blob fetch. The initial-mount effect calls this
    * with `clearSelections=false` so a hydrated template's blobId is
    * preserved; the post-upload path calls it with `false` too so the
    * just-uploaded blob the parent has already pre-selected stays.
@@ -218,7 +218,7 @@ export function NewRunPage() {
   useEffect(() => { void refreshRegions(); }, []);
   useInterval(() => { void refreshRegions(); }, 5000);
 
-  // UX1 — fetch the URL-bound application's capacity grid once on mount
+  // Fetch the URL-bound application's capacity grid once on mount
   // (and whenever the URL app changes). The cap-aware +/- ceiling reads
   // maxByRegion from this map; missing app or missing capacity row falls
   // back to the legacy idlePods-based bound.
@@ -264,7 +264,7 @@ export function NewRunPage() {
    */
   function addWorkers(region: string, n: number) {
     if (n < 1) return;
-    // UX1 — clamp at the app's per-region maxAvailable (the policy cap),
+    // Clamp at the app's per-region maxAvailable (the policy cap),
     // not the live IDLE-pod count. Picking more than IDLE-now is fine —
     // the shortfall flow handles the gap via spinShortfall. Picking
     // more than maxAvailable is rejected by the backend; clamp here so
@@ -392,7 +392,7 @@ export function NewRunPage() {
     });
     const body: StartRunRequest = {
       testPlanBlobId,
-      // UI-D3 — persist the selected application on the run record so
+      // Persist the selected application on the run record so
       // the Applications tab can filter without joining through document-service.
       application: application.trim() || undefined,
       fleetAllocation: cleanAllocation,
@@ -445,7 +445,7 @@ export function NewRunPage() {
   }
 
   /**
-   * UX26 — poll the run-status endpoint after the run is created, and
+   * Poll the run-status endpoint after the run is created, and
    * advance stages 3/4/5 based on observed member states.
    *
    * <p>Mapping (we can't distinguish "uploading artifacts" from
@@ -554,7 +554,7 @@ export function NewRunPage() {
           message: err instanceof Error ? err.message : String(err),
         });
       }
-      // UX28 — INSUFFICIENT_CAPACITY isn't a hard failure; it's a
+      // INSUFFICIENT_CAPACITY isn't a hard failure; it's a
       // recoverable shortfall the operator can resolve by spinning the
       // gap or accepting bestEffort. Leave the stages alone (we never
       // really got started) and let the modal swap to the shortfall
@@ -590,7 +590,7 @@ export function NewRunPage() {
     await send(buildRequest());
   }
 
-  // UX29 — handleSpinShortfall / handleRetryBestEffort previously
+  // HandleSpinShortfall / handleRetryBestEffort previously
   // backed the in-page WORKERS NOT READY buttons. Both are now invoked
   // directly inline from the progress modal's shortfallPrompt prop, so
   // the named wrappers are gone.
@@ -599,7 +599,7 @@ export function NewRunPage() {
   // up to 20 pods per region without spinning up that many local-orchestrator
   // replicas. Production builds (`import.meta.env.DEV === false`) keep the
   // real /regions value untouched.
-  // UX19 — the global /regions rollup only returns regions where at
+  // The global /regions rollup only returns regions where at
   // least one pod is registered. For a fresh app with a 4-region
   // capacity grid but no pods yet, three of those regions would be
   // missing from the launcher entirely. Merge the app's capacity-grid
@@ -647,10 +647,10 @@ export function NewRunPage() {
     submit: chipSubmit,
   });
 
-  // UI-6 — viz-toolbar state. Form-pane visibility persists across reloads;
+  // Viz-toolbar state. Form-pane visibility persists across reloads;
   // the `[` keybind toggles controls visibility unless the operator is
   // typing into a form field. View-mode toggle (Flow/Form) restored in
-  // UI-C2.b polish — the diagram is the default; the Form view is a
+  // The diagram is the default; the Form view is a
   // table-style alternative for keyboard-heavy operators.
   const [controlsHidden, setControlsHidden] = useState<boolean>(readStoredControlsHidden);
   useEffect(() => {
@@ -658,7 +658,7 @@ export function NewRunPage() {
     catch { /* ignore */ }
   }, [controlsHidden]);
 
-  // UX5 — viewMode/setViewMode were used by the now-gone VizPanelToolbar.
+  // ViewMode/setViewMode were used by the now-gone VizPanelToolbar.
   // We keep readStoredViewMode + VIEW_MODE_STORAGE_KEY off the export
   // surface so stale localStorage values don't matter; nothing reads them.
 
@@ -1025,7 +1025,7 @@ function BlobSelect({ id, value, onChange, blobs, placeholder, loading, error, r
 //  app comes from the URL path `/applications/:appName/runs/new`.)
 
 /**
- * UX13 — inline file upload alongside the BlobSelect dropdowns.
+ * Inline file upload alongside the BlobSelect dropdowns.
  * Removes the friction of "leave this page → go to /documents → upload
  * → come back → re-pick the just-uploaded blob." The upload tags the
  * blob with the launcher's current application + the requested type so

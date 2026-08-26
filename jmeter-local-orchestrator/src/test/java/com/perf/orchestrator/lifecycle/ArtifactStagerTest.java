@@ -34,7 +34,7 @@ import static org.assertj.core.api.SoftAssertions.assertSoftly;
  * Behaviour tests for {@link ArtifactStager}. Real temp filesystem, real
  * {@link java.util.zip.ZipInputStream} — only the input streams are
  * synthetic. Each {@code @Nested} block describes a documented rule from
- * {@code ORCHESTRATOR-PLAN.md} §"Validation rules" or the atomic-swap
+ * {@code docs/orchestratorPlan.md} §"Validation rules" or the atomic-swap
  * contract.
  */
 @DisplayName("ArtifactStager — streaming uploads, validation, and atomic swap")
@@ -588,10 +588,7 @@ class ArtifactStagerTest {
                 "TEST_REGION",         "us-east-1",
                 "RUN_ID",              "stager-test",
                 "JTL_PATH",            "/results/results.jtl",
-                "SENTINEL_PATH",       "/results/.done",
-                "KAFKA_BROKERS",       "kafka:9092",
-                "SCHEMA_REGISTRY_URL", "http://schema-registry:8081",
-                "KAFKA_TOPIC",         "jmeter.metrics.perSecond"
+                "SENTINEL_PATH",       "/results/.done"
         ));
         env.put("BASE_DIR",       base.toString());
         env.put("TEST_PLAN_DIR",  base.resolve("testPlan").toString());

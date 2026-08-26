@@ -11,7 +11,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * AUTOMATION — unit tests for the cron parsing + next-fire math. Pure
+ * Unit tests for the cron parsing + next-fire math. Pure
  * functions, no Spring context: pins the 5-field/6-field/@macro normalisation,
  * timezone handling, catch-up-once semantics, and validation failures.
  */

@@ -3,7 +3,7 @@ import { useState } from "react";
 import { getActor, setActor } from "../actor";
 
 /**
- * AUDIT-TRAIL — header control for the operator's self-attested identity.
+ * Header control for the operator's self-attested identity.
  * Until cloud auth lands there is no logged-in user, so the operator sets
  * their name once; it's cached in localStorage and sent as `X-Actor` on every
  * run action (start / scale up / scale down / drain) and shows up on the run's

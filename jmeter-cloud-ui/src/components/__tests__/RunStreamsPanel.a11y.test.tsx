@@ -21,7 +21,7 @@ function LogTailMock(props: { workerId: string; streamSource: string }) {
 
 vi.mock("../LogTailPanel", () => ({ LogTailPanel: LogTailMock }));
 
-// HM-3 — keep the a11y sweep focused on the shell; the historical
+// Keep the a11y sweep focused on the shell; the historical
 // metrics panel has its own dedicated a11y assertions.
 vi.mock("../MetricsTabPanel", () => ({
   MetricsTabPanel: ({ runId }: { runId: string }) => (

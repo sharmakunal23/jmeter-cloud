@@ -20,7 +20,7 @@ import java.time.Duration;
  *
  * <p>If this line stops appearing in the logs, the consumer is wedged
  * (deadlocked, OOM-pending, etc) — independent of whether actual
- * batches are arriving from Kafka. Pairs with the
+ * envelopes are arriving over HTTP. Pairs with the
  * {@link ConsumerHeartbeatHealthIndicator} which translates "no batch
  * processed in N seconds" into a DOWN health status.
  */

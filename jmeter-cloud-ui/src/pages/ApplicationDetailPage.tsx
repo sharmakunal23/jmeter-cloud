@@ -3,6 +3,8 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 
 import { runsApi, type Run, type RunListing } from "../api/runs";
 import { applicationsApi, type Application } from "../api/applications";
+import { usePlatformCapabilities } from "../hooks/usePlatformCapabilities";
+import { DataCentersSectionForApp } from "../components/DataCentersSection";
 import { Paginator } from "../components/Paginator";
 import { RegionBadgeList } from "../components/RegionBadge";
 import { CreateApplicationDialog } from "../components/CreateApplicationDialog";
@@ -58,6 +60,7 @@ export function ApplicationDetailPage() {
 
 function ApplicationDetailBody({ appName }: { appName: string }) {
   const navigate = useNavigate();
+  const { isStaticFleet } = usePlatformCapabilities();
   const [searchParams, setSearchParams] = useSearchParams();
   const page = Math.max(1, Number.parseInt(searchParams.get("page") ?? "1", 10) || 1);
   const offset = (page - 1) * PAGE_SIZE;
@@ -338,6 +341,11 @@ function ApplicationDetailBody({ appName }: { appName: string }) {
           onClose={() => setEditingApp(null)}
         />
       )}
+
+      {/* STATIC-FLEET Phase 7 — the operator-facing worker surface on a fleet
+          this platform does not provision. Mutually exclusive with the
+          Capacity tab, which is hidden in that mode. */}
+      {isStaticFleet && <DataCentersSectionForApp appName={appName} />}
 
       {deleteTargets && deleteTargets.length > 0 && (
         <DeleteRunsConfirmDialog

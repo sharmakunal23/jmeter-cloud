@@ -34,7 +34,7 @@ public record StartRunRequest(
         List<String> labelFilter,
         String initiatedBy,
         /**
-         * WORKER-HYGIENE Phase E — when true, a shortfall in the claim
+         * When true, a shortfall in the claim
          * phase triggers an on-the-fly spin to fill the gap rather than
          * a 503 INSUFFICIENT_CAPACITY. Subject to the per-region
          * {@code applicationCapacity.maxAvailable} ceiling: if the

@@ -70,7 +70,7 @@ describe("FleetFlowDiagram — topology", () => {
         expect(document.querySelector('.fleetFlow__global')).toBeNull();
     });
 
-    // UX7 — lane dividers were removed in the flow refactor. Regions
+    // Lane dividers were removed in the flow refactor. Regions
     // now stand on their own and edges visually separate header from
     // pods. Two new assertions: each region renders ONE header, and
     // each allocated worker renders its own pod node.
@@ -98,7 +98,7 @@ describe("FleetFlowDiagram — topology", () => {
     });
 });
 
-// UX3 hybrid view — in-node +/- DeltaControls were removed. The form
+// In-node +/- DeltaControls were removed. The form
 // sibling owns add/remove ergonomics. The diagram is purely read-only
 // from this rework forward.
 describe("FleetFlowDiagram — UX3 hybrid (no in-node controls)", () => {

@@ -1,13 +1,11 @@
 package com.perf.metricsconsumer.http;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.perf.metricsconsumer.health.ConsumerHeartbeat;
 import com.perf.metricsconsumer.jdbc.WorkerMetricWriter;
+import com.perf.metricsconsumer.model.WorkerMetricBatch;
+import com.perf.metricsconsumer.model.WorkerMetricEntry;
 import com.perf.metricsconsumer.util.RateLimitedLogger;
-import com.perf.orchestrator.WorkerMetricBatch;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
-import org.apache.avro.io.BinaryDecoder;
-import org.apache.avro.io.DecoderFactory;
-import org.apache.avro.specific.SpecificDatumReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -20,36 +18,33 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
 import java.util.List;
 
 /**
- * HTTP fallback ingest endpoint for {@link WorkerMetricBatch} envelopes
- * (K-4). When Kafka is unreachable from the producer
- * side, the local-orchestrator's {@code MetricsDispatcher} (K-5) falls back
- * to {@code POST /api/v1/ingest} on this service. The internal write path is
- * identical to the Kafka path — same {@link WorkerMetricWriter#writeBatch},
- * same multi-row INSERT, same {@code ON CONFLICT DO NOTHING} idempotency.
+ * The platform's only metrics-ingest endpoint: every worker POSTs its
+ * per-second {@link WorkerMetricBatch} here as JSON, and
+ * {@link WorkerMetricWriter#writeBatch} lands it idempotently.
  *
- * <h2>Wire format</h2>
- * Request body is raw Avro binary (no Schema Registry consultation — the
- * {@code WorkerMetricBatch} schema is fixed at deploy time per the K-0 hard
- * cutover decision). {@code Content-Type: application/avro}.
+ * <p>Required identity fields are validated here rather than left to the
+ * INSERT, so a structurally valid but semantically broken envelope is rejected
+ * terminally instead of looping forever through the worker's retry path.
  *
- * <h2>Response shape</h2>
- * <ul>
- *   <li>{@code 202 ACCEPTED} + {@code {rowsInserted: N}} — happy path. {@code N}
- *       may be less than the envelope's entry count if duplicates collapsed
- *       on the PK.</li>
- *   <li>{@code 400 BAD_REQUEST} — body could not be deserialised as
- *       {@link WorkerMetricBatch}. The dispatcher should NOT retry — the
- *       payload is malformed.</li>
- *   <li>{@code 413 PAYLOAD_TOO_LARGE} — body exceeded {@code maxBodyBytes}.
- *       Defense in depth against oversize envelopes.</li>
- *   <li>{@code 503 SERVICE_UNAVAILABLE} — Postgres unreachable. The
- *       dispatcher SHOULD retry via the K-5 retry sweeper.</li>
- * </ul>
+ * <p><b>The status codes are a cross-component contract</b> — the worker's
+ * dispatcher branches on them, so changing one changes the worker:
+ *
+ * <table>
+ *   <caption>Response contract</caption>
+ *   <tr><td>{@code 202}</td><td>Accepted, {@code {rowsInserted: N}}. N is below
+ *       the entry count when duplicates collapsed on the PK. The worker drops
+ *       the envelope from its disk buffer.</td></tr>
+ *   <tr><td>{@code 400}</td><td>Not valid JSON, or a required field is missing.
+ *       Terminal — the worker must not retry.</td></tr>
+ *   <tr><td>{@code 413}</td><td>Body over {@code maxBodyBytes}. Terminal.</td></tr>
+ *   <tr><td>{@code 415}</td><td>Non-JSON Content-Type. A worker predating the
+ *       JSON wire lands here and retries from its buffer until rebuilt.</td></tr>
+ *   <tr><td>{@code 503}</td><td>Postgres unreachable. The worker retries — ingest
+ *       is idempotent, so replay is safe.</td></tr>
+ * </table>
  */
 @RestController
 @RequestMapping("/api/v1")
@@ -67,79 +62,67 @@ public class IngestController {
     private static final RateLimitedLogger RL_LOG =
             new RateLimitedLogger(LOG, /* minIntervalMs */ 1000L);
 
-    /** Avro reader is thread-safe — share a singleton. */
-    private static final SpecificDatumReader<WorkerMetricBatch> READER =
-            new SpecificDatumReader<>(WorkerMetricBatch.class);
-
-    /** Custom MediaType for Avro binary — Spring Boot doesn't ship one. */
-    public static final String APPLICATION_AVRO_VALUE = "application/avro";
-
     private final WorkerMetricWriter writer;
+    private final ConsumerHeartbeat heartbeat;
+    private final ObjectMapper mapper;
     private final long maxBodyBytes;
-    private final Counter cIngested;
-    private final Counter cRejectedBadRequest;
-    private final Counter cRejectedTooLarge;
-    private final Counter cRejectedDbDown;
 
     public IngestController(WorkerMetricWriter writer,
-                            MeterRegistry meterRegistry,
+                            ConsumerHeartbeat heartbeat,
+                            ObjectMapper mapper,
                             @Value("${metricsConsumer.ingest.maxBodyBytes:2097152}") long maxBodyBytes) {
         this.writer = writer;
+        this.heartbeat = heartbeat;
+        this.mapper = mapper;
         if (maxBodyBytes < 1024) {
             throw new IllegalArgumentException("maxBodyBytes too small (< 1 KB): " + maxBodyBytes);
         }
         this.maxBodyBytes = maxBodyBytes;
-
-        this.cIngested = Counter.builder("metricsConsumer.ingest.envelopesAccepted")
-                .description("Envelopes accepted via HTTP /ingest (K-4 fallback path).")
-                .register(meterRegistry);
-        this.cRejectedBadRequest = Counter.builder("metricsConsumer.ingest.rejectedBadRequest")
-                .description("Envelopes rejected at /ingest due to malformed Avro body.")
-                .register(meterRegistry);
-        this.cRejectedTooLarge = Counter.builder("metricsConsumer.ingest.rejectedTooLarge")
-                .description("Envelopes rejected at /ingest because body exceeded maxBodyBytes.")
-                .register(meterRegistry);
-        this.cRejectedDbDown = Counter.builder("metricsConsumer.ingest.rejectedDbDown")
-                .description("Envelopes rejected at /ingest because Postgres was unreachable.")
-                .register(meterRegistry);
     }
 
-    @PostMapping(value = "/ingest", consumes = APPLICATION_AVRO_VALUE,
+    @PostMapping(value = "/ingest", consumes = MediaType.APPLICATION_JSON_VALUE,
                  produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<IngestResponse> ingest(@RequestBody byte[] body) {
-        // Step 1 — body size guard. Reject oversize before deserialise so an
-        // attacker can't pin Avro reader memory with a huge invalid payload.
+        // Step 1 — body size guard. Reject oversize before parse so an
+        // attacker can't pin parser memory with a huge invalid payload.
         if (body.length > maxBodyBytes) {
-            cRejectedTooLarge.increment();
+            // This WARN is the only signal a dropped envelope leaves.
+            RL_LOG.warn("INGEST_TOO_LARGE",
+                    "Rejected oversize /ingest body: {} bytes exceeds maxBodyBytes {}",
+                    body.length, maxBodyBytes);
             return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
                     .body(new IngestResponse(0, "PAYLOAD_TOO_LARGE",
                             "body " + body.length + " bytes exceeds maxBodyBytes " + maxBodyBytes));
         }
 
-        // Step 2 — deserialise.
+        // Both failure classes are terminal 400s — the worker must drop the
+        // envelope, not retry. Rate-limited because a stale-image producer can
+        // hit this thousands of times a second and has OOM-killed the consumer
+        // through this exact path before.
         WorkerMetricBatch envelope;
         try {
-            envelope = decode(body);
+            envelope = mapper.readValue(body, WorkerMetricBatch.class);
         } catch (Exception e) {
-            // Avro can throw IOException AND AvroRuntimeException; broad catch.
-            // Rate-limited: a stale-image producer can hit this thousands of
-            // times per second (incident 2026-05-15 OOM-killed the consumer
-            // via this exact path).
-            cRejectedBadRequest.increment();
-            RL_LOG.warn("INGEST_BAD_AVRO",
+            RL_LOG.warn("INGEST_BAD_JSON",
                     "Rejected malformed /ingest body ({} bytes): {}", body.length, e.toString());
             return ResponseEntity.badRequest()
-                    .body(new IngestResponse(0, "INVALID_AVRO", e.getMessage()));
+                    .body(new IngestResponse(0, "INVALID_JSON", e.getMessage()));
+        }
+        String violation = firstViolation(envelope);
+        if (violation != null) {
+            RL_LOG.warn("INGEST_BAD_JSON",
+                    "Rejected invalid /ingest envelope: {}", violation);
+            return ResponseEntity.badRequest()
+                    .body(new IngestResponse(0, "INVALID_JSON", violation));
         }
 
         // Step 3 — write.
         try {
             int rowsInserted = writer.writeBatch(List.of(envelope));
-            cIngested.increment();
+            heartbeat.markBatchProcessed(rowsInserted);
             return ResponseEntity.accepted()
                     .body(new IngestResponse(rowsInserted, "ACCEPTED", null));
         } catch (DataAccessException e) {
-            cRejectedDbDown.increment();
             RL_LOG.warn("INGEST_DB_DOWN",
                     "Rejected /ingest envelope: Postgres unreachable: {}", e.toString());
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
@@ -147,9 +130,31 @@ public class IngestController {
         }
     }
 
-    private static WorkerMetricBatch decode(byte[] body) throws IOException {
-        BinaryDecoder dec = DecoderFactory.get().binaryDecoder(new ByteArrayInputStream(body), null);
-        return READER.read(null, dec);
+    /**
+     * Semantic validation of fields the INSERT depends on. JSON decode is
+     * lenient (a missing field arrives as null/0), so without this check a
+     * broken envelope would fail the NOT NULL constraints in Postgres and be
+     * misclassified as a retryable {@code 503} — poisoning the worker's disk
+     * buffer with an envelope that can never succeed. Returns the first
+     * violation, or null when the envelope is insertable.
+     * An EMPTY entries list is valid — 202 with {@code rowsInserted: 0}.
+     */
+    private static String firstViolation(WorkerMetricBatch env) {
+        if (isBlank(env.runId()))            return "runId is required";
+        if (isBlank(env.workerId()))         return "workerId is required";
+        if (isBlank(env.region()))           return "region is required";
+        if (isBlank(env.windowTimestamp()))  return "windowTimestamp is required";
+        if (env.entries() == null)           return "entries is required (may be empty, not absent)";
+        for (int i = 0; i < env.entries().size(); i++) {
+            WorkerMetricEntry entry = env.entries().get(i);
+            if (entry == null)               return "entries[" + i + "] is null";
+            if (isBlank(entry.label()))      return "entries[" + i + "].label is required";
+        }
+        return null;
+    }
+
+    private static boolean isBlank(String s) {
+        return s == null || s.isBlank();
     }
 
     /**
@@ -157,7 +162,7 @@ public class IngestController {
      *
      * @param rowsInserted number of rows actually written; may be less than
      *                     envelope's entry count if duplicates collapsed
-     * @param code         short status code: {@code ACCEPTED}, {@code INVALID_AVRO},
+     * @param code         short status code: {@code ACCEPTED}, {@code INVALID_JSON},
      *                     {@code PAYLOAD_TOO_LARGE}, {@code POSTGRES_UNAVAILABLE}
      * @param message      human-readable detail; null on success
      */

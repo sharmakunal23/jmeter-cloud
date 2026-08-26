@@ -13,7 +13,7 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * AUTOMATION Phase F — JDBC access for {@code globalOrchestrator.runTrend}
+ * JDBC access for {@code globalOrchestrator.runTrend}
  * (Flyway V24). Uses the run-state (writer) JdbcTemplate: global-orch both
  * writes the snapshot (on a run-terminal transition) and reads the 7-day
  * baseline (for the daily perf-test report). The metrics datasource can't be

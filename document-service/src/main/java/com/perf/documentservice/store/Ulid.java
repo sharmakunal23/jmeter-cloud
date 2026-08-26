@@ -3,15 +3,9 @@ package com.perf.documentservice.store;
 import java.security.SecureRandom;
 
 /**
- * Minimal ULID generator — 26-char Crockford-base32, lexicographically
- * sortable by creation time. Avoids pulling a dedicated dependency for a
- * 50-line algorithm.
- *
- * <p>Layout: 48-bit timestamp (ms since epoch) + 80-bit randomness, all
- * encoded as 5-bit groups against the Crockford alphabet (excludes I, L,
- * O, U to dodge transcription ambiguity).
- *
- * <p>Output is URL-safe: alphabetical + decimal digits only.
+ * Minimal ULID generator — 48-bit timestamp plus 80-bit randomness as 26
+ * URL-safe Crockford-base32 chars, lexicographically sortable by creation time.
+ * Hand-rolled to avoid a dependency for a 50-line algorithm.
  */
 public final class Ulid {
 
@@ -20,11 +14,12 @@ public final class Ulid {
     private static final SecureRandom RANDOM = new SecureRandom();
 
     /**
-     * Regex matching the 26-char Crockford-base32 shape this class emits.
-     * Kept in sync with {@link #isValid(String)} — reused as a Spring
-     * path-variable constraint so a malformed blobId/runId is rejected at
-     * routing (404) before it reaches the store. Compile-time constant so it
-     * can sit in a {@code @GetMapping} attribute.
+     * The shape {@link #generate()} emits, kept in sync with
+     * {@link #isValid(String)}.
+     *
+     * <p>Used as a Spring path-variable constraint, so a malformed blobId or
+     * runId is rejected at routing with a 404 before reaching the store. It must
+     * stay a compile-time constant to sit inside a {@code @GetMapping}.
      */
     public static final String PATTERN = "[0-9A-HJKMNP-TV-Z]{26}";
 

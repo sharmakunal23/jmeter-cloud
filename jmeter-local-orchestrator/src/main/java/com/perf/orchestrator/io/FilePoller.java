@@ -19,41 +19,19 @@ import java.util.Optional;
 import java.util.logging.Logger;
 
 /**
- * Tails a JMeter JTL file using {@link RandomAccessFile}, assembles complete
- * CSV lines via {@link LineBuffer}, parses them into {@link JtlRow} records,
- * and periodically persists the byte offset for crash recovery.
+ * Tails a JMeter JTL with a {@link RandomAccessFile}, assembling complete CSV
+ * lines through {@link LineBuffer}, parsing them to {@link JtlRow}, and
+ * persisting the byte offset so a restart resumes rather than reprocesses.
  *
- * <h2>Lifecycle</h2>
- * <ol>
- *   <li>{@link #tryOpen} — opens the file, reads the header, builds the parser,
- *       restores the crash-recovery offset. Returns empty if the file or header
- *       is not yet ready; the state machine retries on the next poll cycle.</li>
- *   <li>{@link #poll} — reads up to {@code maxReadBytes} per call, feeds bytes
- *       into {@link LineBuffer}, parses complete lines. Returns {@link PollResult}
- *       containing parsed rows and raw bytes read. Called repeatedly in RUNNING
- *       and DRAINING states.</li>
- *   <li>{@link #pollFinal} — called once when DRAINING confirms no more bytes
- *       are incoming. Flushes any partial line from {@link LineBuffer} (the last
- *       line of a JTL file has no trailing newline), forces a final offset
- *       persist, and returns remaining rows.</li>
- *   <li>{@link #close} — closes the underlying {@link RandomAccessFile}.</li>
- * </ol>
+ * <p>{@link #tryOpen} returns empty until the file and its header exist, and
+ * leaves the file pointer exactly after the header newline. {@link #poll} then
+ * reads up to {@code maxReadBytes} per call. <b>{@link #pollFinal} must be
+ * called once when draining confirms no more bytes are coming</b> — a JTL's last
+ * line has no trailing newline, so without it that row is lost in
+ * {@link LineBuffer}.
  *
- * <h2>Header reading</h2>
- * The header is read byte-by-byte until a newline is found. After {@link #tryOpen}
- * returns, the internal {@link RandomAccessFile} pointer is positioned exactly at
- * the byte after the header's newline — no data bytes are consumed or discarded
- * during header reading.
- *
- * <h2>Crash recovery</h2>
- * On startup, if {@link JtlOffsetStore} holds a saved offset from a previous
- * run, the RAF is seeked to that position and polling resumes without
- * reprocessing earlier rows. If the saved offset exceeds the current file length
- * (stale state from a different run), it is discarded and polling starts just
- * after the header.
- *
- * <h2>Thread safety</h2>
- * Not thread-safe. All methods must be called from the single poll-loop thread.
+ * <p>A restored offset beyond the current file length is treated as stale state
+ * from a different run and discarded rather than trusted.
  */
 public final class FilePoller implements Closeable {
 

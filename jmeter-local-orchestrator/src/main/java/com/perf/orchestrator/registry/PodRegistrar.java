@@ -1,7 +1,5 @@
 package com.perf.orchestrator.registry;
 
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,13 +40,8 @@ public class PodRegistrar {
     private final String region;
     private final String podBaseUrl;
     private final String applicationId;
-    private final Counter registrationOk;
-    private final Counter registrationErr;
-    private final Counter heartbeatOk;
-    private final Counter heartbeatErr;
 
     public PodRegistrar(
-            MeterRegistry meterRegistry,
             @Value("${GLOBAL_ORCHESTRATOR_URL:}")    String globalUrl,
             @Value("${HOSTNAME:#{null}}")            String hostname,
             @Value("${REGION:us-east-1}")            String region,
@@ -76,10 +69,6 @@ public class PodRegistrar {
                 ? podBaseUrlOverride
                 : "http://" + this.podId + ":" + httpPort;
         this.applicationId = applicationId != null && !applicationId.isBlank() ? applicationId : null;
-        this.registrationOk  = Counter.builder("podRegistrar.registrations.ok").register(meterRegistry);
-        this.registrationErr = Counter.builder("podRegistrar.registrations.err").register(meterRegistry);
-        this.heartbeatOk     = Counter.builder("podRegistrar.heartbeats.ok").register(meterRegistry);
-        this.heartbeatErr    = Counter.builder("podRegistrar.heartbeats.err").register(meterRegistry);
     }
 
     @PostConstruct
@@ -104,13 +93,10 @@ public class PodRegistrar {
                 return;
             }
             if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
-                heartbeatErr.increment();
                 LOG.warn("Heartbeat to {} failed: HTTP {} body={}", globalUrl, resp.statusCode(), resp.body());
                 return;
             }
-            heartbeatOk.increment();
         } catch (Exception e) {
-            heartbeatErr.increment();
             LOG.warn("Heartbeat to {} failed: {}", globalUrl, e.toString());
         }
     }
@@ -127,16 +113,13 @@ public class PodRegistrar {
         try {
             HttpResponse<String> resp = post("/api/v1/registerPod", body.toString());
             if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
-                registrationErr.increment();
                 LOG.warn("registerPod to {} failed: HTTP {} body={}",
                         globalUrl, resp.statusCode(), resp.body());
                 return;
             }
-            registrationOk.increment();
             LOG.info("Registered with global-orchestrator at {} as podId={} baseUrl={} applicationId={}",
                     globalUrl, podId, podBaseUrl, applicationId);
         } catch (Exception e) {
-            registrationErr.increment();
             LOG.warn("registerPod to {} failed: {}", globalUrl, e.toString());
         }
     }

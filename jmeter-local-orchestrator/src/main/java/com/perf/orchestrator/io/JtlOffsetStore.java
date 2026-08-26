@@ -25,9 +25,9 @@ import java.util.logging.Logger;
  *
  * <h2>Crash recovery semantics</h2>
  * At-least-once delivery: if the orchestrator crashes between persisting the offset
- * and Kafka acknowledging the messages, rows since the last persisted offset
- * are re-processed and re-published. Kafka's idempotent producer (Section 5)
- * deduplicates these at the broker level.
+ * and the metrics-consumer acknowledging the envelopes, rows since the last
+ * persisted offset are re-processed and re-published. The consumer's idempotent
+ * insert ({@code ON CONFLICT DO NOTHING}) deduplicates these.
  *
  * <h2>Thread safety</h2>
  * Not thread-safe. Intended for use by the single poll-loop thread only.
@@ -115,7 +115,7 @@ public final class JtlOffsetStore {
      *
      * <p>Failures are logged at WARNING level but do not propagate — a failed
      * persist means at-most-one-flush-interval of rows will be re-processed
-     * on the next restart, which is acceptable given Kafka's idempotent producer.
+     * on the next restart, which is acceptable given the consumer's idempotent insert.
      *
      * @param offset the byte position in the JTL file after the last processed byte
      */

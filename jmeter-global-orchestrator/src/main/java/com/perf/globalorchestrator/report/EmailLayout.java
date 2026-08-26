@@ -1,7 +1,7 @@
 package com.perf.globalorchestrator.report;
 
 /**
- * AUTOMATION — shared, lightweight HTML shell for the report emails. Keeps both
+ * Shared, lightweight HTML shell for the report emails. Keeps both
  * composers ({@link InfraReadinessComposer}, {@link DailyReportComposer}) visually
  * consistent and light: a narrow, system-font container, a small subtitle, an
  * optional operator intro note, and inline styles (email clients ignore {@code

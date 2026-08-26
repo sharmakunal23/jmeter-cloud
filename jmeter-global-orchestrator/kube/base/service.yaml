@@ -1,0 +1,42 @@
+# KUBE-5 — two Services:
+#   global-orchestrator — ClusterIP, parity with the compose name so
+#     GLOBAL_ORCHESTRATOR_URL defaults and the UI nginx proxy target work
+#     unchanged.
+#   workers — HEADLESS, selecting the provisioner-managed worker Pods so
+#     each resolves at {podName}.workers (the K8sPodProvisioner stamps
+#     hostname/subdomain to match). Selector keys are the provisioner's
+#     com.perf.jmeterCloud.* labels; managedBy=global-orchestrator keeps
+#     it disjoint from a standalone jmeter-orchestrator-k8s in the same
+#     namespace.
+apiVersion: v1
+kind: Service
+metadata:
+  name: global-orchestrator
+  labels:
+    app: global-orchestrator
+spec:
+  selector:
+    app: global-orchestrator
+  ports:
+    - name: http
+      port: 8082
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workers
+  labels:
+    app: global-orchestrator
+spec:
+  clusterIP: None
+  # publishNotReadyAddresses: worker DNS must resolve as soon as the Pod
+  # exists — PodSpinService's health-wait polls the worker URL, which
+  # needs the name to resolve BEFORE the worker is Ready.
+  publishNotReadyAddresses: true
+  selector:
+    com.perf.jmeterCloud.managedBy: global-orchestrator
+    com.perf.jmeterCloud.role: local-orchestrator
+  ports:
+    - name: http
+      port: 8080

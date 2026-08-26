@@ -13,7 +13,7 @@ import { AbortRunDialog } from "../components/AbortRunDialog";
 
 /**
  * Run detail — page-level snapshot poller around a {@link RunStreamsPanel}
- * (UI-3) that owns the Metrics / Console / Logs sub-tabs.
+ * that owns the Metrics / Console / Logs sub-tabs.
  *
  * <p>2026-05-15 (smoke fix 2): operator-driven UX rework.
  * <ul>

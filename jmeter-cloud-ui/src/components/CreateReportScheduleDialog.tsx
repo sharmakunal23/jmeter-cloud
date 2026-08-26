@@ -6,7 +6,7 @@ import { EmailPreviewModal } from "./EmailPreviewModal";
 import { ScheduleBuilder, type ScheduleValue } from "./ScheduleBuilder";
 
 /**
- * AUTOMATION Phase E/D — modal to create a platform-wide report schedule. The
+ * Modal to create a platform-wide report schedule. The
  * operator picks the report kind:
  *   • INFRA_READINESS — daily infra-readiness email (all backends + every app's
  *     24h health);

@@ -1,6 +1,7 @@
 package com.perf.globalorchestrator.repo;
 
 import com.perf.globalorchestrator.domain.Pod;
+import com.perf.globalorchestrator.domain.PodSource;
 import com.perf.globalorchestrator.domain.PodState;
 import com.perf.globalorchestrator.domain.RegionCapacity;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -37,9 +38,21 @@ public class PodRepository {
      * On re-register, COALESCE preserves a previously-set applicationId
      * so a pod that goes through a transient identity wobble doesn't lose
      * its app binding.
+     *
+     * <p>STATIC-FLEET Phase 3 — a self-registering worker never changes a
+     * DECLARED row's identity. If the operator declared this pod
+     * ({@code source='STATIC'}) its {@code region} and {@code baseUrl} are
+     * the operator's statement of where the worker is, and they win: the
+     * worker derives its own {@code baseUrl} from its hostname, which in a
+     * private cloud is frequently not the address the control plane can
+     * reach it at. Letting a self-registration overwrite the declared
+     * address would break fan-out for a worker that had been declared
+     * correctly. {@code source} itself is never touched on conflict, so a
+     * declared worker that also self-registers stays declared — declaring
+     * and self-registering converge on one row instead of fighting.
      */
     public void register(String podId, String region, String baseUrl, String applicationId) {
-        // WORKER-HYGIENE Phase D — preserve DRAINING_FOR_RECYCLE through
+        // Preserve DRAINING_FOR_RECYCLE through
         // re-register. A pod that's mid-recycle is still alive enough to
         // re-register (heartbeats keep firing until the container is
         // stopped); we must not flip it back to IDLE or a concurrent
@@ -49,13 +62,63 @@ public class PodRepository {
                 + "(\"podId\",\"region\",\"baseUrl\",\"state\",\"lastHeartbeat\",\"applicationId\") "
                 + "VALUES (?,?,?,'IDLE', now(), ?) "
                 + "ON CONFLICT (\"podId\") DO UPDATE SET "
-                + "  \"region\"=EXCLUDED.\"region\", "
-                + "  \"baseUrl\"=EXCLUDED.\"baseUrl\", "
+                + "  \"region\"=CASE WHEN \"globalOrchestrator\".\"pod\".\"source\"='STATIC' "
+                + "                  THEN \"globalOrchestrator\".\"pod\".\"region\" "
+                + "                  ELSE EXCLUDED.\"region\" END, "
+                + "  \"baseUrl\"=CASE WHEN \"globalOrchestrator\".\"pod\".\"source\"='STATIC' "
+                + "                   THEN \"globalOrchestrator\".\"pod\".\"baseUrl\" "
+                + "                   ELSE EXCLUDED.\"baseUrl\" END, "
                 + "  \"state\"=CASE WHEN \"globalOrchestrator\".\"pod\".\"state\"='DRAINING_FOR_RECYCLE' "
                 + "                 THEN 'DRAINING_FOR_RECYCLE' ELSE 'IDLE' END, "
                 + "  \"lastHeartbeat\"=now(), "
                 + "  \"applicationId\"=COALESCE(EXCLUDED.\"applicationId\", \"globalOrchestrator\".\"pod\".\"applicationId\")",
                 podId, region, baseUrl, applicationId);
+    }
+
+    /**
+     * Declares an operator-deployed worker.
+     * Idempotent on {@code podId}: re-declaring updates the address and
+     * re-binds nothing else, so an operator can correct a typo'd URL by
+     * declaring again.
+     *
+     * <p>Unlike {@link #register}, this is the operator speaking, so the
+     * supplied {@code region} / {@code baseUrl} DO overwrite. {@code state}
+     * is left alone on conflict — a declared worker the sweeper has marked
+     * {@code LOST} must not be flipped IDLE by a re-declare, or a claim
+     * could grab a worker that is still unreachable. {@code StaticPodProbe}
+     * is the only thing that resurrects it, and only on real evidence.
+     *
+     * <p>{@code lastHeartbeat} is seeded to {@code now()} on INSERT so a
+     * freshly declared worker is claimable immediately rather than being
+     * swept LOST before the first probe tick.
+     */
+    public void declareStatic(String podId, String region, String baseUrl, String applicationId) {
+        jdbc.update(
+                "INSERT INTO \"globalOrchestrator\".\"pod\" "
+                + "(\"podId\",\"region\",\"baseUrl\",\"state\",\"lastHeartbeat\",\"applicationId\",\"source\") "
+                + "VALUES (?,?,?,'IDLE', now(), ?, 'STATIC') "
+                + "ON CONFLICT (\"podId\") DO UPDATE SET "
+                + "  \"region\"=EXCLUDED.\"region\", "
+                + "  \"baseUrl\"=EXCLUDED.\"baseUrl\", "
+                + "  \"applicationId\"=EXCLUDED.\"applicationId\", "
+                + "  \"source\"='STATIC'",
+                podId, region, baseUrl, applicationId);
+    }
+
+    /**
+     * Every row with the given source. Drives
+     * {@code StaticPodProbe}, which only probes what the operator declared:
+     * a DYNAMIC row left over from before a mode flip belongs to the
+     * (now absent) provisioner, not to the probe.
+     */
+    public List<Pod> findBySource(PodSource source) {
+        return jdbc.query(
+                "SELECT \"podId\", \"region\", \"baseUrl\", \"state\", "
+                + "\"lastHeartbeat\", \"registeredAt\", \"applicationId\", "
+                + "\"runsServed\", \"imageDigest\", \"provisionedAt\", \"source\" "
+                + "FROM \"globalOrchestrator\".\"pod\" WHERE \"source\" = ? "
+                + "ORDER BY \"podId\"",
+                ROW_MAPPER, source.name());
     }
 
     /**
@@ -65,7 +128,7 @@ public class PodRepository {
      * "everyone forgot about you" cases.
      */
     public int heartbeat(String podId) {
-        // WORKER-HYGIENE Phase D — DRAINING_FOR_RECYCLE is preserved
+        // DRAINING_FOR_RECYCLE is preserved
         // through the heartbeat (pod is mid-recycle; flipping back to
         // IDLE would re-expose it to claim).
         return jdbc.update(
@@ -82,7 +145,7 @@ public class PodRepository {
      * Returns the number of pods flipped — useful as a metric.
      */
     public int markLostBefore(Instant cutoff) {
-        // WORKER-HYGIENE Phase D — DRAINING_FOR_RECYCLE pods may go silent
+        // DRAINING_FOR_RECYCLE pods may go silent
         // while their container is being stopped. Don't relabel them LOST;
         // the recycle path is the authoritative driver for these rows.
         return jdbc.update(
@@ -105,7 +168,7 @@ public class PodRepository {
                 "SELECT p.\"podId\", p.\"region\", p.\"baseUrl\", "
                 + "       p.\"state\", p.\"lastHeartbeat\", p.\"registeredAt\", "
                 + "       p.\"applicationId\", p.\"runsServed\", "
-                + "       p.\"imageDigest\", p.\"provisionedAt\" "
+                + "       p.\"imageDigest\", p.\"provisionedAt\", p.\"source\" "
                 + "FROM \"globalOrchestrator\".\"pod\" p "
                 + "WHERE p.\"state\" = 'IDLE' "
                 + "  AND NOT EXISTS ("
@@ -146,7 +209,7 @@ public class PodRepository {
                 "SELECT p.\"podId\", p.\"region\", p.\"baseUrl\", "
                 + "       p.\"state\", p.\"lastHeartbeat\", p.\"registeredAt\", "
                 + "       p.\"applicationId\", p.\"runsServed\", "
-                + "       p.\"imageDigest\", p.\"provisionedAt\" "
+                + "       p.\"imageDigest\", p.\"provisionedAt\", p.\"source\" "
                 + "FROM \"globalOrchestrator\".\"pod\" p "
                 + "WHERE p.\"state\" = 'IDLE' "
                 + "  AND p.\"region\" = ? "
@@ -227,11 +290,31 @@ public class PodRepository {
         return jdbc.query(
                 "SELECT \"podId\", \"region\", \"baseUrl\", \"state\", "
                 + "       \"lastHeartbeat\", \"registeredAt\", \"applicationId\", "
-                + "       \"runsServed\", \"imageDigest\", \"provisionedAt\" "
+                + "       \"runsServed\", \"imageDigest\", \"provisionedAt\", \"source\" "
                 + "FROM \"globalOrchestrator\".\"pod\" "
                 + "WHERE \"applicationId\" = ? AND \"region\" = ? "
                 + "ORDER BY \"podId\"",
                 ROW_MAPPER, applicationId, region);
+    }
+
+    /**
+     * Single-row lookup by primary key. Added for STATIC-FLEET Phase 1:
+     * {@code StaticPodProvisioner} answers {@code exists} / {@code isRunning}
+     * / {@code baseUrlFor} from the registry, and those are called once per
+     * pod while rendering a capacity page — a {@link #findAll()} scan per
+     * call would make that quadratic.
+     */
+    public java.util.Optional<Pod> findByPodId(String podId) {
+        if (podId == null || podId.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        List<Pod> rows = jdbc.query(
+                "SELECT \"podId\", \"region\", \"baseUrl\", \"state\", "
+                + "\"lastHeartbeat\", \"registeredAt\", \"applicationId\", "
+                + "\"runsServed\", \"imageDigest\", \"provisionedAt\", \"source\" "
+                + "FROM \"globalOrchestrator\".\"pod\" WHERE \"podId\" = ?",
+                ROW_MAPPER, podId);
+        return rows.isEmpty() ? java.util.Optional.empty() : java.util.Optional.of(rows.get(0));
     }
 
     /**
@@ -352,14 +435,14 @@ public class PodRepository {
         return jdbc.query(
                 "SELECT \"podId\", \"region\", \"baseUrl\", \"state\", "
                 + "       \"lastHeartbeat\", \"registeredAt\", \"applicationId\", "
-                + "       \"runsServed\", \"imageDigest\", \"provisionedAt\" "
+                + "       \"runsServed\", \"imageDigest\", \"provisionedAt\", \"source\" "
                 + "FROM \"globalOrchestrator\".\"pod\" "
                 + "ORDER BY \"lastHeartbeat\" DESC",
                 ROW_MAPPER);
     }
 
     /**
-     * WORKER-HYGIENE Phase B — bumps {@code runsServed} for one pod inside
+     * Bumps {@code runsServed} for one pod inside
      * the caller's transaction. Returns the rowcount so the caller can
      * detect a vanished pod (race with drain) and fail the run-claim if
      * the bump would have been against a deleted row.
@@ -379,7 +462,7 @@ public class PodRepository {
     }
 
     /**
-     * WORKER-HYGIENE Phase B — records the image digest + provisionedAt
+     * Records the image digest + provisionedAt
      * captured by the provisioner at container-create time. Idempotent on
      * {@code podId}; called after {@link #register} once the container is
      * actually running and the digest is known. Leaves the existing
@@ -390,7 +473,7 @@ public class PodRepository {
      * {@link #register} and then back-fills the digest via this method.
      */
     /**
-     * WORKER-HYGIENE Phase D — flips a pod from IDLE → DRAINING_FOR_RECYCLE.
+     * Flips a pod from IDLE → DRAINING_FOR_RECYCLE.
      * Guarded on the current state being IDLE so a concurrent
      * {@code claimIdleByRegionAndApp} can't race us: if the claim has
      * already locked the row, it observes IDLE and grabs it; our UPDATE
@@ -430,7 +513,14 @@ public class PodRepository {
             rs.getString("applicationId"),
             rs.getLong("runsServed"),
             rs.getString("imageDigest"),
-            instant(rs, "provisionedAt"));
+            instant(rs, "provisionedAt"),
+            podSource(rs));
+
+    /** V29's CHECK constraint guarantees a known value; null only on a pre-V29 read. */
+    private static PodSource podSource(ResultSet rs) throws SQLException {
+        String raw = rs.getString("source");
+        return raw == null ? PodSource.DYNAMIC : PodSource.valueOf(raw);
+    }
 
     private static Instant instant(ResultSet rs, String col) throws SQLException {
         Timestamp t = rs.getTimestamp(col);

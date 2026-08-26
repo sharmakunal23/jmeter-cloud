@@ -1,21 +1,29 @@
 import { useMemo, useState } from "react";
 
 import {
-  USA_REGIONS,
   US_MAP_PATH,
   isCanonicalRegion,
   regionLabel,
+  resolveRegionOptions,
 } from "../regions";
+import { usePlatformCapabilities } from "../hooks/usePlatformCapabilities";
 
 /**
- * Region picker — lets an operator choose which of the 4 USA AWS regions an
- * application uses (1–4), via a clickable US map + a synced checklist.
+ * Placement picker — lets an operator choose which regions (or, on a
+ * private cloud, which data centers) an application uses, via a clickable
+ * US map + a synced checklist.
  *
- * <p>Toggling a region on adds it; toggling off removes it. A region that
- * still has provisioned workers is <em>locked</em> (can't be removed until
- * drained). At least one region must stay selected. Any non-canonical
- * "legacy" regions the app already has (dummy data) are listed separately so
- * they can be cleaned up, but they're not on the map.
+ * <p>Toggling one on adds it; toggling off removes it. One that still has
+ * provisioned workers is <em>locked</em> (can't be removed until drained).
+ * At least one must stay selected. Any the app already has that aren't in
+ * the deployment's list are surfaced separately so they can be cleaned up.
+ *
+ * <p>STATIC-FLEET Phase 7 — the option list comes from the deployment
+ * (`GET /api/v1/platform/capabilities`) instead of the hardcoded four AWS
+ * USA regions, and the map is dropped as soon as any option has no place on
+ * it: `na-east` is not a point in Virginia, and a pin in the wrong spot is
+ * worse than no map. The vocabulary follows the same signal — "Region" on
+ * AWS, "Data center" on a private cloud.
  *
  * <p>The parent computes the add/remove diff from {@code current} vs the
  * submitted selection and applies it (PUT to add, DELETE to remove).
@@ -38,10 +46,28 @@ export function RegionPicker({
   const [selected, setSelected] = useState<Set<string>>(() => new Set(current));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const { regions: deploymentRegions, regionNoun } = usePlatformCapabilities();
 
+  const { options, showMap } = useMemo(
+    () => resolveRegionOptions(deploymentRegions, current),
+    [deploymentRegions, current],
+  );
+
+  /**
+   * Ids the app carries that this deployment doesn't offer. With a
+   * configured list that means "not in the list"; without one it falls back
+   * to the AWS-canonical check, which is what it meant before Phase 7.
+   */
   const legacyRegions = useMemo(
-    () => current.filter((r) => !isCanonicalRegion(r)),
-    [current],
+    () => (deploymentRegions.length > 0
+      ? current.filter((r) => !deploymentRegions.includes(r))
+      : current.filter((r) => !isCanonicalRegion(r))),
+    [current, deploymentRegions],
+  );
+  /** Options rendered in the checklist — the deployment's, minus the legacy strays. */
+  const listOptions = useMemo(
+    () => options.filter((o) => !legacyRegions.includes(o.id)),
+    [options, legacyRegions],
   );
 
   function toggle(id: string) {
@@ -91,50 +117,55 @@ export function RegionPicker({
       >
         <header className="modal__header">
           <h3 id="regionPickerTitle">
-            Manage regions <span className="modal__titleApp mono">{appName}</span>
+            Manage {regionNoun({ plural: true })}{" "}
+            <span className="modal__titleApp mono">{appName}</span>
           </h3>
           <button type="button" className="btn btn--ghost" onClick={onCancel} aria-label="Close">×</button>
         </header>
 
         <div className="modal__body regionPicker">
-          {/* US map — clickable region pins. */}
-          <svg
-            className="regionMap"
-            viewBox="0 0 960 600"
-            role="group"
-            aria-label="USA region map"
-          >
-            <path className="regionMap__land" d={US_MAP_PATH} />
-            {USA_REGIONS.map((r) => {
-              const isSel = selected.has(r.id);
-              const isLocked = lockedRegions.has(r.id) && isSel;
-              return (
-                <g
-                  key={r.id}
-                  className={`regionPin ${isSel ? "regionPin--on" : ""} ${isLocked ? "regionPin--locked" : ""}`}
-                  transform={`translate(${r.x} ${r.y})`}
-                  role="checkbox"
-                  aria-checked={isSel}
-                  aria-label={`${r.label} (${r.id})${isLocked ? " — locked, has workers" : ""}`}
-                  tabIndex={0}
-                  onClick={() => toggle(r.id)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(r.id); }
-                  }}
-                >
-                  <circle className="regionPin__halo" r={26} />
-                  <circle className="regionPin__dot" r={13} />
-                  {isLocked && <text className="regionPin__lock" y={5}>🔒</text>}
-                  <text className="regionPin__label" y={-30}>{r.label}</text>
-                  <text className="regionPin__id" y={44}>{r.id}</text>
-                </g>
-              );
-            })}
-          </svg>
+          {/* US map — clickable pins. Rendered only when every option has a
+              real place on it (see resolveRegionOptions). */}
+          {showMap && (
+            <svg
+              className="regionMap"
+              viewBox="0 0 960 600"
+              role="group"
+              aria-label="USA region map"
+            >
+              <path className="regionMap__land" d={US_MAP_PATH} />
+              {listOptions.map((r) => {
+                const isSel = selected.has(r.id);
+                const isLocked = lockedRegions.has(r.id) && isSel;
+                return (
+                  <g
+                    key={r.id}
+                    className={`regionPin ${isSel ? "regionPin--on" : ""} ${isLocked ? "regionPin--locked" : ""}`}
+                    transform={`translate(${r.x} ${r.y})`}
+                    role="checkbox"
+                    aria-checked={isSel}
+                    aria-label={`${r.label} (${r.id})${isLocked ? " — locked, has workers" : ""}`}
+                    tabIndex={0}
+                    onClick={() => toggle(r.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(r.id); }
+                    }}
+                  >
+                    <circle className="regionPin__halo" r={26} />
+                    <circle className="regionPin__dot" r={13} />
+                    {isLocked && <text className="regionPin__lock" y={5}>🔒</text>}
+                    <text className="regionPin__label" y={-30}>{r.label}</text>
+                    <text className="regionPin__id" y={44}>{r.id}</text>
+                  </g>
+                );
+              })}
+            </svg>
+          )}
 
-          {/* Checklist (form view) — synced with the map. */}
-          <ul className="regionChecklist" aria-label="region checklist">
-            {USA_REGIONS.map((r) => {
+          {/* Checklist (form view) — synced with the map when there is one,
+              and the sole control when there isn't. */}
+          <ul className="regionChecklist" aria-label={`${regionNoun()} checklist`}>
+            {listOptions.map((r) => {
               const isSel = selected.has(r.id);
               const isLocked = lockedRegions.has(r.id) && isSel;
               return (
@@ -161,7 +192,9 @@ export function RegionPicker({
 
           {legacyRegions.length > 0 && (
             <div className="regionPicker__legacy">
-              <small className="ink-soft">Legacy regions (not USA-canonical) — toggle off to remove:</small>
+              <small className="ink-soft">
+                Not offered by this deployment — toggle off to remove:
+              </small>
               <div className="regionPicker__legacyChips">
                 {legacyRegions.map((r) => {
                   const isSel = selected.has(r);
@@ -203,7 +236,7 @@ export function RegionPicker({
             )}
             {tooFew && (
               <p className="text--error" style={{ fontSize: "0.78rem", margin: "0.3rem 0 0" }}>
-                Keep at least one region.
+                Keep at least one {regionNoun()}.
               </p>
             )}
           </div>
@@ -220,7 +253,7 @@ export function RegionPicker({
             disabled={!canSave}
             aria-busy={saving}
           >
-            {saving ? "Saving…" : "Save regions"}
+            {saving ? "Saving…" : `Save ${regionNoun({ plural: true })}`}
           </button>
         </footer>
       </div>

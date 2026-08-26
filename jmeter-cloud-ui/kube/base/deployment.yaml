@@ -1,0 +1,54 @@
+# KUBE-6 — jmeter-cloud-ui: the control-plane SPA + nginx reverse proxy.
+# The proxy targets (global-orchestrator:8082, document-service:8084) are
+# baked into nginx.conf by Service-name parity; at container start
+# resolverEnv.envsh derives BOTH the DNS resolver (CoreDNS ClusterIP
+# from /etc/resolv.conf) AND SVC_SUFFIX (".jmeter-cloud.svc.cluster.local"
+# in-cluster — nginx's resolver skips search domains, so upstream names
+# must be fully qualified here). No env needed in this manifest.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jmeter-cloud-ui
+  labels:
+    app: jmeter-cloud-ui
+spec:
+  # Stateless static server + proxy — replicas can scale freely; 1
+  # matches compose.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jmeter-cloud-ui
+  template:
+    metadata:
+      labels:
+        app: jmeter-cloud-ui
+    spec:
+      # Convention 5 (infra/deploy/k8s/README.md).
+      enableServiceLinks: false
+      containers:
+        - name: jmeter-cloud-ui
+          image: jmeter-cloud-ui:dev
+          ports:
+            - name: http
+              containerPort: 80
+          # /healthz is nginx-local (no upstream dependency) — right for
+          # liveness AND readiness: a down backend must surface as UI
+          # error states + the Home checklist, not as an unservable SPA.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            # nginx serving a static bundle + proxying — tiny.
+            requests:
+              memory: 64Mi
+              cpu: 50m
+            limits:
+              memory: 128Mi

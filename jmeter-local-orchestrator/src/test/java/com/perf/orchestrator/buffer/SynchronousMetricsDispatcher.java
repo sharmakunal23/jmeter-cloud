@@ -1,35 +1,36 @@
 package com.perf.orchestrator.buffer;
 
-import com.perf.orchestrator.WorkerMetricBatch;
-import com.perf.orchestrator.kafka.MetricPublisher;
+import com.perf.orchestrator.model.WorkerMetricBatch;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * Test fake — calls {@link MetricPublisher#publishAll(List)} synchronously
- * on every {@link #offer}. No buffer, no background thread, no async pipeline.
- * Use in wire-up tests that want to assert on a recording publisher's snapshot
- * immediately after the state machine runs.
+ * Test fake — records every offered envelope synchronously. No buffer, no
+ * background thread, no HTTP. Use in wire-up tests that want to assert on
+ * the published envelopes immediately after the state machine runs.
  */
 public final class SynchronousMetricsDispatcher implements MetricsDispatcher {
 
-    private final MetricPublisher publisher;
-
-    public SynchronousMetricsDispatcher(MetricPublisher publisher) {
-        this.publisher = publisher;
-    }
+    /**
+     * CopyOnWriteArrayList because offer() is called from the state machine
+     * thread while test assertions read from the test thread.
+     */
+    private final CopyOnWriteArrayList<WorkerMetricBatch> received = new CopyOnWriteArrayList<>();
 
     @Override
-    public boolean offer(WorkerMetricBatch envelope, String topic) {
-        publisher.publishAll(List.of(envelope), topic);
+    public boolean offer(WorkerMetricBatch envelope) {
+        received.add(envelope);
         return true;
     }
 
     @Override
-    public int offerAll(Collection<WorkerMetricBatch> envelopes, String topic) {
-        publisher.publishAll(List.copyOf(envelopes), topic);
+    public int offerAll(Collection<WorkerMetricBatch> envelopes) {
+        received.addAll(envelopes);
         return envelopes.size();
     }
 
@@ -44,7 +45,22 @@ public final class SynchronousMetricsDispatcher implements MetricsDispatcher {
     }
 
     @Override
+    public long publishedCount() {
+        return received.size();
+    }
+
+    @Override
+    public long failedCount() {
+        return 0;
+    }
+
+    @Override
     public void close() {
         // nothing to release
+    }
+
+    /** Returns an unmodifiable snapshot of all received envelopes. */
+    public List<WorkerMetricBatch> snapshot() {
+        return Collections.unmodifiableList(new ArrayList<>(received));
     }
 }

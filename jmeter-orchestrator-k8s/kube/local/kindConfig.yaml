@@ -1,0 +1,9 @@
+# K8S-ORCHESTRATOR F-1 — local kind cluster. Single node is enough: the
+# orchestrator + a handful of 6 GiB-limit workers schedule fine on one
+# Docker Desktop VM, and the bootstrap script joins this node's container
+# to the compose network for the F-2 service bridge.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: jmeter-cloud
+nodes:
+  - role: control-plane

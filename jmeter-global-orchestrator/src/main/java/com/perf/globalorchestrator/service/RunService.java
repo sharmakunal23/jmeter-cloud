@@ -20,7 +20,6 @@ import com.perf.globalorchestrator.http.ScaleUpRunRequest;
 import com.perf.globalorchestrator.http.ScaleUpRunResponse;
 import com.perf.globalorchestrator.http.StartRunRequest;
 import com.perf.globalorchestrator.observability.ErrorContext;
-import com.perf.globalorchestrator.observability.SpanAttributes;
 import com.perf.globalorchestrator.repo.PodRepository;
 import com.perf.globalorchestrator.repo.ApplicationCapacityRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
@@ -31,10 +30,6 @@ import com.perf.globalorchestrator.repo.RunRepository;
 import com.perf.globalorchestrator.repo.RunTrendRepository;
 import com.perf.globalorchestrator.domain.RunTrend;
 import org.springframework.cache.annotation.Cacheable;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.Gauge;
-import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.observation.annotation.Observed;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -83,7 +78,7 @@ public class RunService {
     /** AUDIT-TRAIL — write path; shared with PodRecycler. */
     private final RunAuditWriter audit;
     /**
-     * AUDIT-TRAIL — self-reference so the {@code @Transactional} claim+insert
+     * Self-reference so the {@code @Transactional} claim+insert
      * methods are invoked through the Spring proxy. A plain {@code this.}
      * self-invocation bypasses the transaction interceptor (proxy-mode
      * limitation), which would leave the audit-event write non-atomic with
@@ -98,11 +93,13 @@ public class RunService {
     private final ApplicationRepository applications;
     private final ApplicationCapacityRepository applicationCapacity;
     private final LocalOrchestratorClient localClient;
-    // AUTOMATION Phase F — runTrend snapshot on the run-terminal transition.
+    // RunTrend snapshot on the run-terminal transition.
     private final MetricsRollupRepository metricsRollup;
     private final RunTrendRepository runTrends;
     /** WORKER-HYGIENE Phase E — spin-to-fill on shortfall. Optional so tests can omit it. */
     private final com.perf.globalorchestrator.provision.PodSpinService spinService;
+    /** STATIC-FLEET Phase 2 — gates spin-to-fill; workers are operator-managed in STATIC mode. */
+    private final com.perf.globalorchestrator.provision.ProvisioningProperties provisioning;
     private final String region;
     private final int maxFleetSizePerRun;
     private final long spinHealthTimeoutMs;
@@ -120,19 +117,6 @@ public class RunService {
     private final java.util.Set<String> resultsSavedEmitted =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
 
-    private final Counter runsStarted;
-    private final Counter runsFailed;
-    private final Counter runsAborted;
-    private final Counter runsDeleted;
-    private final Counter membersFailedLost;
-    private final Counter fanoutsAccepted;
-    private final Counter fanoutsRejected;
-    private final Counter claimShortfalls;
-    private final Counter scaleUpsStarted;
-    private final Counter scaleUpsRejected;
-    private final Counter scaleDownsStarted;
-    private final Counter scaleDownsRejected;
-
     public RunService(
             RunRepository runs,
             RunEventRepository auditEvents,
@@ -145,7 +129,7 @@ public class RunService {
             RunTrendRepository runTrends,
             @org.springframework.beans.factory.annotation.Autowired(required = false)
             com.perf.globalorchestrator.provision.PodSpinService spinService,
-            MeterRegistry meterRegistry,
+            com.perf.globalorchestrator.provision.ProvisioningProperties provisioning,
             @Value("${globalOrchestrator.region:us-east-1}") String region,
             @Value("${globalOrchestrator.fanoutThreads:8}") int fanoutThreads,
             @Value("${globalOrchestrator.maxFleetSizePerRun:100}") int maxFleetSizePerRun,
@@ -160,6 +144,7 @@ public class RunService {
         this.metricsRollup = metricsRollup;
         this.runTrends = runTrends;
         this.spinService = spinService;
+        this.provisioning = provisioning;
         this.region = region;
         this.maxFleetSizePerRun = maxFleetSizePerRun;
         this.spinHealthTimeoutMs = spinHealthTimeoutMs;
@@ -169,64 +154,15 @@ public class RunService {
                     t.setDaemon(true);
                     return t;
                 });
-        this.runsStarted     = Counter.builder("globalOrchestrator.runs.started").register(meterRegistry);
-        this.runsFailed      = Counter.builder("globalOrchestrator.runs.failed").register(meterRegistry);
-        this.runsAborted     = Counter.builder("globalOrchestrator.runs.aborted")
-                .description("Runs force-terminated via POST /runs/{id}/abort.")
-                .register(meterRegistry);
-        this.runsDeleted     = Counter.builder("globalOrchestrator.runs.deleted")
-                .description("Terminal runs soft-deleted (hidden) via DELETE /runs/{id}.")
-                .register(meterRegistry);
-        this.membersFailedLost = Counter.builder("globalOrchestrator.members.failedLost")
-                .description("Active fleet members force-failed because their worker's pod was marked LOST.")
-                .register(meterRegistry);
-        this.fanoutsAccepted = Counter.builder("globalOrchestrator.fanouts.accepted").register(meterRegistry);
-        this.fanoutsRejected = Counter.builder("globalOrchestrator.fanouts.rejected").register(meterRegistry);
-        this.claimShortfalls = Counter.builder("globalOrchestrator.runs.claimShortfalls")
-                .description("Run-launch attempts that found fewer IDLE pods than requested.")
-                .register(meterRegistry);
-        this.scaleUpsStarted = Counter.builder("globalOrchestrator.runs.scaleUpsStarted")
-                .description("Mid-test scale-up requests that progressed past validation + capacity gate.")
-                .register(meterRegistry);
-        this.scaleUpsRejected = Counter.builder("globalOrchestrator.runs.scaleUpsRejected")
-                .description("Mid-test scale-up requests rejected before any pod was claimed (state, capacity, validation).")
-                .register(meterRegistry);
-        this.scaleDownsStarted = Counter.builder("globalOrchestrator.runs.scaleDownsStarted")
-                .description("Mid-test scale-down requests that progressed past validation (one or more drains fired).")
-                .register(meterRegistry);
-        this.scaleDownsRejected = Counter.builder("globalOrchestrator.runs.scaleDownsRejected")
-                .description("Mid-test scale-down requests rejected before any drain fired (state, validation).")
-                .register(meterRegistry);
-        // SECURITY S-0 — in-flight (non-terminal) run count across all apps.
-        // Sampled at scrape cadence via a cheap indexed COUNT; a sustained climb
-        // is the run-launch-flood / stuck-fleet abuse signal the alert rules
-        // watch. DB hiccup → NaN (Micrometer drops the sample) rather than a
-        // throwing scrape. No tenant dimension yet (single-team platform);
-        // re-key per tenant when S-4 lands.
-        Gauge.builder("security.concurrentRuns", runs, r -> {
-                    try {
-                        return (double) r.countActive();
-                    } catch (RuntimeException e) {
-                        return Double.NaN;
-                    }
-                })
-                .description("Current in-flight (non-terminal) runs across all applications (S-0 abuse signal).")
-                .register(meterRegistry);
     }
 
-    @Observed(name = "globalOrchestrator.startRun",
-              contextualName = "startRun",
-              lowCardinalityKeyValues = {"action", "startRun"})
     public Run startRun(StartRunRequest request, boolean bestEffort, Actor actor) {
-        SpanAttributes.tag("applicationName", request == null ? null : request.application());
-        SpanAttributes.tag("bestEffort", String.valueOf(bestEffort));
-        SpanAttributes.tag("actor", actor.name());
         validate(request);
         StartTransactionResult started;
         try {
             started = self.openRunAndClaimPods(request, bestEffort, actor);
         } catch (InsufficientCapacityException shortfallEx) {
-            // WORKER-HYGIENE Phase E — spin-to-fill on shortfall. The
+            // Spin-to-fill on shortfall. The
             // transactional claim attempt rolled back (no run row inserted
             // yet, no pod claims committed), so we can spin pods to fill
             // and retry without worrying about cleanup. The cap-check
@@ -236,6 +172,19 @@ public class RunService {
             // past the ceiling while leaving the in-flight check happy.
             if (!request.isSpinShortfall() || spinService == null) {
                 throw shortfallEx; // strict mode (or no provisioner wired) — propagate
+            }
+            // Workers are operator-managed; there is
+            // nothing to spin. Surface the original shortfall (which names
+            // the short regions and counts) rather than inventing a second
+            // error shape; the UI turns this into "declare more workers"
+            // using GET /api/v1/platform/capabilities.
+            if (provisioning.isStatic()) {
+                LOG.info("spinShortfall ignored for application={} — {}=STATIC; "
+                        + "operator must declare more workers for {}",
+                        request.application(),
+                        com.perf.globalorchestrator.provision.ProvisioningMode.PROPERTY,
+                        shortfallEx.shortfall().keySet());
+                throw shortfallEx;
             }
             spinToFillShortfall(request.application(), shortfallEx.shortfall());
             started = self.openRunAndClaimPods(request, bestEffort, actor); // retry after spin
@@ -252,16 +201,21 @@ public class RunService {
         if (accepted == started.members().size()) {
             runs.updateRunState(started.runId(), RunState.RUNNING, started.stateReason());
         } else if (accepted == 0) {
-            runs.updateRunState(started.runId(), RunState.FAILED, "all fan-outs rejected");
+            // MULTI-INSTANCE (2026-07-24): claim the terminal transition so a
+            // sibling replica's sweeper racing this launch failure can't
+            // double-emit the RUN_FAILED bookend.
+            int claimed = runs.updateRunStateClaimingTerminal(
+                    started.runId(), RunState.FAILED, "all fan-outs rejected");
             // Save Results — a run that failed at launch never produced a clean
             // upload, so clear the flag (same reasoning as commitAbort): the UI
             // won't offer a Download-that-404s and refreshAndGet's terminal
             // fast-path won't chase the dead workers. Only a clean COMPLETED keeps it.
             runs.clearSaveResults(started.runId());
-            runsFailed.increment();
-            // AUDIT-TRAIL — the run went terminal at launch (every fan-out
+            // The run went terminal at launch (every fan-out
             // rejected). Bookend its timeline with a RUN_FAILED event.
-            recordRunTerminal(started.runId(), RunState.FAILED, "all fan-outs rejected");
+            if (claimed == 1) {
+                recordRunTerminal(started.runId(), RunState.FAILED, "all fan-outs rejected");
+            }
         } else {
             String reason = "partial fan-out: " + accepted + "/" + started.members().size() + " accepted";
             if (started.stateReason() != null) {
@@ -269,12 +223,11 @@ public class RunService {
             }
             runs.updateRunState(started.runId(), RunState.RUNNING, reason);
         }
-        runsStarted.increment();
         return runs.findByRunId(started.runId()).orElseThrow();
     }
 
     /**
-     * WORKER-HYGIENE Phase E — spins enough pods to fill each region's
+     * Spins enough pods to fill each region's
      * shortfall, then polls the new pods' actuator/health until they're
      * reachable. The caller (startRun) then retries the claim.
      *
@@ -364,7 +317,7 @@ public class RunService {
     }
 
     /**
-     * MID-TEST-SCALING Phase A — adds workers to a RUNNING run.
+     * Adds workers to a RUNNING run.
      *
      * <p>Validations (outside the transaction):
      * <ul>
@@ -391,17 +344,10 @@ public class RunService {
      * marked FAILED but the run itself continues with whatever joined
      * successfully + the original fleet.
      */
-    @Observed(name = "globalOrchestrator.scaleUpRun",
-              contextualName = "scaleUpRun",
-              lowCardinalityKeyValues = {"action", "scaleUpRun"})
     public ScaleUpRunResponse scaleUpRun(String runId, ScaleUpRunRequest request,
                                          boolean bestEffort, boolean spinShortfall, Actor actor) {
-        SpanAttributes.tag("runId", runId);
-        SpanAttributes.tag("bestEffort", String.valueOf(bestEffort));
-        SpanAttributes.tag("spinShortfall", String.valueOf(spinShortfall));
-        SpanAttributes.tag("actor", actor.name());
         Run run = runs.findByRunId(runId).orElseThrow(() -> new RunNotFoundException(runId));
-        // AUDIT-TRAIL Phase C — the run exists from here on, so a rejected
+        // The run exists from here on, so a rejected
         // action gets a SCALE_UP event with result "rejected:CODE". (A
         // RunNotFound above does NOT: there is nothing to FK the event to,
         // and an action against a non-existent run isn't auditable.) Only
@@ -452,7 +398,6 @@ public class RunService {
                 opened = self.openMembersInExistingRun(
                         run, request.allocations(), joinedAtSecond, bestEffort, actor);
             }
-            scaleUpsStarted.increment();
 
             // Fan-out — same machinery as initial start, sourced from the
             // run row's persisted blob IDs.
@@ -480,27 +425,21 @@ public class RunService {
             return new ScaleUpRunResponse(updated, requestedTotal, opened.members().size(),
                     partial, opened.stateReason());
         } catch (RunNotInScalableStateException e) {
-            scaleUpsRejected.increment();
             recordScaleUpRejected(runId, request, bestEffort, actor, "RUN_NOT_SCALABLE");
             throw e;
         } catch (RunNotScalableNoApplicationException e) {
-            scaleUpsRejected.increment();
             recordScaleUpRejected(runId, request, bestEffort, actor, "RUN_NOT_SCALABLE_NO_APPLICATION");
             throw e;
         } catch (FleetSizeExceededException e) {
-            scaleUpsRejected.increment();
             recordScaleUpRejected(runId, request, bestEffort, actor, "FLEET_SIZE_EXCEEDED");
             throw e;
         } catch (ApplicationCapacityExceededException e) {
-            scaleUpsRejected.increment();
             recordScaleUpRejected(runId, request, bestEffort, actor, "APPLICATION_CAPACITY_EXCEEDED");
             throw e;
         } catch (InsufficientCapacityException e) {
-            scaleUpsRejected.increment();
             recordScaleUpRejected(runId, request, bestEffort, actor, "INSUFFICIENT_CAPACITY");
             throw e;
         } catch (IllegalArgumentException e) {
-            scaleUpsRejected.increment();
             recordScaleUpRejected(runId, request, bestEffort, actor, "INVALID_REQUEST");
             throw e;
         }
@@ -621,7 +560,6 @@ public class RunService {
         }
 
         if (!shortfall.isEmpty()) {
-            claimShortfalls.increment();
             // Strict mode → roll back. Best-effort with zero claimed
             // also rolls back — a run with no pods is not useful.
             if (!bestEffort || claimed.isEmpty()) {
@@ -648,7 +586,7 @@ public class RunService {
                 // the LIKE filter doesn't accidentally match an empty string.
                 (request.application() == null || request.application().isBlank())
                         ? null : request.application(),
-                // AUDIT-TRAIL — `initiatedBy` is the actor (X-Actor / cached
+                // `initiatedBy` is the actor (X-Actor / cached
                 // operator name) by default; the launcher no longer asks for
                 // it separately. An explicit body value still wins for
                 // programmatic callers that set their own.
@@ -670,7 +608,7 @@ public class RunService {
                     null, null, p.baseUrl(), now, null, null, props);
             runs.insertFleetMember(m);
             initialMembers.add(m);
-            // WORKER-HYGIENE Phase B — bump the per-pod run counter inside
+            // Bump the per-pod run counter inside
             // the run-claim transaction so the value is consistent with
             // runFleetMember insert rate. Phase D's reconciler reads this
             // to decide "this pod has done N runs; recycle it on idle."
@@ -678,7 +616,7 @@ public class RunService {
         }
         runs.updateRunState(runId, RunState.STARTING, stateReason);
 
-        // AUDIT-TRAIL Phase C — one RUN_START event, written inside this
+        // One RUN_START event, written inside this
         // transaction so it commits atomically with the run + member rows. A
         // strict-mode shortfall threw above (before insertRun), so this line
         // is only reached when the run was actually opened; a forced failure
@@ -736,7 +674,7 @@ public class RunService {
     }
 
     /**
-     * MID-TEST-SCALING Phase B — drains workers from a RUNNING run.
+     * Drains workers from a RUNNING run.
      *
      * <p>Validations:
      * <ul>
@@ -762,25 +700,18 @@ public class RunService {
      *
      * <p>Run state stays RUNNING — drain doesn't end the run on its own.
      */
-    @Observed(name = "globalOrchestrator.scaleDownRun",
-              contextualName = "scaleDownRun",
-              lowCardinalityKeyValues = {"action", "scaleDownRun"})
     public ScaleDownRunResponse scaleDownRun(String runId, ScaleDownRunRequest request, Actor actor) {
-        SpanAttributes.tag("runId", runId);
-        SpanAttributes.tag("actor", actor.name());
         Run run = runs.findByRunId(runId).orElseThrow(() -> new RunNotFoundException(runId));
-        // AUDIT-TRAIL Phase C — the run exists, so each rejection below records
+        // The run exists, so each rejection below records
         // a rejected event before throwing (RunNotFound above does not — there
         // is nothing to FK the event to). scaleDownRun is not transactional, so
         // the SCALE_DOWN / DRAIN_WORKER outcome event is written post-hoc at the
         // return sites with the actual drained/skipped ledger.
         if (run.state() != RunState.RUNNING) {
-            scaleDownsRejected.increment();
             recordScaleDownRejected(runId, request, actor, "RUN_NOT_SCALABLE");
             throw new RunNotInScalableStateException(runId, run.state());
         }
         if (!request.isExclusive()) {
-            scaleDownsRejected.increment();
             recordScaleDownRejected(runId, request, actor, "INVALID_REQUEST");
             throw new IllegalArgumentException(
                     "scaleDown requires exactly one of workerIds or allocations");
@@ -797,7 +728,6 @@ public class RunService {
                         .findFirst()
                         .orElse(null);
                 if (m == null) {
-                    scaleDownsRejected.increment();
                     recordScaleDownRejected(runId, request, actor, "INVALID_REQUEST");
                     throw new IllegalArgumentException(
                             "workerId '" + workerId + "' is not a member of run " + runId);
@@ -818,7 +748,6 @@ public class RunService {
             // allocations path — youngest-by-default per region.
             for (FleetAllocationEntry e : request.allocations()) {
                 if (e.region() == null || e.region().isBlank() || e.count() <= 0) {
-                    scaleDownsRejected.increment();
                     recordScaleDownRejected(runId, request, actor, "INVALID_REQUEST");
                     throw new IllegalArgumentException(
                             "scaleDown allocation entries must have non-blank region + count > 0");
@@ -848,7 +777,6 @@ public class RunService {
             return new ScaleDownRunResponse(runs.findByRunId(runId).orElseThrow(),
                     List.of(), skipped);
         }
-        scaleDownsStarted.increment();
 
         // Mark DRAINING + fire drain RPCs in parallel via the existing
         // fan-out pool. The drain endpoint is async on the local-orch
@@ -910,40 +838,26 @@ public class RunService {
     }
 
     /**
-     * Force-terminates a run — the operator's "stop now" / zombie-run cleanup.
-     * Unlike {@link #scaleDownRun} (graceful, run keeps running), abort rolls
-     * the WHOLE run to ABORTED and releases every fleet-member binding, freeing
-     * the run's pods for re-claim and drain.
+     * Force-terminates a run and releases every fleet-member binding, freeing
+     * its pods for re-claim — the operator's "stop now" and the way a zombie run
+     * gets cleaned up. Unlike {@link #scaleDownRun}, the whole run goes ABORTED.
      *
-     * <p>Flow (mirrors scaleDown's transaction discipline):
-     * <ol>
-     *   <li>404 {@link RunNotFoundException} if the run is unknown; 409
-     *       {@link RunNotAbortableException} if it is already terminal — nothing
-     *       to abort, its pods are already released (idempotency guard so a
-     *       double-click doesn't emit a second ABORT event).</li>
-     *   <li>Best-effort fire {@code POST /api/v1/test/abort} to each non-terminal
-     *       member OUTSIDE the transaction (long-haul HTTP). A zombie run's
-     *       workers are already gone → those RPCs fail and land in the skipped
-     *       ledger; the run is force-aborted regardless.</li>
-     *   <li>In one transaction ({@link #commitAbort}): mark every non-terminal
-     *       member ABORTED, roll the run to ABORTED, and append one ABORT audit
-     *       event — atomic so a rolled-back mutation emits zero events.</li>
-     * </ol>
+     * <p>Aborting an already-terminal run is a 409 rather than a no-op, so a
+     * double-click cannot emit a second ABORT event. The per-member
+     * {@code POST /api/v1/test/abort} calls fire outside the transaction; a
+     * zombie run's workers are gone, so those fail into the skipped ledger and
+     * the run is force-aborted regardless. The state change itself — members
+     * ABORTED, run ABORTED, one audit event — is a single transaction, so a
+     * rollback emits nothing.
      *
-     * <p>Marking the members terminal is load-bearing, not cosmetic: the
-     * pod-claim {@code NOT EXISTS} guard, {@code countActivePodsForAppRegion},
+     * <p><b>Marking the members terminal is load-bearing, not cosmetic.</b> The
+     * pod-claim {@code NOT EXISTS} guard, {@code countActivePodsForAppRegion}
      * and {@link #rollUp} all key on member state. A run left ABORTED with
-     * members still RUNNING would leave its pods unclaimable AND could
-     * self-downgrade back to RUNNING on the next status poll of a saveResults
-     * run (rollUp sees a live member). Anchoring the binding release on member
-     * state is also what lets the drained pods read as READY immediately.
+     * members still RUNNING leaves its pods unclaimable, and can self-downgrade
+     * back to RUNNING on the next status poll of a saveResults run when rollUp
+     * sees a live member.
      */
-    @Observed(name = "globalOrchestrator.abortRun",
-              contextualName = "abortRun",
-              lowCardinalityKeyValues = {"action", "abortRun"})
     public Run abortRun(String runId, Actor actor, String reason) {
-        SpanAttributes.tag("runId", runId);
-        SpanAttributes.tag("actor", actor.name());
         Run run = runs.findByRunId(runId).orElseThrow(() -> new RunNotFoundException(runId));
         if (run.state().isTerminal()) {
             throw new RunNotAbortableException(runId, run.state());
@@ -992,7 +906,6 @@ public class RunService {
         self.commitAbort(runId,
                 targets.stream().map(RunFleetMember::workerId).toList(),
                 reason, actor, aborted, skipped);
-        runsAborted.increment();
         return runs.findByRunId(runId).orElseThrow();
     }
 
@@ -1039,8 +952,6 @@ public class RunService {
      * run so the caller can confirm the prior state.
      */
     public Run deleteRun(String runId, Actor actor, String reason) {
-        SpanAttributes.tag("runId", runId);
-        SpanAttributes.tag("actor", actor.name());
         Run run = runs.findByRunId(runId).orElseThrow(() -> new RunNotFoundException(runId));
         if (!run.state().isTerminal()) {
             throw new RunNotDeletableException(runId, run.state());
@@ -1050,7 +961,6 @@ public class RunService {
         // failure rolls back BOTH (the "rolled-back mutation emits zero events"
         // invariant).
         self.commitDelete(runId, actor, reason);
-        runsDeleted.increment();
         return runs.findByRunId(runId).orElseThrow();
     }
 
@@ -1095,7 +1005,6 @@ public class RunService {
             return;
         }
         if (affected.isEmpty()) return;
-        membersFailedLost.increment(affected.size());
         List<String> distinctRuns = affected.stream().distinct().toList();
         LOG.info("Lost-worker reaper failed {} active member(s) across {} run(s); finalising",
                 affected.size(), distinctRuns.size());
@@ -1189,7 +1098,6 @@ public class RunService {
         }
 
         if (!shortfall.isEmpty()) {
-            claimShortfalls.increment();
             // Strict mode → roll back. Best-effort with zero claimed
             // also rolls back — a scale-up that adds zero workers is
             // not useful and the operator should learn about it.
@@ -1212,13 +1120,13 @@ public class RunService {
                     null, null, p.baseUrl(), now, null, null, props, joinedAtSecond);
             runs.insertFleetMember(m);
             newMembers.add(m);
-            // WORKER-HYGIENE Phase B — same per-pod counter bump as the
+            // Same per-pod counter bump as the
             // initial-claim path. A scale-up member is a fresh run-claim
             // for that pod, even though the parent run is mid-flight.
             pods.incrementRunsServed(p.podId());
         }
 
-        // AUDIT-TRAIL Phase C — one SCALE_UP event, atomic with the new
+        // One SCALE_UP event, atomic with the new
         // member rows. A capacity rejection threw above (before any claim),
         // so this is only reached on a real add; a forced failure here rolls
         // back the members AND the event together (decision #7).
@@ -1275,11 +1183,7 @@ public class RunService {
      * lazy-on-read refresh; in the future, heartbeats could carry the
      * test state too and we'd serve from cached state.
      */
-    @Observed(name = "globalOrchestrator.refreshAndGet",
-              contextualName = "refreshAndGet",
-              lowCardinalityKeyValues = {"action", "refreshAndGet"})
     public Run refreshAndGet(String runId) {
-        SpanAttributes.tag("runId", runId);
         Run run = runs.findByRunId(runId).orElseThrow(() -> new RunNotFoundException(runId));
         boolean terminal = run.state().isTerminal();
         // Fast path unchanged for terminal runs that didn't opt into Save
@@ -1319,7 +1223,7 @@ public class RunService {
                 if (pollState) {
                     MemberState mapped = mapLocalState(snap.get("state"));
                     if (mapped != null && mapped != m.state()
-                            // MID-TEST-SCALING Phase B — DRAINING is sticky.
+                            // DRAINING is sticky.
                             // The local-orch keeps reporting RUNNING until
                             // JMeter exits; don't downgrade until a true
                             // terminal (DRAINED / ABORTED / FAILED) arrives.
@@ -1335,32 +1239,38 @@ public class RunService {
         Run refreshed = runs.findByRunId(runId).orElseThrow();
         RunState rolled = rollUp(refreshed);
         if (rolled != refreshed.state()) {
-            runs.updateRunState(runId, rolled, null);
-            // AUDIT-TRAIL — the platform just detected the run reached a
-            // terminal state. Emit exactly one terminal event (the early
-            // return at the top of this method on subsequent polls — the run
-            // is now terminal — guarantees no duplicate).
             if (rolled.isTerminal()) {
-                // Save Results — only a clean COMPLETED produces a combined
-                // upload (failed/aborted workers skip the JTL upload on a
-                // non-COMPLETE exit). Clear saveResults on any non-COMPLETED
-                // terminal so the UI's Download button (gated on
-                // saveResults) never offers a 404 and the terminal fast-path
-                // above stops chasing dead workers. COMPLETED keeps it — that's
-                // the only state that uploads + offers a download.
-                if (rolled != RunState.COMPLETED) {
-                    runs.clearSaveResults(runId);
+                // AUDIT-TRAIL + MULTI-INSTANCE (2026-07-24) — claim the terminal
+                // transition with a guarded UPDATE (state NOT IN terminal).
+                // refreshAndGet runs concurrently across replicas (UI polls,
+                // ResultsSavedSweeper, PodSweeper reap on every instance) and
+                // even across threads of one instance; the old in-memory
+                // comparison alone let two callers both observe the transition
+                // and double-emit. Only the claim winner (rowcount 1) does the
+                // terminal bookkeeping.
+                int claimed = runs.updateRunStateClaimingTerminal(runId, rolled, null);
+                if (claimed == 1) {
+                    // Save Results — only a clean COMPLETED produces a combined
+                    // upload (failed/aborted workers skip the JTL upload on a
+                    // non-COMPLETE exit). Clear saveResults on any non-COMPLETED
+                    // terminal so the UI's Download button (gated on
+                    // saveResults) never offers a 404 and the terminal fast-path
+                    // above stops chasing dead workers. COMPLETED keeps it — that's
+                    // the only state that uploads + offers a download.
+                    if (rolled != RunState.COMPLETED) {
+                        runs.clearSaveResults(runId);
+                    }
+                    recordRunTerminal(runId, rolled, refreshed.stateReason());
+                    // Snapshot the run's aggregate into
+                    // runTrend, but only for a clean COMPLETED (a failed/aborted
+                    // run's partial metrics aren't a meaningful baseline). The
+                    // claim above makes this the single terminal-transition tick.
+                    if (rolled == RunState.COMPLETED) {
+                        recordRunTrend(refreshed);
+                    }
                 }
-                recordRunTerminal(runId, rolled, refreshed.stateReason());
-                // AUTOMATION Phase F — snapshot the run's aggregate into
-                // runTrend, but only for a clean COMPLETED (a failed/aborted
-                // run's partial metrics aren't a meaningful baseline). This is
-                // the single terminal-transition tick (the early-return at the
-                // top guarantees we never re-enter for an already-terminal run),
-                // so the snapshot happens exactly once.
-                if (rolled == RunState.COMPLETED) {
-                    recordRunTrend(refreshed);
-                }
+            } else {
+                runs.updateRunState(runId, rolled, null);
             }
             return runs.findByRunId(runId).orElseThrow();
         }
@@ -1415,7 +1325,7 @@ public class RunService {
     }
 
     /**
-     * CACHE C-2 (2026-05-26) — the run's metadata (row + fleet members).
+     * The run's metadata (row + fleet members).
      * Cached <b>only for terminal runs</b> ({@code unless} drops the cache put
      * when the fetched run isn't terminal), because a terminal run's row and
      * members are frozen — no further writes occur, so no eviction is needed
@@ -1435,7 +1345,7 @@ public class RunService {
     }
 
     /**
-     * AUDIT-TRAIL — one page of the reverse-chronological audit timeline for a
+     * One page of the reverse-chronological audit timeline for a
      * run, plus the total count. 404 {@link RunNotFoundException} if the run is
      * unknown (so the UI's error path matches the other per-run endpoints).
      * A long-running test can accumulate many events, so the timeline is
@@ -1464,16 +1374,9 @@ public class RunService {
     private Map<String, FanoutOutcome> fanOut(String runId, List<RunFleetMember> members,
                                               String testPlanBlobId, String dataFilesBlobId,
                                               String application, boolean saveResults) {
-        // KAFKA-PER-APP Phase C — registered-app runs route metrics to
-        // their per-app topic; the topic name is computed once for the
-        // whole fan-out (every member of a run shares the same topic).
-        // Legacy untagged runs leave the field unset → the local-orch
-        // falls back to its own KAFKA_TOPIC env-var default
-        // ({@code jmeter.metrics.perSecond}), preserving the pre-Phase-A
-        // wire shape until Phase E retires the legacy topic.
-        String perRunKafkaTopic = (application != null && !application.isBlank())
-                ? "jmeter.metrics." + application
-                : null;
+        // DIRECT-METRICS: metrics routing needs nothing in the fan-out
+        // body — every worker POSTs straight to the metrics-consumer via
+        // its METRICS_INGEST_URL env.
         Map<String, Future<FanoutOutcome>> futures = new LinkedHashMap<>();
         for (RunFleetMember m : members) {
             runs.updateMemberState(runId, m.workerId(), MemberState.REQUESTED, null, null);
@@ -1495,10 +1398,7 @@ public class RunService {
             if (dataFilesBlobId != null) {
                 body.put("dataFilesBlobId", dataFilesBlobId);
             }
-            if (perRunKafkaTopic != null) {
-                body.put("kafkaTopic", perRunKafkaTopic);
-            }
-            // MID-TEST-SCALING Phase C — only include joinedAtSecond on
+            // Only include joinedAtSecond on
             // scale-up members (it's NULL for original-fleet rows;
             // the local-orch defaults to 0 when omitted, which is the
             // intended semantic for original-fleet members).
@@ -1525,8 +1425,15 @@ public class RunService {
                 if (r.accepted() || r.ok()) {
                     return new FanoutOutcome(MemberState.ACCEPTED, r.statusCode(), null);
                 }
-                return new FanoutOutcome(MemberState.FAILED, r.statusCode(),
-                        r.body() == null ? "no body" : truncate(r.body(), 240));
+                String reason = r.body() == null ? "no body" : truncate(r.body(), 240);
+                // The worker refused because it is
+                // already busy. Ask WHOSE run holds it and say so, instead of
+                // handing the operator a raw 409 body.
+                if (r.statusCode() == CONFLICT_STATUS) {
+                    String busy = foreignRunReason(runId, m.podBaseUrl());
+                    if (busy != null) reason = busy;
+                }
+                return new FanoutOutcome(MemberState.FAILED, r.statusCode(), reason);
             }));
         }
         Map<String, FanoutOutcome> outcomes = new LinkedHashMap<>();
@@ -1535,8 +1442,6 @@ public class RunService {
                 FanoutOutcome o = f.get();
                 outcomes.put(workerId, o);
                 runs.updateMemberState(runId, workerId, o.state(), o.reason(), o.statusCode());
-                if (o.state() == MemberState.ACCEPTED) fanoutsAccepted.increment();
-                else fanoutsRejected.increment();
             } catch (Exception e) {
                 ErrorContext.logWarn(LOG,
                         "startFanout runId=" + runId + " workerId=" + workerId,
@@ -1544,11 +1449,61 @@ public class RunService {
                         e);
                 outcomes.put(workerId, new FanoutOutcome(MemberState.FAILED, 0, e.toString()));
                 runs.updateMemberState(runId, workerId, MemberState.FAILED, e.toString(), 0);
-                fanoutsRejected.increment();
             }
         });
         return outcomes;
     }
+
+    /**
+     * Names the run actually holding a worker that refused fan-out with a 409.
+     * The claim path only knows about runs this control plane started, so on a
+     * shared fleet a worker can be busy with work we never launched — a hand-run
+     * JMeter, or a second environment pointing at the same workers.
+     *
+     * <p><b>This deliberately runs after the refusal, not as a pre-flight.</b>
+     * The pre-flight version was built first and rejected: the worker's
+     * synchronised {@code start()} is the authority, so a pre-flight GET is only
+     * advisory — the worker can go busy between it and the POST — and therefore
+     * prevents nothing the 409 doesn't. But it *can* reject a worker that would
+     * have accepted, on a stale or ambiguous snapshot. That is a new failure
+     * mode bought for nothing. Running it on the 409 path costs one GET only
+     * after a launch has already failed, and yields the same diagnostic.
+     *
+     * @return null when the snapshot shows nothing useful, in which case the
+     *         caller keeps the raw response body
+     */
+    private String foreignRunReason(String runId, String podBaseUrl) {
+        java.util.Optional<Map<String, Object>> snapshot = localClient.getTestStatus(podBaseUrl);
+        if (snapshot.isEmpty()) return null;
+        Object stateObj = snapshot.get().get("state");
+        if (stateObj == null) return null;
+        String localState = stateObj.toString();
+        if (!LOCAL_BUSY_STATES.contains(localState)) return null;
+
+        Object holderRunId = snapshot.get().get("runId");
+        if (holderRunId != null && runId.equals(holderRunId.toString())) {
+            // Busy with OUR run — a duplicate fan-out, not a foreign holder.
+            // The raw body is the more honest reason there.
+            return null;
+        }
+        return "worker is already running a test this run did not start (state=" + localState
+                + ", runId=" + (holderRunId == null ? "unknown" : holderRunId)
+                + ") — launched outside this control plane, or by another environment "
+                + "sharing this worker";
+    }
+
+    /**
+     * Local-orchestrator lifecycle states that mean "a JMeter test is in
+     * flight". The terminal ones (COMPLETED / FAILED / ABORTED / DRAINED)
+     * and IDLE are free — a worker keeps its last run's snapshot on file
+     * after it finishes, so treating any snapshot as busy would read every
+     * reused worker as occupied.
+     */
+    private static final java.util.Set<String> LOCAL_BUSY_STATES =
+            java.util.Set.of("PREPARING", "STARTING", "RUNNING", "DRAINING");
+
+    /** The worker's "a test is already in progress" refusal (409 TEST_RUNNING). */
+    private static final int CONFLICT_STATUS = 409;
 
     private static MemberState mapLocalState(Object stateObj) {
         if (stateObj == null) return null;
@@ -1559,7 +1514,7 @@ public class RunService {
             case "COMPLETED" -> MemberState.COMPLETED;
             case "FAILED"    -> MemberState.FAILED;
             case "ABORTED"   -> MemberState.ABORTED;
-            // MID-TEST-SCALING Phase B — local DRAINED → global DRAINED.
+            // Local DRAINED → global DRAINED.
             // Local "DRAINING" stays mapped to RUNNING because local's
             // DRAINING is the brief post-exit pipeline-flush state, not
             // operator-initiated drain. The global side carries its own
@@ -1576,7 +1531,7 @@ public class RunService {
         boolean allTerminal = members.stream().allMatch(m -> m.state().isTerminal());
         if (allTerminal) {
             boolean anyAbort   = members.stream().anyMatch(m -> m.state() == MemberState.ABORTED);
-            // MID-TEST-SCALING Phase B — DRAINED counts as a successful
+            // DRAINED counts as a successful
             // terminal alongside COMPLETED. A run with members in any mix
             // of {COMPLETED, DRAINED} (no FAILED, no ABORTED) rolls up to
             // RunState.COMPLETED — the operator chose to drain some
@@ -1587,7 +1542,7 @@ public class RunService {
             if (anyAbort) return RunState.ABORTED;
             return anySuccess ? RunState.COMPLETED : RunState.FAILED;
         }
-        // MID-TEST-SCALING Phase B — DRAINING members are live; the run
+        // DRAINING members are live; the run
         // stays RUNNING while any member is still RUNNING or DRAINING.
         if (members.stream().anyMatch(
                 m -> m.state() == MemberState.RUNNING || m.state() == MemberState.DRAINING)) {
@@ -1614,7 +1569,7 @@ public class RunService {
     }
 
     /**
-     * AUDIT-TRAIL — a platform-detected run-terminal event (RUN_COMPLETED /
+     * A platform-detected run-terminal event (RUN_COMPLETED /
      * RUN_FAILED / RUN_ABORTED), attributed to the system actor since no
      * operator hit a button — the orchestrator observed the run end. Callers
      * must invoke this exactly on the transition into a terminal state.
@@ -1637,7 +1592,7 @@ public class RunService {
     }
 
     /**
-     * AUTOMATION Phase F — snapshot one COMPLETED run's aggregate into
+     * Snapshot one COMPLETED run's aggregate into
      * {@code runTrend} for the daily perf-report baseline. Best-effort: any
      * failure (metrics DB hiccup, aggregate error) is logged and swallowed so
      * it can never disrupt the status poll that detected the terminal
@@ -1683,7 +1638,13 @@ public class RunService {
         if (!resultsSavedEmitted.add(runId + "|" + workerId)) return; // intra-process concurrency dedup
         Object target = snap.get("uploadTarget");
         try {
-            recordEvent(runId, RunEventType.RESULTS_SAVED, Actor.system("orchestrator"),
+            // MULTI-INSTANCE (2026-07-24): deterministic eventId — every replica
+            // computes the same id for the same (run, worker) upload fact, so
+            // the runEvent PK's ON CONFLICT DO NOTHING dedups across instances
+            // too, closing the check-then-insert race between two concurrent
+            // sweepers that both read the durable set before either wrote.
+            audit.record("resultsSaved:" + runId + ":" + workerId,
+                    runId, RunEventType.RESULTS_SAVED, Actor.system("orchestrator"),
                     new RunEventPayloads.ResultsSaved(workerId, target == null ? null : target.toString()),
                     "ok");
         } catch (RuntimeException e) {
@@ -1756,7 +1717,7 @@ public class RunService {
     }
 
     /**
-     * MID-TEST-SCALING Phase A — surface as 409 CONFLICT.
+     * Surface as 409 CONFLICT.
      * scaleUp can only target a RUNNING run. PREPARING/STARTING means
      * the original fan-out hasn't completed yet; terminal means the run
      * is over and adding workers makes no sense.
@@ -1819,7 +1780,7 @@ public class RunService {
     }
 
     /**
-     * MID-TEST-SCALING Phase A — surface as 409 CONFLICT.
+     * Surface as 409 CONFLICT.
      * scaleUp gates capacity per-(application, region); a run launched
      * without an application binding has no app to gate against, so
      * scaleUp is unavailable. Legacy untagged runs (pre-V4) hit this.

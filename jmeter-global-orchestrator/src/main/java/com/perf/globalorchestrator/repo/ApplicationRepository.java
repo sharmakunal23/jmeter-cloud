@@ -69,7 +69,7 @@ public class ApplicationRepository {
 
     public Application insert(Application app) {
         String endpointsJson = serialise(app.healthEndpoints());
-        // WORKER-HYGIENE Phase C — the constructor defaults a null policy
+        // The constructor defaults a null policy
         // to REUSE, so this is always non-null. Thresholds may be null
         // per the cross-field CHECK constraint.
         jdbc.update(
@@ -169,7 +169,7 @@ public class ApplicationRepository {
                               RecyclePolicy recyclePolicy, Integer maxRunsPerPod,
                               Integer podMaxAgeHours, boolean alwaysOn) {
         String endpointsJson = serialise(healthEndpoints == null ? List.of() : healthEndpoints);
-        // WORKER-HYGIENE Phase C — recyclePolicy may be null on the caller
+        // RecyclePolicy may be null on the caller
         // boundary (operator omitted the field on PUT); the controller
         // applies REUSE in that case before reaching here. Repo treats
         // null as "no change" defensively so a future internal caller

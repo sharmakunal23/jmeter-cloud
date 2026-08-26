@@ -1,0 +1,17 @@
+# KUBE-2 — kind overlay. Dev credentials match the compose defaults
+# (metricsWriter/localdev — already public in this repo). Side-load the
+# image before applying (BuildKit attestations break `kind load` with
+# "ctr: content digest not found"):
+#   docker build --provenance=false -t jmeter-metrics-consumer:dev jmeter-metrics-consumer/
+#   kind load docker-image jmeter-metrics-consumer:dev --name jmeter-cloud
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+secretGenerator:
+  - name: metrics-consumer-credentials
+    literals:
+      - postgresUser=metricsWriter
+      - postgresPassword=localdev
+    options:
+      disableNameSuffixHash: true

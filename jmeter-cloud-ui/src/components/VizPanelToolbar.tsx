@@ -1,7 +1,7 @@
 /**
- * UI-6 → UI-C2.b polish → WORKER-HYGIENE UX3 hybrid — top-of-viz toolbar.
+ * Top-of-viz toolbar.
  *
- * <p>Flow / Form toggle removed in the UX3 hybrid view rework: the
+ * <p>The Flow / Form toggle was removed: the
  * launcher now renders both the form (operator edits via the table) and
  * the read-only flow diagram (visual mirror) on the same page. Only the
  * Hide Controls toggle remains. {@code VizViewMode} + the toggle props

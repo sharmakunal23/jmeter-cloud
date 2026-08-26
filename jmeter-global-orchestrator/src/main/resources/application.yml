@@ -46,7 +46,11 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus
+        # SLIMDOWN SL-E (2026-07-22): health,info ONLY — /actuator/prometheus
+        # and the tracing stack are gone (hosting infra provides observability).
+        # NEVER drop health: the compose healthcheck, the UI Home checklist and
+        # operator probes all depend on it.
+        include: health,info
   endpoint:
     health:
       show-details: always
@@ -55,21 +59,12 @@ management:
       # /actuator/health includes the Postgres connection in its aggregate;
       # if Postgres goes DOWN, /actuator/health flips to DOWN.
       enabled: true
-  # OBSERVABILITY Phase B — distributed tracing.
-  # Sampling: 0.01 default (1% of all spans) — operator-initiated actions are bumped
-  # to 100% by the TracingFilter (Phase C). Local dev override lives in
-  # the docker-compose env so single-pod stacks see every trace.
-  # OTLP endpoint defaults to Jaeger over HTTP (port 4318 — /v1/traces is
-  # the standard OTLP HTTP path). gRPC (4317) is a single config flip
-  # away: add `opentelemetry-exporter-sender-grpc-managed-channel` to the
-  # pom + flip `tracing.transport` to grpc.
-  tracing:
-    sampling:
-      probability: ${MANAGEMENT_TRACING_SAMPLING_PROBABILITY:0.01}
-  otlp:
-    tracing:
-      endpoint: ${MANAGEMENT_OTLP_TRACING_ENDPOINT:http://jaeger:4318/v1/traces}
-      transport: http
+  # SLIMDOWN SL-E — belt-and-braces: no meter registry exists anymore, but
+  # keep any future auto-configured export switched off.
+  defaults:
+    metrics:
+      export:
+        enabled: false
 
 # Swagger UI — points at the hand-curated /openapi.yaml served from the
 # JAR's static/ root (api/openapi.yaml is mapped there by the pom's
@@ -92,7 +87,7 @@ documentService:
 # Per-run timeseries (GET /runs/{id}/timeseries) trailing-edge trim. On a LIVE
 # run the newest `settleSeconds` of data are still in flight — each worker holds
 # a per-second window open for its close-grace (~2 s, up to GRACE_PERIOD_SECONDS)
-# and the metrics-consumer adds Kafka fetch-wait + batch-INSERT lag before the
+# and the metrics-consumer adds ingest + batch-INSERT lag before the
 # rows land in Postgres. Until then those seconds are partially aggregated, so a
 # run polled every 5 s shows a wobbling trailing edge that the auto-scaled chart
 # rescales around. CachingMetricsService drops them for live runs (stable
@@ -124,50 +119,116 @@ globalOrchestrator:
   # connection to the metrics DB used ONLY to DELETE a purged run's per-second
   # rows. Connects as the dedicated metricsPurger role (SELECT + DELETE); the
   # hot metrics read pool above stays read-only. statement_timeout is generous
-  # (120 s) because a run-scoped DELETE scans every weekly partition.
+  # (120 s) because a run-scoped DELETE removes every row a whole test produced.
   metricsPurgeUrl:               ${POSTGRES_METRICS_URL:jdbc:postgresql://postgres:5432/jmetercloud_metrics}
   metricsPurgeUser:              ${POSTGRES_METRICS_PURGER_USER:metricsPurger}
   metricsPurgePassword:          ${POSTGRES_METRICS_PURGER_PASSWORD:localdev}
   metricsPurgeStatementTimeoutMs: ${METRICS_PURGE_STATEMENT_TIMEOUT_MS:120000}
 
-  # ── Phase 1 capacity rework: PodProvisioner config ────────────────
-  # Drives the host docker daemon over a mounted /var/run/docker.sock to
-  # spin up per-app local-orchestrator containers
-  # ({appName}-{region}-worker-{n}) on demand. Defaults mirror the static
-  # orchestrator-1 / orchestrator-2 compose env so a provisioned pod is
-  # bit-for-bit identical to a statically-declared one. The cloud
-  # counterpart (K8sApiPodProvisioner) will sit behind the same
-  # PodProvisioner interface and ignore these.
+  # ── STATIC-FLEET: provisioning posture ─────────────────────────────
+  # Whether this deployment may create worker pods at all.
+  #   STATIC (DEFAULT since 2026-07-27) — workers are deployed and owned by
+  #     the operator, which is this platform's normal deployment shape
+  #     (private clouds where on-demand provisioning is unavailable, or a
+  #     namespace quota caps what may be allocated). Spin / restart /
+  #     container teardown answer 409 PROVISIONING_DISABLED; PodReconciler
+  #     and PodRecycler are not wired AT ALL. That last part is
+  #     load-bearing: the reconciler's row-first pass deletes any registry
+  #     row whose container it cannot see, which with no substrate access
+  #     would wipe the operator's whole declared fleet at boot.
+  #   DYNAMIC — the control plane owns worker lifecycle: it spins,
+  #     restarts, drains and recycles through a PodProvisioner. Set this
+  #     explicitly when the control plane HAS rights to create workers —
+  #     including local compose dev, where it is what makes the Capacity
+  #     tab's Spin button work.
+  # Distinct from podProvisioner.substrate below: substrate answers HOW we
+  # create workers, this answers WHETHER. In STATIC mode the substrate key
+  # is ignored entirely.
+  provisioning:
+    mode:    ${PROVISIONING_MODE:STATIC}
+    # Comma-separated region ids this deployment uses; empty means "no
+    # override" and the UI keeps its own defaults. In STATIC mode these are
+    # the operator's data centers (e.g. na-east,na-west) — the platform
+    # keeps calling the axis "region" in the API and schema because it
+    # already IS the placement axis (pod registry, capacity matrix, claim
+    # SQL, run request); only the UI label changes. Do not rename the
+    # column — the API and schema keep saying "region".
+    regions: ${PROVISIONING_REGIONS:}
+
+  # ── STATIC-FLEET: declared-worker liveness probe (STATIC mode only) ─
+  # Operator-deployed workers need not know this control plane exists, so
+  # they may never POST /api/v1/heartbeat — which would let PodSweeper mark
+  # the whole declared fleet LOST within pod.lostAfterMs and leave it
+  # unclaimable. StaticPodProbe inverts the direction: it GETs each declared
+  # worker's /actuator/health and refreshes lastHeartbeat on success, which
+  # is the same evidence a heartbeat carries, so nothing downstream changes.
+  #   probeIntervalMs     — matches the worker heartbeat cadence; 3x margin
+  #                         inside the 90 s LOST window, so one missed probe
+  #                         does not flap a healthy worker.
+  #   probeInitialDelayMs — MUST be shorter than pod.sweepInitialDelayMs
+  #                         (30 s), or a restart sweeps the fleet LOST for a
+  #                         window before the first probe runs.
+  #   probeConcurrency    — bounded fan-out; each probe costs up to the
+  #                         client's 2 s timeout.
+  #   probeTickBudgetMs   — hard ceiling on one tick; must stay well under
+  #                         pod.lostAfterMs or a slow tick causes the very
+  #                         sweep this exists to prevent.
+  staticPod:
+    probeIntervalMs:     ${STATICPOD_PROBE_INTERVAL_MS:30000}
+    probeInitialDelayMs: ${STATICPOD_PROBE_INITIAL_DELAY_MS:5000}
+    probeConcurrency:    ${STATICPOD_PROBE_CONCURRENCY:8}
+    probeTickBudgetMs:   ${STATICPOD_PROBE_TICK_BUDGET_MS:20000}
+
+  # ── PodProvisioner config ─────────────────────────────────────────
+  # Spins per-app local-orchestrator workers ({appName}-{region}-worker-{n})
+  # on demand. Only consulted when provisioning.mode = DYNAMIC.
   podProvisioner:
+    # parity:ignore-start — substrate SELECTION is specific to this service:
+    # it is the one orchestrator that can drive a docker daemon, so it needs
+    # a switch and the docker-only knobs. The twin always uses fabric8.
+    # KUBE-5 Option A (2026-07-22) — `docker` (default, the compose stack;
+    # DockerSocketPodProvisioner over the mounted socket) or `k8s`
+    # (K8sPodProvisioner via fabric8 + in-cluster ServiceAccount). Exactly
+    # one provisioner bean activates.
+    substrate:             ${PODPROVISIONER_SUBSTRATE:docker}
     dockerHost:            ${PODPROVISIONER_DOCKER_HOST:unix:///var/run/docker.sock}
     network:               ${PODPROVISIONER_NETWORK:jmeter-cloud_default}
+    # parity:ignore-end
+    # K8s substrate — worker Pods live in this namespace, and the headless
+    # Service gives each one the stable DNS name {podName}.{headlessService}.
+    # Both are K8s resource names → DNS-1123 lowercase (camelCase exemption).
+    # The fabric8 client auto-detects in-cluster ServiceAccount vs local
+    # kubeconfig, so there is deliberately no master-URL key here.
+    namespace:             ${PODPROVISIONER_NAMESPACE:jmeter-cloud}
+    headlessService:       ${PODPROVISIONER_HEADLESS_SERVICE:workers}
     image:                 ${PODPROVISIONER_IMAGE:jmeter-local-orchestrator:dev}
     localOrchestratorPort: ${PODPROVISIONER_LOCAL_ORCHESTRATOR_PORT:8080}
     globalOrchestratorUrl: ${GLOBAL_ORCHESTRATOR_URL:http://global-orchestrator:8082}
-    kafkaBrokers:          ${KAFKA_BROKERS_INTERNAL:kafka:29092}
-    schemaRegistryUrl:     ${SCHEMA_REGISTRY_URL_INTERNAL:http://schema-registry:8081}
+    # The PodProvisioner stamps this onto every spawned worker.
+    metricsIngestUrl:      ${PODPROVISIONER_METRICS_INGEST_URL:http://metrics-consumer:8083/api/v1/ingest}
     documentServiceUrl:    ${DOCUMENT_SERVICE_URL:http://document-service:8084}
-    # Phase E (2026-05-16): default per-pod KAFKA_TOPIC env points at the
-    # placeholder topic. RunService.fanOut overrides this per-run for
-    # registered-app runs (Phase C); only legacy unregistered-app code
-    # paths fall through to this default.
-    kafkaTopic:            ${KAFKA_TOPIC:jmeter.metrics.placeholder}
-    # OBSERVABILITY Phase B — tracing env vars propagated to each spawned
-    # local-orch container so its OTLP exporter reaches the same Jaeger.
-    # Sampling defaults to 1% (production); the compose env overrides to
-    # 100% so single-pod dev shows every span.
-    tracingSamplingProbability: ${PODPROVISIONER_TRACING_SAMPLING_PROBABILITY:0.01}
-    otlpTracingEndpoint:        ${PODPROVISIONER_OTLP_TRACING_ENDPOINT:http://jaeger:4318/v1/traces}
-    # Reliability — hard Docker memory limit (MiB) per spawned worker container.
-    # Round 6 (2026-05-31) raised 4096 → 6144 alongside the JMeter child heap bump
-    # (1g → 2g, OrchestratorConfig.JMETER_JVM_ARGS). 6144 fits the orchestrator JVM
-    # (-Xmx1g + ~0.5 GiB native ≈ 1.5 GiB) + the JMeter child (-Xmx2g + ~0.5 GiB
-    # native ≈ 2.5 GiB) + ~2 GiB page-cache headroom for the multi-GB JTL of a 12 h /
-    # 200-250 rps / ~100-endpoint run. 4096 was the Round-5 figure for a 1g JMeter
-    # child and left no headroom once the child grew — workers OOM'd near the 1-hour
-    # mark. memory-swap == memory (set in DockerSocketPodProvisioner) keeps swap off
-    # so a runaway fails fast inside the cgroup.
+    # SLIMDOWN (2026-07-22): no tracing keys or stamps at all — the worker
+    # image was slimmed too, so even the old silencer
+    # (MANAGEMENT_TRACING_SAMPLING_PROBABILITY=0.0) is gone.
+    # Reliability — the memory limit (MiB) applied to every spawned worker:
+    # a hard docker memory limit on the docker substrate, the Pod's
+    # resources.limits.memory (and matching request, so the scheduler
+    # reserves what the worker really uses) on K8s. Round 6 (2026-05-31)
+    # raised 4096 → 6144 alongside the JMeter child heap bump (1g → 2g,
+    # OrchestratorConfig.JMETER_JVM_ARGS). 6144 fits the orchestrator JVM
+    # (-Xmx1g + ~0.5 GiB native ≈ 1.5 GiB) + the JMeter child (-Xmx2g +
+    # ~0.5 GiB native ≈ 2.5 GiB) + ~2 GiB page-cache headroom for the
+    # multi-GB JTL of a 12 h / 200-250 rps / ~100-endpoint run. 4096 was the
+    # Round-5 figure for a 1g JMeter child and left no headroom once the
+    # child grew — workers OOM'd near the 1-hour mark. A hard limit means a
+    # runaway worker OOMs inside its own cgroup (ExitOnOutOfMemoryError,
+    # reaped by PodSweeper) instead of triggering the host/node OOM-killer.
     workerMemoryMb:             ${PODPROVISIONER_WORKER_MEMORY_MB:6144}
+    # CPU REQUEST per worker on the K8s substrate (no cpu limit on purpose —
+    # cfs throttling on a load generator skews the latencies it measures;
+    # the request only keeps the scheduler honest). 500m locally; size up in
+    # cloud. The docker substrate sets no CPU constraint at all.
+    workerCpuRequest:           ${PODPROVISIONER_WORKER_CPU_REQUEST:500m}
     # RELIABILITY Round 8 — aggregator late-arrival grace (seconds) stamped onto
     # each spawned worker as GRACE_PERIOD_SECONDS. 10s lets slow samples (JMeter
     # writes a sample at completion but timestamps it at start, so a slow row
@@ -194,25 +255,6 @@ globalOrchestrator:
     # being chased forever.
     resultsSavedLookbackMs:          ${RESULTS_SAVED_LOOKBACK_MS:3600000}
 
-  # ── KAFKA-PER-APP Phase B: AdminClient + per-app topic lifecycle ────
-  # AdminClient wired in KafkaAdminConfig. Topic naming convention pinned
-  # in kafka/README.md: jmeter.metrics.<applicationName> (+ .DLT).
-  # Defaults below are the LOCAL profile values (single-broker KRaft, no
-  # auth). The `cloud` profile block overrides replicationFactor +
-  # retentionMs + deleteTopicsOnAppDelete to production-safe values.
-  kafka:
-    brokers:                    ${KAFKA_BROKERS_INTERNAL:kafka:29092}
-    topicPartitions:            ${KAFKA_TOPIC_PARTITIONS:3}
-    topicReplicationFactor:     ${KAFKA_TOPIC_REPLICATION_FACTOR:1}
-    # 7 days = 604800000 ms — local default. Cloud profile bumps to 14 d.
-    topicRetentionMs:           ${KAFKA_TOPIC_RETENTION_MS:604800000}
-    # AdminClient request timeout. 15 s leaves budget for a slow MSK metadata
-    # round-trip without holding the request thread indefinitely.
-    adminTimeoutMs:             ${KAFKA_ADMIN_TIMEOUT_MS:15000}
-    # When true, DELETE /applications/{id} also removes the per-app topic
-    # + DLT. Default true locally (clean dev cycles); default false in
-    # cloud (audit policy may require retention beyond app lifetime).
-    deleteTopicsOnAppDelete:    ${KAFKA_DELETE_TOPICS_ON_APP_DELETE:true}
 
   # ── AUTOMATION Phase A+B: DB-claim CRON scheduler ──────────────────
   # CronJobScheduler runs a single @Scheduled tick that claims due cronJob
@@ -230,10 +272,10 @@ globalOrchestrator:
     maxDueBatch:          ${AUTOMATION_MAX_DUE_BATCH:50}
 
     # ── Phase E: report emails (INFRA_READINESS now; DAILY_REPORT in Phase D) ──
+    # SMTP is the ONLY backend (the SES + -Pcloud selector is gone).
+    # Point spring.mail at the deploy environment's relay via env vars;
+    # local dev uses the MailHog container.
     email:
-      # local → SmtpEmailSender (MailHog in dev compose). cloud profile flips
-      # this to `ses` (SesEmailSender, -Pcloud build).
-      backend:   ${AUTOMATION_EMAIL_BACKEND:local}
       from:      ${AUTOMATION_EMAIL_FROM:jmeter-cloud@localhost}
     # Comma-separated fallback recipients when a report schedule carries none.
     reportRecipients: ${AUTOMATION_REPORT_RECIPIENTS:}
@@ -284,20 +326,5 @@ security:
   rateLimit:
     enabled:           ${SECURITY_RATE_LIMIT_ENABLED:true}
     trustForwardedFor: ${SECURITY_RATE_LIMIT_TRUST_XFF:true}
-globalOrchestrator:
-  automation:
-    email:
-      # MSK-style cloud default — AWS SES. Region from AWS_REGION (SDK default);
-      # credentials via the instance-profile / IRSA default provider chain.
-      backend: ${AUTOMATION_EMAIL_BACKEND:ses}
-  kafka:
-    # MSK minimum broker count is 3 → RF=3 with min.insync.replicas=2 is
-    # the cloud safety floor. Override locally via env var if needed.
-    topicReplicationFactor:  ${KAFKA_TOPIC_REPLICATION_FACTOR:3}
-    # 14 days in cloud — long enough for replay-from-DLT exercises +
-    # extended-incident review windows.
-    topicRetentionMs:        ${KAFKA_TOPIC_RETENTION_MS:1209600000}
-    # Topic-delete is irreversible + audit may need retained metrics
-    # past app deletion → default OFF in cloud. Operator opts in by
-    # setting the env var explicitly.
-    deleteTopicsOnAppDelete: ${KAFKA_DELETE_TOPICS_ON_APP_DELETE:false}
+# (The cloud email override is gone: SMTP is the one backend everywhere;
+# configure the relay via spring.mail env vars.)

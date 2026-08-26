@@ -11,6 +11,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -86,6 +87,21 @@ public final class GlobalErrorHandler {
         // faults. Operators see them in the request log already.
         LOG.info("Rejected artifact upload: {} — {}", e.code(), e.getMessage());
         return ResponseEntity.status(status).body(envelope(e.code(), e.getMessage()));
+    }
+
+    /**
+     * 404 NOT_FOUND for URLs that match no controller or static resource.
+     * Without this, Spring MVC's {@link NoResourceFoundException} fell
+     * through to {@link #handleUnexpected} and every unknown path (a typo,
+     * a probe against the SLIMDOWN-removed {@code /actuator/prometheus})
+     * returned a 500 + ERROR stacktrace — a client-side miss misreported
+     * as a server fault. Found during the SLIMDOWN smoke (2026-07-21);
+     * the misclassification predates it.
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Map<String, String>> handleNotFound(NoResourceFoundException e) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(envelope("NOT_FOUND", "No such path: /" + e.getResourcePath()));
     }
 
     @ExceptionHandler(Exception.class)

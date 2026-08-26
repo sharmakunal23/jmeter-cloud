@@ -35,38 +35,34 @@ import java.util.zip.ZipException;
 import java.util.zip.ZipInputStream;
 
 /**
- * Streaming, validating writer for the test plan and the data-file zip.
+ * Streams the uploaded test plan and data-file zip to disk, validating as it
+ * goes, and swaps each into place atomically.
  *
- * <h2>Memory contract</h2>
- * No upload is buffered in memory. Bytes flow through a fixed
- * {@value #BUFFER_BYTES}-byte buffer from the input stream to disk; the SHA-256
- * hash is computed by a {@link DigestInputStream} wrapper, so a 512&nbsp;MB
- * upload uses well under 1&nbsp;MB of orchestrator RAM.
+ * <p>Nothing is buffered in memory: bytes move through a fixed
+ * {@value #BUFFER_BYTES}-byte buffer while a {@link DigestInputStream} computes
+ * the SHA-256, so a 512&nbsp;MB upload costs well under 1&nbsp;MB of RAM. Each
+ * upload lands in a {@code .tmp} sibling and is renamed on success, so any
+ * failure — validation, truncation, disk error — leaves the previous content
+ * intact.
  *
- * <h2>Atomic swap</h2>
- * Each upload writes to a {@code .tmp} sibling first. On success, the
- * staging artifact is renamed in place; on any failure (validation,
- * truncated upload, disk error) the previous content is preserved and
- * the {@code .tmp} state is cleaned up before the exception propagates.
- *
- * <h2>Validation</h2>
- * Per {@code ORCHESTRATOR-PLAN.md} §"Validation rules":
+ * <p>Zip validation is a security boundary, not a convenience check
+ * (see {@code docs/orchestratorPlan.md} §"Validation rules"):
  * <ul>
- *   <li>No {@code ..}, leading {@code /}, NUL byte, or Windows drive letter in any entry name.</li>
- *   <li>No symlink-style entries (rejected when {@link ZipEntry} signals a non-regular file via mode bits).</li>
- *   <li>Per-entry size ≤ {@code MAX_ENTRY_SIZE_MB} (default 256).</li>
- *   <li>Total extracted ≤ {@code MAX_EXTRACTED_SIZE_MB} (default 1024).</li>
- *   <li>File count ≤ {@code MAX_FILE_COUNT} (default 500).</li>
- *   <li>Allowed extensions: {@code .csv .json .txt .properties .xml .jmx}.</li>
+ *   <li>Entry names may not contain {@code ..}, a leading {@code /}, a NUL byte,
+ *       or a Windows drive letter.</li>
+ *   <li>Symlink-style entries are rejected via the {@link ZipEntry} mode bits.</li>
+ *   <li>Caps: per-entry {@code MAX_ENTRY_SIZE_MB} (256), total extracted
+ *       {@code MAX_EXTRACTED_SIZE_MB} (1024), count {@code MAX_FILE_COUNT} (500).</li>
+ *   <li>Extensions limited to {@code .csv .json .txt .properties .xml .jmx}.</li>
  * </ul>
  *
- * <h2>Layout on disk</h2>
+ * <p>On-disk layout:
  * <pre>
  *   ${TEST_PLAN_DIR}/plan.jmx          uploaded plan
- *   ${TEST_PLAN_DIR}/.metadata.json    plan metadata companion file
+ *   ${TEST_PLAN_DIR}/.metadata.json    plan metadata
  *   ${DATA_FILES_DIR}/                 extracted data files
- *   ${DATA_FILES_DIR}.zip              original zip (re-served by GET .../file)
- *   ${DATA_FILES_DIR}.manifest.json    dataFiles manifest companion file
+ *   ${DATA_FILES_DIR}.zip              original zip, re-served by GET .../file
+ *   ${DATA_FILES_DIR}.manifest.json    dataFiles manifest
  * </pre>
  */
 @Service

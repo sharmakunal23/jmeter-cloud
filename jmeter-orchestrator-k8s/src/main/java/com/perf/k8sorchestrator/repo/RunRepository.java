@@ -1,0 +1,572 @@
+package com.perf.k8sorchestrator.repo;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.perf.k8sorchestrator.domain.MemberState;
+import com.perf.k8sorchestrator.domain.Run;
+import com.perf.k8sorchestrator.domain.RunFleetMember;
+import com.perf.k8sorchestrator.domain.RunState;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.dao.EmptyResultDataAccessException;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.stereotype.Repository;
+
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+/**
+ * Persistence for {@code globalOrchestrator.run} and
+ * {@code globalOrchestrator.runFleetMember}. Uses the runState datasource
+ * (RW) — see {@link com.perf.k8sorchestrator.config.DataSourceConfig}.
+ */
+@Repository
+public class RunRepository {
+
+    private static final TypeReference<Map<String, String>> PROPERTIES_TYPE =
+            new TypeReference<>() { };
+
+    private final JdbcTemplate jdbc;
+    private final ObjectMapper json;
+    private final RowMapper<RunFleetMember> memberRowMapper;
+
+    public RunRepository(@Qualifier("runStateJdbcTemplate") JdbcTemplate jdbc,
+                         ObjectMapper json) {
+        this.jdbc = jdbc;
+        this.json = json;
+        this.memberRowMapper = buildMemberRowMapper(json);
+    }
+
+    private static RowMapper<RunFleetMember> buildMemberRowMapper(ObjectMapper json) {
+        return (rs, n) -> {
+            // properties JSONB → Map<String,String>. {} default keeps reads
+            // identical for legacy rows that pre-date the V3 migration.
+            String propsRaw = rs.getString("properties");
+            Map<String, String> props;
+            if (propsRaw == null || propsRaw.isBlank()) {
+                props = Map.of();
+            } else {
+                try {
+                    props = json.readValue(propsRaw, PROPERTIES_TYPE);
+                } catch (Exception e) {
+                    throw new SQLException("failed to deserialise runFleetMember.properties", e);
+                }
+            }
+            // joinedAtSecond → NULL for original-fleet members (V11
+            // column added by MID-TEST-SCALING Phase A; NULL is the
+            // default for any row written before scale-up landed).
+            Long joinedAtSecond = (Long) rs.getObject("joinedAtSecond");
+            // Phase F2 — runsServed is joined from the pod table at
+            // SELECT time (see findMembers). Null when the pod row is
+            // gone (drained pod whose member row outlived it) or when
+            // the read path didn't include the join (insert codepaths).
+            Long runsServed = hasColumn(rs, "podRunsServed")
+                    ? (Long) rs.getObject("podRunsServed")
+                    : null;
+            return new RunFleetMember(
+                    rs.getString("runId"),
+                    rs.getString("workerId"),
+                    rs.getString("region"),
+                    MemberState.valueOf(rs.getString("state")),
+                    rs.getString("stateReason"),
+                    (Integer) rs.getObject("fanoutStatusCode"),
+                    rs.getString("podBaseUrl"),
+                    instant(rs, "createdAt"),
+                    instant(rs, "startedAt"),
+                    instant(rs, "completedAt"),
+                    props,
+                    joinedAtSecond,
+                    runsServed);
+        };
+    }
+
+    /** True iff the row's metadata has a column by this name. Cheap; used
+     *  for opt-in joined columns (pod.runsServed) that aren't on every
+     *  SELECT. */
+    private static boolean hasColumn(java.sql.ResultSet rs, String name) throws SQLException {
+        java.sql.ResultSetMetaData md = rs.getMetaData();
+        int n = md.getColumnCount();
+        for (int i = 1; i <= n; i++) {
+            if (name.equalsIgnoreCase(md.getColumnLabel(i))) return true;
+        }
+        return false;
+    }
+
+    public void insertRun(Run run) {
+        jdbc.update(
+                "INSERT INTO \"globalOrchestrator\".\"run\" "
+                + "(\"runId\",\"originRegion\",\"testPlanBlobId\",\"dataFilesBlobId\","
+                + " \"application\",\"initiatedBy\",\"state\",\"createdAt\",\"saveResults\") "
+                + "VALUES (?,?,?,?,?,?,?,?,?)",
+                run.runId(), run.originRegion(), run.testPlanBlobId(),
+                run.dataFilesBlobId(), run.application(),
+                run.initiatedBy(), run.state().name(),
+                Timestamp.from(run.createdAt()), run.saveResults());
+    }
+
+    public void insertFleetMember(RunFleetMember m) {
+        // properties → JSONB. PreparedStatement bindings are typed as
+        // strings; the explicit `::jsonb` cast lets Postgres parse the
+        // JSON server-side and reject malformed input. The
+        // properties-validation contract is upstream
+        // (StartTestRequest's compact constructor on the local-orch),
+        // so a write here only fails on a programming error.
+        String propsJson;
+        try {
+            propsJson = json.writeValueAsString(
+                    m.properties() == null ? Map.of() : m.properties());
+        } catch (Exception e) {
+            throw new IllegalStateException("failed to serialise fleet-member properties", e);
+        }
+        jdbc.update(
+                "INSERT INTO \"globalOrchestrator\".\"runFleetMember\" "
+                + "(\"runId\",\"workerId\",\"region\",\"state\",\"podBaseUrl\","
+                + " \"createdAt\",\"properties\",\"joinedAtSecond\") "
+                + "VALUES (?,?,?,?,?,?, ?::jsonb, ?)",
+                m.runId(), m.workerId(), m.region(), m.state().name(),
+                m.podBaseUrl(), Timestamp.from(m.createdAt()), propsJson,
+                m.joinedAtSecond());
+    }
+
+    /**
+     * Save Results — flip the run's {@code saveResults} flag off. Called when a
+     * run is aborted: a force-terminated run never produces a clean upload (the
+     * local-orchestrator skips the JTL upload on a non-COMPLETE stop), so the
+     * UI must stop advertising a "Download results" that would 404, and
+     * {@link RunService#refreshAndGet}'s terminal fast-path must re-engage
+     * (it's gated on {@code !saveResults}) so we stop polling the dead workers.
+     */
+    public void clearSaveResults(String runId) {
+        jdbc.update(
+                "UPDATE \"globalOrchestrator\".\"run\" SET \"saveResults\"=false WHERE \"runId\"=?",
+                runId);
+    }
+
+    /**
+     * Save Results reconciliation — run IDs that COMPLETED with {@code
+     * saveResults} on, completed at or after {@code completedAfter}, and still
+     * have a <em>clean-exit</em> fleet member (COMPLETED / DRAINED — the states
+     * that upload; FAILED / ABORTED never do) <em>without</em> a {@code
+     * RESULTS_SAVED} audit event. The background sweeper drives {@link
+     * RunService#refreshAndGet} on each so the per-worker JTL upload (which
+     * finishes AFTER the run goes terminal, once no UI is polling) is observed
+     * and recorded. Bounded by {@code completedAfter} so a run whose upload
+     * never lands (e.g. a worker died post-completion) stops being polled
+     * instead of being chased forever, and {@code LIMIT 200} caps a tick.
+     */
+    public List<String> runIdsAwaitingResultsSaved(Instant completedAfter) {
+        return jdbc.queryForList(
+                "SELECT r.\"runId\" FROM \"globalOrchestrator\".\"run\" r "
+                + "WHERE r.\"state\"='COMPLETED' AND r.\"saveResults\"=true "
+                + "  AND r.\"completedAt\" >= ? "
+                + "  AND (SELECT count(*) FROM \"globalOrchestrator\".\"runFleetMember\" m "
+                + "         WHERE m.\"runId\"=r.\"runId\" AND m.\"podBaseUrl\" IS NOT NULL "
+                + "           AND m.\"state\" IN ('COMPLETED','DRAINED')) "
+                + "      > (SELECT count(DISTINCT e.\"payload\"->>'workerId') "
+                + "           FROM \"globalOrchestrator\".\"runEvent\" e "
+                + "           WHERE e.\"runId\"=r.\"runId\" AND e.\"eventType\"='RESULTS_SAVED') "
+                + "ORDER BY r.\"completedAt\" "
+                + "LIMIT 200",
+                String.class, Timestamp.from(completedAfter));
+    }
+
+    /**
+     * Soft-delete — mark a run hidden (sets {@code hiddenAt=now()}) so it drops
+     * out of the default listing. Reversible: the row, fleet members, and audit
+     * trail are retained; {@link #listRuns(ListRunsCriteria)} filters
+     * {@code hiddenAt IS NULL} unless {@code includeHidden}. The
+     * {@code hiddenAt IS NULL} guard makes a repeat hide a no-op (idempotent).
+     */
+    public void markHidden(String runId) {
+        jdbc.update(
+                "UPDATE \"globalOrchestrator\".\"run\" SET \"hiddenAt\"=now() "
+                + "WHERE \"runId\"=? AND \"hiddenAt\" IS NULL",
+                runId);
+    }
+
+    /**
+     * HARD-DELETE / purge — true iff the run exists AND is hidden
+     * ({@code hiddenAt IS NOT NULL}). The purge path requires a run to be hidden
+     * (trashed) first, so this gates the "trash → empty trash" two-tier flow: an
+     * un-hidden run can only be hidden, never purged directly.
+     */
+    public boolean isRunHidden(String runId) {
+        Integer n = jdbc.queryForObject(
+                "SELECT count(*) FROM \"globalOrchestrator\".\"run\" "
+                + "WHERE \"runId\"=? AND \"hiddenAt\" IS NOT NULL",
+                Integer.class, runId);
+        return n != null && n > 0;
+    }
+
+    /**
+     * HARD-DELETE / purge — how many OTHER runs (any run but {@code excludeRunId})
+     * still reference {@code blobId} as their testPlan or dataFiles blob. The
+     * purge deletes a run's testPlan/dataFiles blob only when this is 0; the same
+     * uploaded plan is commonly reused across many runs (templates, re-launches),
+     * so deleting it while a sibling still points at it would break that sibling's
+     * download / re-run. Result blobs are per-(runId, workerId) and need no such
+     * guard. {@code blobId} carries no LIKE wildcards (it's a ULID), so the
+     * equality match is exact.
+     */
+    public int countOtherRunsReferencingBlob(String blobId, String excludeRunId) {
+        if (blobId == null || blobId.isBlank()) return 0;
+        Integer n = jdbc.queryForObject(
+                "SELECT count(*) FROM \"globalOrchestrator\".\"run\" "
+                + "WHERE \"runId\" <> ? "
+                + "  AND (\"testPlanBlobId\" = ? OR \"dataFilesBlobId\" = ?)",
+                Integer.class, excludeRunId, blobId, blobId);
+        return n == null ? 0 : n;
+    }
+
+    /**
+     * HARD-DELETE / purge — physically removes the run row. The FK
+     * {@code ON DELETE CASCADE} on {@code runFleetMember} (V1) and {@code runEvent}
+     * (V15) takes those child rows with it (the cascade runs with the table
+     * owner's privileges, so no extra grant is needed). Idempotent: a re-run of a
+     * partially-completed purge matches zero rows. Returns the rowcount (1 when
+     * the run existed, 0 when already gone). NOT to be confused with
+     * {@link #markHidden} (the reversible soft delete).
+     */
+    public int deleteRunRow(String runId) {
+        return jdbc.update(
+                "DELETE FROM \"globalOrchestrator\".\"run\" WHERE \"runId\"=?",
+                runId);
+    }
+
+    public void updateRunState(String runId, RunState state, String reason) {
+        jdbc.update(
+                "UPDATE \"globalOrchestrator\".\"run\" "
+                + "SET \"state\"=?, \"stateReason\"=?, "
+                + "\"startedAt\"=COALESCE(\"startedAt\", "
+                + "  CASE WHEN ? = 'RUNNING' THEN now() ELSE NULL END), "
+                + "\"completedAt\"=COALESCE(\"completedAt\", "
+                + "  CASE WHEN ? IN ('COMPLETED','FAILED','ABORTED') THEN now() ELSE NULL END) "
+                + "WHERE \"runId\"=?",
+                state.name(), reason, state.name(), state.name(), runId);
+    }
+
+    /**
+     * Claim the transition into a terminal
+     * state. Flips the run only when it is not already terminal and reports
+     * whether THIS caller won (rowcount 1). {@code refreshAndGet} runs
+     * concurrently across replicas (UI polls + ResultsSavedSweeper +
+     * PodSweeper reap on every instance); the winner-only contract is what
+     * keeps the terminal audit event and the runTrend snapshot single-shot.
+     * {@code completedAt} COALESCEs so the first stamp wins.
+     */
+    public int updateRunStateClaimingTerminal(String runId, RunState state, String reason) {
+        return jdbc.update(
+                "UPDATE \"globalOrchestrator\".\"run\" "
+                + "SET \"state\"=?, \"stateReason\"=?, "
+                + "\"completedAt\"=COALESCE(\"completedAt\", now()) "
+                + "WHERE \"runId\"=? "
+                + "  AND \"state\" NOT IN ('COMPLETED','FAILED','ABORTED')",
+                state.name(), reason, runId);
+    }
+
+    public void updateMemberState(String runId, String workerId,
+                                  MemberState state, String reason,
+                                  Integer fanoutStatusCode) {
+        jdbc.update(
+                "UPDATE \"globalOrchestrator\".\"runFleetMember\" "
+                + "SET \"state\"=?, \"stateReason\"=?, \"fanoutStatusCode\"=COALESCE(?,\"fanoutStatusCode\"), "
+                + "\"startedAt\"=COALESCE(\"startedAt\", "
+                + "  CASE WHEN ? IN ('RUNNING','ACCEPTED') THEN now() ELSE NULL END), "
+                + "\"completedAt\"=COALESCE(\"completedAt\", "
+                + "  CASE WHEN ? IN ('COMPLETED','FAILED','ABORTED') THEN now() ELSE NULL END) "
+                + "WHERE \"runId\"=? AND \"workerId\"=?",
+                state.name(), reason, fanoutStatusCode,
+                state.name(), state.name(),
+                runId, workerId);
+    }
+
+    /**
+     * Forces every still-active fleet-member row for {@code workerId} to
+     * ABORTED. "Active" matches the same states the claim/capacity paths
+     * treat as occupying a pod ({@code PENDING / REQUESTED / ACCEPTED /
+     * RUNNING / DRAINING}). Used by two paths:
+     * <ul>
+     *   <li>run-abort — releases all of a run's bindings as the run goes
+     *       terminal (per-member call from {@code RunService.commitAbort});</li>
+     *   <li>stale-drain — when the operator drains a pod whose container is
+     *       gone but whose run still shows it active, this releases the dead
+     *       binding so the pod can be drained and a re-spun same-name pod
+     *       won't re-bind to the zombie run.</li>
+     * </ul>
+     * Returns the rowcount (0 when the pod held no active binding).
+     */
+    public int abortActiveMembersForWorker(String workerId, String reason) {
+        return jdbc.update(
+                "UPDATE \"globalOrchestrator\".\"runFleetMember\" "
+                + "SET \"state\"='ABORTED', \"stateReason\"=?, "
+                + "    \"completedAt\"=COALESCE(\"completedAt\", now()) "
+                + "WHERE \"workerId\"=? "
+                + "  AND \"state\" IN ('PENDING','REQUESTED','ACCEPTED','RUNNING','DRAINING')",
+                reason, workerId);
+    }
+
+    /**
+     * Reliability — fail every still-active fleet member whose worker's pod has
+     * been marked {@code LOST} by the heartbeat sweeper. A killed worker's pod
+     * flips to LOST after the heartbeat threshold, but nothing else transitions
+     * its member row, so without this the member sticks at RUNNING forever (the
+     * status poller silently no-ops on an unreachable worker). FAILED — not
+     * ABORTED — because the worker died unexpectedly; ABORTED is reserved for an
+     * operator's deliberate stop.
+     *
+     * <p>Set-based + idempotent: safe to run every sweep tick; it self-heals a
+     * member a prior tick missed and matches zero rows in steady state. Returns
+     * the {@code runId} of each member it failed (with duplicates when a run had
+     * several members on lost pods) so the caller can roll those runs up.
+     */
+    public List<String> failActiveMembersOnLostPods(String reason) {
+        return jdbc.queryForList(
+                "UPDATE \"globalOrchestrator\".\"runFleetMember\" m "
+                + "SET \"state\"='FAILED', \"stateReason\"=?, "
+                + "    \"completedAt\"=COALESCE(m.\"completedAt\", now()) "
+                + "WHERE m.\"state\" IN ('PENDING','REQUESTED','ACCEPTED','RUNNING','DRAINING') "
+                + "  AND EXISTS (SELECT 1 FROM \"globalOrchestrator\".\"pod\" p "
+                + "              WHERE p.\"podId\" = m.\"workerId\" AND p.\"state\" = 'LOST') "
+                + "RETURNING m.\"runId\"",
+                String.class, reason);
+    }
+
+    public Optional<Run> findByRunId(String runId) {
+        try {
+            Run run = jdbc.queryForObject(
+                    "SELECT * FROM \"globalOrchestrator\".\"run\" WHERE \"runId\"=?",
+                    RUN_ROW_MAPPER_NO_MEMBERS, runId);
+            return Optional.of(withMembers(run, findMembers(runId)));
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
+    public List<RunFleetMember> findMembers(String runId) {
+        // Phase F2 — LEFT JOIN pod so each member row carries its pod's
+        // current runsServed (or NULL if the pod has been drained and
+        // its row removed since the member was inserted). The column
+        // alias `podRunsServed` keeps the join non-ambiguous and lets
+        // the rowMapper's `hasColumn` gate stay clean.
+        return jdbc.query(
+                "SELECT m.*, p.\"runsServed\" AS \"podRunsServed\" "
+                + "FROM \"globalOrchestrator\".\"runFleetMember\" m "
+                + "LEFT JOIN \"globalOrchestrator\".\"pod\" p ON p.\"podId\" = m.\"workerId\" "
+                + "WHERE m.\"runId\"=? "
+                + "ORDER BY m.\"workerId\"",
+                memberRowMapper, runId);
+    }
+
+    /**
+     * The most-recent run a worker (pod) served, by {@code
+     * createdAt}. Drives PodRecycler's best-effort attribution of a recycle to
+     * a run (a pod can serve many runs over its life, so "most recent" is the
+     * pragmatic choice). Empty when the pod never served a run. Backed by the
+     * {@code runFleetMember_workerId_createdAt_idx} index.
+     */
+    public Optional<String> findMostRecentRunIdForWorker(String workerId) {
+        try {
+            String runId = jdbc.queryForObject(
+                    "SELECT \"runId\" FROM \"globalOrchestrator\".\"runFleetMember\" "
+                    + "WHERE \"workerId\"=? ORDER BY \"createdAt\" DESC LIMIT 1",
+                    String.class, workerId);
+            return Optional.ofNullable(runId);
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
+    public List<Run> listRuns(boolean activeOnly, int limit) {
+        return listRuns(new ListRunsCriteria(activeOnly, null, false, false, 0, limit)).runs();
+    }
+
+    /**
+     * UI-D3 — paginated + application-filtered listing. Returns the page of
+     * rows plus the total count so the UI can render a {@code <Paginator>}
+     * without a second round-trip.
+     *
+     * <p>{@code activeOnly} narrows to states not in COMPLETED/FAILED/ABORTED.
+     * {@code application}, when non-null, narrows to rows where
+     * {@code run.application = ?} (NULL rows are excluded — the app filter
+     * is a positive predicate, not "show me untagged"). {@code offset} and
+     * {@code limit} drive pagination; {@code limit} is clamped to a sane cap
+     * upstream by the controller.
+     */
+    public ListRunsPage listRuns(ListRunsCriteria c) {
+        StringBuilder where = new StringBuilder();
+        List<Object> args = new ArrayList<>();
+        if (c.activeOnly()) {
+            where.append("\"state\" NOT IN ('COMPLETED','FAILED','ABORTED')");
+        }
+        if (c.application() != null) {
+            if (where.length() > 0) where.append(" AND ");
+            where.append("\"application\" = ?");
+            args.add(c.application());
+        }
+        // Soft-delete visibility. Three modes:
+        //   • hiddenOnly  → the "Archived" view: ONLY hidden runs (the purge
+        //     surface — every row here is a hidden run eligible for hard delete).
+        //   • includeHidden → visible + hidden mixed (admin escape hatch).
+        //   • default      → visible only (hidden runs drop out).
+        if (c.hiddenOnly()) {
+            if (where.length() > 0) where.append(" AND ");
+            where.append("\"hiddenAt\" IS NOT NULL");
+        } else if (!c.includeHidden()) {
+            if (where.length() > 0) where.append(" AND ");
+            where.append("\"hiddenAt\" IS NULL");
+        }
+
+        String whereClause = where.length() == 0 ? "" : "WHERE " + where + " ";
+
+        // Total count first — needed for the X-Total-Count header even when
+        // the page itself is empty.
+        Integer total = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM \"globalOrchestrator\".\"run\" " + whereClause,
+                Integer.class, args.toArray());
+        long totalCount = total == null ? 0L : total;
+
+        String sql = "SELECT * FROM \"globalOrchestrator\".\"run\" "
+                + whereClause
+                + "ORDER BY \"createdAt\" DESC "
+                + "LIMIT ? OFFSET ?";
+        Object[] pageArgs = new Object[args.size() + 2];
+        for (int i = 0; i < args.size(); i++) pageArgs[i] = args.get(i);
+        pageArgs[args.size()]     = c.limit();
+        pageArgs[args.size() + 1] = c.offset();
+
+        List<Run> bare = jdbc.query(sql, RUN_ROW_MAPPER_NO_MEMBERS, pageArgs);
+        List<Run> hydrated = new ArrayList<>(bare.size());
+        for (Run r : bare) {
+            hydrated.add(withMembers(r, findMembers(r.runId())));
+        }
+        return new ListRunsPage(hydrated, totalCount);
+    }
+
+    /**
+     * Count this application's active (non-terminal) runs. Used by the
+     * application soft-delete guard — an app with live runs can't be hidden
+     * (they'd be orphaned from navigation). Uses the same terminal-state set
+     * as {@link #listRuns(ListRunsCriteria)}'s {@code activeOnly}; hidden runs
+     * are terminal by construction, so no extra predicate is needed.
+     */
+    public int countActiveByApplication(String application) {
+        Integer n = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM \"globalOrchestrator\".\"run\" "
+                + "WHERE \"application\" = ? "
+                + "AND \"state\" NOT IN ('COMPLETED','FAILED','ABORTED')",
+                Integer.class, application);
+        return n == null ? 0 : n;
+    }
+
+    /**
+     * Count ALL active (non-terminal) runs across every application. Backs the
+     * SECURITY S-0 {@code security.concurrentRuns} gauge — a cheap, indexed
+     * count sampled at Prometheus scrape cadence (~15 s), surfacing a run-launch
+     * flood (or a stuck fleet) as an abuse/health signal. Same terminal-state
+     * set as {@link #countActiveByApplication}.
+     */
+    public int countActive() {
+        Integer n = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM \"globalOrchestrator\".\"run\" "
+                + "WHERE \"state\" NOT IN ('COMPLETED','FAILED','ABORTED')",
+                Integer.class);
+        return n == null ? 0 : n;
+    }
+
+    /**
+     * Counts of this application's runs created since
+     * {@code since}, grouped by terminal/active state (state name → count).
+     * Drives the daily perf-report's "launched / completed / failed" line:
+     * launched = sum of all values; completed = COMPLETED; failed = FAILED +
+     * ABORTED. Counts the run by {@code createdAt} (when it was launched) so a
+     * run started in-window but still running is included in "launched".
+     */
+    public Map<String, Long> countByStateForApplicationSince(String application, Instant since) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT \"state\", count(*) AS \"n\" "
+                + "FROM \"globalOrchestrator\".\"run\" "
+                + "WHERE \"application\" = ? AND \"createdAt\" >= ? "
+                + "GROUP BY \"state\"",
+                application, Timestamp.from(since));
+        Map<String, Long> byState = new java.util.HashMap<>();
+        for (Map<String, Object> r : rows) {
+            byState.put((String) r.get("state"), ((Number) r.get("n")).longValue());
+        }
+        return byState;
+    }
+
+    /**
+     * Re-tag every run from {@code fromApplication} to {@code toApplication}.
+     * Used when an application is soft-deleted: its runs move to the app's
+     * archived (hidden) name so the original name is freed for a fresh app
+     * without that new app inheriting this one's history — and so a future
+     * purge job can find the hidden app's runs by its archived name. Returns
+     * the number of rows re-tagged. Caller scopes this to terminal runs only
+     * (the soft-delete guard rejects apps with active runs).
+     */
+    public int reassignApplication(String fromApplication, String toApplication) {
+        return jdbc.update(
+                "UPDATE \"globalOrchestrator\".\"run\" SET \"application\"=? WHERE \"application\"=?",
+                toApplication, fromApplication);
+    }
+
+    /**
+     * HARD-DELETE / purge Phase 2 — every run id tagged to {@code application},
+     * hidden or not. When an app is soft-deleted its runs are re-tagged to the
+     * archived name (see {@link #reassignApplication}), so the application purge
+     * passes that archived name here to collect the runs to purge. No {@code
+     * hiddenAt} filter — a purge must sweep ALL of the app's runs, including any
+     * individually-hidden ones.
+     */
+    public List<String> findRunIdsByApplication(String application) {
+        return jdbc.queryForList(
+                "SELECT \"runId\" FROM \"globalOrchestrator\".\"run\" WHERE \"application\"=?",
+                String.class, application);
+    }
+
+    /**
+     * Filter + page criteria for {@link #listRuns(ListRunsCriteria)}.
+     * {@code hiddenOnly} (the Archive / purge view) takes precedence over
+     * {@code includeHidden}.
+     */
+    public record ListRunsCriteria(boolean activeOnly, String application,
+                                   boolean includeHidden, boolean hiddenOnly,
+                                   int offset, int limit) {}
+
+    /** Page result for {@link #listRuns(ListRunsCriteria)} — runs + total count. */
+    public record ListRunsPage(List<Run> runs, long total) {}
+
+    private static final RowMapper<Run> RUN_ROW_MAPPER_NO_MEMBERS = (rs, n) -> new Run(
+            rs.getString("runId"),
+            rs.getString("originRegion"),
+            rs.getString("testPlanBlobId"),
+            rs.getString("dataFilesBlobId"),
+            rs.getString("application"),
+            rs.getString("initiatedBy"),
+            RunState.valueOf(rs.getString("state")),
+            rs.getString("stateReason"),
+            instant(rs, "createdAt"),
+            instant(rs, "startedAt"),
+            instant(rs, "completedAt"),
+            rs.getBoolean("saveResults"),
+            null);
+
+    private static Instant instant(ResultSet rs, String col) throws SQLException {
+        Timestamp t = rs.getTimestamp(col);
+        return t == null ? null : t.toInstant();
+    }
+
+    private static Run withMembers(Run base, List<RunFleetMember> members) {
+        return new Run(
+                base.runId(), base.originRegion(), base.testPlanBlobId(),
+                base.dataFilesBlobId(), base.application(), base.initiatedBy(),
+                base.state(), base.stateReason(), base.createdAt(),
+                base.startedAt(), base.completedAt(), base.saveResults(), members);
+    }
+}

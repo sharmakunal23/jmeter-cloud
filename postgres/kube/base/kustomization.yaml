@@ -1,0 +1,28 @@
+# KUBE-1 — postgres base: StatefulSet + Services + Flyway Job + initdb
+# ConfigMap. Environment-neutral; overlays add credentials, registry
+# images, and storageClass.
+#
+# initdb/01_createDatabases.sql is a VERBATIM COPY of
+# postgres/initdb/01_createDatabases.sql (kustomize cannot reference
+# files outside this kustomization root). If you touch one, touch both —
+# same discipline as the golden-payload duplication in the metrics
+# contract. `diff postgres/initdb postgres/kube/base/initdb` must stay
+# empty.
+#
+# The `postgres-credentials` Secret (keys: postgresUser, postgresPassword)
+# is NOT defined here: the kind overlay generates it with the local dev
+# values; privateCloud creates it out-of-band (see that overlay).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - statefulSet.yaml
+  - service.yaml
+  - flywayJob.yaml
+configMapGenerator:
+  - name: postgres-initdb
+    files:
+      - initdb/01_createDatabases.sql
+    options:
+      # Fixed name: a hash suffix would make any initdb edit roll the
+      # StatefulSet pod for a script that only runs on first boot.
+      disableNameSuffixHash: true

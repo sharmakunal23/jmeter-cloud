@@ -17,31 +17,18 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * OBSERVABILITY Phase E — emits one structured access-log record per
- * critical request. Method, path, status, latencyMs, and clientIp are
- * placed in MDC immediately before the {@code INFO} call, so the existing
- * {@code logstash-logback-encoder} (Phase A) renders them as top-level
- * JSON fields. The dedicated logger name {@code "access"} lets operators
- * grep / route these lines separately from regular app logs.
+ * Emits one structured access-log record per critical request — method, path,
+ * status, latency and client IP go into the MDC just before an {@code INFO} on
+ * the dedicated {@code "access"} logger, so they render as top-level JSON fields
+ * and operators can route them separately from app logs.
  *
- * <h2>Critical-vs-non-critical policy</h2>
- * The filter follows the same {@link CriticalPaths} gate as the TracingFilter:
- * actuator probes, swagger UI, openapi spec, and static assets are skipped
- * entirely — no log line, no MDC mutation. Otherwise a 10-second healthcheck
- * cadence × 5 services × 1 access line each = 4,320 nonsense lines per hour
- * drowning the signal.
+ * <p>Scoped by {@link CriticalPaths}: actuator, swagger, the spec and static
+ * assets are skipped entirely. Without that gate, a 10-second healthcheck
+ * cadence across five services is 4,320 lines an hour drowning the signal.
  *
- * <h2>Filter ordering</h2>
- * Registered at {@code HIGHEST_PRECEDENCE + 20} — runs AFTER the
- * {@link TracingFilter} ({@code HIGHEST_PRECEDENCE + 10}) so the MDC keys
- * the access line emits ({@code actor}, {@code runId}, etc.) are already
- * populated by the time we log. Spring Boot's tracing autoconfig sets
- * {@code traceId} / {@code spanId} EARLIER in the chain, so those are
- * also present.
- *
- * <h2>MDC discipline</h2>
- * Owned keys are tracked in a local list and removed in {@code finally} —
- * never {@link MDC#clear()} (which would wipe the tracing-autoconfig keys).
+ * <p>Ordered at {@code HIGHEST_PRECEDENCE + 20}, after
+ * {@link MdcEnrichmentFilter} at +10, so the business IDs it logs are already
+ * in the MDC by the time this fires.
  */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 20)

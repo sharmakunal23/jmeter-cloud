@@ -5,25 +5,19 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Extracts well-known identifiers (runId, applicationId, workerId,
- * podName, region) from a request URI.
+ * Extracts the well-known identifiers — runId, applicationId, workerId,
+ * podName, region — from a request URI.
  *
- * <p>The global-orchestrator's REST paths follow predictable templates:
+ * <p>Walks path segments and takes the token after each known label rather than
+ * matching a regex per template, so it stays correct as new sub-resources
+ * appear under an existing parent:
  * <pre>
- *   /api/v1/runs/{runId}/...
  *   /api/v1/runs/{runId}/members/{workerId}/...
- *   /api/v1/applications/{applicationId}/...
- *   /api/v1/applications/{applicationId}/capacity/{region}/...
  *   /api/v1/applications/{applicationId}/capacity/{region}/pods/{podName}/...
  *   /api/v1/admin/pods/{podName}
  * </pre>
  *
- * <p>Rather than a regex per template (brittle when controllers grow),
- * we walk the path segments and pick the token AFTER each known label
- * — that way the extractor stays correct as new sub-resources are added
- * under the same parent.
- *
- * <p>Pure utility — no Spring deps — so unit tests can pin every shape.
+ * <p>Pure utility, no Spring deps, so unit tests can pin every shape.
  */
 public final class PathIds {
 

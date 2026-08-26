@@ -21,8 +21,7 @@ import java.util.Optional;
  * REST surface for the singleton test run:
  * {@code POST/GET/DELETE /api/v1/test} and {@code POST /api/v1/test/abort}.
  *
- * <p><b>Migrated to Spring MVC in Step 4.4e.</b> All status-code mapping
- * for parsing failures and lifecycle rejections is delegated to
+ * <p>All status-code mapping for parsing failures and lifecycle rejections is delegated to
  * {@link GlobalErrorHandler}; this class only deals with happy-path JSON
  * shapes and the {@code 404 NO_TEST_EXISTS} / {@code 404 NO_ACTIVE_RUN}
  * envelopes that aren't exception-driven.
@@ -89,7 +88,7 @@ public final class TestController {
     }
 
     /**
-     * MID-TEST-SCALING Phase B — graceful drain via JMeter's TCP shutdown
+     * Graceful drain via JMeter's TCP shutdown
      * port. In-flight samplers complete; no new ones start. The run lands
      * in {@link TestState#DRAINED} on clean exit. If the drain budget
      * ({@code JMETER_DRAIN_TIMEOUT_S}, default 60 s) elapses without exit,
@@ -122,8 +121,8 @@ public final class TestController {
         out.put("elapsedMs",        elapsedMs(s));
         out.put("rowsIngested",     s.rowsIngested());
         out.put("windowsPublished", s.windowsPublished());
-        out.put("kafkaSendErrors",  s.kafkaSendErrors());
-        out.put("lastKafkaAckMs",   s.lastKafkaAckMs());
+        out.put("publishErrors",    s.publishErrors());
+        out.put("lastPublishAckMs", s.lastPublishAckMs());
         out.put("jmeterPid",        s.jmeterPid());
         out.put("jmeterAlive",      s.state() == TestState.RUNNING || s.state() == TestState.STARTING);
         out.put("exitCode",         s.exitCode());

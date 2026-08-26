@@ -2,20 +2,14 @@ package com.perf.metricsconsumer;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.kafka.annotation.EnableKafka;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
- * Consumes {@code WorkerMetric} Avro records from
- * {@code jmeter.metrics.perSecond} and writes per-second rows into the
- * {@code jmetercloud_metrics} Postgres database.
- *
- * <p>Step 7 skeleton — the consumer logs each record at INFO and increments
- * a Micrometer counter; actual Postgres inserts wait on the partitioned
- * schema landing in Step 9.
+ * Spring Boot entry point for the metrics-consumer on port 8083, which ingests
+ * {@code WorkerMetricBatch} JSON envelopes at {@code POST /api/v1/ingest} and
+ * writes per-second rows into the {@code jmetercloud_metrics} database.
  */
 @SpringBootApplication
-@EnableKafka
 @EnableScheduling
 public class MetricsConsumerApplication {
     public static void main(String[] args) {

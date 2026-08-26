@@ -6,10 +6,10 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * SECURITY S-7 — pins the server-side blob-description cap (the UI's
- * {@code maxLength=200} is bypassable, so the cap must hold server-side too).
+ * Pins the server-side blob-description cap, which must hold independently
+ * because the UI's {@code maxLength} is bypassable by a direct caller.
  */
-@DisplayName("SECURITY S-7 — BlobController.sanitizeDescription")
+@DisplayName("BlobController.sanitizeDescription")
 class BlobControllerSanitizeTest {
 
     @Test

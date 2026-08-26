@@ -15,8 +15,8 @@ import java.util.Map;
 public record OrchestratorCounters(
         long rowsParsedTotal,
         long windowsPublishedTotal,
-        long kafkaSendErrorsTotal,
-        long kafkaLastAckEpochMs,
+        long publishErrorsTotal,
+        long publishLastAckEpochMs,
         long uploadInflightBytes,
         long diskFreeBytes,
         long offsetSaveFailuresTotal) {
@@ -26,8 +26,8 @@ public record OrchestratorCounters(
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("rowsParsedTotal",         rowsParsedTotal);
         out.put("windowsPublishedTotal",   windowsPublishedTotal);
-        out.put("kafkaSendErrorsTotal",    kafkaSendErrorsTotal);
-        out.put("kafkaLastAckEpochMs",     kafkaLastAckEpochMs);
+        out.put("publishErrorsTotal",      publishErrorsTotal);
+        out.put("publishLastAckEpochMs",   publishLastAckEpochMs);
         out.put("uploadInflightBytes",     uploadInflightBytes);
         out.put("diskFreeBytes",           diskFreeBytes);
         out.put("offsetSaveFailuresTotal", offsetSaveFailuresTotal);

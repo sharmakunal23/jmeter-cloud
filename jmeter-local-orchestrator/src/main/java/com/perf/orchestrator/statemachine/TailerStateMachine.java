@@ -1,6 +1,6 @@
 package com.perf.orchestrator.statemachine;
 
-import com.perf.orchestrator.WorkerMetricBatch;
+import com.perf.orchestrator.model.WorkerMetricBatch;
 import com.perf.orchestrator.aggregator.TumblingWindowAggregator;
 import com.perf.orchestrator.buffer.MetricsDispatcher;
 import com.perf.orchestrator.config.OrchestratorConfig;
@@ -8,7 +8,6 @@ import com.perf.orchestrator.io.FilePoller;
 import com.perf.orchestrator.io.PollResult;
 import com.perf.orchestrator.io.SentinelWatcher;
 import com.perf.orchestrator.io.JtlOffsetStore;
-import com.perf.orchestrator.kafka.MetricPublisher;
 import com.perf.orchestrator.model.JtlRow;
 
 import java.io.IOException;
@@ -20,28 +19,19 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Drives the JTL tailing lifecycle through its four states.
+ * Drives the JTL tailing lifecycle through its four states. {@link #run()} is
+ * the only entry point, must be called from a single thread, and blocks until
+ * the machine reaches {@link TailerState#DONE}.
  *
- * <p>All dependencies are injected via the constructor so the machine is fully
- * testable without any I/O or Kafka infrastructure. {@link #run()} is the single
- * entry point and blocks until the machine reaches {@link TailerState#DONE}.
+ * <p>A SIGTERM sets the shutdown flag, which RUNNING checks each iteration
+ * exactly as it checks the sentinel file — so a SIGTERM gets the same graceful
+ * drain-then-flush as normal completion, rather than losing the tail. The
+ * shutdown hook only writes a {@code volatile boolean}, so no synchronisation
+ * is needed.
  *
- * <h2>SIGTERM handling</h2>
- * A JVM shutdown hook sets {@code shutdownRequested = true}. The RUNNING state
- * checks this flag on every iteration — exactly as it checks the sentinel file —
- * and transitions to DRAINING. This means a SIGTERM triggers the same graceful
- * drain-then-flush sequence as a normal test completion.
- *
- * <h2>Error handling</h2>
- * {@link IOException} from the poller is treated as fatal: it is logged,
- * the machine transitions directly to DONE, and cleanup runs in the
- * {@code finally} block. Non-I/O exceptions from the aggregator or publisher
- * are also caught so cleanup always runs.
- *
- * <h2>Thread safety</h2>
- * {@code run()} must be called from a single thread. The shutdown hook runs
- * on a separate JVM thread but only writes a {@code volatile boolean} — no
- * synchronisation is needed.
+ * <p>An {@link IOException} from the poller is fatal: log, go straight to DONE,
+ * and let the {@code finally} block clean up. Other exceptions are caught for
+ * the same reason — cleanup must always run.
  */
 public final class TailerStateMachine {
 
@@ -51,9 +41,7 @@ public final class TailerStateMachine {
     private final JtlOffsetStore      stateStore;
     private final SentinelWatcher        sentinel;
     private final TumblingWindowAggregator aggregator;
-    private final MetricPublisher        publisher;
     private final MetricsDispatcher      dispatcher;
-    private final String                 topic;
 
     private TailerState state                = TailerState.WAITING_FOR_FILE;
     private FilePoller  poller               = null;
@@ -73,19 +61,12 @@ public final class TailerStateMachine {
                                JtlOffsetStore      stateStore,
                                SentinelWatcher        sentinel,
                                TumblingWindowAggregator aggregator,
-                               MetricPublisher        publisher,
-                               MetricsDispatcher      dispatcher,
-                               String                 topic) {
+                               MetricsDispatcher      dispatcher) {
         this.config     = Objects.requireNonNull(config,     "config cannot be null");
         this.stateStore = Objects.requireNonNull(stateStore, "stateStore cannot be null");
         this.sentinel   = Objects.requireNonNull(sentinel,   "sentinel cannot be null");
         this.aggregator = Objects.requireNonNull(aggregator, "aggregator cannot be null");
-        this.publisher  = Objects.requireNonNull(publisher,  "publisher cannot be null");
         this.dispatcher = Objects.requireNonNull(dispatcher, "dispatcher cannot be null");
-        if (topic == null || topic.isBlank()) {
-            throw new IllegalArgumentException("topic must be non-blank");
-        }
-        this.topic = topic;
     }
 
     // -----------------------------------------------------------------------
@@ -96,7 +77,7 @@ public final class TailerStateMachine {
      * Runs the state machine to completion, blocking the calling thread.
      *
      * <p>Returns normally when {@link TailerState#DONE} is reached.
-     * The publisher is flushed and closed in all exit paths, including errors.
+     * The dispatch queue is drained in all exit paths, including errors.
      */
     public void run() {
         installShutdownHook();
@@ -118,12 +99,13 @@ public final class TailerStateMachine {
         } finally {
             deregisterShutdownHook();
             closePollerSafely();
-            // Per-run end: drain the dispatch queue first so every envelope
-            // offered during this run reaches the buffer (and ideally Kafka).
-            // Then flush the underlying publisher so any in-flight Kafka
-            // sends settle before COMPLETED. Do NOT call publisher.close() —
-            // the publisher + dispatcher are process-wide singletons owned
-            // by the orchestrator's shutdown hook.
+            // Per-run end: drain the dispatch queue so every envelope offered
+            // during this run reaches the buffer (and ideally the consumer's
+            // /ingest). Envelopes the consumer hasn't accepted yet stay on
+            // disk — the dispatcher's retry sweeper keeps re-POSTing them
+            // after the run completes, so COMPLETED never loses data that
+            // made it into the buffer. Do NOT close the dispatcher — it is a
+            // process-wide singleton owned by the orchestrator's shutdown hook.
             try {
                 boolean drained = dispatcher.awaitQueueDrain(Duration.ofSeconds(10));
                 if (!drained) {
@@ -133,14 +115,9 @@ public final class TailerStateMachine {
                 Thread.currentThread().interrupt();
                 LOG.warning("Interrupted awaiting dispatcher drain at end of run");
             }
-            try {
-                publisher.flush();
-            } catch (Exception e) {
-                LOG.log(Level.WARNING, "Error flushing publisher at end of run", e);
-            }
             LOG.info(() -> String.format(
-                    "TailerStateMachine shut down. published=%d failed=%d bufferDepth=%d",
-                    publisher.getPublishedCount(), publisher.getFailedCount(), 0L));
+                    "TailerStateMachine shut down. published=%d failed=%d",
+                    dispatcher.publishedCount(), dispatcher.failedCount()));
         }
     }
 
@@ -241,7 +218,7 @@ public final class TailerStateMachine {
 
         List<WorkerMetricBatch> finalEnvelopes = aggregator.drainAll();
         if (!finalEnvelopes.isEmpty()) {
-            int accepted = dispatcher.offerAll(finalEnvelopes, topic);
+            int accepted = dispatcher.offerAll(finalEnvelopes);
             if (accepted < finalEnvelopes.size()) {
                 LOG.warning(() -> String.format(
                         "Final flush: dispatcher refused %d/%d envelopes due to backpressure",
@@ -267,7 +244,7 @@ public final class TailerStateMachine {
     private void publishCloseable() {
         List<WorkerMetricBatch> closed = aggregator.drainCloseable();
         if (!closed.isEmpty()) {
-            int accepted = dispatcher.offerAll(closed, topic);
+            int accepted = dispatcher.offerAll(closed);
             if (accepted < closed.size()) {
                 LOG.warning(() -> String.format(
                         "Dispatcher refused %d/%d envelopes due to backpressure — see metricsDispatch.dropsForBackpressure",

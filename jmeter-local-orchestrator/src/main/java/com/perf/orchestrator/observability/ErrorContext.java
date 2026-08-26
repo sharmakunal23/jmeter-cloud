@@ -4,7 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.MDC;
 
 /**
- * OBSERVABILITY Phase F — operator-readable error context for catch blocks.
+ * Operator-readable error context for catch blocks.
  * See the equivalent class in jmeter-global-orchestrator for the full
  * design rationale.
  */
@@ -27,7 +27,6 @@ public final class ErrorContext {
         try {
             if (context != null && !context.isBlank()) {
                 MDC.put(MDC_KEY, context);
-                SpanAttributes.tag(MDC_KEY, context);
                 tagged = true;
             }
             switch (level) {

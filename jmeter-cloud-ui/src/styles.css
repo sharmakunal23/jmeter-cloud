@@ -4884,3 +4884,71 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
   .metricsPanel__body { flex-direction: column; }
   .aiPanel--side { flex-basis: auto; max-height: 420px; }
 }
+
+/* ── STATIC-FLEET Phase 7 — Data centers section ─────────────────────────
+   The operator-facing worker surface on a fleet the platform does not
+   provision. Deliberately reuses the existing card / table / chip / form
+   primitives so it reads as part of the Application detail page rather
+   than a bolted-on panel. */
+.dataCenters {
+  margin-top: 2rem;
+}
+.dataCenters__intro {
+  margin: 0.2rem 0 1rem;
+  max-width: 62ch;
+}
+.dataCenters__card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 1.1rem;
+  margin-bottom: 1rem;
+  background: var(--surface);
+}
+.dataCenters__cardHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.7rem;
+}
+.dataCenters__cardHeader h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.dataCenters__cardActions {
+  margin-left: auto;
+}
+.dataCenters__table {
+  width: 100%;
+}
+.dataCenters__declareForm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px dashed var(--border);
+}
+.dataCenters__declareForm label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.dataCenters__declareForm label > span {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.dataCenters__declareForm input {
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+}
+.dataCenters__declareForm small {
+  font-size: 0.75rem;
+}
+.dataCenters__declareActions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}

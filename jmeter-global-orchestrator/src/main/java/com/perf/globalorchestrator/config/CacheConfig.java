@@ -16,46 +16,31 @@ import org.springframework.data.redis.serializer.RedisSerializationContext;
 import java.time.Duration;
 
 /**
- * CACHE C-0 (2026-05-26) — the shared-cache substrate.
+ * Configures the cache provider. The cache itself lives outside the service in
+ * Redis so every orchestrator instance reads the same data, and the caching is
+ * expressed with {@code @Cacheable} / {@code @CacheEvict} elsewhere — this class
+ * only wires the provider.
  *
- * <p>Per the operator's direction, the cache lives <b>outside</b> the service
- * in Redis so every
- * global-orchestrator instance reads the same data. Caching is expressed with
- * Spring's {@code @Cacheable} / {@code @CacheEvict} annotations (see
- * {@code CachingMetricsService} and {@code ApplicationController}); this class
- * only configures the provider.
+ * <p>{@code spring.cache.type} selects it: {@code redis} at runtime,
+ * {@code simple} in tests, where the customizer below is simply never invoked
+ * so no Redis is needed. The terminal-vs-active gating is provider-agnostic.
  *
- * <h2>Provider selection</h2>
- * The provider is chosen by {@code spring.cache.type}: {@code redis} at runtime
- * (see {@code application.yml}), {@code simple} in tests (a
- * {@code ConcurrentMapCacheManager}, wired by the test-only
- * {@code application-local.yml}). The terminal-vs-active gating is
- * provider-agnostic, so tests need no Redis. When {@code simple} is active the
- * {@link RedisCacheManagerBuilderCustomizer} bean below is simply never invoked.
- *
- * <h2>Per-cache TTLs</h2>
+ * <p>TTLs differ by what the entry is:
  * <ul>
  *   <li>{@link #CACHE_RUN_TIMESERIES} / {@link #CACHE_RUN_ROLLUP} — 1 h.
- *       Terminal-run metrics are immutable, so the TTL is only a freshness /
- *       turnover bound (e.g. a future run-purge that removes the underlying
- *       rows), not the memory guard — see the note below.</li>
- *   <li>{@link #CACHE_APPLICATION_CAPACITY} — 10 m. The per-(app, region)
- *       capacity grid is mutable but orchestrator-owned and slow-moving, so
- *       it is <b>evicted on every write</b> ({@code @CacheEvict} on the
- *       repository's upsert / replaceAll / delete, plus the app-delete DB
- *       cascade); the short TTL is only a backstop in case a write path is
- *       ever missed. (The application <i>registry</i> itself is deliberately
- *       NOT cached — {@code ApplicationHealthPoller} rewrites it every 30 s,
- *       making it fast-changing.)</li>
+ *       Terminal-run metrics are immutable, so this bounds turnover (a later
+ *       purge removing the rows), not memory.</li>
+ *   <li>{@link #CACHE_APPLICATION_CAPACITY} — 10 m, but <b>evicted on every
+ *       write</b>; the TTL is only a backstop for a write path someone forgot
+ *       to annotate. The application <i>registry</i> is deliberately not cached
+ *       at all — {@code ApplicationHealthPoller} rewrites it every 30 s.</li>
  * </ul>
  *
- * <h2>Serialization</h2>
- * Values serialize as JSON ({@link GenericJackson2JsonRedisSerializer}) rather
- * than JDK serialization — the cached DTOs are Java records, which are not
- * {@code Serializable}, and JSON is human-inspectable in Redis. Default typing
- * is set to {@code EVERYTHING} so the {@code @class} type tag is written even
- * for {@code final} record types (without it, polymorphic round-trips of
- * records fail to resolve their concrete type on read).
+ * <p>Values serialize as JSON, not JDK serialization: the cached DTOs are Java
+ * records, which are not {@code Serializable}. Default typing is
+ * {@code EVERYTHING} so the {@code @class} tag is written even for {@code final}
+ * records — without it a polymorphic round-trip cannot resolve its concrete
+ * type on read.
  */
 @Configuration
 @EnableCaching
@@ -101,6 +86,8 @@ public class CacheConfig {
                 // skip NullValue handling entirely (it would otherwise need its
                 // own serializer wiring with the custom ObjectMapper).
                 .disableCachingNullValues()
+                // D-4 — distinct prefix so a Redis shared with the k8s
+                // orchestrator (the local dev case) never serves its entries.
                 .prefixCacheNameWith("jmeterCloud:globalOrchestrator:");
         return builder -> builder
                 .enableStatistics()

@@ -10,7 +10,7 @@ import com.perf.globalorchestrator.domain.CronJob;
 import com.perf.globalorchestrator.domain.CronJobFire;
 import com.perf.globalorchestrator.domain.CronJobKind;
 import com.perf.globalorchestrator.domain.Ulid;
-import com.perf.globalorchestrator.observability.TracingFilter;
+import com.perf.globalorchestrator.observability.MdcEnrichmentFilter;
 import com.perf.globalorchestrator.repo.ApplicationCapacityRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.CronJobFireHistoryRepository;
@@ -41,7 +41,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * AUTOMATION — REST surface for CRON schedules. The contract (paths, field
+ * REST surface for CRON schedules. The contract (paths, field
  * names, {@code {items:[...]}} list shape) is taken verbatim from the UI stub
  * {@code jmeter-cloud-ui/src/api/automation.ts} so flipping that stub to live
  * data is the promised one-line change.
@@ -118,7 +118,7 @@ public class CronJobController {
     @PostMapping
     public ResponseEntity<CronJobSummary> create(
             @RequestBody CronJobRequest req,
-            @RequestHeader(value = TracingFilter.HEADER_ACTOR, required = false) String actorHeader) {
+            @RequestHeader(value = MdcEnrichmentFilter.HEADER_ACTOR, required = false) String actorHeader) {
         String name = validateName(req.name());
         String timeZone = normaliseTimeZone(req.timeZone());
         CronSchedule.validate(req.cronExpression(), timeZone);
@@ -219,7 +219,7 @@ public class CronJobController {
     @PostMapping("/{cronJobId:" + Ulid.PATTERN + "}/fireNow")
     public ResponseEntity<Map<String, Object>> fireNow(
             @PathVariable String cronJobId,
-            @RequestHeader(value = TracingFilter.HEADER_ACTOR, required = false) String actorHeader) {
+            @RequestHeader(value = MdcEnrichmentFilter.HEADER_ACTOR, required = false) String actorHeader) {
         CronJob job = require(cronJobId);
         FireResult result = fireService.fire(job, Actor.fromHeader(actorHeader));
         Map<String, Object> body = new java.util.LinkedHashMap<>();

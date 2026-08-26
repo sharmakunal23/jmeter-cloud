@@ -114,7 +114,7 @@ class ObservabilityControllerTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.rowsParsedTotal").value(100L))
                     .andExpect(jsonPath("$.windowsPublishedTotal").value(4L))
-                    .andExpect(jsonPath("$.kafkaLastAckEpochMs").value(1700000000000L))
+                    .andExpect(jsonPath("$.publishLastAckEpochMs").value(1700000000000L))
                     .andExpect(jsonPath("$.diskFreeBytes").value(8_000_000_000L));
         }
     }

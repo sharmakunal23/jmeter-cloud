@@ -44,7 +44,7 @@ function LogTailMock(props: LogTailMockProps) {
 
 vi.mock("../LogTailPanel", () => ({ LogTailPanel: LogTailMock }));
 
-// HM-3 — MetricsTabPanel now does its own data fetching + uPlot
+// MetricsTabPanel now does its own data fetching + uPlot
 // rendering. The RunStreamsPanel tests target the surrounding shell
 // (tab strip, worker selector, tab filtering, control visibility);
 // the panel itself has its own dedicated test file.

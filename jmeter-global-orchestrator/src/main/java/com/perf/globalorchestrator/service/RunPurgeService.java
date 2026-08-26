@@ -5,14 +5,11 @@ import com.perf.globalorchestrator.client.DocumentServiceClient;
 import com.perf.globalorchestrator.domain.Actor;
 import com.perf.globalorchestrator.domain.Run;
 import com.perf.globalorchestrator.domain.Ulid;
-import com.perf.globalorchestrator.observability.SpanAttributes;
 import com.perf.globalorchestrator.repo.AiResponseRepository;
 import com.perf.globalorchestrator.repo.MetricsPurgeRepository;
 import com.perf.globalorchestrator.repo.PurgeAuditRepository;
 import com.perf.globalorchestrator.repo.RunRepository;
 import com.perf.globalorchestrator.repo.RunTrendRepository;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,37 +22,25 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * HARD-DELETE / purge — the irreversible second
- * tier of the two-tier delete model. {@link RunService#deleteRun} "hides" a run
- * (reversible, {@code hiddenAt}); this PHYSICALLY removes a hidden run and the
- * storage it occupies, to reclaim space:
+ * The irreversible second tier of the delete model: where
+ * {@link RunService#deleteRun} only hides a run, this physically removes a
+ * hidden run's result blobs, its per-second metrics rows and its run-state, and
+ * leaves a {@code purgeAudit} tombstone. Test-plan and data-file blobs go only
+ * if no surviving run still references them.
  *
- * <ol>
- *   <li><b>Result blobs</b> in document-service ({@code results-{runId}-*}),
- *       plus the run's testPlan/dataFiles blobs <em>iff</em> no other run still
- *       references them (shared uploaded plans survive).</li>
- *   <li><b>Metrics</b> — the run's per-second rows in
- *       {@code metrics."workerMetric"} (the bulk of the bytes), via the
- *       purge-only datasource.</li>
- *   <li><b>Run-state</b> — {@code aiResponse} + {@code runTrend} rows, then the
- *       {@code run} row itself (cascading its fleet members + audit events), and
- *       a {@code purgeAudit} tombstone, all in one transaction.</li>
- * </ol>
- *
- * <h2>Ordering &amp; retry-safety</h2>
- * Every step is idempotent, so a partially-completed purge is safe to re-run.
- * The order is deliberate:
+ * <p>Every step is idempotent, so a partially completed purge is safe to re-run,
+ * and <b>the order is load-bearing</b>:
  * <ul>
- *   <li>Blobs first, and <em>tolerant</em>: if document-service is unreachable
- *       the purge records the blob step as incomplete and proceeds — orphaned,
- *       runId-named result blobs are reclaimable by a future retention sweep, and
- *       wedging the whole purge on a transient blob-service blip would be worse.</li>
- *   <li>Metrics next, and <em>required</em>: if the metrics DELETE fails the
- *       purge ABORTS before touching the run row. The run row is the only handle
- *       on those rows (runId), so deleting it first would orphan them
- *       un-findably. Leaving the run hidden lets the operator retry.</li>
- *   <li>Run-state last, transactionally — the run only disappears once its
- *       artifacts are gone.</li>
+ *   <li><b>Blobs first, tolerantly.</b> If document-service is unreachable the
+ *       step is recorded incomplete and the purge continues — the orphans are
+ *       runId-named and reclaimable by a later sweep, where wedging the whole
+ *       purge on a transient blip would not be.</li>
+ *   <li><b>Metrics next, and required.</b> A failed DELETE aborts before the run
+ *       row is touched, because that row's runId is the only handle on those
+ *       rows — deleting it first orphans them un-findably. The run stays hidden
+ *       so the operator can retry.</li>
+ *   <li><b>Run-state last, in one transaction</b>, so a run disappears only once
+ *       its artifacts are gone.</li>
  * </ul>
  */
 @Service
@@ -81,18 +66,13 @@ public class RunPurgeService {
     @Lazy
     private RunPurgeService self;
 
-    private final Counter runsPurged;
-    private final Counter metricRowsPurged;
-    private final Counter blobsPurged;
-
     public RunPurgeService(RunRepository runs,
                            RunTrendRepository runTrends,
                            AiResponseRepository aiResponses,
                            MetricsPurgeRepository metricsPurge,
                            DocumentServiceClient docClient,
                            PurgeAuditRepository purgeAudit,
-                           ObjectMapper json,
-                           MeterRegistry meterRegistry) {
+                           ObjectMapper json) {
         this.runs = runs;
         this.runTrends = runTrends;
         this.aiResponses = aiResponses;
@@ -100,15 +80,6 @@ public class RunPurgeService {
         this.docClient = docClient;
         this.purgeAudit = purgeAudit;
         this.json = json;
-        this.runsPurged = Counter.builder("globalOrchestrator.runs.purged")
-                .description("Runs permanently deleted (hard delete / purge).")
-                .register(meterRegistry);
-        this.metricRowsPurged = Counter.builder("globalOrchestrator.purge.metricRows")
-                .description("metrics.workerMetric rows removed by run purges.")
-                .register(meterRegistry);
-        this.blobsPurged = Counter.builder("globalOrchestrator.purge.blobs")
-                .description("document-service blobs removed by run purges.")
-                .register(meterRegistry);
     }
 
     /**
@@ -120,9 +91,6 @@ public class RunPurgeService {
      *                                         not been hidden first (409).
      */
     public PurgeResult purgeRun(String runId, Actor actor, String reason) {
-        SpanAttributes.tag("runId", runId);
-        SpanAttributes.tag("actor", actor.name());
-
         Run run = runs.findByRunId(runId)
                 .orElseThrow(() -> new RunService.RunNotFoundException(runId));
         if (!run.state().isTerminal()) {
@@ -167,18 +135,14 @@ public class RunPurgeService {
                     + "Orphaned result blobs (results-{}-*) remain for a future retention sweep.",
                     runId, e.getMessage(), runId);
         }
-        blobsPurged.increment(blobsDeleted);
-
         // ── 2. Metrics — required; abort before touching the run row ─────
         long metricRows = metricsPurge.deleteByRunId(runId);
-        metricRowsPurged.increment(metricRows);
 
         // ── 3. Run-state — transactional, through the self proxy ─────────
         String detailsJson = writeDetails(blobStepComplete);
         self.commitRunStatePurge(runId, run.application(), actor, reason,
                 metricRows, blobsDeleted, writeTombstone, detailsJson);
 
-        runsPurged.increment();
         LOG.info("Run {} purged by {}: {} metric rows, {} blobs (blobStepComplete={})",
                 runId, actor.name(), metricRows, blobsDeleted, blobStepComplete);
         return new PurgeResult(runId, metricRows, blobsDeleted, blobStepComplete);

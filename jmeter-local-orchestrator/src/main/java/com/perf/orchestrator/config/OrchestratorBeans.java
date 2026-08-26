@@ -4,14 +4,12 @@ import com.perf.orchestrator.OrchestratorMain;
 import com.perf.orchestrator.buffer.AsyncMetricsDispatcher;
 import com.perf.orchestrator.buffer.DiskBackedMetricsBuffer;
 import com.perf.orchestrator.buffer.DiskBackedMetricsBuffer.DiskBackedMetricsBufferConfig;
-import com.perf.orchestrator.buffer.HttpFallbackClient;
-import com.perf.orchestrator.buffer.JdkHttpFallbackClient;
+import com.perf.orchestrator.buffer.HttpIngestClient;
+import com.perf.orchestrator.buffer.JdkHttpIngestClient;
 import com.perf.orchestrator.buffer.MetricsBuffer;
 import com.perf.orchestrator.buffer.MetricsDispatcher;
 import com.perf.orchestrator.http.BuildInfo;
 import com.perf.orchestrator.http.ReadinessProbe;
-import com.perf.orchestrator.kafka.KafkaMetricPublisher;
-import com.perf.orchestrator.kafka.MetricPublisher;
 import com.perf.orchestrator.lifecycle.ArtifactSources;
 import com.perf.orchestrator.lifecycle.ArtifactStager;
 import com.perf.orchestrator.lifecycle.CurrentRun;
@@ -21,12 +19,11 @@ import com.perf.orchestrator.lifecycle.StreamingPipeline;
 import com.perf.orchestrator.lifecycle.TestRunManager;
 import com.perf.orchestrator.logs.LogTail;
 import com.perf.orchestrator.metrics.CountersSupplier;
+import com.perf.orchestrator.metrics.IngestReachabilityProbe;
 import com.perf.orchestrator.metrics.JmxMetricsCollector;
-import com.perf.orchestrator.metrics.KafkaReachabilityProbe;
 import com.perf.orchestrator.metrics.OrchestratorCounters;
 import com.perf.orchestrator.storage.ArtifactSource;
 import com.perf.orchestrator.storage.ResultSink;
-import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 
@@ -38,46 +35,27 @@ import java.time.Instant;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
- * Spring configuration entry point for the orchestrator.
+ * Spring configuration for the orchestrator: every singleton is a {@code @Bean}
+ * here, and the component scan covers {@code com.perf.orchestrator} so
+ * {@code @Service} classes are picked up alongside them.
  *
- * <h2>Wiring model</h2>
- * Every singleton in the orchestrator is a {@code @Bean} declared on this
- * class — Spring constructs them in dependency order and injects them into
- * controllers, the {@code TestRunManager}, and the streaming pipeline. The
- * legacy "pre-publish bridge" (where {@code OrchestratorMain.main} hand-built
- * each singleton then registered them as pre-existing instances via
- * {@code GenericApplicationContext.registerBean}) was retired in the
- * {@code @Bean}-factory migration so {@code main()} can shrink to "boot
- * Spring, register a shutdown hook, park."
- *
- * <h2>Component scan</h2>
- * Scan opens to {@code com.perf.orchestrator} so {@code @Service}-annotated
- * classes ({@link ArtifactStager}, {@link com.perf.orchestrator.lifecycle.ResultUploader})
- * get auto-instantiated alongside the {@code @Bean}-declared singletons —
- * the previous narrow scan ({@code com.perf.orchestrator.http} only) was a
- * holdover from the migration period when those classes' instances were
- * pre-published from {@code OrchestratorMain}.
- *
- * <h2>Lifecycle and shutdown ordering</h2>
- * Every {@code @Bean} below uses {@code destroyMethod = ""} so context close
- * does NOT auto-invoke {@code Closeable.close()} on the bean. Shutdown
- * ordering is owned by the explicit hook in {@link OrchestratorMain#main}:
+ * <p><b>Shutdown ordering is owned by the explicit hook in
+ * {@link OrchestratorMain#main}, not by Spring.</b> That is why every bean sets
+ * {@code destroyMethod = ""} — context close must not call {@code close()}
+ * itself, because Spring's default ordering would not produce this sequence:
  * <ol>
- *   <li>{@code kafkaProbe.close()} — flips /actuator/health DOWN; K8s stops routing.</li>
- *   <li>{@code runManager.shutdownGracefully(grace)} — drains in-flight test.</li>
- *   <li>{@code metricPublisher.close()} — disposes the singleton Kafka producer.</li>
+ *   <li>{@code ingestProbe.close()} — flips health DOWN so K8s stops routing.</li>
+ *   <li>{@code runManager.shutdownGracefully(grace)} — drains the in-flight test.</li>
+ *   <li>{@code metricsDispatcher.close()} — stops dispatch; unsent envelopes stay
+ *       in the on-disk buffer for the next process.</li>
  *   <li>{@code jmx.close()} — releases the JMX connector.</li>
- *   <li>{@code springCtx.close()} — stops Tomcat (no-ops the bean closes).</li>
+ *   <li>{@code springCtx.close()} — stops Tomcat.</li>
  * </ol>
- * Spring's default destroy ordering would not produce this sequence; the
- * explicit hook is load-bearing.
  *
- * <h2>{@code @SpringBootApplication}</h2>
- * Used (instead of plain {@code @Configuration} + {@code @EnableAutoConfiguration}
- * + {@code @ComponentScan}) so the scan picks up Spring Boot's
- * {@code TypeExcludeFilter} and {@code AutoConfigurationExcludeFilter}
- * — without them, {@code @TestConfiguration} fixtures in slice tests get
- * auto-detected and trip {@code BeanDefinitionOverrideException}.
+ * <p>{@code @SpringBootApplication} rather than plain {@code @Configuration}:
+ * the scan then honours Boot's {@code TypeExcludeFilter}, without which
+ * {@code @TestConfiguration} fixtures are auto-detected in slice tests and trip
+ * {@code BeanDefinitionOverrideException}.
  */
 @SpringBootApplication(scanBasePackages = "com.perf.orchestrator")
 @org.springframework.scheduling.annotation.EnableScheduling
@@ -117,9 +95,9 @@ public class OrchestratorBeans {
     /**
      * Process-level counter for JTL byte-offset persist failures. Threaded
      * into each per-run {@link StreamingPipeline} so a flaky disk shows up as
-     * a monotonically-increasing Prometheus counter rather than scattered
-     * WARN log lines. Bean name distinguishes it in case more {@link LongAdder}
-     * counters are added later.
+     * a monotonically-increasing counter on {@code GET /api/v1/metrics/orchestrator}
+     * rather than scattered WARN log lines. Bean name distinguishes it in case
+     * more {@link LongAdder} counters are added later.
      */
     @Bean
     public LongAdder offsetSaveFailures() {
@@ -153,18 +131,9 @@ public class OrchestratorBeans {
         return new JmxMetricsCollector(config.getJmxPort());
     }
 
-    /**
-     * Publishes the JMeter child's JMX snapshot as {@code jmeter_jvm_*}
-     * Prometheus gauges on the orchestrator's actuator endpoint, so the
-     * "Worker Pod JVM" Grafana dashboard can chart the orchestrator and the
-     * JMeter child JVMs side by side. Spring Boot auto-binds {@link MeterBinder}
-     * beans to the primary {@link MeterRegistry}.
-     */
-    @Bean
-    public com.perf.orchestrator.metrics.JmeterJvmMetrics jmeterJvmMetrics(
-            JmxMetricsCollector jmxMetricsCollector) {
-        return new com.perf.orchestrator.metrics.JmeterJvmMetrics(jmxMetricsCollector);
-    }
+    // SLIMDOWN (2026-07-21): the JmeterJvmMetrics MeterBinder (jmeter_jvm_*
+    // Prometheus gauges) left with the Micrometer stack. The JMX collector
+    // itself stays — GET /api/v1/metrics/jmeterJvm serves the same snapshot.
 
     // -----------------------------------------------------------------------
     // Storage backends — gated by env-driven factories so the same fat JAR
@@ -186,45 +155,21 @@ public class OrchestratorBeans {
     }
 
     // -----------------------------------------------------------------------
-    // Kafka — reachability probe + metric publisher
+    // Metrics-consumer reachability probe
     // -----------------------------------------------------------------------
 
     /**
-     * Daemon-thread cached probe via {@code AdminClient}. Started immediately
-     * so /actuator/health reflects the real broker state by the time Tomcat
-     * starts accepting traffic; until the first poll returns the snapshot is
-     * DOWN/{@code startup_in_progress} so /ready never reports a false UP.
+     * Daemon-thread cached probe via HTTP {@code OPTIONS} against the ingest
+     * URL. Started immediately so /actuator/health reflects the real consumer
+     * state by the time Tomcat starts accepting traffic; until the first poll
+     * returns the snapshot is DOWN/{@code startup_in_progress} so /ready
+     * never reports a false UP.
      */
     @Bean(destroyMethod = "")
-    public KafkaReachabilityProbe kafkaReachabilityProbe(OrchestratorConfig config) {
-        KafkaReachabilityProbe probe = KafkaReachabilityProbe.create(config);
+    public IngestReachabilityProbe ingestReachabilityProbe(OrchestratorConfig config) {
+        IngestReachabilityProbe probe = IngestReachabilityProbe.create(config);
         probe.start();
         return probe;
-    }
-
-    /**
-     * Per-process Kafka producer singleton. Shared across every test run —
-     * the producer config (brokers, schema-registry URL, client.id from pod
-     * name) doesn't change between runs, so warming one producer once saves
-     * ~100-200 ms per {@code POST /test}, accumulates broker-side metrics
-     * across the orchestrator's lifetime, and lets KafkaTemplate's
-     * Micrometer binder expose {@code /actuator/metrics/kafka.producer.*}
-     * once.
-     *
-     * <p>Injecting {@link MeterRegistry} here lets us call
-     * {@link KafkaMetricPublisher#enableMicrometer(MeterRegistry)} during
-     * construction — Spring Boot's auto-config has registered the registry
-     * by the time this {@code @Bean} method runs.
-     *
-     * <p>{@code destroyMethod = ""} so the orchestrator shutdown hook (not
-     * Spring) decides when to close the producer; see the class javadoc for
-     * shutdown ordering.
-     */
-    @Bean(destroyMethod = "")
-    public KafkaMetricPublisher metricPublisher(OrchestratorConfig config, MeterRegistry meterRegistry) {
-        KafkaMetricPublisher publisher = KafkaMetricPublisher.create(config);
-        publisher.enableMicrometer(meterRegistry);
-        return publisher;
     }
 
     // -----------------------------------------------------------------------
@@ -234,13 +179,12 @@ public class OrchestratorBeans {
     /**
      * Disk-backed write-ahead queue for {@code WorkerMetricBatch} envelopes.
      * Persists each envelope to {@code BASE_DIR/metricsBuffer/<id>.envelope.gz}
-     * before publish, so envelopes survive Kafka outages and process crashes.
-     * JMeter-considerate sizing: caps total bytes, reserves free disk for
-     * JTL writes, drops oldest first when over cap.
+     * before publish, so envelopes survive metrics-consumer outages and
+     * process crashes. JMeter-considerate sizing: caps total bytes, reserves
+     * free disk for JTL writes, drops oldest first when over cap.
      */
     @Bean(destroyMethod = "")
     public MetricsBuffer metricsBuffer(OrchestratorConfig config,
-                                       MeterRegistry meterRegistry,
                                        Clock clock) {
         DiskBackedMetricsBufferConfig cfg = new DiskBackedMetricsBufferConfig(
                 config.getMetricsBufferMaxBytes(),
@@ -248,46 +192,37 @@ public class OrchestratorBeans {
                 config.getMetricsBufferMinFreeDiskBytes(),
                 Duration.ofHours(config.getMetricsBufferMaxAgeHours()));
         return new DiskBackedMetricsBuffer(
-                Paths.get(config.getMetricsBufferPath()), cfg, meterRegistry, clock);
+                Paths.get(config.getMetricsBufferPath()), cfg, clock);
+    }
+
+    /**
+     * The metrics sink — POSTs JSON envelopes to the metrics-consumer's
+     * {@code /api/v1/ingest} — the only publish path.
+     */
+    @Bean(destroyMethod = "")
+    public HttpIngestClient httpIngestClient(OrchestratorConfig config) {
+        return new JdkHttpIngestClient(
+                config.getMetricsIngestUrl(),
+                java.time.Duration.ofMillis(config.getMetricsIngestConnectTimeoutMs()),
+                java.time.Duration.ofMillis(config.getMetricsIngestRequestTimeoutMs()));
     }
 
     /**
      * Single-thread coordinator between the aggregator (producer) and
-     * publisher + buffer. {@code dispatcher.offer(envelope)} is a
+     * ingest client + buffer. {@code dispatcher.offer(envelope)} is a
      * sub-microsecond CAS — the aggregator's poll thread never blocks on
-     * disk I/O. The dispatch thread persists to the buffer, publishes to
-     * Kafka, and deletes from the buffer on success. Periodic retry sweeper
-     * republishes envelopes left on disk by prior publish failures (e.g.
-     * Kafka outage).
+     * disk I/O. The dispatch thread persists to the buffer, POSTs to the
+     * consumer, and deletes from the buffer on success. Periodic retry
+     * sweeper republishes envelopes left on disk by prior publish failures
+     * (e.g. consumer outage).
      *
      * <p>{@code destroyMethod = ""} so the orchestrator's shutdown hook (not
      * Spring) decides when to stop the dispatch thread.
      */
-    /**
-     * K-5 — HTTP fallback to metrics-consumer's {@code /api/v1/ingest} when a
-     * Kafka send fails. Returns {@code null} when {@code metricsHttpFallbackEnabled=false}
-     * — in that case the dispatcher leaves failed envelopes on disk for the
-     * K-3 retry sweeper, but never attempts HTTP. Useful for environments
-     * without a metrics-consumer reachable from the local-orchestrator.
-     */
-    @Bean(destroyMethod = "")
-    public HttpFallbackClient httpFallbackClient(OrchestratorConfig config) {
-        if (!config.isMetricsHttpFallbackEnabled()) {
-            return null;
-        }
-        return new JdkHttpFallbackClient(
-                config.getMetricsHttpFallbackUrl(),
-                java.time.Duration.ofMillis(config.getMetricsHttpFallbackConnectTimeoutMs()),
-                java.time.Duration.ofMillis(config.getMetricsHttpFallbackRequestTimeoutMs()));
-    }
-
     @Bean(destroyMethod = "")
     public MetricsDispatcher metricsDispatcher(MetricsBuffer metricsBuffer,
-                                               KafkaMetricPublisher metricPublisher,
-                                               @org.springframework.beans.factory.annotation.Autowired(required = false)
-                                               HttpFallbackClient httpFallbackClient,
-                                               MeterRegistry meterRegistry) {
-        return new AsyncMetricsDispatcher(metricsBuffer, metricPublisher, httpFallbackClient, meterRegistry);
+                                               HttpIngestClient httpIngestClient) {
+        return new AsyncMetricsDispatcher(metricsBuffer, httpIngestClient);
     }
 
     // -----------------------------------------------------------------------
@@ -298,7 +233,7 @@ public class OrchestratorBeans {
      * Owns the orchestrator's single in-flight test run.
      *
      * <p>The {@code StreamingPipeline} factory lambda captures the singleton
-     * {@code metricPublisher} and {@code offsetSaveFailures} counter — those
+     * {@code metricsDispatcher} and {@code offsetSaveFailures} counter — those
      * stay constant across runs while the per-run {@link OrchestratorConfig}
      * changes (different {@code runId}, JTL paths, etc.).
      */
@@ -307,20 +242,23 @@ public class OrchestratorBeans {
                                          ArtifactStager stager,
                                          CurrentRun currentRun,
                                          LogTail logTail,
-                                         MetricPublisher metricPublisher,
                                          MetricsDispatcher metricsDispatcher,
                                          LongAdder offsetSaveFailures,
                                          ResultSink resultSink,
                                          ArtifactSource artifactSource,
-                                         Clock clock) {
+                                         Clock clock,
+                                         com.perf.orchestrator.hygiene.OrphanJmeterReaper orphanReaper,
+                                         com.perf.orchestrator.hygiene.RunArtifactRetention retention) {
         return new TestRunManager(
                 config, stager, currentRun,
                 new JmeterProcessManager(logTail),
-                cfg -> new StreamingPipeline(cfg, metricPublisher, metricsDispatcher, offsetSaveFailures),
+                cfg -> new StreamingPipeline(cfg, metricsDispatcher, offsetSaveFailures),
                 resultSink,
                 artifactSource,
                 clock,
-                logTail);
+                logTail,
+                orphanReaper,
+                retention);
     }
 
     // -----------------------------------------------------------------------
@@ -328,30 +266,114 @@ public class OrchestratorBeans {
     // -----------------------------------------------------------------------
 
     /**
-     * Composes the readiness response from the live signals: Kafka reachability
-     * (most severe — DOWN if unreachable), then disk pressure, then UP. The
-     * precedence rules are factored into {@link OrchestratorMain#composeReadinessSnapshot}
-     * so they can be unit-tested without booting Tomcat.
+     * Composes the readiness response from the live signals: metrics-consumer
+     * reachability (most severe — DOWN if unreachable), then disk pressure,
+     * then UP. The precedence rules are factored into
+     * {@link OrchestratorMain#composeReadinessSnapshot} so they can be
+     * unit-tested without booting Tomcat.
      */
     @Bean
     public ReadinessProbe readinessProbe(OrchestratorConfig config,
                                          CurrentRun currentRun,
-                                         KafkaReachabilityProbe kafkaProbe) {
+                                         IngestReachabilityProbe ingestProbe,
+                                         com.perf.orchestrator.hygiene.OrphanJmeterReaper orphanReaper) {
         long minFreeDiskBytes = config.getMinFreeDiskMb() * 1024L * 1024L;
         Path baseDir = Path.of(config.getBaseDir());
         return () -> OrchestratorMain.composeReadinessSnapshot(
-                kafkaProbe.snapshot(),
+                ingestProbe.snapshot(),
                 OrchestratorMain.diskFreeBytes(baseDir),
                 minFreeDiskBytes,
-                currentRun.state().name());
+                currentRun.state().name(),
+                orphanReaper.unresolvedOrphan());
+    }
+
+    /**
+     * Finds a JMeter child that outlived its run.
+     * Ownership is decided by the command line naming BOTH
+     * {@code ApacheJMeter.jar} and this orchestrator's {@code BASE_DIR}, so
+     * a co-tenant's JMeter on the same host can never be a candidate.
+     */
+    @Bean
+    public com.perf.orchestrator.hygiene.OrphanJmeterReaper orphanJmeterReaper(
+            OrchestratorConfig config, CurrentRun currentRun) {
+        return new com.perf.orchestrator.hygiene.OrphanJmeterReaper(
+                currentRun::isActive,
+                config.getBaseDir(),
+                com.perf.orchestrator.hygiene.OrphanJmeterReaper.Policy
+                        .valueOf(config.getOrphanJmeterPolicy()));
+    }
+
+    /**
+     * Bounds what preserved run artifacts cost on a
+     * worker that is never recycled.
+     */
+    @Bean
+    public com.perf.orchestrator.hygiene.RunArtifactRetention runArtifactRetention(
+            OrchestratorConfig config) {
+        return new com.perf.orchestrator.hygiene.RunArtifactRetention(
+                Path.of(config.getResultsDir()),
+                Path.of(config.getLogsDir()),
+                config.getRunArtifactRetentionCount(),
+                java.time.Duration.ofDays(config.getRunArtifactRetentionDays()));
+    }
+
+    /**
+     * The idle hygiene tick.
+     *
+     * <p>A plain {@link java.util.concurrent.ScheduledExecutorService} rather
+     * than {@code @Scheduled}: the cadence comes from
+     * {@code OrchestratorConfig}, which is this service's single config
+     * entrypoint (see its CLAUDE.md — {@code @Value} / {@code application.yml}
+     * are deliberately not used for runtime knobs here), and
+     * {@code @Scheduled} would have forced the interval back into a property
+     * placeholder.
+     *
+     * <p>Both sweeps are no-ops while a test is in flight: the reaper gates
+     * on {@code CurrentRun.isActive}, and retention is handed the live runId
+     * so it can never delete artifacts being written.
+     */
+    @Bean(destroyMethod = "shutdownNow")
+    public java.util.concurrent.ScheduledExecutorService hygieneScheduler(
+            OrchestratorConfig config,
+            CurrentRun currentRun,
+            com.perf.orchestrator.hygiene.OrphanJmeterReaper reaper,
+            com.perf.orchestrator.hygiene.RunArtifactRetention retention) {
+        java.util.concurrent.ScheduledExecutorService scheduler =
+                java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                    Thread t = new Thread(r, "workerHygiene");
+                    t.setDaemon(true);
+                    return t;
+                });
+        long periodSeconds = config.getOrphanJmeterScanIntervalSeconds();
+        scheduler.scheduleWithFixedDelay(() -> {
+            try {
+                reaper.sweep();
+                if (!currentRun.isActive()) {
+                    retention.sweep(protectedRunIds(currentRun));
+                }
+            } catch (Exception e) {
+                // Never let a sweep kill the scheduler — the next tick retries.
+                HYGIENE_LOG.warn("Worker hygiene tick failed: {}", e.toString());
+            }
+        }, periodSeconds, periodSeconds, java.util.concurrent.TimeUnit.SECONDS);
+        return scheduler;
+    }
+
+    private static final org.slf4j.Logger HYGIENE_LOG =
+            org.slf4j.LoggerFactory.getLogger("workerHygiene");
+
+    /** The in-flight run's directories are never retention candidates. */
+    static java.util.Set<String> protectedRunIds(CurrentRun currentRun) {
+        return currentRun.snapshotIfPresent()
+                .map(s -> s.runId() == null ? java.util.Set.<String>of() : java.util.Set.of(s.runId()))
+                .orElse(java.util.Set.of());
     }
 
     /**
      * Snapshots the orchestrator's process-level counters: rows ingested,
-     * windows published, Kafka send errors, last Kafka ack timestamp, upload
+     * windows published, publish errors, last publish ack timestamp, upload
      * in-flight bytes, free disk, offset-save failures. Consumed by
-     * {@code ObservabilityController} ({@code GET /api/v1/metrics/orchestrator})
-     * and the Prometheus actuator binding.
+     * {@code ObservabilityController} ({@code GET /api/v1/metrics/orchestrator}).
      */
     @Bean
     public CountersSupplier countersSupplier(OrchestratorConfig config,
@@ -364,8 +386,8 @@ public class OrchestratorBeans {
             return new OrchestratorCounters(
                     s.rowsIngested(),
                     s.windowsPublished(),
-                    s.kafkaSendErrors(),
-                    s.lastKafkaAckMs() == null ? 0L : s.lastKafkaAckMs(),
+                    s.publishErrors(),
+                    s.lastPublishAckMs() == null ? 0L : s.lastPublishAckMs(),
                     stager.getUploadInflightBytes(),
                     OrchestratorMain.diskFreeBytes(baseDir),
                     offsetSaveFailures.sum());

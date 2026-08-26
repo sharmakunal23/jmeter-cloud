@@ -1,5 +1,6 @@
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 
+import { DynamicScalingRoute } from "./components/DynamicScalingRoute";
 import { Layout } from "./components/Layout";
 import { ApplicationsListPage } from "./pages/ApplicationsListPage";
 import { ApplicationDetailPage } from "./pages/ApplicationDetailPage";
@@ -17,7 +18,7 @@ import { TemplatesListPage } from "./pages/TemplatesListPage";
 import { TemplatesDetailPage } from "./pages/TemplatesDetailPage";
 
 /**
- * Track UI-D1 — IA cutover. Routes reshaped from
+ * Routes reshaped from
  * {@code /runs · /runs/new · /blobs} to the application-centric IA:
  *
  * <ul>
@@ -49,9 +50,26 @@ export function App() {
           <Route path="applications/:appName/runs/:runId" element={<RunDetailPage />} />
 
           {/* Phase 5b — Capacity rework. List view + drill-in detail
-              following the Applications-tab IA pattern. */}
-          <Route path="capacity"           element={<CapacityListPage />} />
-          <Route path="capacity/:appName"  element={<CapacityDetailPage />} />
+              following the Applications-tab IA pattern.
+              STATIC-FLEET Phase 7 — both routes redirect to /applications on
+              a deployment that does not provision its own workers; the whole
+              surface is spin / restart / drain, which don't apply there. */}
+          <Route
+            path="capacity"
+            element={
+              <DynamicScalingRoute>
+                <CapacityListPage />
+              </DynamicScalingRoute>
+            }
+          />
+          <Route
+            path="capacity/:appName"
+            element={
+              <DynamicScalingRoute>
+                <CapacityDetailPage />
+              </DynamicScalingRoute>
+            }
+          />
 
           {/* Phase IA-Documents (2026-05-12) — list-then-drill-in IA
               matching `/capacity`. /documents shows apps with per-app

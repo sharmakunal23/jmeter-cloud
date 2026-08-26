@@ -2,7 +2,7 @@ package com.perf.orchestrator.lifecycle;
 
 /**
  * Thrown by {@link ArtifactStager} when an upload fails the validation
- * rules documented in {@code ORCHESTRATOR-PLAN.md} §"Validation rules".
+ * rules documented in {@code docs/orchestratorPlan.md} §"Validation rules".
  *
  * <p>Carries a stable {@code code} (e.g. {@code INVALID_ARCHIVE},
  * {@code PAYLOAD_TOO_LARGE}, {@code NO_TEST_PLAN}) so the controller can

@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * AUTOMATION Phase E — append-only access for
+ * Append-only access for
  * {@code globalOrchestrator.applicationHealthHistory} (Flyway V23). Written by
  * {@code ApplicationHealthPoller} on a status change; read by
  * {@code InfraReadinessComposer} to compute 24h downtime windows.

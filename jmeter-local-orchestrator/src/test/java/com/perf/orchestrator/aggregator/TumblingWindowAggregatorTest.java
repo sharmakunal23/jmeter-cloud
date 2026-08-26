@@ -1,6 +1,6 @@
 package com.perf.orchestrator.aggregator;
 
-import com.perf.orchestrator.WorkerMetricBatch;
+import com.perf.orchestrator.model.WorkerMetricBatch;
 import com.perf.orchestrator.model.JtlRow;
 import com.perf.orchestrator.testsupport.WorkerMetricRow;
 import org.junit.jupiter.api.BeforeEach;
@@ -113,7 +113,7 @@ class TumblingWindowAggregatorTest {
 
             List<WorkerMetricBatch> batches = aggregator.drainCloseable();
             assertThat(batches).isNotEmpty();
-            assertThat(batches.get(0).getJoinedAtSecond())
+            assertThat(batches.get(0).joinedAtSecond())
                     .as("default constructor must produce 0 — original-fleet semantic")
                     .isEqualTo(0L);
         }
@@ -133,7 +133,7 @@ class TumblingWindowAggregatorTest {
                     .isNotEmpty();
             assertThat(batches)
                     .as("every emitted batch must carry the joinedAtSecond stamp")
-                    .allSatisfy(b -> assertThat(b.getJoinedAtSecond()).isEqualTo(42L));
+                    .allSatisfy(b -> assertThat(b.joinedAtSecond()).isEqualTo(42L));
         }
     }
 
@@ -554,15 +554,15 @@ class TumblingWindowAggregatorTest {
             List<WorkerMetricBatch> envelopes = aggregator.drainCloseable();
 
             assertThat(envelopes)
-                    .filteredOn(b -> b.getWindowSecond() == 1000L)
+                    .filteredOn(b -> b.windowSecond() == 1000L)
                     .as("one envelope per (workerId, windowSecond) pair")
                     .hasSize(1);
-            assertThat(envelopes.get(0).getEntries())
+            assertThat(envelopes.get(0).entries())
                     .as("the envelope's entries[] holds all 200 labels")
                     .hasSize(200);
-            assertThat(envelopes.get(0).getRegion().toString()).isEqualTo(REGION);
-            assertThat(envelopes.get(0).getWorkerId().toString()).isEqualTo(WORKER_ID);
-            assertThat(envelopes.get(0).getRunId().toString()).isEqualTo(RUN_ID);
+            assertThat(envelopes.get(0).region().toString()).isEqualTo(REGION);
+            assertThat(envelopes.get(0).workerId().toString()).isEqualTo(WORKER_ID);
+            assertThat(envelopes.get(0).runId().toString()).isEqualTo(RUN_ID);
         }
 
         @Test
@@ -576,26 +576,26 @@ class TumblingWindowAggregatorTest {
             aggregator.record(row(1003L, "GET /endpoint/0")); // close window at 1000
 
             List<WorkerMetricBatch> envelopes = aggregator.drainCloseable().stream()
-                    .filter(b -> b.getWindowSecond() == 1000L)
+                    .filter(b -> b.windowSecond() == 1000L)
                     .toList();
 
             assertThat(envelopes)
                     .as("600 entries split into 2 envelopes at MAX_ENTRIES_PER_ENVELOPE=500")
                     .hasSize(2);
-            assertThat(envelopes.get(0).getEntries()).hasSize(500);
-            assertThat(envelopes.get(1).getEntries()).hasSize(100);
+            assertThat(envelopes.get(0).entries()).hasSize(500);
+            assertThat(envelopes.get(1).entries()).hasSize(100);
 
             // Same envelope-level metadata on both — the consumer's idempotency
             // contract handles per-row INSERTs identically.
             assertSoftly(softly -> {
-                softly.assertThat(envelopes.get(0).getWindowSecond())
-                        .isEqualTo(envelopes.get(1).getWindowSecond());
-                softly.assertThat(envelopes.get(0).getRegion().toString())
-                        .isEqualTo(envelopes.get(1).getRegion().toString());
-                softly.assertThat(envelopes.get(0).getWorkerId().toString())
-                        .isEqualTo(envelopes.get(1).getWorkerId().toString());
-                softly.assertThat(envelopes.get(0).getRunId().toString())
-                        .isEqualTo(envelopes.get(1).getRunId().toString());
+                softly.assertThat(envelopes.get(0).windowSecond())
+                        .isEqualTo(envelopes.get(1).windowSecond());
+                softly.assertThat(envelopes.get(0).region().toString())
+                        .isEqualTo(envelopes.get(1).region().toString());
+                softly.assertThat(envelopes.get(0).workerId().toString())
+                        .isEqualTo(envelopes.get(1).workerId().toString());
+                softly.assertThat(envelopes.get(0).runId().toString())
+                        .isEqualTo(envelopes.get(1).runId().toString());
             });
 
             // No row lost across the split — flatten to verify total row count.

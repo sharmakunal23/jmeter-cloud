@@ -1,150 +1,27 @@
 # grafana subsystem — Compose fragment.
 #
-# Brings up:
-#   • Grafana — HTTP UI on host port 3000. Provisioning is mounted from
-#     grafana/provisioning so datasources + the dashboard loader are
-#     auto-configured on boot. Dashboards are mounted from
-#     grafana/dashboards.
-#   • Prometheus — scrapes the Spring Boot services' /actuator/prometheus
-#     plus the kafka and postgres exporters.
-#   • kafka-exporter — Kafka topic + consumer-group metrics for Prometheus.
-#   • postgres_exporter — Postgres connection + query + cache metrics.
+# Brings up Grafana only — HTTP UI on host port 3000. Provisioning is
+# mounted from grafana/provisioning so the Postgres datasource + the
+# dashboard loader are auto-configured on boot; the Application
+# Performance dashboard (perTestLiveMetrics) is mounted from
+# grafana/dashboards and reads metrics."workerMetric" directly.
 #
-# Local dev posture: anonymous read access on Grafana so the dashboards
-# are clickable without logging in.
+# SLIMDOWN SL-D (2026-07-21): prometheus, postgres-exporter and jaeger
+# left this fragment — the hosting infra provides observability, and the
+# surviving dashboard needs none of them (operator decision D-1). Don't
+# reintroduce scrape/trace infra here; if a future dashboard needs a
+# non-Postgres datasource, that's an infra conversation first.
+#
+# Local dev posture: anonymous read access on Grafana so the dashboard
+# is clickable without logging in.
 
 services:
-
-  prometheus:
-    image: prom/prometheus:v2.55.0
-    profiles: [default]
-    restart: unless-stopped   # Self-heal so dashboards/alerts don't go blind on a crash.
-    # docker.sock is mounted so Prometheus's docker_sd_config can
-    # discover worker pods (dynamically-spawned local-orchestrator
-    # containers) by their `com.perf.jmeterCloud.role=local-orchestrator`
-    # label. Without this mount the worker-pods scrape job logs
-    # "permission denied" and the Worker Pod JVM dashboard stays empty.
-    # The user override matches the global-orchestrator pattern: the
-    # default `nobody` user can't read the socket on macOS/Linux hosts.
-    user: root
-    ports:
-      - "${PROMETHEUS_PORT:-9090}:9090"
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      # SECURITY S-0 — abuse-signal alert rules referenced by prometheus.yml's rule_files.
-      - ./securityAlerts.yml:/etc/prometheus/securityAlerts.yml:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - prometheus-data:/prometheus
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=7d
-      - --web.console.libraries=/usr/share/prometheus/console_libraries
-      - --web.console.templates=/usr/share/prometheus/consoles
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
-
-  kafka-exporter:
-    image: danielqsj/kafka-exporter:v1.9.0
-    profiles: [default]
-    depends_on:
-      kafka:
-        condition: service_healthy
-    command:
-      - --kafka.server=kafka:29092
-    expose:
-      - "9308"
-    # Phase 6 (chore-drawer): kafka-exporter has no built-in retry on
-    # broker unavailability and exits 255 with "client has run out of
-    # available brokers" if it starts before kafka finishes its leader
-    # election (depends_on: service_healthy isn't enough — the broker is
-    # accepting connections before all topics have leaders). on-failure
-    # restarts let the cold-start race self-heal without operator action.
-    # Normalized to unless-stopped (Round 5) for parity with the rest of the
-    # backbone — also survives a host reboot, not just a non-zero exit.
-    restart: unless-stopped
-
-  postgres-exporter:
-    image: prometheuscommunity/postgres-exporter:v0.16.0
-    profiles: [default]
-    restart: unless-stopped   # Reliability (Round 5): self-heal.
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      # The exporter needs the cluster-owner-equivalent — pg_stat_*
-      # views require broader privileges than metricsReader has.
-      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:-jmetercloud}:${POSTGRES_PASSWORD:-localdev}@postgres:5432/jmetercloud_metrics?sslmode=disable"
-    expose:
-      - "9187"
-
-  # Jaeger all-in-one — OBSERVABILITY Phase A backend.
-  #
-  # Accepts OTLP traces from every Java service over gRPC (4317) + HTTP
-  # (4318); operators open the UI at http://localhost:16686. All-in-one
-  # is in-memory and 1 h-retention — fine for local dev. Cloud uses
-  # X-Ray (no extra infra), reachable via the same OTLP wire.
-  #
-  # COLLECTOR_OTLP_ENABLED=true switches on the native OTLP receivers
-  # so we don't need to run a separate OTel collector sidecar.
-  jaeger:
-    # Operator feedback 2026-05-26: the `jaeger-all-in-one` service that
-    # appeared in the Jaeger UI is Jaeger tracing its own internals.
-    # Jaeger v1.62 had TWO independent tracers (OTel SDK + jaeger-client-go)
-    # and neither OTEL_TRACES_EXPORTER=none nor JAEGER_DISABLED=true fully
-    # silenced both. Jaeger v2.x is built on the OpenTelemetry Collector
-    # and uses OTel exclusively — setting OTEL_TRACES_EXPORTER=none on v2
-    # cleanly disables self-tracing. Same UI port + OTLP receivers, so
-    # the upgrade is a one-line image change.
-    image: jaegertracing/jaeger:2.0.0
-    profiles: [default]
-    restart: unless-stopped   # Reliability (Round 5): self-heal (in-memory traces are dev-only, but keep the receiver up).
-    environment:
-      # Jaeger v2 is built on the OpenTelemetry Collector. Setting
-      # OTEL_TRACES_EXPORTER=none + OTEL_SDK_DISABLED=true silences most
-      # self-tracing (residual "jaeger" service shows a handful of spans
-      # per startup — hardcoded internal instrumentation we can't fully
-      # disable without a custom config file).
-      OTEL_TRACES_EXPORTER: "none"
-      OTEL_SDK_DISABLED: "true"
-    # Jaeger v2's default OTel-Collector config binds the OTLP receivers
-    # to localhost — INSIDE the container, so other containers can't
-    # reach 4317/4318 at all (silent: no error, spans just drop on the
-    # producer side after timeout). Override via the OpenTelemetry
-    # Collector's `--set` flag at boot so the receivers listen on every
-    # interface. This is a v2-only requirement; v1.62 defaulted to
-    # 0.0.0.0. Document this trap in the operator runbook.
-    command:
-      - "--set"
-      - "receivers.otlp.protocols.grpc.endpoint=0.0.0.0:4317"
-      - "--set"
-      - "receivers.otlp.protocols.http.endpoint=0.0.0.0:4318"
-    ports:
-      - "${JAEGER_UI_PORT:-16686}:16686"
-      - "${JAEGER_OTLP_GRPC_PORT:-4317}:4317"
-      - "${JAEGER_OTLP_HTTP_PORT:-4318}:4318"
-    healthcheck:
-      # 16687 is Jaeger's UI sidecar admin port; /metrics returns 200 once
-      # the UI is reachable. 14269 (the admin port for the standalone
-      # collector binary) is not exposed by all-in-one. Probing the UI
-      # root via wget keeps the healthcheck dep-free (no jq / curl).
-      test: ["CMD-SHELL", "wget -qO- http://localhost:16686/ > /dev/null 2>&1 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 20s
 
   grafana:
     image: grafana/grafana:11.4.0
     profiles: [default]
     restart: unless-stopped   # Reliability (Round 5): self-heal.
     depends_on:
-      prometheus:
-        condition: service_healthy
       postgres:
         condition: service_healthy
     ports:
@@ -181,5 +58,4 @@ services:
       start_period: 30s
 
 volumes:
-  prometheus-data:
   grafana-data:

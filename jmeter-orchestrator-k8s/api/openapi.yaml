@@ -1,0 +1,2853 @@
+openapi: 3.0.3
+
+info:
+  title: jmeter-orchestrator-k8s
+  version: 0.1.0
+  summary: Fan-out layer driving many jmeter-local-orchestrators across regions.
+  description: |
+    The control plane: clients hit this service, and it fans `POST /api/v1/test`
+    out to many `jmeter-local-orchestrator` workers, tracking run state in
+    Postgres and serving aggregated metrics back from the rollup tables.
+
+    Pod selection is registry-driven. Workers self-register on boot and
+    heartbeat every 30 s; a sweeper marks a pod LOST after 90 s of silence, and
+    runs claim only IDLE pods belonging to their own application.
+  contact:
+    name: Performance Engineering
+  license:
+    name: Apache-2.0
+
+servers:
+  - url: http://localhost:8088
+    description: Local dev (default HTTP_PORT=8088)
+  - url: http://{host}:{port}
+    description: Cloud — host and port are deployment-specific
+    variables:
+      host: { default: k8s-orchestrator.jmetercloud.local }
+      port: { default: "8088" }
+
+tags:
+  - name: runs
+    description: Fleet-wide run lifecycle — start, query, status, metrics roll-up.
+  - name: pods
+    description: Pod registry — self-registration + heartbeat protocol used by every local-orchestrator.
+  - name: capacity
+    description: |
+      Per-(application, region) pod-budget management.
+      `PUT /api/v1/applications/{id}/capacity/{region}` sets `maxAvailable`;
+      the `/pods` sub-endpoints spin / restart / drain individual containers.
+  - name: platform
+    description: |
+      Deployment-wide facts: `GET /api/v1/platform/capabilities` (what this
+      deployment can do — provisioning posture + region vocabulary, read once
+      at UI boot) plus the Spring Boot Actuator endpoints (health, info — the
+      only exposed set since SLIMDOWN SL-E).
+  - name: cronJobs
+    description: |
+      CRON schedules that launch a run from a saved Template on a
+      cron expression. A DB-claim scheduler (FOR UPDATE SKIP LOCKED) fires due
+      schedules HA-safely across replicas; `nextFireAt` is materialised so a
+      missed fire is caught (catch-up-once) after a restart.
+  - name: ai
+    description: |
+      AI analysis — Claude-backed, server-side proxy. The
+      `ANTHROPIC_API_KEY` lives only on the orchestrator; the browser calls
+      these endpoints, never Anthropic. Responses are advisory, never
+      authoritative. Terminal-run results are cached in the durable
+      `aiResponse` table (30-day TTL); `?fresh=true` bypasses + re-bills.
+      A per-instance daily cap guards cost (429 when tripped); with no key the
+      endpoints return 503 `AI_DISABLED` and the UI hides its buttons.
+
+paths:
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Run management
+  # ────────────────────────────────────────────────────────────────────────
+  /api/v1/runs:
+    post:
+      tags: [runs]
+      summary: Start a fleet-wide test run
+      description: |
+        Creates a run, claims pods from the registry per the request's
+        `fleetAllocation` (or the legacy `fleetSize` + single-element
+        `regions` shortcut), inserts one `runFleetMember` per pod, and
+        fans out `POST /api/v1/test` to each. Returns 201 with the
+        persisted run + member rows; check `state` (`RUNNING` if all
+        fan-outs accepted, `FAILED` if all rejected, `RUNNING` with a
+        partial reason otherwise) and per-member `fanoutStatusCode` for
+        diagnostics.
+
+        Strict mode (default): any per-region shortfall rolls back with
+        503 `INSUFFICIENT_CAPACITY` carrying a structured `shortfall`
+        array.
+
+        Best-effort mode (`?bestEffort=true`): the run launches with
+        whatever was claimed; the deficit is recorded on
+        `run.stateReason` as `bestEffort claim — …`. Still 503s when
+        zero pods could be claimed across all requested regions.
+      parameters:
+        - name: bestEffort
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: |
+            When `true`, accept a partial claim instead of rolling back
+            on a per-region shortfall. The run launches with whatever
+            pods were available and the shortfall is recorded on
+            `run.stateReason`.
+        - $ref: "#/components/parameters/XActorHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StartRunRequest" }
+      responses:
+        "201":
+          description: Run created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Run" }
+        "400":
+          description: |
+            Malformed body or invalid allocation — codes:
+            `INVALID_REQUEST`, `UNKNOWN_REGION`, `FLEET_SIZE_EXCEEDED`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: |
+            Per-region capacity shortfall (strict mode) or zero pods
+            claimable (best-effort mode). Body carries structured
+            `shortfall` so the UI can highlight specific regions.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+    get:
+      tags: [runs]
+      summary: List recent runs
+      description: |
+        Most-recent first. Pagination uses `?offset=N&limit=25` with the
+        total count emitted as an `X-Total-Count` response header — the
+        body stays a flat array so existing clients keep working.
+
+        UI-D3 added the optional `application` filter — when set, only
+        runs launched against that application are returned (NULL/legacy
+        rows are excluded).
+
+        Soft-deleted ("hidden") runs are excluded by default; pass
+        `includeHidden=true` to surface them mixed with visible runs, or
+        `hidden=true` for the "Archived" view (ONLY hidden runs — the
+        hard-delete / purge surface).
+      parameters:
+        - { name: state,         in: query, required: false, schema: { type: string, enum: [active] }, description: "If `active`, exclude COMPLETED/FAILED/ABORTED runs." }
+        - { name: application,   in: query, required: false, schema: { type: string },                  description: "UI-D3 — filter to runs launched against the named application. Empty/missing → no filter." }
+        - { name: includeHidden, in: query, required: false, schema: { type: boolean, default: false }, description: "When true, include soft-deleted (hidden) runs mixed with visible ones." }
+        - { name: hidden,        in: query, required: false, schema: { type: boolean, default: false }, description: "When true, return ONLY hidden runs (the Archived / purge view). Takes precedence over includeHidden." }
+        - { name: offset,        in: query, required: false, schema: { type: integer, default: 0,  minimum: 0 } }
+        - { name: limit,         in: query, required: false, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        "200":
+          description: Most-recent first.
+          headers:
+            X-Total-Count:
+              schema: { type: integer }
+              description: |
+                UI-D3 — total number of rows matching the filter (NOT
+                limited by `limit`/`offset`). Drives the pagination UI.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Run" }
+
+  /api/v1/runs/{runId}:
+    parameters:
+      - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    get:
+      tags: [runs]
+      summary: Run definition + fleet member list
+      responses:
+        "200":
+          description: Run + fleet members (no live refresh).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Run" }
+        "404":
+          description: Unknown runId.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+    delete:
+      tags: [runs]
+      summary: Soft-delete ("hide") a terminal run
+      description: |
+        Hides a run so it drops out of the default `GET /runs` listing — the
+        declutter primitive so operators see only the runs that matter.
+
+        This is a SOFT delete: the run row, its fleet members, the audit trail,
+        and any saved results are RETAINED. A hidden run is still reachable by
+        id (`GET /runs/{runId}`) and via `GET /runs?includeHidden=true`, so the
+        action is reversible. (Chosen over a hard delete to preserve the audit
+        trail — the `DELETE` event recorded here stays valid.)
+
+        Only TERMINAL runs (COMPLETED / FAILED / ABORTED) can be hidden — an
+        active run is still important and pins live pods. The `X-Actor` header
+        attributes the action and an optional `reason` rides onto the `DELETE`
+        audit event.
+      parameters:
+        - $ref: "#/components/parameters/XActorHeader"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeleteRunRequest" }
+      responses:
+        "200":
+          description: Run hidden. Body is the (now-hidden) run.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Run" }
+        "404":
+          description: Unknown runId — code `RUN_NOT_FOUND`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: Run is still active — code `RUN_NOT_DELETABLE` (only terminal runs can be hidden).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/runs/{runId}/purge:
+    parameters:
+      - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    post:
+      tags: [runs]
+      summary: Permanently delete ("purge") a hidden run — HARD delete, irreversible
+      description: |
+        The second tier of the two-tier delete model ("trash, then empty
+        trash"). Unlike `DELETE /runs/{runId}` (which only HIDES), this
+        PHYSICALLY removes the run and the storage it occupies — it CANNOT be
+        undone:
+
+        - result blobs in document-service (`results-{runId}-*`), plus the run's
+          testPlan / dataFiles blobs **only if** no other run still references
+          them (shared uploaded plans survive);
+        - the run's per-second rows in `metrics."workerMetric"`;
+        - its AI-cache + trend rows, and the `run` row itself — cascading its
+          fleet members and audit events.
+
+        A `purgeAudit` tombstone records who/what/when + what was reclaimed
+        (it outlives the deleted run).
+
+        Precondition: the run must already be HIDDEN (via `DELETE /runs/{runId}`)
+        and terminal. `X-Actor` attributes the action; an optional `reason` rides
+        onto the tombstone.
+
+        Retry-safe: every step is idempotent. If document-service is unreachable
+        the DB purge still proceeds and `blobStepComplete=false` is returned —
+        orphaned, runId-named result blobs are reclaimed by a future retention
+        sweep.
+      parameters:
+        - $ref: "#/components/parameters/XActorHeader"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeleteRunRequest" }
+      responses:
+        "200":
+          description: Run permanently deleted. Body summarises what was reclaimed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurgeRunResponse" }
+        "404":
+          description: Unknown runId — code `RUN_NOT_FOUND`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: |
+            Run is still active, or has not been hidden first — code
+            `RUN_NOT_PURGEABLE` (purge requires a hidden, terminal run).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/runs/{runId}/status:
+    parameters:
+      - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    get:
+      tags: [runs]
+      summary: Aggregated run state across the fleet (live refresh)
+      description: |
+        Polls each non-terminal member's local orchestrator
+        (`GET /api/v1/test`), updates the stored member state, and rolls
+        the result up to the run-level `state`. For a fleet of N pods,
+        this is N HTTP calls — fine for fleets up to a few dozen pods.
+      responses:
+        "200":
+          description: Aggregated run state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunStatus" }
+        "404":
+          description: Unknown runId.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/runs/{runId}/events:
+    parameters:
+      - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    get:
+      tags: [runs]
+      summary: Audit timeline for a run
+      description: |
+        The reverse-chronological list of state-changing
+        operator actions against this run: who started it, who scaled it
+        up/down, who drained a worker, when, and with what result. One row
+        per action (append-only).
+
+        Paginated — a long-running test can accumulate many events. Use
+        `?offset=N&limit=25`; the total count rides on the `X-Total-Count`
+        response header (the body stays a flat array, mirroring `GET /runs`).
+        Default page size is 25, newest first.
+
+        Rejected actions ARE recorded — e.g. a scale-up that hit the
+        per-(app, region) cap shows
+        `result: "rejected:APPLICATION_CAPACITY_EXCEEDED"` — so the timeline
+        reflects attempts, not just successes.
+      parameters:
+        - { name: offset, in: query, required: false, schema: { type: integer, default: 0,  minimum: 0 } }
+        - { name: limit,  in: query, required: false, schema: { type: integer, default: 25, minimum: 1, maximum: 200 } }
+      responses:
+        "200":
+          description: One page of audit events, newest first.
+          headers:
+            X-Total-Count:
+              schema: { type: integer }
+              description: Total events for this run across all pages.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RunEvent" }
+        "404":
+          description: Unknown runId — code `RUN_NOT_FOUND`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/runs/{runId}/scaleUp:
+    parameters:
+      - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    post:
+      tags: [runs]
+      summary: Add workers to a RUNNING run (mid-test scale-up)
+      description: |
+        Claims additional IDLE pods from the
+        run's per-(application, region) pod pool and fans out
+        `POST /api/v1/test` to each. The original run's `testPlanBlobId` +
+        `dataFilesBlobId` are sourced from the persisted run row, so the
+        request body only carries the per-region allocation. Each new
+        worker therefore stages the SAME test plan AND data files as the
+        original fleet (the local-orchestrator fetches both blobs from the
+        document-service before launching JMeter) and inherits the run's
+        `saveResults` setting (forwarded as `autoUploadResults`).
+
+        New `runFleetMember` rows are stamped with `joinedAtSecond`
+        (seconds since `run.startedAt`) so the consumer + UI can
+        distinguish original-fleet members from mid-test joiners.
+
+        Properties are NOT inherited from existing fleet members —
+        position-based inheritance would be surprising. Pass
+        `perNodeProperties` in the allocation entry to set extra `-J`
+        properties on the new workers.
+
+        Strict mode (default): per-region shortfall rolls back with 503
+        `INSUFFICIENT_CAPACITY`. Per-(app, region) capacity exceeded
+        rolls back with 409 `APPLICATION_CAPACITY_EXCEEDED`.
+
+        Best-effort mode (`?bestEffort=true`): adds whatever was claimed;
+        the deficit is recorded on `run.stateReason`. Still 503s when
+        zero pods could be claimed across all requested regions.
+
+        Spin mode (`?spinShortfall=true`): on a per-region shortfall,
+        provision (spin) the missing pods up to the per-(app, region)
+        `maxAvailable` ceiling, wait for them to report healthy, then
+        retry the claim — mirrors `POST /api/v1/runs`'s `spinShortfall`.
+        Lets the operator add workers up to MAX CAPACITY (not just the
+        currently-provisioned IDLE pods). If filling the gap would exceed
+        the ceiling, the response is 409 `APPLICATION_CAPACITY_EXCEEDED`
+        (raise the ceiling first). Combine with `bestEffort` to spin what
+        the ceiling allows and accept any residual shortfall.
+
+        Pre-conditions:
+          - Run must exist (else 404 `RUN_NOT_FOUND`).
+          - Run state must be `RUNNING` (else 409 `RUN_NOT_SCALABLE` —
+            PREPARING/STARTING means the original fan-out hasn't
+            finished; terminal means scaleUp is meaningless).
+          - Run must have an `application` binding (else 409
+            `RUN_NOT_SCALABLE_NO_APPLICATION` — pre-V4 legacy untagged
+            runs don't have an app to gate capacity against).
+      parameters:
+        - name: bestEffort
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: |
+            When `true`, accept a partial claim instead of rolling back
+            on a per-region shortfall. The new workers join with whatever
+            pods were available; the shortfall is recorded on
+            `run.stateReason`.
+        - name: spinShortfall
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: |
+            When `true`, a per-region shortfall triggers an on-the-fly
+            spin of the missing pods (subject to the per-(app, region)
+            `maxAvailable` ceiling) followed by a claim retry — so the
+            operator can scale up to max capacity, not just the
+            currently-IDLE pods. Exceeding the ceiling → 409
+            `APPLICATION_CAPACITY_EXCEEDED`. The UI sets this only after
+            the operator confirms the "provision missing workers" prompt
+            rendered from the 503 shortfall body.
+        - $ref: "#/components/parameters/XActorHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ScaleUpRunRequest" }
+      responses:
+        "200":
+          description: Workers added (or partial-add for best-effort).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScaleUpRunResponse" }
+        "400":
+          description: |
+            Malformed body or invalid allocation — codes:
+            `INVALID_REQUEST`, `UNKNOWN_REGION`, `FLEET_SIZE_EXCEEDED`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Unknown runId — code `RUN_NOT_FOUND`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: |
+            Pre-condition violation — codes:
+            `RUN_NOT_SCALABLE` (run not in RUNNING state),
+            `RUN_NOT_SCALABLE_NO_APPLICATION` (run has no app binding),
+            `APPLICATION_CAPACITY_EXCEEDED` (per-(app, region) cap hit).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: |
+            Per-region capacity shortfall (strict mode) or zero pods
+            claimable (best-effort mode). Body carries structured
+            `shortfall` so the UI can highlight specific regions.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/runs/{runId}/scaleDown:
+    parameters:
+      - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    post:
+      tags: [runs]
+      summary: Drain workers from a RUNNING run (mid-test scale-down)
+      description: |
+        Gracefully drains the targeted workers
+        — each pod's local-orchestrator sends `Shutdown` to JMeter's
+        TCP port (default `4445`); in-flight samplers complete; the
+        worker lands in `DRAINED` on clean exit. If the drain budget
+        elapses without exit (`JMETER_DRAIN_TIMEOUT_S`, default 60 s on
+        the local-orch), the worker lands `ABORTED` with reason
+        `drainTimeoutExpired`.
+
+        Body supplies exactly one of:
+          - `workerIds` — explicit list of pod ids to drain.
+          - `allocations` — per-region count; the service picks the N
+            most-recently-created RUNNING members in that region
+            (youngest-first).
+
+        Member state goes RUNNING → `DRAINING` immediately at the API
+        boundary; the local poll path is sticky on DRAINING so the
+        operator-visible state doesn't flicker back to RUNNING while
+        in-flight samplers complete. Run state stays `RUNNING` —
+        drain on its own does not end the run; the run goes terminal
+        only when ALL members are terminal.
+
+        Already-terminal targets (e.g., a worker that hit COMPLETED
+        right before the drain RPC arrived) are silently skipped and
+        listed under `skipped` in the response. Already-DRAINING is
+        also skipped (idempotent).
+
+        Pre-conditions:
+          - Run must exist (else 404 `RUN_NOT_FOUND`).
+          - Run state must be `RUNNING` (else 409 `RUN_NOT_SCALABLE`).
+          - For `workerIds`: every id must reference a member of this
+            run (else 400 `INVALID_REQUEST`).
+      parameters:
+        - $ref: "#/components/parameters/XActorHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ScaleDownRunRequest" }
+      responses:
+        "200":
+          description: Drain RPCs fired (or no-op if all targets were skipped).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScaleDownRunResponse" }
+        "400":
+          description: |
+            Malformed body, missing both `workerIds` and `allocations`,
+            both supplied (must be exactly one), unknown workerId, or
+            invalid allocation entry.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Unknown runId — code `RUN_NOT_FOUND`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: |
+            Run not in scalable state — code `RUN_NOT_SCALABLE` (run
+            state ≠ RUNNING).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/runs/{runId}/abort:
+    parameters:
+      - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    post:
+      tags: [runs]
+      summary: Force-terminate a run (hard stop / zombie-run cleanup)
+      description: |
+        Rolls the WHOLE run to `ABORTED`, best-effort hard-kills each live
+        worker (`POST /api/v1/test/abort`), and releases every fleet-member
+        binding — freeing the run's pods for re-claim and drain.
+
+        Unlike `scaleDown` (graceful; the run keeps running), abort ends the
+        run. This is the clean way to clear a run whose workers have died but
+        whose row is stuck non-terminal — which otherwise pins its pods forever
+        (`POD_IN_USE` on every drain) and causes a re-spun same-name worker to
+        re-bind to the dead run.
+
+        Each non-terminal member is marked `ABORTED`; the `ABORT` audit event
+        records who aborted (`X-Actor`), the optional `reason`, and a ledger of
+        which workers acknowledged the kill vs. were unreachable. A worker that
+        is already gone (abort RPC fails / 404 NO_ACTIVE_RUN) still counts as
+        aborted — the run is force-terminated regardless of RPC outcome.
+
+        Save Results: aborting clears the run's `saveResults` flag. An aborted
+        run never produced a clean upload (the local-orchestrator skips the JTL
+        upload on a non-COMPLETE stop), so the run-detail "Download results"
+        link (gated on `saveResults`) must not appear, and the platform stops
+        polling the now-dead workers for an upload that will never land.
+
+        Idempotency guard: aborting an already-terminal run is refused 409
+        `RUN_NOT_ABORTABLE` (nothing to abort; its pods are already released).
+      parameters:
+        - $ref: "#/components/parameters/XActorHeader"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AbortRunRequest" }
+      responses:
+        "200":
+          description: Run aborted. Body is the post-abort run (state ABORTED).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Run" }
+        "404":
+          description: Unknown runId — code `RUN_NOT_FOUND`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: Run is already terminal — code `RUN_NOT_ABORTABLE`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/runs/{runId}/members/{workerId}/logs:
+    parameters:
+      - { name: runId,    in: path,  required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+      - { name: workerId, in: path,  required: true, schema: { type: string } }
+      - { name: stream,   in: query, required: false, schema: { type: string, default: console, enum: [console, jmeter] }, description: "Source selector forwarded to the pod. `console` (default) tails the orchestrator's in-memory ring of the JMeter child's stdout/stderr. `jmeter` tails jmeter.log on disk (JMeter's own log4j output — distinct content). Unknown values produce 400 from the local orchestrator." }
+      - { name: tail,     in: query, required: false, schema: { type: integer, default: 200, minimum: 1, maximum: 10000 } }
+    get:
+      tags: [runs]
+      summary: "Per-pod log tail proxied through the global"
+      description: |
+        Looks up the pod's `podBaseUrl` from `runFleetMember`, calls the
+        local orchestrator's `GET /api/v1/logs?stream=&tail=N`, and
+        forwards the raw `text/plain` body. Used by the run-detail
+        page's live log panel — the UI talks only to its known origin
+        while the proxy fans the request out to the right pod.
+      responses:
+        "200":
+          description: Log tail (text/plain). Empty body when the pod's ring buffer / log file hasn't filled yet.
+          content:
+            text/plain; charset=UTF-8:
+              schema: { type: string }
+        "400":
+          description: Unknown `stream` value (forwarded from the local orchestrator).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Unknown runId or workerId not in the run.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "502":
+          description: Pod unreachable.
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /api/v1/runs/{runId}/metrics:
+    parameters:
+      - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    get:
+      tags: [runs]
+      summary: Per-label metrics rollup from the metrics DB
+      description: |
+        Aggregates `metrics."workerMetric"` rows for the run across the
+        whole fleet, grouped by JMeter sampler label. Per-worker
+        percentiles are averaged — this is a crude proxy; faithful
+        cross-worker percentile aggregation needs HDRHistogram merging
+        (future enhancement).
+      responses:
+        "200":
+          description: Per-label rollup.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunMetricsRollup" }
+        "404":
+          description: Unknown runId.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/runs/timeseries:
+    get:
+      tags: [runs]
+      summary: Batched per-second timeseries for the comparison view (HM-5)
+      description: |
+        Returns timeseries for exactly two runs in a single round-trip.
+        Drives the side-by-side comparison page where an operator picks
+        two runs (e.g. before/after a tuning PR) and views their TPS,
+        avg RT, and error % overlaid on shared axes.
+
+        **Strict ids count.** The `ids` query parameter must contain
+        exactly two distinct, non-empty run ids (comma-separated). The
+        UI compares two runs only — single-run views go through
+        `/api/v1/runs/{runId}/timeseries`; three or more is out of scope.
+
+        **Partial-200.** If one (or both) of the two ids does not
+        resolve to a known run, the response is still 200 with the
+        present run's payload in `runs` and the missing id reported in
+        `missing`. Forcing the operator to re-issue the request to
+        find out *which* run is gone would be a worse experience than
+        telling them upfront.
+
+        Each per-run payload uses the same `MetricsTimeseries` schema
+        as the single-run endpoint (same downsampling rules apply).
+      parameters:
+        - name: ids
+          in: query
+          required: true
+          description: Exactly two distinct run ids, comma-separated.
+          schema:
+            type: string
+            example: "01J0000000000000000000RUNA,01J0000000000000000000RUNB"
+      responses:
+        "200":
+          description: Batched per-run timeseries (partial-200 if one or both ids are missing).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MetricsTimeseriesBatch" }
+        "400":
+          description: Missing `ids` param, or count is not exactly 2.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/runs/{runId}/timeseries:
+    parameters:
+      - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    get:
+      tags: [runs]
+      summary: Per-second timeseries for the run-detail Metrics tab (HM-1)
+      description: |
+        Per-second timeseries aggregated across the whole fleet:
+        `tps` (sum of throughput), `avgRtMs` (TPS-weighted mean of
+        per-label P50), `errorPct` (100 × errors / total), and
+        `statusCodes` (per-code counts exploded from each row's JSONB
+        status map).
+
+        Server-side downsamples when the raw second count exceeds 1500
+        (≈ 25 min runs); `bucketSize` reports the bucket width in
+        seconds. The UI uses `fromSecond` / `toSecond` to label the
+        time axis and to build the "Open in Grafana" deep-link with
+        an explicit time range (so finished runs render correctly in
+        Grafana, not Grafana's "now-5m" default).
+
+        When `byRegion=true`, the response additionally carries a
+        `regions` map (region → the same four series) alongside the
+        all-regions total in `series`, driving the UI's "Split by
+        region" toggle (compare us-east vs us-west). The total stays
+        the exact fold of the per-region rows. Omitted (empty) by
+        default, so the aggregate payload is unchanged.
+
+        Empty arrays (200, not 404) during PREPARING when the metrics
+        consumer hasn't written any rows yet — friendly polling shape.
+      parameters:
+        - name: byRegion
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: When true, include the per-region breakdown in `regions`.
+      responses:
+        "200":
+          description: Per-second timeseries for the run.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MetricsTimeseries" }
+        "404":
+          description: Unknown runId.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # AI analysis — server-side Claude proxy
+  # ────────────────────────────────────────────────────────────────────────
+  /api/v1/ai/status:
+    get:
+      tags: [ai]
+      summary: AI feature probe (enabled + model)
+      description: |
+        Reports whether AI analysis is configured on this server. Consumes no
+        quota and never calls Claude — the UI polls it once to decide whether to
+        render the AI buttons at all (hidden when `enabled=false`).
+      responses:
+        "200":
+          description: AI feature status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AiStatus" }
+
+  /api/v1/ai/ping:
+    post:
+      tags: [ai]
+      summary: AI smoke test (fixed prompt)
+      description: |
+        Sends a fixed prompt and returns the reply plus token counts — for
+        first-time-setup verification + latency baselining. Not wired into the
+        UI. Counts against the daily cap.
+      responses:
+        "200":
+          description: Reply + token counts.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AiPingResponse" }
+        "429":
+          description: Daily invocation cap reached.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: No API key configured (`AI_DISABLED`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/runs/{runId}/insights:
+    parameters:
+      - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    post:
+      tags: [ai]
+      summary: Generate AI insights for a single run (AI-1)
+      description: |
+        Hands the run's metadata, per-second timeseries, and per-label rollup to
+        Claude and returns a short summary plus 3–5 severity-tagged findings.
+        Advisory only. Terminal runs are cached in the durable `aiResponse`
+        table (no re-bill on reload); active runs are never cached (their inputs
+        are still moving). `?fresh=true` bypasses the cache and re-bills.
+      parameters:
+        - name: fresh
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: Bypass the cache and re-generate (re-bills, counts against the cap).
+      responses:
+        "200":
+          description: Run insights (freshly generated or served from cache — see `fromCache`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunInsights" }
+        "404":
+          description: Unknown runId.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "429":
+          description: Daily invocation cap reached (`AI_QUOTA_EXCEEDED`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "502":
+          description: Upstream provider call failed (`AI_UPSTREAM_ERROR`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: No API key configured (`AI_DISABLED`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/runs/compare-insights:
+    post:
+      tags: [ai]
+      summary: Explain the delta between two runs (AI-2)
+      description: |
+        Hands both runs' timeseries to Claude and returns a comparison narrative
+        plus per-metric verdicts (regression / improvement / no significant
+        change). Mirrors the batch timeseries endpoint's strict exactly-2-distinct-ids
+        contract; both runs must exist (a missing run is a 404 — we refuse to
+        compare against nothing). Cached on the sorted pair for terminal runs;
+        `?fresh=true` bypasses + re-bills.
+      parameters:
+        - name: ids
+          in: query
+          required: true
+          description: Exactly two distinct run ids, comma-separated.
+          schema:
+            type: string
+            example: "01J0000000000000000000RUNA,01J0000000000000000000RUNB"
+        - name: fresh
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: Bypass the cache and re-generate (re-bills, counts against the cap).
+      responses:
+        "200":
+          description: Comparison insights (freshly generated or served from cache — see `fromCache`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompareInsights" }
+        "400":
+          description: Missing `ids` param, or count is not exactly 2.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: One of the two runs is unknown.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "429":
+          description: Daily invocation cap reached (`AI_QUOTA_EXCEEDED`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "502":
+          description: Upstream provider call failed (`AI_UPSTREAM_ERROR`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: No API key configured (`AI_DISABLED`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Pod registry
+  # ────────────────────────────────────────────────────────────────────────
+  /api/v1/registerPod:
+    post:
+      tags: [pods]
+      summary: Register (or refresh) a local-orchestrator pod
+      description: |
+        Idempotent: a re-registering pod resets its `state` to IDLE and
+        bumps `lastHeartbeat` to now. The local-orchestrator calls this
+        on boot via the `PodRegistrar` bean.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterPodRequest" }
+      responses:
+        "200":
+          description: Pod registered (or refreshed).
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "400":
+          description: Missing podId, baseUrl, or applicationId.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/heartbeat:
+    post:
+      tags: [pods]
+      summary: Heartbeat from a registered pod
+      description: |
+        Refreshes the pod's `lastHeartbeat` and flips its state from LOST
+        back to IDLE if the sweeper had marked it stale. Local
+        orchestrators ping this every `podRegistrar.heartbeatIntervalMs`
+        (default 30 s).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HeartbeatRequest" }
+      responses:
+        "200":
+          description: Heartbeat acknowledged.
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "404":
+          description: Unknown podId — caller should re-register.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/pods:
+    get:
+      tags: [pods]
+      summary: List every registered pod with its current state
+      responses:
+        "200":
+          description: Pod registry contents (ordered by lastHeartbeat DESC).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Pod" }
+
+  /api/v1/applications:
+    get:
+      tags: [applications]
+      summary: List registered applications
+      description: |
+        D-AppRegistry — returns the registered-application registry sorted
+        by name. Each row carries operator-managed metadata (sealId,
+        description, healthEndpoints) plus a health snapshot
+        (`lastHealthStatus`, `lastHealthCheckedAt`, `lastHealthDetails`)
+        updated by `ApplicationHealthPoller` every ~30s.
+
+        Pass `hidden=true` for the "Archived applications" view — ONLY
+        soft-deleted apps (the hard-delete / purge surface). Their `name` is
+        the archived `<name>__deleted__<id>` form. Default lists visible apps.
+      parameters:
+        - { name: hidden, in: query, required: false, schema: { type: boolean, default: false }, description: "When true, return ONLY hidden (soft-deleted) apps — the Archived / purge view." }
+      responses:
+        "200":
+          description: Most-recent first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Application" }
+    post:
+      tags: [applications]
+      summary: Register a new application
+      description: |
+        Registration is a pure DB operation: the application row is
+        inserted and its per-(app, region) capacity rows are auto-seeded
+        at 0 for this deployment's regions — the ones named by
+        `PROVISIONING_REGIONS` (see `GET /api/v1/platform/capabilities`),
+        or the single starter region `us-east-1` when it declares none. Pod counts are never set
+        here — capacity changes go through the capacity endpoints.
+        (DIRECT-METRICS, 2026-07-20: the KAFKA-PER-APP topic provisioning
+        that used to happen on registration left with the broker — workers
+        POST metrics straight to the metrics-consumer.)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateApplicationRequest" }
+      responses:
+        "201":
+          description: Application created; capacity rows seeded at 0 for this deployment's regions.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Application" }
+        "400":
+          description: INVALID_REQUEST — name regex / length limits / health URL shape failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: APPLICATION_NAME_TAKEN — another row already uses this name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+  /api/v1/applications/{applicationId}:
+    parameters:
+      - { name: applicationId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    get:
+      tags: [applications]
+      summary: Get one application by id
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Application" }
+        "404":
+          description: APPLICATION_NOT_FOUND
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+    put:
+      tags: [applications]
+      summary: Update an application's metadata
+      description: |
+        Operator-controlled fields (name, sealId, description, healthEndpoints)
+        are replaced wholesale. Health-snapshot fields are owned by
+        `ApplicationHealthPoller` and never touched by PUT.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateApplicationRequest" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Application" }
+        "400":
+          description: INVALID_REQUEST
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: APPLICATION_NOT_FOUND
+        "409":
+          description: APPLICATION_NAME_TAKEN
+    delete:
+      tags: [applications]
+      summary: Soft-delete ("hide") an application
+      description: |
+        SOFT delete: the application is HIDDEN — it drops out of the
+        applications list, launcher picker, capacity matrix, and health
+        poller (everything reads the non-hidden listing). The row, its
+        capacity rows, this app's run history + metrics + audit-trail
+        events, and all uploaded blobs (test plans / data files / results)
+        are RETAINED. To reclaim that storage, follow with
+        `POST /applications/{id}/purge` ("trash, then empty trash").
+
+        The original name is FREED for re-use: the hidden row is renamed to
+        an archived name (`<name>__deleted__<id>`) and its runs are re-tagged
+        to match, in one transaction. So the operator can immediately register
+        a fresh application with the original name, and that new app does NOT
+        inherit this one's run history.
+
+        Idempotent — hiding an unknown OR already-hidden app returns 204.
+
+        Blocked while the application has any active (non-terminal) run:
+        those runs are reached through the application page, so hiding
+        would orphan them — abort or let them finish first.
+      responses:
+        "204":
+          description: Hidden (or already hidden / never existed).
+        "409":
+          description: |
+            APPLICATION_HAS_ACTIVE_RUNS — the application still has active
+            (non-terminal) runs. Abort or let them finish before hiding it.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/applications/{applicationId}/purge:
+    parameters:
+      - { name: applicationId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    post:
+      tags: [applications]
+      summary: Permanently delete ("purge") a hidden application — HARD delete, irreversible
+      description: |
+        The second tier of the two-tier delete model ("trash, then empty
+        trash"). Unlike `DELETE /applications/{id}` (which only HIDES), this
+        PHYSICALLY removes a HIDDEN application and its entire footprint — it
+        CANNOT be undone:
+
+        - every one of the app's runs is purged (result/testPlan/dataFiles
+          blobs, per-second metric rows, run-state rows — same fan-out as
+          `POST /runs/{id}/purge`);
+        - its `pod` registry rows (cleared before the app row — the
+          `pod.applicationId` FK is `ON DELETE RESTRICT`);
+        - its health-transition log;
+        - the `application` row itself (`applicationCapacity` cascades).
+
+        A single `purgeAudit` tombstone records the sweep.
+
+        Precondition: the app must already be HIDDEN (via `DELETE
+        /applications/{id}`). `X-Actor` attributes the action; an optional
+        `reason` rides onto the tombstone.
+      parameters:
+        - $ref: "#/components/parameters/XActorHeader"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeleteApplicationRequest" }
+      responses:
+        "200":
+          description: Application permanently deleted. Body summarises what was reclaimed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurgeApplicationResponse" }
+        "404":
+          description: Unknown applicationId — code `APPLICATION_NOT_FOUND`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: |
+            The application exists but has not been hidden first — code
+            `APPLICATION_NOT_PURGEABLE` (purge requires a hidden app).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/regions:
+    get:
+      tags: [pods]
+      summary: Per-region pod capacity rollup
+      description: |
+        Aggregates `k8sOrchestrator.pod` by region; `idlePods`
+        excludes pods already claimed by an active `runFleetMember`,
+        so the count reflects what `POST /api/v1/runs` could claim
+        right now. Used by the UI launcher's per-region allocation
+        widget.
+      responses:
+        "200":
+          description: Per-region capacity rollup.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RegionCapacity" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Capacity (Phase 3 of the capacity rework)
+  # All endpoints scoped to one (applicationId, region).
+  # ────────────────────────────────────────────────────────────────────────
+  /api/v1/applications/{applicationId}/capacity/{region}:
+    parameters:
+      - { name: applicationId, in: path, required: true, schema: { type: string } }
+      - { name: region,        in: path, required: true, schema: { type: string } }
+    put:
+      tags: [capacity]
+      summary: Set per-(application, region) maxAvailable directly
+      description: |
+        Replaces the Phase 2 sponsor-gate stub. No approval flow — the
+        operator owns capacity. Refuses 409 `CAPACITY_SHRINK_BELOW_PROVISIONED`
+        when the requested ceiling is lower than the number of pods
+        currently provisioned (drain first).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [maxAvailable]
+              properties:
+                maxAvailable: { type: integer, minimum: 0, maximum: 1000 }
+      responses:
+        "200":
+          description: Updated capacity row.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplicationCapacityRow" }
+        "400":
+          description: Invalid maxAvailable.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "409":
+          description: Would shrink below currently provisioned pod count.
+          content: { application/json: { schema: { $ref: "#/components/schemas/CapacityShrinkResponse" } } }
+    delete:
+      tags: [capacity]
+      summary: Remove a region from the application
+      description: |
+        The "deselect a region" half of the Capacity tab's region picker.
+        Drain-first: refuses 409 `REGION_NOT_EMPTY` when the region still has
+        provisioned workers (drain them first). 404 when the region isn't
+        configured for the application.
+      responses:
+        "204":
+          description: Region removed.
+        "404":
+          description: Region (or application) not configured.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "409":
+          description: Region still has provisioned workers.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+
+  /api/v1/applications/{applicationId}/capacity/{region}/pods:
+    parameters:
+      - { name: applicationId, in: path, required: true, schema: { type: string } }
+      - { name: region,        in: path, required: true, schema: { type: string } }
+    get:
+      tags: [capacity]
+      summary: List pods for (application, region) with Ready / In-Use state
+      responses:
+        "200":
+          description: Per-(app, region) capacity snapshot.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CapacitySnapshot" }
+    post:
+      tags: [capacity]
+      summary: Spin up one new Ready pod
+      description: |
+        Allocates the next free `{appName}-{region}-worker-{n}` name,
+        creates and starts the container, then waits for the local-orch
+        to self-register (typically <30 s; the registry row appears
+        asynchronously via POST /registerPod). The response carries the
+        allocated podName + the baseUrl the global will use to fan out.
+      responses:
+        "201":
+          description: Spin started. Container created + start command issued.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SpinPodResponse" }
+        "404":
+          description: applicationId or capacity row missing.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "409":
+          description: |
+            Either the spin would exceed `maxAvailable`
+            (`APPLICATION_CAPACITY_EXCEEDED`), or this deployment does not
+            provision (`PROVISIONING_DISABLED` — see
+            `GET /api/v1/platform/capabilities`).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/CapacityExceededResponse"
+                  - $ref: "#/components/schemas/ProvisioningDisabledResponse"
+
+  /api/v1/applications/{applicationId}/capacity/{region}/pods/{podName}/restart:
+    parameters:
+      - { name: applicationId, in: path, required: true, schema: { type: string } }
+      - { name: region,        in: path, required: true, schema: { type: string } }
+      - { name: podName,       in: path, required: true, schema: { type: string } }
+    post:
+      tags: [capacity]
+      summary: Restart one container in place
+      responses:
+        "200":
+          description: Restart issued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  podName:   { type: string }
+                  restarted: { type: boolean }
+        "404":
+          description: Pod not bound to (applicationId, region).
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "409":
+          description: |
+            `PROVISIONING_DISABLED` — workers are operator-managed in this
+            deployment (`PROVISIONING_MODE=STATIC`), so the control plane
+            does not restart them.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ProvisioningDisabledResponse" } } }
+
+  /api/v1/applications/{applicationId}/capacity/{region}/pods/{podName}:
+    parameters:
+      - { name: applicationId, in: path, required: true, schema: { type: string } }
+      - { name: region,        in: path, required: true, schema: { type: string } }
+      - { name: podName,       in: path, required: true, schema: { type: string } }
+    put:
+      tags: [capacity]
+      summary: Declare an operator-deployed worker (STATIC provisioning only)
+      description: |
+        Binds a worker the operator deployed themselves to this
+        (application, region). **Static mode only** — `409
+        PROVISIONING_REQUIRES_STATIC` when the deployment provisions its own
+        workers, where names are allocator-owned and `POST .../pods` (spin)
+        is the right call.
+
+        PUT rather than a parallel `/staticPods` collection: the operator
+        names the resource (they deployed it and know its name), the call is
+        idempotent, and one worker resource keeps the verbs carrying the
+        meaning — POST allocates-and-spins, PUT declares an existing one,
+        DELETE releases either.
+
+        `podName` MUST equal the `workerId` the worker stamps on its metrics
+        or the `metrics."workerMetric"` join breaks.
+
+        The address is probed (`GET {baseUrl}/actuator/health`) before the
+        declaration is accepted, so a typo fails here rather than at the next
+        run launch. `?force=true` skips that check for a worker that is
+        deployed but not up yet.
+
+        `maxAvailable` for the (application, region) is **derived** — it is
+        set to the declared worker count on every declare and release. There
+        is no separate capacity to approve in this mode, and
+        `PUT .../capacity/{region}` is refused accordingly.
+      parameters:
+        - name: force
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: Declare even if the worker does not currently answer.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeclarePodRequest" }
+      responses:
+        "201":
+          description: Worker newly declared.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeclaredPodResponse" }
+        "200":
+          description: An existing declaration was updated (idempotent re-declare).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeclaredPodResponse" }
+        "400":
+          description: |
+            `INVALID_REQUEST` (malformed podName / baseUrl — non-HTTP scheme,
+            embedded credentials, query or fragment) or `WORKER_UNREACHABLE`
+            (address did not answer and `force` was not set).
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "404":
+          description: applicationId not registered.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "409":
+          description: |
+            `PROVISIONING_REQUIRES_STATIC` (this deployment provisions its own
+            workers), `POD_BOUND_ELSEWHERE` (already declared to another
+            application), or `POD_IN_USE` (re-addressing a worker held by an
+            active run would break that run's follow-up calls to it).
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    delete:
+      tags: [capacity]
+      summary: Release a pod — drain (dynamic) or undeclare (static)
+      description: |
+        Under `PROVISIONING_MODE=DYNAMIC` this is a full **drain**: the
+        container is stopped and removed, then the registry row is deleted.
+        Under `STATIC` it is an **undeclare** — the registry row is deleted
+        and the operator's worker keeps running, because the control plane
+        does not own it. The in-use guard, the stale-binding release and the
+        response shape are identical in both modes; only `containerStopped`
+        differs.
+
+        Refuses 409 `POD_IN_USE` when the pod is held by an active run whose
+        worker **container is still running** — a genuinely busy pod. To drain
+        it, abort the run first (`POST /api/v1/runs/{runId}/abort`).
+
+        STALE-BINDING tolerance: if the pod is bound to a non-terminal run but
+        its container is no longer running (a zombie run — the worker died and
+        no heartbeat flipped the run terminal), the binding is treated as stale.
+        The drain proceeds, releasing the dead member binding so a re-spun
+        same-name worker won't re-bind to the zombie run; the response carries
+        `staleBindingReleased: true`. (The zombie run itself stays non-terminal
+        until you abort it — drain frees the pod, abort ends the run.)
+      responses:
+        "200":
+          description: Drained.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  podName: { type: string }
+                  drained: { type: boolean }
+                  containerStopped:
+                    type: boolean
+                    description: |
+                      True when the control plane stopped and removed the
+                      worker container (dynamic mode). False in static mode —
+                      the registry row was removed and the operator's worker
+                      was left running.
+                  staleBindingReleased:
+                    type: boolean
+                    description: |
+                      Present + true only when the drain released a stale
+                      binding to a non-terminal run whose container was gone.
+        "404":
+          description: Pod not bound to (applicationId, region).
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "409":
+          description: Pod is held by an active run whose container is still running.
+          content: { application/json: { schema: { $ref: "#/components/schemas/PodInUseResponse" } } }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Platform capabilities
+  # ────────────────────────────────────────────────────────────────────────
+  /api/v1/platform/capabilities:
+    get:
+      tags: [platform]
+      summary: What this deployment can do — read once at UI boot
+      description: |
+        Deployment posture the UI gates its surfaces on. Values are resolved
+        at boot from `PROVISIONING_MODE` / `PROVISIONING_REGIONS` and never
+        change for the life of the process.
+
+        This is deliberately server-side rather than a build-time UI flag:
+        a browser flag cannot enforce anything (hiding the Capacity tab
+        would leave the spin endpoints live) and would force a UI image
+        rebuild per environment, breaking the one-image-serves-docker-and-
+        Kubernetes property. The server decides; the browser reflects.
+      responses:
+        "200":
+          description: Deployment capabilities.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlatformCapabilities" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Spring Boot Actuator
+  # ────────────────────────────────────────────────────────────────────────
+  /actuator/health:
+    get:
+      tags: [platform]
+      summary: Aggregate health (Spring Boot Actuator)
+      responses:
+        "200":
+          description: UP.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /actuator/info:
+    get:
+      tags: [platform]
+      summary: Build / version info
+      responses:
+        "200":
+          description: Build info.
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /api/v1/cronJobs:
+    get:
+      tags: [cronJobs]
+      summary: List CRON schedules
+      description: |
+        All schedules, optionally filtered by `application`,
+        sorted by `nextFireAt` ascending (disabled — null `nextFireAt` — last).
+      parameters:
+        - { name: application, in: query, required: false, schema: { type: string }, description: "Filter to one application's schedules." }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CronJobListResponse" }
+    post:
+      tags: [cronJobs]
+      summary: Create a CRON schedule
+      description: |
+        Validates: the cron expression parses (5-field unix or 6-field; also
+        `@macro`), the application is registered, the template blob is fetchable
+        from document-service, the template's own application agrees with the
+        schedule's, and `(applicationName, name)` is unique. `nextFireAt` is
+        seeded from the expression. `createdBy` is taken from `X-Actor`.
+      parameters:
+        - { $ref: "#/components/parameters/XActorHeader" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CronJobRequest" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CronJobSummary" }
+        "400":
+          description: |
+            INVALID_REQUEST (name/applicationName/templateBlobId missing or
+            template/application mismatch), INVALID_CRON (bad expression /
+            timezone), UNKNOWN_APPLICATION (not registered), or
+            TEMPLATE_UNAVAILABLE (blob missing / unparseable).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: CRON_JOB_CONFLICT — a schedule with this name already exists for the application.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/cronJobs/{cronJobId}:
+    parameters:
+      - { name: cronJobId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    get:
+      tags: [cronJobs]
+      summary: Get one schedule
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CronJobSummary" }
+        "404":
+          description: CRON_JOB_NOT_FOUND
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+    put:
+      tags: [cronJobs]
+      summary: Edit a schedule's definition
+      description: |
+        Replaces name / applicationName / templateBlobId / cronExpression /
+        timeZone (same validation as create). `enabled` is managed by the
+        enable/disable endpoints, not here. `nextFireAt` is recomputed from the
+        new expression when the schedule is enabled.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CronJobRequest" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CronJobSummary" }
+        "400":
+          description: INVALID_REQUEST / INVALID_CRON / UNKNOWN_APPLICATION / TEMPLATE_UNAVAILABLE
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: CRON_JOB_NOT_FOUND
+        "409":
+          description: CRON_JOB_CONFLICT
+    delete:
+      tags: [cronJobs]
+      summary: Delete a schedule
+      description: |
+        Hard-deletes the schedule row. Its append-only fire history is retained
+        (FK-less) for forensics.
+      responses:
+        "204":
+          description: Deleted.
+        "404":
+          description: CRON_JOB_NOT_FOUND
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/cronJobs/{cronJobId}/fireNow:
+    parameters:
+      - { name: cronJobId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+      - { $ref: "#/components/parameters/XActorHeader" }
+    post:
+      tags: [cronJobs]
+      summary: Fire a schedule now (manual)
+      description: |
+        Operator-triggered fire on the same launch path as a scheduled fire,
+        attributed to the operator's `X-Actor`. Does NOT change the schedule's
+        cadence (`nextFireAt` is untouched). Returns the outcome.
+      responses:
+        "202":
+          description: |
+            Accepted — the fire was attempted. `outcome` is LAUNCHED (run
+            started), SKIPPED (no capacity / previous run still active), or
+            FAILED (template unavailable / launch error).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CronJobFireResult" }
+        "404":
+          description: CRON_JOB_NOT_FOUND
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/cronJobs/{cronJobId}/enable:
+    parameters:
+      - { name: cronJobId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    post:
+      tags: [cronJobs]
+      summary: Enable a schedule
+      description: Sets enabled=true and seeds `nextFireAt` from the expression.
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CronJobSummary" }
+        "404":
+          description: CRON_JOB_NOT_FOUND
+
+  /api/v1/cronJobs/{cronJobId}/disable:
+    parameters:
+      - { name: cronJobId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    post:
+      tags: [cronJobs]
+      summary: Disable a schedule
+      description: Sets enabled=false and clears `nextFireAt` so the sweep can't see it.
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CronJobSummary" }
+        "404":
+          description: CRON_JOB_NOT_FOUND
+
+  /api/v1/cronJobs/{cronJobId}/skipNext:
+    parameters:
+      - { name: cronJobId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    post:
+      tags: [cronJobs]
+      summary: Skip the next scheduled fire
+      description: >
+        Advances `nextFireAt` to the slot after the current one without firing —
+        a one-off "not this time" that leaves the schedule enabled. 409
+        `NOTHING_TO_SKIP` if the schedule is disabled or has no upcoming fire.
+      responses:
+        "200":
+          description: ok (the schedule with its advanced `nextFireAt`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CronJobSummary" }
+        "404":
+          description: CRON_JOB_NOT_FOUND
+        "409":
+          description: NOTHING_TO_SKIP
+
+  /api/v1/cronJobs/{cronJobId}/history:
+    parameters:
+      - { name: cronJobId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    get:
+      tags: [cronJobs]
+      summary: Fire history for a schedule
+      description: Append-only fire-attempt log, newest first.
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/CronJobFire" }
+        "404":
+          description: CRON_JOB_NOT_FOUND
+
+  /api/v1/automation/reports/infraReadiness:
+    get:
+      tags: [cronJobs]
+      summary: Preview the infra-readiness report
+      description: |
+        On-demand render of the same content the INFRA_READINESS scheduled fire
+        would email — so the report is never email-only. Returns the structured
+        report, the email subject, and the rendered HTML body. The optional
+        customSubject / customIntro params preview unsaved operator tailoring.
+      parameters:
+        - { name: customSubject, in: query, required: false, schema: { type: string }, description: "Preview an unsaved custom subject." }
+        - { name: customIntro,   in: query, required: false, schema: { type: string }, description: "Preview an unsaved intro note." }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subject: { type: string }
+                  html:    { type: string, description: "Rendered HTML email body." }
+                  report:
+                    type: object
+                    properties:
+                      generatedAt: { type: string, format: date-time }
+                      allClear:    { type: boolean }
+                      backends:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            name:   { type: string }
+                            status: { type: string }
+                            detail: { type: string, nullable: true }
+                      apps:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            name:               { type: string }
+                            currentStatus:      { type: string }
+                            downtimeMinutes24h: { type: integer, format: int64 }
+                            healthyNow:         { type: boolean }
+
+  /api/v1/automation/reports/daily:
+    get:
+      tags: [cronJobs]
+      summary: Preview the daily perf-test report
+      description: |
+        On-demand render of the same content the DAILY_REPORT scheduled fire
+        would email — so the report is never email-only. Returns the structured
+        report (per-app run counts for the last 24h + p50/p95/error-rate vs the
+        6-day baseline + top regressions), the email subject, and the rendered
+        HTML body. Reads existing run + runTrend data; no metrics-table scan.
+        The optional customSubject / customIntro params preview unsaved tailoring.
+      parameters:
+        - { name: customSubject, in: query, required: false, schema: { type: string }, description: "Preview an unsaved custom subject." }
+        - { name: customIntro,   in: query, required: false, schema: { type: string }, description: "Preview an unsaved intro note." }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subject: { type: string }
+                  html:    { type: string, description: "Rendered HTML email body." }
+                  report:
+                    type: object
+                    properties:
+                      generatedAt: { type: string, format: date-time }
+                      totalRuns:   { type: integer, format: int64, description: "Runs launched across all apps in the last 24h." }
+                      apps:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            name:      { type: string }
+                            launched:  { type: integer, format: int64 }
+                            completed: { type: integer, format: int64 }
+                            failed:    { type: integer, format: int64 }
+                            recent:    { type: object, nullable: true, description: "Last-24h averaged p50Ms/p95Ms/errorRate (null when no completed runs)." }
+                            baseline:  { type: object, nullable: true, description: "Preceding 6-day averaged p50Ms/p95Ms/errorRate (null when no baseline runs)." }
+                      topRegressions:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            application:   { type: string }
+                            baselineP95Ms: { type: number, format: double }
+                            recentP95Ms:   { type: number, format: double }
+                            deltaPct:      { type: number, format: double }
+
+components:
+
+  parameters:
+
+    # AUDIT-TRAIL — shared X-Actor header on every state-changing run endpoint.
+    XActorHeader:
+      name: X-Actor
+      in: header
+      required: false
+      schema: { type: string }
+      description: |
+        Who is performing this action. Recorded on the run's audit timeline
+        (`GET /runs/{runId}/events`). Self-attested today (no auth locally);
+        blank/absent → actor `anonymous`. The cloud auth filter will later
+        derive this from the verified OIDC subject / IAM role instead, which
+        flips the recorded `actorSource` from `headerActor` to
+        `oidcSubject` / `iamRole`.
+
+  schemas:
+
+    # ── AUTOMATION — CRON schedules ────────────────────────────────────
+    # CronJobSummary mirrors CronJobSummary in jmeter-cloud-ui/src/api/automation.ts
+    # verbatim — keep the field names aligned (the UI stub's one-line swap).
+    CronJobSummary:
+      type: object
+      required: [cronJobId, name, cronExpression, timeZone, enabled, createdAt, kind]
+      properties:
+        cronJobId:       { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+        name:            { type: string, description: "Operator label; unique per application (or globally for report kinds)." }
+        applicationName: { type: string, nullable: true, description: "Null for platform-wide report kinds (INFRA_READINESS / DAILY_REPORT)." }
+        templateBlobId:
+          type: string
+          nullable: true
+          description: "document-service blob (X-Type=template). Required for LAUNCH_RUN; null for DRAIN_REGION / PROVISION_REGION."
+        cronExpression:  { type: string, description: "5-field unix, 6-field (with seconds), or @macro." }
+        timeZone:        { type: string, description: "IANA zone id; nextFireAt is computed in it.", default: UTC }
+        enabled:         { type: boolean }
+        createdBy:       { type: string, nullable: true, description: "X-Actor at create time." }
+        createdAt:       { type: string, format: date-time }
+        lastFiredAt:     { type: string, format: date-time, nullable: true }
+        lastFiredRunId:  { type: string, nullable: true }
+        lastFireStatus:
+          type: string
+          nullable: true
+          enum: [LAUNCHED, SKIPPED, FAILED, DISABLED]
+        nextFireAt:      { type: string, format: date-time, nullable: true, description: "Null when disabled." }
+        kind:
+          type: string
+          description: |
+            AUTOMATION Phase C/E/D — dispatch:
+              LAUNCH_RUN       fire a saved template via RunService.startRun;
+              DRAIN_REGION     drain every IDLE worker in (app, region) without
+                               replacement (skipped if application.alwaysOn);
+              PROVISION_REGION spin workers in (app, region) up to applicationCapacity.maxAvailable;
+              INFRA_READINESS  platform-wide: email the daily infra-readiness report (goal #2);
+              DAILY_REPORT     platform-wide: email the daily perf-test report (goal #1).
+          enum: [LAUNCH_RUN, DRAIN_REGION, PROVISION_REGION, INFRA_READINESS, DAILY_REPORT]
+        region:
+          type: string
+          nullable: true
+          description: "Required for DRAIN_REGION / PROVISION_REGION; null otherwise."
+        recipients:
+          type: string
+          nullable: true
+          description: "Comma-separated report-email recipients (report kinds). Blank → AUTOMATION_REPORT_RECIPIENTS env fallback."
+        customSubject:
+          type: string
+          nullable: true
+          description: "AUTOMATION: optional custom email subject for report kinds; null → composer default."
+        customIntro:
+          type: string
+          nullable: true
+          description: "AUTOMATION: optional intro/note rendered above the report body for report kinds."
+
+    CronJobListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/CronJobSummary" }
+
+    CronJobRequest:
+      type: object
+      required: [name, applicationName, cronExpression]
+      properties:
+        name:            { type: string, description: "≤ 128 chars, non-blank." }
+        applicationName: { type: string, description: "Must be a registered application." }
+        templateBlobId:
+          type: string
+          nullable: true
+          description: "Required for kind=LAUNCH_RUN; must be fetchable from document-service and its application must match."
+        cronExpression:  { type: string, description: "5-field unix, 6-field, or @macro. Validated server-side." }
+        timeZone:        { type: string, nullable: true, description: "IANA zone id; defaults to UTC.", default: UTC }
+        kind:
+          type: string
+          nullable: true
+          description: "AUTOMATION Phase C/E/D — null defaults to LAUNCH_RUN. INFRA_READINESS and DAILY_REPORT are platform-wide reports (no application/template/region; just a cron + recipients)."
+          enum: [LAUNCH_RUN, DRAIN_REGION, PROVISION_REGION, INFRA_READINESS, DAILY_REPORT]
+        region:
+          type: string
+          nullable: true
+          description: "Required for kind=DRAIN_REGION / PROVISION_REGION; must be a configured row in applicationCapacity (else 400 REGION_NOT_CONFIGURED)."
+        recipients:
+          type: string
+          nullable: true
+          description: "Comma-separated emails for report kinds (INFRA_READINESS / DAILY_REPORT); blank uses the AUTOMATION_REPORT_RECIPIENTS env fallback."
+        customSubject:
+          type: string
+          nullable: true
+          description: "AUTOMATION — optional custom email subject for report kinds; blank → composer default."
+        customIntro:
+          type: string
+          nullable: true
+          description: "AUTOMATION — optional intro/note rendered above the report body for report kinds."
+
+    CronJobFire:
+      type: object
+      required: [fireId, cronJobId, firedAt, outcome]
+      properties:
+        fireId:      { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+        cronJobId:   { type: string }
+        firedAt:     { type: string, format: date-time }
+        outcome:
+          type: string
+          enum: [LAUNCHED, SKIPPED, FAILED, DISABLED]
+        runId:       { type: string, nullable: true, description: "Set for LAUNCHED." }
+        errorReason: { type: string, nullable: true, description: "Diagnostic for SKIPPED / FAILED." }
+
+    CronJobFireResult:
+      type: object
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [LAUNCHED, SKIPPED, FAILED, DISABLED]
+        runId: { type: string, nullable: true }
+        error: { type: string, nullable: true }
+
+    ApplicationCapacityEntry:
+      type: object
+      required: [region, maxAvailable]
+      properties:
+        region:        { type: string, description: "DNS-friendly region key (e.g. us-east, us-west)." }
+        maxAvailable:  { type: integer, minimum: 1, maximum: 1000, description: "Operator-set ceiling for this (app, region). Provisioned pods (some may be off for cost-saving)." }
+
+    # Phase 3 — full row returned by PUT /capacity/{region} (carries timestamps).
+    ApplicationCapacityRow:
+      type: object
+      required: [applicationId, region, maxAvailable]
+      properties:
+        applicationId: { type: string }
+        region:        { type: string }
+        maxAvailable:  { type: integer, minimum: 0, maximum: 1000 }
+        createdAt:     { type: string, format: date-time, nullable: true }
+        updatedAt:     { type: string, format: date-time, nullable: true }
+
+    Application:
+      type: object
+      required: [applicationId, name, healthEndpoints, createdAt]
+      properties:
+        applicationId:        { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+        name:                 { type: string, description: "DNS-friendly registered name. Drives URLs + cross-table joins on `run.application`." }
+        sealId:               { type: string, nullable: true, description: "Operator-supplied identifier (e.g. internal catalog ID)." }
+        description:          { type: string, nullable: true }
+        healthEndpoints:
+          type: array
+          description: "Health-check URLs polled every ~30s by ApplicationHealthPoller. Empty → polling disabled, status stays UNKNOWN."
+          items: { type: string }
+        capacity:
+          type: array
+          nullable: true
+          description: "D-Capacity v2 — per-region max-pod budget for this application. NULL on requests without capacity hydration; populated on responses from this controller."
+          items: { $ref: "#/components/schemas/ApplicationCapacityEntry" }
+        createdAt:            { type: string, format: date-time }
+        lastHealthCheckedAt:  { type: string, format: date-time, nullable: true }
+        lastHealthStatus:
+          type: string
+          nullable: true
+          enum: [HEALTHY, DEGRADED, UNHEALTHY, UNKNOWN]
+        lastHealthDetails:
+          type: array
+          nullable: true
+          description: "Per-endpoint poll snapshot — array of {url, statusCode, latencyMs, error?, ok}."
+          items:
+            type: object
+            properties:
+              url:        { type: string }
+              statusCode: { type: integer, nullable: true }
+              latencyMs:  { type: integer }
+              error:      { type: string, nullable: true }
+              ok:         { type: boolean }
+        recyclePolicy:
+          type: string
+          description: "WORKER-HYGIENE Phase C — pod recycle policy. Default REUSE."
+          enum: [REUSE, MAX_RUNS, MAX_AGE, BOTH, EVERY_RUN]
+        maxRunsPerPod:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 10000
+          description: "Required for MAX_RUNS / BOTH; null otherwise."
+        podMaxAgeHours:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 720
+          description: "Required for MAX_AGE / BOTH; null otherwise."
+        alwaysOn:
+          type: boolean
+          default: false
+          description: "AUTOMATION Phase C — when true, scheduled DRAIN_REGION jobs SKIP for this app (production-like, never auto-drained). PROVISION_REGION + LAUNCH_RUN unaffected."
+
+    CreateApplicationRequest:
+      type: object
+      required: [name]
+      properties:
+        name:            { type: string, description: "DNS-friendly: [a-z0-9]([-a-z0-9_]{0,62}[a-z0-9])?" }
+        sealId:          { type: string, nullable: true, description: "≤ 128 chars" }
+        description:     { type: string, nullable: true, description: "≤ 512 chars" }
+        healthEndpoints:
+          type: array
+          description: "Optional. Max 8 entries; each must be a valid http(s) URI ≤ 256 chars."
+          items: { type: string }
+        capacity:
+          type: array
+          nullable: true
+          description: "D-Capacity v2 — per-region max-pod budget. Empty/null = configure later."
+          items: { $ref: "#/components/schemas/ApplicationCapacityEntry" }
+        recyclePolicy:
+          type: string
+          nullable: true
+          description: "WORKER-HYGIENE Phase C — null defaults to REUSE."
+          enum: [REUSE, MAX_RUNS, MAX_AGE, BOTH, EVERY_RUN]
+        maxRunsPerPod:  { type: integer, nullable: true, minimum: 1, maximum: 10000 }
+        podMaxAgeHours: { type: integer, nullable: true, minimum: 1, maximum: 720 }
+        alwaysOn:
+          type: boolean
+          nullable: true
+          description: "AUTOMATION Phase C — defaults to false on create."
+
+    UpdateApplicationRequest:
+      type: object
+      required: [name]
+      properties:
+        name:            { type: string }
+        sealId:          { type: string, nullable: true }
+        description:     { type: string, nullable: true }
+        healthEndpoints:
+          type: array
+          items: { type: string }
+        capacity:
+          type: array
+          nullable: true
+          items: { $ref: "#/components/schemas/ApplicationCapacityEntry" }
+        recyclePolicy:
+          type: string
+          nullable: true
+          description: "WORKER-HYGIENE Phase C — null = no policy change. Setting requires the matching threshold fields per policy."
+          enum: [REUSE, MAX_RUNS, MAX_AGE, BOTH, EVERY_RUN]
+        maxRunsPerPod:  { type: integer, nullable: true, minimum: 1, maximum: 10000 }
+        podMaxAgeHours: { type: integer, nullable: true, minimum: 1, maximum: 720 }
+        alwaysOn:
+          type: boolean
+          nullable: true
+          description: "AUTOMATION Phase C — null on PUT preserves the current value (no surprise flips for callers that don't know about it)."
+
+    StartRunRequest:
+      type: object
+      required: [testPlanBlobId]
+      properties:
+        testPlanBlobId:
+          type: string
+          description: document-service blob ID for the .jmx test plan to fan out.
+          example: "01HXC2VQK4M9N6P5T0YBX2WZ4Q"
+        dataFilesBlobId:
+          type: string
+          nullable: true
+          description: Optional document-service blob ID for the data-files zip.
+        application:
+          type: string
+          nullable: true
+          description: |
+            UI-D3 — application name this run is launched against; mirrors
+            the testPlan blob's `X-Application` tag. Persisted on the run
+            record so the `/applications/:appName` surface can filter
+            `?application=<name>` without joining through document-service.
+            Optional for API callers; the launcher form's application gate
+            ensures it's always set when submitted from the UI.
+          example: "checkout-svc"
+        fleetAllocation:
+          type: array
+          description: |
+            Track F multi-region allocation. One `(region, count)` entry
+            per region the run should span. Required unless the legacy
+            `fleetSize` + single-element `regions` shortcut is used.
+            If both `fleetAllocation` and `fleetSize` are set,
+            `fleetAllocation` wins and the run's `stateReason` records
+            `ignored legacy fleetSize`.
+          items: { $ref: "#/components/schemas/FleetAllocationEntry" }
+        fleetSize:
+          type: integer
+          minimum: 1
+          description: |
+            **Legacy.** Total pods to claim across regions. Used when
+            `fleetAllocation` is absent. When paired with a
+            single-element `regions`, equivalent to
+            `fleetAllocation:[{region:regions[0], count:fleetSize}]`.
+            With an empty `regions`, claims freshest-heartbeat pods
+            regardless of region (Step 14 behavior).
+        regions:
+          type: array
+          description: |
+            **Legacy.** Used only when `fleetAllocation` is absent. With
+            a single entry, acts as the region filter for `fleetSize`.
+            Multi-element `regions` is ignored — supply `fleetAllocation`
+            instead.
+          items: { type: string }
+        labelFilter:
+          type: array
+          description: Optional list of JMeter labels to focus the run on.
+          items: { type: string }
+        initiatedBy:
+          type: string
+          description: Free-form initiator identity (UI user, CI job, etc.). Auth model TBD.
+        spinShortfall:
+          type: boolean
+          nullable: true
+          default: false
+          description: |
+            When true, a shortfall during the
+            claim phase triggers an on-the-fly spin to fill the gap
+            rather than a 503 INSUFFICIENT_CAPACITY. Subject to the
+            per-region `applicationCapacity.maxAvailable` ceiling: if
+            filling the gap would exceed it, the response is 409
+            `APPLICATION_CAPACITY_EXCEEDED` with the offending region.
+            The UI's NewRunPage sets this only after the operator
+            confirms a shortfall dialog rendered from the 503 body.
+        saveResults:
+          type: boolean
+          nullable: true
+          default: false
+          description: |
+            Save Results — when true, each worker zips + uploads its JTL to the
+            Document Service on a clean COMPLETE (tagged with this run's
+            application + runId + workerId). Threads to the local-orchestrator
+            fan-out body as `autoUploadResults=true` and is persisted on the run
+            record (`Run.saveResults`) so the run-detail page shows a
+            "Download results" link (document-service
+            `GET /api/v1/blob/run/{runId}/archive`). One `RESULTS_SAVED` audit
+            event is emitted per worker as each upload lands. Default false.
+
+    FleetAllocationEntry:
+      type: object
+      required: [region, count]
+      properties:
+        region:
+          type: string
+          description: |
+            Region label. Must match a region that has had at least one
+            pod registered — otherwise the request returns 400
+            `UNKNOWN_REGION`.
+          example: "us-east-1"
+        count:
+          type: integer
+          minimum: 1
+          description: Number of IDLE pods to claim in this region.
+        perNodeProperties:
+          type: array
+          nullable: true
+          description: |
+            Track G (Step 31) — per-pod JMeter `-J` properties, indexed
+            positionally. The i-th entry applies to the i-th claimed
+            pod in this region; missing or null entries mean "no extra
+            properties for that pod." Length may be less than `count`
+            (trailing pods get no extras). Re-used by MID-TEST-SCALING
+            Phase A's `scaleUp` endpoint.
+          items:
+            type: object
+            additionalProperties: { type: string }
+
+    Run:
+      type: object
+      required: [runId, originRegion, testPlanBlobId, initiatedBy, state, createdAt]
+      properties:
+        runId:           { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+        originRegion:    { type: string }
+        testPlanBlobId:  { type: string }
+        dataFilesBlobId: { type: string, nullable: true }
+        application:     { type: string, nullable: true, description: "UI-D3 — application this run was launched against. NULL for legacy rows." }
+        initiatedBy:     { type: string }
+        state:           { $ref: "#/components/schemas/RunStateEnum" }
+        stateReason:     { type: string, nullable: true }
+        createdAt:       { type: string, format: date-time }
+        startedAt:       { type: string, format: date-time, nullable: true }
+        completedAt:     { type: string, format: date-time, nullable: true }
+        saveResults:     { type: boolean, description: "Save Results — true if the run was launched with saveResults=true (each worker uploads its JTL to the Document Service on completion). Drives the run-detail \"Download results\" link (shown only for COMPLETED runs). Cleared to false when a run ends in any non-COMPLETED terminal state (ABORTED, or FAILED — e.g. all fan-outs rejected, or every worker lost/failed): those produce no clean combined upload, so the platform stops polling the dead workers and the UI must not offer a Download that 404s. Only a clean COMPLETED keeps it true. Note a worker that itself FAILED (non-zero exit / killed) never uploads regardless — the combined archive only ever contains the cleanly-COMPLETED workers." }
+        fleetMembers:
+          type: array
+          items: { $ref: "#/components/schemas/RunFleetMember" }
+
+    RunFleetMember:
+      type: object
+      required: [runId, workerId, region, state, createdAt]
+      properties:
+        runId:            { type: string }
+        workerId:         { type: string }
+        region:           { type: string }
+        state:            { $ref: "#/components/schemas/MemberStateEnum" }
+        stateReason:      { type: string, nullable: true }
+        fanoutStatusCode: { type: integer, nullable: true, description: "HTTP status returned by the POST /api/v1/test fan-out call." }
+        podBaseUrl:       { type: string, nullable: true }
+        createdAt:        { type: string, format: date-time }
+        startedAt:        { type: string, format: date-time, nullable: true }
+        completedAt:      { type: string, format: date-time, nullable: true }
+        properties:
+          type: object
+          additionalProperties: { type: string }
+          description: "Track G (Step 31) — per-node JMeter -J properties this pod was launched with. Empty object for nodes without extras."
+        joinedAtSecond:
+          type: integer
+          format: int64
+          nullable: true
+          description: |
+            NULL for original-fleet members
+            (joined at run start). For mid-test scale-up joiners, the
+            number of seconds since `run.startedAt` at which this
+            worker joined. UI renders as a "joined +Xm" chip.
+        runsServed:
+          type: integer
+          format: int64
+          nullable: true
+          description: |
+            Joined from `pod.runsServed` at
+            read time. Null when the pod row is gone (drained pod
+            whose member row outlived it). UI uses this to flag a
+            worker whose pod is near its recycle threshold.
+
+    ScaleUpRunRequest:
+      type: object
+      required: [allocations]
+      description: |
+        Body of `POST /api/v1/runs/{runId}/scaleUp`. Only the per-region
+        allocation; the run's testPlan + dataFiles blob IDs come from
+        the persisted run row.
+      properties:
+        allocations:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/FleetAllocationEntry" }
+
+    ScaleUpRunResponse:
+      type: object
+      required: [run, requested, granted, partial]
+      description: |
+        Response of `POST /api/v1/runs/{runId}/scaleUp`. `run` is the
+        post-scale snapshot (original + newly added members). `granted`
+        is the actual number of new members opened; `partial` is true
+        iff `granted < requested` (only possible with `bestEffort=true`).
+      properties:
+        run:         { $ref: "#/components/schemas/Run" }
+        requested:   { type: integer, description: "Total workers requested across all allocation entries." }
+        granted:     { type: integer, description: "Number of workers actually claimed and inserted." }
+        partial:     { type: boolean, description: "True iff granted < requested (only with bestEffort=true)." }
+        stateReason: { type: string, nullable: true, description: "Best-effort shortfall note, if any. Same shape as run.stateReason." }
+
+    AbortRunRequest:
+      type: object
+      description: |
+        Body of `POST /api/v1/runs/{runId}/abort`. Optional — an operator may
+        abort with no body at all.
+      properties:
+        reason:
+          type: string
+          description: |
+            Free-text note recorded on the `ABORT` audit event and the run's
+            `stateReason`. PII-free by convention (the audit timeline is
+            shared — don't put secrets here).
+
+    DeleteRunRequest:
+      type: object
+      description: |
+        Body of `DELETE /api/v1/runs/{runId}`. Optional — an operator may hide a
+        run with no body at all.
+      properties:
+        reason:
+          type: string
+          description: |
+            Free-text note recorded on the `DELETE` audit event. PII-free by
+            convention (the audit timeline is shared — don't put secrets here).
+
+    DeleteApplicationRequest:
+      type: object
+      description: |
+        Body of `POST /api/v1/applications/{id}/purge`. Optional — an operator
+        may purge with no body at all.
+      properties:
+        reason:
+          type: string
+          description: |
+            Free-text note recorded on the `purgeAudit` tombstone. PII-free by
+            convention.
+
+    PurgeApplicationResponse:
+      type: object
+      description: |
+        Response of `POST /api/v1/applications/{id}/purge`. Summarises what the
+        hard delete reclaimed across the app and its runs.
+      properties:
+        applicationId:
+          type: string
+        runsPurged:
+          type: integer
+          description: Number of the app's runs that were purged.
+        metricRowsDeleted:
+          type: integer
+          format: int64
+          description: 'Total rows removed from metrics."workerMetric" across all the app''s runs.'
+        blobsDeleted:
+          type: integer
+          description: Total document-service blobs removed across all the app's runs.
+        blobStepComplete:
+          type: boolean
+          description: |
+            False when document-service was unreachable for at least one run and
+            some result blobs were left for a future retention sweep.
+
+    PurgeRunResponse:
+      type: object
+      description: |
+        Response of `POST /api/v1/runs/{runId}/purge`. Summarises what the hard
+        delete reclaimed.
+      properties:
+        runId:
+          type: string
+          description: The purged run's id.
+        metricRowsDeleted:
+          type: integer
+          format: int64
+          description: 'Rows removed from metrics."workerMetric".'
+        blobsDeleted:
+          type: integer
+          description: |
+            document-service blobs removed (result blobs + any unshared
+            testPlan/dataFiles blobs).
+        blobStepComplete:
+          type: boolean
+          description: |
+            False when document-service was unreachable and the blob cleanup was
+            skipped — the DB purge still completed; orphaned result blobs remain
+            for a future retention sweep.
+
+    ScaleDownRunRequest:
+      type: object
+      description: |
+        Body of `POST /api/v1/runs/{runId}/scaleDown`. Supply EXACTLY
+        ONE of `workerIds` or `allocations`. MID-TEST-SCALING Phase B.
+      properties:
+        workerIds:
+          type: array
+          description: "Explicit list of pod ids to drain."
+          items: { type: string }
+        allocations:
+          type: array
+          description: |
+            Per-region drain count. The service picks the N most-recently-
+            created RUNNING members in each named region (youngest-first).
+          items: { $ref: "#/components/schemas/FleetAllocationEntry" }
+
+    ScaleDownRunResponse:
+      type: object
+      required: [run, drained, skipped]
+      description: |
+        Response of `POST /api/v1/runs/{runId}/scaleDown`. `run` is the
+        post-scale snapshot (drained members appear in DRAINING / DRAINED).
+        `drained` lists workerIds that were targeted and accepted by their
+        local-orch. `skipped` lists targets that were already terminal,
+        already DRAINING, or whose drain RPC failed — each with a
+        one-line reason.
+      properties:
+        run: { $ref: "#/components/schemas/Run" }
+        drained:
+          type: array
+          items: { type: string }
+        skipped:
+          type: array
+          items:
+            type: object
+            required: [workerId, reason]
+            properties:
+              workerId: { type: string }
+              reason:   { type: string }
+
+    RunStatus:
+      type: object
+      required: [runId, state, members]
+      properties:
+        runId:       { type: string }
+        state:       { $ref: "#/components/schemas/RunStateEnum" }
+        stateReason: { type: string, nullable: true }
+        startedAt:   { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+        members:
+          type: array
+          items: { $ref: "#/components/schemas/RunFleetMember" }
+
+    # AUDIT-TRAIL — one append-only event per state-changing operator action.
+    RunEvent:
+      type: object
+      required: [eventId, runId, eventType, actor, actorSource, payload, result, occurredAt]
+      properties:
+        eventId:     { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$", description: "ULID. Idempotency key — a same-id retry is dropped." }
+        runId:       { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+        eventType:
+          type: string
+          enum: [RUN_START, SCALE_UP, SCALE_DOWN, DRAIN_WORKER, ABORT, STOP, DELETE, RUN_COMPLETED, RUN_FAILED, RUN_ABORTED, WORKERS_RECYCLED, RESULTS_SAVED]
+          description: |
+            What happened. DRAIN_WORKER is a single-explicit-workerId drain;
+            multi-worker / region drains are SCALE_DOWN. ABORT is an
+            operator-initiated force-terminate (`POST /runs/{id}/abort`) — the
+            operator is the cause of the terminal transition, so a manual abort
+            emits ABORT (not a system RUN_ABORTED). DELETE is an operator
+            soft-delete (`DELETE /runs/{id}`) — the run is hidden, not erased,
+            so the event is retained. RUN_COMPLETED / RUN_FAILED /
+            RUN_ABORTED + WORKERS_RECYCLED + RESULTS_SAVED are platform-detected
+            (actorSource=system), not operator actions.
+        actor:       { type: string, description: "Who performed the action (X-Actor header; default `anonymous`)." }
+        actorSource:
+          type: string
+          enum: [anonymous, headerActor, oidcSubject, iamRole, system]
+          description: "How the actor identity was learned, so auditors can weigh trust. `system` = platform-initiated (automation / internal), not a human."
+        payload:
+          type: object
+          additionalProperties: true
+          description: |
+            Per-event-type contract (no PII). Shapes:
+            `RUN_START` → `{ application, fleetAllocation: [{region,count}], requested, granted }`;
+            `SCALE_UP` → `{ allocations: [{region,count}], bestEffort, requested, granted, partial }`;
+            `SCALE_DOWN` → `{ workerIds, allocations: [{region,count}], drained, skipped: [{target,reason}] }`;
+            `DRAIN_WORKER` → `{ workerId, drained, skipped }`;
+            `ABORT` → `{ reason, aborted: [workerId], skipped: [{target,reason}] }`;
+            `DELETE` → `{ reason }`;
+            `RUN_COMPLETED` / `RUN_FAILED` / `RUN_ABORTED` → `{ finalState, reason }`;
+            `RESULTS_SAVED` → `{ workerId, target }`.
+        result:
+          type: string
+          description: "`ok` / `partial` (best-effort partial grant or some drains skipped) / `failed` / `aborted` (run terminal outcome) / `rejected:CODE` (the action was refused; CODE is the same ErrorResponse.code the caller saw)."
+        occurredAt:  { type: string, format: date-time }
+
+    RunMetricsRollup:
+      type: object
+      required: [runId, state, byLabel]
+      properties:
+        runId: { type: string }
+        state: { $ref: "#/components/schemas/RunStateEnum" }
+        byLabel:
+          type: array
+          items:
+            type: object
+            properties:
+              label:            { type: string }
+              totalThroughput:  { type: integer, format: int64 }
+              totalErrors:      { type: integer, format: int64 }
+              errorRate:        { type: number, format: double }
+              avgP50Ms:         { type: number, format: double }
+              avgP95Ms:         { type: number, format: double }
+              avgP99Ms:         { type: number, format: double }
+              maxMs:            { type: number, format: double }
+              maxActiveThreads: { type: integer, format: int64 }
+              firstSecond:      { type: integer, format: int64 }
+              lastSecond:       { type: integer, format: int64 }
+              rowCount:         { type: integer, format: int64 }
+
+    TimeseriesPoint:
+      type: object
+      required: [sec, v]
+      description: One sample. `sec` is a Unix epoch second; `v` is the metric value.
+      properties:
+        sec: { type: integer, format: int64, description: "Unix epoch second" }
+        v:   { type: number,  format: double, description: "Metric value (TPS / ms / percentage / count)" }
+
+    MetricsSeries:
+      type: object
+      description: "The four per-second series the UI charts consume (used for both the all-regions total and each per-region breakdown)."
+      required: [tps, avgRtMs, errorPct, statusCodes]
+      properties:
+        tps:
+          type: array
+          items: { $ref: "#/components/schemas/TimeseriesPoint" }
+        avgRtMs:
+          type: array
+          items: { $ref: "#/components/schemas/TimeseriesPoint" }
+        errorPct:
+          type: array
+          items: { $ref: "#/components/schemas/TimeseriesPoint" }
+        statusCodes:
+          type: object
+          description: "Per-status-code timeseries. Keys are status code strings (HTTP code or JMeter's non-HTTP marker); values are TimeseriesPoint arrays."
+          additionalProperties:
+            type: array
+            items: { $ref: "#/components/schemas/TimeseriesPoint" }
+
+    MetricsTimeseries:
+      type: object
+      required: [runId, bucketSize, series]
+      properties:
+        runId:      { type: string }
+        bucketSize:
+          type: integer
+          minimum: 1
+          description: "Number of raw seconds aggregated per returned point. `1` = no bucketing."
+        fromSecond: { type: integer, format: int64, nullable: true, description: "First raw windowSecond covered by the response (null when series are empty)." }
+        toSecond:   { type: integer, format: int64, nullable: true, description: "Last raw windowSecond covered by the response (null when series are empty)." }
+        series: { $ref: "#/components/schemas/MetricsSeries" }
+        regions:
+          type: object
+          description: |
+            Per-region breakdown of the same four series, keyed by region
+            (e.g. `us-east-1`). Present only when the request passed
+            `byRegion=true`; omitted otherwise. The all-regions total in
+            `series` is the exact fold of these per-region entries.
+          additionalProperties: { $ref: "#/components/schemas/MetricsSeries" }
+
+    MetricsTimeseriesBatch:
+      type: object
+      required: [runs, missing]
+      description: |
+        HM-5 — batched timeseries response for the comparison view.
+        `runs` is keyed by runId (preserves the order from the `ids`
+        query param so the UI can map the first id to its left column);
+        `missing` lists ids that did not resolve to a known run.
+      properties:
+        runs:
+          type: object
+          description: "Per-run timeseries keyed by runId. Order matches the `ids` query parameter."
+          additionalProperties: { $ref: "#/components/schemas/MetricsTimeseries" }
+        missing:
+          type: array
+          description: "Run ids that did not resolve to a known run; the UI calls these out so the operator knows which side of the comparison is empty."
+          items: { type: string }
+
+    RunStateEnum:
+      type: string
+      enum: [PREPARING, STARTING, RUNNING, DRAINING, COMPLETED, FAILED, ABORTED]
+
+    MemberStateEnum:
+      type: string
+      description: |
+        Per-pod lifecycle within a fleet run. `DRAINING` (MID-TEST-SCALING
+        Phase B) marks a worker the operator drained via
+        `POST /runs/{runId}/scaleDown`; `DRAINED` is the successful
+        terminal — distinct from `COMPLETED` (natural end) and `ABORTED`
+        (forced stop). Drain-timeout escalations land `ABORTED` with
+        reason `drainTimeoutExpired`.
+      enum: [PENDING, REQUESTED, ACCEPTED, RUNNING, DRAINING, COMPLETED, FAILED, ABORTED, DRAINED]
+
+    RegisterPodRequest:
+      type: object
+      required: [podId, baseUrl, applicationId]
+      properties:
+        podId:
+          type: string
+          description: |
+            Pod identity. Matches `WorkerMetric.workerId` so the metrics
+            join works. Typically the K8s pod name / Docker container
+            hostname.
+        region:
+          type: string
+          description: Region label (defaults to `us-east-1` when omitted).
+        baseUrl:
+          type: string
+          description: Where the k8s-orchestrator can reach this pod's REST API.
+        applicationId:
+          type: string
+          description: |
+            The application this pod is bound to. Set by the local-
+            orchestrator from its `APPLICATION_ID` env var, which the
+            k8s-orchestrator's `PodProvisioner` populates when spinning
+            up a per-app worker. **Required as of Phase 6b** — `pod.applicationId`
+            is NOT NULL (migration V16) and the legacy null-app pool was
+            removed. A registration without it returns 400 `INVALID_REQUEST`.
+
+    HeartbeatRequest:
+      type: object
+      required: [podId]
+      properties:
+        podId: { type: string }
+
+    Pod:
+      type: object
+      required: [podId, region, baseUrl, state, lastHeartbeat, registeredAt]
+      properties:
+        podId:         { type: string }
+        region:        { type: string }
+        baseUrl:       { type: string }
+        state:         { type: string, enum: [IDLE, LOST] }
+        lastHeartbeat: { type: string, format: date-time }
+        registeredAt:  { type: string, format: date-time }
+        applicationId:
+          type: string
+          description: |
+            Phase 1 capacity rework: the application this pod is bound to.
+            Nullable during the Phase 1 → Phase 6 migration window for
+            legacy static pods that registered without `APPLICATION_ID`.
+        source:
+          type: string
+          enum: [DYNAMIC, STATIC]
+          description: |
+            Who owns this worker's lifecycle. `DYNAMIC`: the
+            control plane created it and may restart / recycle / destroy it;
+            liveness comes from the worker's own heartbeat. `STATIC`: the
+            operator deployed and declared it; the control plane only uses
+            it, and `StaticPodProbe` maintains its liveness. Defaults to
+            `DYNAMIC` for every row that predates the column.
+
+    RegionCapacity:
+      type: object
+      required: [region, totalPods, idlePods, lostPods]
+      properties:
+        region:     { type: string, example: "us-east-1" }
+        totalPods:  { type: integer, format: int64, description: "Every pod ever registered to this region (any state)." }
+        idlePods:   { type: integer, format: int64, description: "IDLE pods not currently held by an active run — what POST /runs could claim now." }
+        lostPods:   { type: integer, format: int64, description: "Pods marked LOST by the sweeper (heartbeat stale)." }
+
+    # ── Phase 3 capacity-rework response schemas ──────────────────────────
+    CapacitySnapshot:
+      type: object
+      required: [applicationId, region, maxAvailable, provisioned, ready, inUse, spinnable, pods]
+      properties:
+        applicationId: { type: string }
+        region:        { type: string }
+        maxAvailable:  { type: integer, description: "Operator-set ceiling from applicationCapacity.maxAvailable." }
+        provisioned:   { type: integer, description: "ready + inUse — pods that exist as containers right now." }
+        ready:         { type: integer, description: "Pods running + idle (not currently held by any run)." }
+        inUse:         { type: integer, description: "Pods currently held by an active runFleetMember." }
+        spinnable:     { type: integer, description: "maxAvailable - provisioned, clamped at 0. What POST /pods can create right now." }
+        pods:
+          type: array
+          items: { $ref: "#/components/schemas/PodView" }
+    PodView:
+      type: object
+      required: [podName, state, containerRunning, runsServed]
+      properties:
+        podName:          { type: string, example: "payments-us-east-worker-1" }
+        state:            { type: string, enum: [READY, IN_USE, LOST, UNKNOWN, RECYCLING],
+                            description: "RECYCLING is reported when the pod row is in DRAINING_FOR_RECYCLE state (WORKER-HYGIENE Phase D)." }
+        containerRunning: { type: boolean, description: "Live readback from `docker inspect` (provisioner.isRunning). False on daemon outages." }
+        lastHeartbeat:    { type: string, format: date-time, nullable: true }
+        blockedBy:        { $ref: "#/components/schemas/PodBlockedBy", nullable: true }
+        runsServed:       { type: integer, format: int64, description: "WORKER-HYGIENE Phase F1 — count of runs claimed against this pod." }
+        imageDigest:      { type: string, nullable: true, description: "WORKER-HYGIENE Phase F1 — sha256 ID of the image; null for legacy rows." }
+        provisionedAt:    { type: string, format: date-time, nullable: true, description: "WORKER-HYGIENE Phase F1 — container-create timestamp; null for legacy rows." }
+    PodBlockedBy:
+      type: object
+      description: "Set on a PodView when state=IN_USE. Surfaces the run holding the pod so the UI can render 'cannot drain — running test {runId}'."
+      properties:
+        runId:       { type: string }
+        state:       { type: string, description: "Run state — PREPARING / STARTING / RUNNING / DRAINING." }
+        startedAt:   { type: string, format: date-time, nullable: true }
+        initiatedBy: { type: string }
+    SpinPodResponse:
+      type: object
+      required: [podName, applicationId, region, baseUrl, provisioned, maxAvailable]
+      properties:
+        podName:       { type: string, example: "payments-us-east-worker-1" }
+        applicationId: { type: string }
+        region:        { type: string }
+        baseUrl:       { type: string, example: "http://payments-us-east-worker-1:8080" }
+        provisioned:   { type: integer, description: "Provisioned count after this spin." }
+        maxAvailable:  { type: integer }
+    PlatformCapabilities:
+      type: object
+      required: [provisioningMode, dynamicScalingEnabled, podRecyclingEnabled, regions, regionLabel]
+      properties:
+        provisioningMode:
+          type: string
+          enum: [DYNAMIC, STATIC]
+          description: |
+            `DYNAMIC` — the control plane owns worker lifecycle.
+            `STATIC` — workers are deployed and owned by the operator.
+        dynamicScalingEnabled:
+          type: boolean
+          description: |
+            Whether the control plane may create / destroy workers. Gates the
+            Capacity tab, the spin buttons and the run-launch shortfall prompt.
+        podRecyclingEnabled:
+          type: boolean
+          description: Whether the recycler runs. Gates the per-application recycle-policy editor.
+        regions:
+          type: array
+          items: { type: string }
+          description: |
+            Region ids this deployment uses; empty means "no override, use the
+            UI default". In static mode these are the operator's data centers.
+        regionLabel:
+          type: string
+          enum: [region, dataCenter]
+          description: |
+            What the UI should call the placement axis. The API and schema keep
+            saying `region` everywhere — it already IS the placement axis in the
+            pod registry, the capacity matrix, the claim SQL and the run request,
+            so renaming it would churn two orchestrators and two databases for no
+            behavior change. This field makes the vocabulary seam machine-readable
+            instead of hardcoded in the browser.
+    DeclarePodRequest:
+      type: object
+      required: [baseUrl]
+      properties:
+        baseUrl:
+          type: string
+          maxLength: 512
+          description: |
+            Absolute http(s) address the control plane can reach this worker
+            at, e.g. `http://payments-na-east-worker-1.workers:8080`. No
+            embedded credentials, query string or fragment. A trailing slash
+            is normalised away.
+          example: http://payments-na-east-worker-1.workers:8080
+    DeclaredPodResponse:
+      type: object
+      required: [podName, applicationId, region, baseUrl, source, reachable, declared, maxAvailable]
+      properties:
+        podName:       { type: string }
+        applicationId: { type: string }
+        region:        { type: string }
+        baseUrl:       { type: string }
+        source:        { type: string, enum: [STATIC] }
+        reachable:
+          type: boolean
+          description: |
+            Whether the worker answered its health endpoint at declare time.
+            False only when `?force=true` was used.
+        declared:
+          type: integer
+          description: Declared workers for this (application, region) after the call.
+        maxAvailable:
+          type: integer
+          description: |
+            The derived capacity written for this (application, region) —
+            always equal to `declared` in static mode.
+    ProvisioningDisabledResponse:
+      type: object
+      required: [code, message, action, provisioningMode]
+      properties:
+        code:             { type: string, enum: [PROVISIONING_DISABLED] }
+        message:          { type: string }
+        action:           { type: string, description: The refused operation, e.g. "spin a worker". }
+        provisioningMode: { type: string, enum: [STATIC] }
+    CapacityExceededResponse:
+      type: object
+      required: [code, message, provisioned, maxAvailable]
+      properties:
+        code:         { type: string, enum: [APPLICATION_CAPACITY_EXCEEDED] }
+        message:      { type: string }
+        provisioned:  { type: integer }
+        maxAvailable: { type: integer }
+    CapacityShrinkResponse:
+      type: object
+      required: [code, message, provisioned, requested]
+      properties:
+        code:        { type: string, enum: [CAPACITY_SHRINK_BELOW_PROVISIONED] }
+        message:     { type: string }
+        provisioned: { type: integer }
+        requested:   { type: integer }
+    PodInUseResponse:
+      type: object
+      required: [code, message, podName, blockedBy]
+      properties:
+        code:      { type: string, enum: [POD_IN_USE] }
+        message:   { type: string }
+        podName:   { type: string }
+        blockedBy: { $ref: "#/components/schemas/PodBlockedBy" }
+
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - RUN_NOT_FOUND
+            - INVALID_REQUEST
+            - INTERNAL_ERROR
+            - INSUFFICIENT_CAPACITY
+            - POD_NOT_REGISTERED
+            - UNKNOWN_REGION
+            - FLEET_SIZE_EXCEEDED
+            # Phase 3 capacity rework error codes — surfaced by CapacityController.
+            - APPLICATION_NOT_FOUND
+            - CAPACITY_REGION_NOT_FOUND
+            - APPLICATION_CAPACITY_EXCEEDED
+            - CAPACITY_SHRINK_BELOW_PROVISIONED
+            - POD_NOT_FOUND
+            - POD_IN_USE
+            # AI analysis error codes — surfaced by AiController.
+            - AI_DISABLED
+            - AI_QUOTA_EXCEEDED
+            - AI_UPSTREAM_ERROR
+        message: { type: string }
+        shortfall:
+          type: array
+          description: |
+            Present on `INSUFFICIENT_CAPACITY` responses — per-region
+            breakdown of requested-vs-claimed counts so the UI can
+            highlight which regions fell short.
+          items:
+            type: object
+            properties:
+              region:    { type: string }
+              requested: { type: integer }
+              claimed:   { type: integer }
+        regions:
+          type: array
+          description: Present on `UNKNOWN_REGION` — the region names the caller specified that the registry has never seen.
+          items: { type: string }
+        requested:
+          type: integer
+          description: Present on `FLEET_SIZE_EXCEEDED` — the total allocation count the caller submitted.
+        max:
+          type: integer
+          description: Present on `FLEET_SIZE_EXCEEDED` — the per-run fleet-size cap.
+
+    # ──────────────────────────────────────────────────────────────────────
+    # AI analysis
+    # ──────────────────────────────────────────────────────────────────────
+    AiStatus:
+      type: object
+      description: AI feature probe — whether analysis is configured + which model.
+      properties:
+        enabled: { type: boolean, description: "True when an ANTHROPIC_API_KEY is configured server-side." }
+        model:   { type: string, description: "Model id the analysis endpoints use, e.g. claude-sonnet-4-6." }
+
+    AiPingResponse:
+      type: object
+      description: Smoke-test reply + token counts.
+      properties:
+        reply:     { type: string }
+        tokensIn:  { type: integer }
+        tokensOut: { type: integer }
+
+    RunInsights:
+      type: object
+      description: |
+        AI-1 — Claude's reading of a single run. Advisory, never authoritative.
+        `fromCache=true` means this load was served from the durable aiResponse
+        table (no Claude bill); `cachedAt` is when the response was produced.
+      properties:
+        runId:         { type: string }
+        model:         { type: string }
+        promptVersion: { type: string, example: v1 }
+        summary:       { type: string, description: "3–5 sentence plain-text overview." }
+        findings:
+          type: array
+          items:
+            type: object
+            properties:
+              severity: { type: string, enum: [info, warn, crit] }
+              title:    { type: string }
+              detail:   { type: string }
+        tokensIn:  { type: integer }
+        tokensOut: { type: integer }
+        cachedAt:  { type: string, format: date-time }
+        fromCache: { type: boolean }
+
+    CompareInsights:
+      type: object
+      description: |
+        AI-2 — Claude's reading of the delta between two runs (B relative to A).
+        Advisory, never authoritative. Cached on the sorted run pair.
+      properties:
+        runIds:
+          type: array
+          items: { type: string }
+          description: "The two run ids in the operator's submitted order (A, B)."
+        model:         { type: string }
+        promptVersion: { type: string, example: v1 }
+        summary:       { type: string, description: "3–5 sentence comparison of B relative to A." }
+        findings:
+          type: array
+          items:
+            type: object
+            properties:
+              metric:  { type: string, example: avgRtMs }
+              verdict: { type: string, enum: [regression, improvement, "no significant change"] }
+              delta:   { type: string, example: "+12.3%" }
+        tokensIn:  { type: integer }
+        tokensOut: { type: integer }
+        cachedAt:  { type: string, format: date-time }
+        fromCache: { type: boolean }

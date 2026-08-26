@@ -15,7 +15,8 @@
         Kubernetes pod or EC2 instance. Accepts test artifacts via REST,
         launches JMeter as a child process, tails the JTL output, aggregates
         1-second tumbling windows per label (HDRHistogram percentiles), and
-        publishes WorkerMetric Avro records to Kafka.
+        POSTs WorkerMetricBatch JSON envelopes directly to the
+        metrics-consumer's /api/v1/ingest endpoint.
     </description>
 
     <properties>
@@ -36,31 +37,9 @@
         <enforcer.maven.version>3.8.0</enforcer.maven.version>
         <enforcer.java.version>21</enforcer.java.version>
 
-        <!-- Runtime dependency versions.
-
-             kafka-clients 3.9.2 is the head of Apache's 3.x patch line as of
-             this audit. Bumped from 3.6.1 to clear CVEs accumulated across
-             the 3.6 / 3.7 / 3.8 series (notably the SCRAM-auth class —
-             relevant once cloud profile enables MSK SASL). Apache Kafka's
-             client wire protocol and the Serializer<T> SPI that Confluent
-             7.6.0's kafka-avro-serializer compiles against have been stable
-             since Kafka 0.10, so the Apache 3.6 → 3.9 bump does not break
-             the Confluent stack.
-
-             avro 1.11.4 clears CVE-2024-47561 (Schema parsing RCE in the
-             Java SDK). Reachable for us via SchemaRegistryClient at boot;
-             1.11.4 is a patch release, API-compatible with 1.11.3.
-
-             confluent stays at 7.6.0 — bumping to 8.x is a major-version
-             jump with artifact renames; no specific CVE forces it. Its
-             transitive kafka-clients (7.6.0-ccs) is excluded in the
-             dependency declaration below; we use Apache upstream. -->
-        <kafka.version>3.9.2</kafka.version>
-        <confluent.version>7.6.0</confluent.version>
-        <avro.version>1.11.4</avro.version>
-        <!-- snappy-java: explicit pin (managed below, not a runtime dep
-             we declare directly). 1.1.10.7 is the latest patch release. -->
-        <snappy.java.version>1.1.10.7</snappy.java.version>
+        <!-- Runtime dependency versions. The metrics path carries no
+             serialization dependency: the ingest body is JSON, handled by the
+             Jackson that spring-boot-starter-web already brings. -->
         <hdrhistogram.version>2.2.2</hdrhistogram.version>
         <!-- slf4j + logback aligned with Spring Boot 3.5.14's BOM-managed
              versions. Bumping past 1.5.3 is mandatory: Spring Boot's
@@ -88,15 +67,6 @@
              Tomcat owns the embedded server now.) -->
         <spring.boot.version>3.5.14</spring.boot.version>
 
-        <!-- Test dependency versions — aligned with Spring Boot 3.5.14's BOM
-             so Spring's test scaffolding (compiled against JUnit 5.12 /
-             Mockito 5.17 / AssertJ 3.27 / Awaitility 4.2.2) does NOT trip
-             NoSuchMethodError at runtime. AssertJ 3.27.7 also clears
-             CVE-2026-24400 (XXE in isXmlEqualTo).
-             Testcontainers is BOM-managed by spring-boot-dependencies
-             (1.21.4), so no property override here — letting the BOM win
-             keeps testcontainers, junit-jupiter and slf4j on a tested
-             matrix. -->
         <junit.version>5.12.2</junit.version>
         <assertj.version>3.27.7</assertj.version>
         <mockito.version>5.17.0</mockito.version>
@@ -105,29 +75,13 @@
         <!-- Plugin versions -->
         <compiler.plugin.version>3.12.1</compiler.plugin.version>
         <surefire.plugin.version>3.2.5</surefire.plugin.version>
-        <failsafe.plugin.version>3.2.5</failsafe.plugin.version>
         <shade.plugin.version>3.5.2</shade.plugin.version>
         <enforcer.plugin.version>3.4.1</enforcer.plugin.version>
         <jacoco.plugin.version>0.8.11</jacoco.plugin.version>
         <build.helper.version>3.5.0</build.helper.version>
     </properties>
 
-    <repositories>
-        <repository>
-            <id>confluent</id>
-            <url>https://packages.confluent.io/maven/</url>
-            <releases><enabled>true</enabled></releases>
-            <snapshots><enabled>false</enabled></snapshots>
-        </repository>
-    </repositories>
-
-    <!--
-        Centralized version management. Using Confluent's BOM keeps
-        kafka-avro-serializer, kafka-schema-registry-client, kafka-schema-rules,
-        and kafka-schema-serializer pinned to a single, mutually-compatible set.
-        This prevents the NoClassDefFoundError: RuleException class of bugs
-        caused by mixed Confluent versions on the classpath.
-    -->
+    <!-- Centralized version management. -->
     <dependencyManagement>
         <dependencies>
             <!-- Spring Boot BOM declared FIRST so its tested versions of
@@ -151,56 +105,20 @@
                 <scope>import</scope>
             </dependency>
             <dependency>
-                <groupId>io.confluent</groupId>
-                <artifactId>kafka-schema-registry-parent</artifactId>
-                <version>${confluent.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
                 <groupId>org.junit</groupId>
                 <artifactId>junit-bom</artifactId>
                 <version>${junit.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
-            <!-- testcontainers-bom intentionally not imported here.
-                 spring-boot-dependencies (declared first) already manages
-                 testcontainers artifacts on a tested matrix (1.21.4 at
-                 Spring Boot 3.5.14). Importing testcontainers-bom would
-                 be shadowed by Spring Boot's first-declared-wins anyway. -->
 
-            <!-- snappy-java explicit pin. Kafka 3.9.x ships 1.1.10.6
-                 transitively; pinning 1.1.10.7 here keeps us on the
-                 latest patch release independent of kafka-clients
-                 future bumps. -->
-            <dependency>
-                <groupId>org.xerial.snappy</groupId>
-                <artifactId>snappy-java</artifactId>
-                <version>${snappy.java.version}</version>
-            </dependency>
-
-            <!-- Force slf4j-api 2.0.x across the whole tree.
-                 Kafka 3.6.1 and Avro 1.11.3 bring slf4j-api 1.7.36 transitively,
-                 but Logback 1.5.x requires slf4j-api 2.0.x. Without this, Maven's
-                 nearest-wins rule picks 1.7.36 and Logback silently fails to bind,
-                 leaving you with NOP logging at runtime. -->
+            <!-- Force slf4j-api 2.0.x across the whole tree — Logback 1.5.x
+                 requires it; a transitive 1.7.x winning nearest-wins would
+                 leave Logback silently unbound (NOP logging) at runtime. -->
             <dependency>
                 <groupId>org.slf4j</groupId>
                 <artifactId>slf4j-api</artifactId>
                 <version>${slf4j.version}</version>
-            </dependency>
-
-            <!-- Force the Apache upstream kafka-clients everywhere. The Confluent
-                 schema registry client transitively pulls kafka-clients:7.6.0-ccs
-                 (Confluent's rebuild). Mixing -ccs and upstream on one classpath
-                 is indeterminate. Pin to Apache 3.9.2 — the orchestrator is a
-                 pure producer (no Confluent-specific patches needed) and 3.9.x
-                 carries the accumulated CVE fixes from the 3.6 → 3.9 line. -->
-            <dependency>
-                <groupId>org.apache.kafka</groupId>
-                <artifactId>kafka-clients</artifactId>
-                <version>${kafka.version}</version>
             </dependency>
 
             <!-- AWS SDK v2 (only included via -Pstorage-s3) pulls commons-codec
@@ -214,29 +132,6 @@
                 <version>1.16.1</version>
             </dependency>
 
-            <!-- Avro 1.11.3 brings commons-compress 1.21; Confluent's
-                 schema-registry chain pulls 1.22; Spring Boot's BOM may
-                 manage a different 1.x. Pin to a single recent CVE-clean
-                 version so dependencyConvergence passes across the whole
-                 tree. (Discovered as a hard-stop during the prior Spring
-                 Boot migration attempt.) -->
-            <dependency>
-                <groupId>org.apache.commons</groupId>
-                <artifactId>commons-compress</artifactId>
-                <version>1.26.2</version>
-            </dependency>
-
-            <!-- Avro 1.11.4 — clears CVE-2024-47561 (Schema parsing RCE
-                 in the Avro Java SDK). Confluent 7.6.0's kafka-avro-serializer
-                 + kafka-schema-registry-client transitively pull 1.11.3, so
-                 without this pin dependencyConvergence fails. 1.11.4 is a
-                 patch release on the 1.11 line; API-compatible with the
-                 generated WorkerMetric Avro class. -->
-            <dependency>
-                <groupId>org.apache.avro</groupId>
-                <artifactId>avro</artifactId>
-                <version>${avro.version}</version>
-            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -244,76 +139,6 @@
         <!-- =========================================================
              RUNTIME DEPENDENCIES
              ========================================================= -->
-
-        <!-- Kafka producer client.
-             Version pinned explicitly; Confluent BOM targets a compatible
-             kafka-clients but we want to control the exact client version
-             for performance tuning and CVE tracking. -->
-        <dependency>
-            <groupId>org.apache.kafka</groupId>
-            <artifactId>kafka-clients</artifactId>
-            <version>${kafka.version}</version>
-            <exclusions>
-                <!-- Pulls slf4j-api 1.7.36 which is incompatible with Logback 1.5.x.
-                     Our dependencyManagement section forces 2.0.12 globally, but
-                     excluding here keeps the dep tree clean and explicit. -->
-                <exclusion>
-                    <groupId>org.slf4j</groupId>
-                    <artifactId>slf4j-api</artifactId>
-                </exclusion>
-                <!-- zstd-jni ships ~13 MB of platform-specific native libs
-                     (linux x86_64/aarch64, darwin x86_64/aarch64, win, freebsd)
-                     for the Zstandard compression codec. The orchestrator's
-                     Kafka producer never sets compression.type=zstd; trimming
-                     this saves the equivalent of ~50% of the fat JAR. If a
-                     future config switches compression to zstd, drop this
-                     exclusion and the JAR grows back. -->
-                <exclusion>
-                    <groupId>com.github.luben</groupId>
-                    <artifactId>zstd-jni</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-
-        <!-- Avro runtime — used by generated WorkerMetric class. -->
-        <dependency>
-            <groupId>org.apache.avro</groupId>
-            <artifactId>avro</artifactId>
-            <version>${avro.version}</version>
-            <exclusions>
-                <exclusion>
-                    <groupId>org.slf4j</groupId>
-                    <artifactId>slf4j-api</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-
-        <!-- Confluent Avro serializer. Pulls kafka-schema-registry-client,
-             kafka-schema-serializer, and kafka-schema-rules transitively
-             (versions managed by the BOM above).
-
-             IMPORTANT: Do NOT also declare kafka-schema-registry-client
-             with a different scope — that overrides the transitive compile
-             scope and causes RuleException NoClassDefFoundError at runtime. -->
-        <dependency>
-            <groupId>io.confluent</groupId>
-            <artifactId>kafka-avro-serializer</artifactId>
-            <version>${confluent.version}</version>
-            <exclusions>
-                <!-- We manage slf4j-api ourselves. -->
-                <exclusion>
-                    <groupId>org.slf4j</groupId>
-                    <artifactId>slf4j-api</artifactId>
-                </exclusion>
-                <!-- The schema registry client transitively pulls
-                     kafka-clients:7.6.0-ccs (Confluent's rebuild of Apache 3.6.x).
-                     We want only the upstream Apache 3.6.1 on the classpath. -->
-                <exclusion>
-                    <groupId>org.apache.kafka</groupId>
-                    <artifactId>kafka-clients</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
 
         <!-- HDRHistogram — streaming percentiles in SecondBucket. -->
         <dependency>
@@ -333,24 +158,6 @@
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
             <version>2.7.0</version>
-        </dependency>
-
-        <!-- Spring Kafka — KafkaTemplate wraps the producer so its
-             metrics are auto-exposed at /actuator/metrics/kafka.producer.*
-             (Micrometer Kafka binder is wired by spring-boot-actuator
-             when spring-kafka is on the classpath). Version is BOM-managed
-             by spring-boot-dependencies (3.3.x line for Spring Boot 3.5.x).
-             We exclude spring-kafka's transitive kafka-clients so our
-             pinned Apache 3.9.2 wins. -->
-        <dependency>
-            <groupId>org.springframework.kafka</groupId>
-            <artifactId>spring-kafka</artifactId>
-            <exclusions>
-                <exclusion>
-                    <groupId>org.apache.kafka</groupId>
-                    <artifactId>kafka-clients</artifactId>
-                </exclusion>
-            </exclusions>
         </dependency>
 
         <!-- =========================================================
@@ -391,20 +198,20 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
-        <!-- Wires /actuator/prometheus so Prometheus scrapers can hit
-             the orchestrator without the bespoke PrometheusExporter
-             that the legacy Javalin /api/v1/metrics endpoint uses.
-             That custom exporter is deleted in 4.4g (ObservabilityController
-             migration). -->
-        <dependency>
-            <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-registry-prometheus</artifactId>
-        </dependency>
+        <!-- SLIMDOWN (2026-07-21) — no metrics/tracing stack in this service:
+             the hosting infra provides observability out of the box.
+             Deliberately absent: micrometer-registry-prometheus,
+             micrometer-tracing-bridge-otel, opentelemetry-exporter-otlp,
+             spring-boot-starter-aop (sole consumer was the @Observed aspect).
+             Logs + /actuator/{health,info} + the app-level REST surface
+             (/api/v1/metrics/*, /api/v1/logs — CurrentRun/LongAdder-backed,
+             never Micrometer) are the whole observability surface.
+             Do not reintroduce a metrics registry or a tracer. -->
 
         <!-- =========================================================
              LOGGING
-             SLF4J API + Logback binding. Without a binding, all Kafka,
-             Avro, and application logs are silently dropped (NOP logger).
+             SLF4J API + Logback binding. Without a binding, application
+             logs are silently dropped (NOP logger).
              Logstash encoder gives structured JSON logs for Kubernetes
              log aggregation (Fluent Bit, Vector, CloudWatch).
              ========================================================= -->
@@ -434,35 +241,9 @@
             <version>${janino.version}</version>
         </dependency>
 
-        <!-- OBSERVABILITY Phase D — AOP for @Observed annotation-driven spans.
-             ObservedAspect (registered in ObservationConfig) instruments
-             TestRunManager.start/drain/abort with per-action spans. Spring
-             AOP proxies; ~1 MB added to the fat JAR. Local-orch budget
-             (60 MB) stays safe at ~59 MB after this. -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-aop</artifactId>
-        </dependency>
-
-        <!-- OBSERVABILITY Phase B — distributed tracing.
-             micrometer-tracing-bridge-otel wires Spring Boot's tracer
-             onto the OpenTelemetry SDK; opentelemetry-exporter-otlp
-             ships spans to Jaeger over OTLP HTTP (default OkHttp sender;
-             no netty/gRPC). Versions BOM-managed by spring-boot-dependencies
-             — no explicit pin needed since the BOM is imported at the
-             top of dependencyManagement above. ~7 MB total per JAR;
-             local-orch JAR budget (60 MB) stays safe at ~58 MB. -->
-        <dependency>
-            <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-tracing-bridge-otel</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.opentelemetry</groupId>
-            <artifactId>opentelemetry-exporter-otlp</artifactId>
-        </dependency>
-
-        <!-- Bridge java.util.logging (used by Kafka internals in a few places)
-             into SLF4J so all logs go through one pipeline. -->
+        <!-- Bridge java.util.logging (used by the buffer/dispatcher classes
+             and a few libraries) into SLF4J so all logs go through one
+             pipeline. -->
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>jul-to-slf4j</artifactId>
@@ -504,19 +285,6 @@
             <groupId>org.awaitility</groupId>
             <artifactId>awaitility</artifactId>
             <version>${awaitility.version}</version>
-            <scope>test</scope>
-        </dependency>
-
-        <!-- Testcontainers for integration tests against real Kafka.
-             Used only in *IT.java tests run by failsafe. -->
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>kafka</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
 
@@ -596,51 +364,6 @@
             </plugin>
 
             <!-- =========================================================
-                 AVRO CODEGEN
-                 ========================================================= -->
-            <plugin>
-                <groupId>org.apache.avro</groupId>
-                <artifactId>avro-maven-plugin</artifactId>
-                <version>${avro.version}</version>
-                <executions>
-                    <execution>
-                        <id>schema</id>
-                        <phase>generate-sources</phase>
-                        <goals><goal>schema</goal></goals>
-                        <configuration>
-                            <sourceDirectory>${project.basedir}/../kafka/schemas</sourceDirectory>
-                            <outputDirectory>${project.build.directory}/generated-sources/avro</outputDirectory>
-                            <stringType>String</stringType>
-                            <!-- Enable optional getters for cleaner null handling in consumers. -->
-                            <gettersReturnOptional>false</gettersReturnOptional>
-                            <createSetters>true</createSetters>
-                            <!-- Fail the build on schema parse errors rather than skipping. -->
-                            <fieldVisibility>private</fieldVisibility>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-
-            <!-- Register generated Avro sources for IDE discovery. -->
-            <plugin>
-                <groupId>org.codehaus.mojo</groupId>
-                <artifactId>build-helper-maven-plugin</artifactId>
-                <version>${build.helper.version}</version>
-                <executions>
-                    <execution>
-                        <id>add-avro-generated-sources</id>
-                        <phase>generate-sources</phase>
-                        <goals><goal>add-source</goal></goals>
-                        <configuration>
-                            <sources>
-                                <source>${project.build.directory}/generated-sources/avro</source>
-                            </sources>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-
-            <!-- =========================================================
                  COMPILER
                  ========================================================= -->
             <plugin>
@@ -654,8 +377,6 @@
                     <compilerArgs>
                         <arg>-Xlint:all</arg>
                         <arg>-Xlint:-processing</arg>
-                        <!-- Do not fail build on warnings from generated Avro sources.
-                             Remove this if you want strictest warnings-as-errors. -->
                     </compilerArgs>
                 </configuration>
             </plugin>
@@ -675,37 +396,13 @@
                     <excludes>
                         <exclude>**/*IT.java</exclude>
                     </excludes>
-                    <!-- Fork per test class isolates leaked state (thread-local,
-                         static caches) that can mask concurrency bugs. -->
-                    <forkCount>1</forkCount>
-                    <reuseForks>false</reuseForks>
+                    <!-- Forks scale with cores and are reused: a JVM per test
+                         class isolated leaked state, but cost ~40 s per run. -->
+                    <forkCount>1C</forkCount>
+                    <reuseForks>true</reuseForks>
                 </configuration>
             </plugin>
 
-            <!-- =========================================================
-                 INTEGRATION TESTS (failsafe): *IT.java, Testcontainers
-                 Kept separate so `mvn test` stays fast for local dev loops.
-                 Run integration tests with `mvn verify`.
-                 ========================================================= -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-failsafe-plugin</artifactId>
-                <version>${failsafe.plugin.version}</version>
-                <configuration>
-                    <argLine>@{argLine} -Xmx1g -XX:+ExitOnOutOfMemoryError</argLine>
-                    <includes>
-                        <include>**/*IT.java</include>
-                    </includes>
-                </configuration>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>integration-test</goal>
-                            <goal>verify</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
 
             <!-- =========================================================
                  COVERAGE
@@ -725,12 +422,6 @@
                         <goals><goal>report</goal></goals>
                     </execution>
                 </executions>
-                <configuration>
-                    <excludes>
-                        <!-- Generated Avro classes: exclude from coverage. -->
-                        <exclude>com/perf/orchestrator/avro/**</exclude>
-                    </excludes>
-                </configuration>
             </plugin>
 
             <!-- =========================================================
@@ -748,9 +439,8 @@
                             <createDependencyReducedPom>false</createDependencyReducedPom>
                             <shadedArtifactAttached>false</shadedArtifactAttached>
                             <!-- Do NOT set <minimizeJar>true</minimizeJar>: it breaks
-                                 reflective loading used by Kafka's ConfigDef (the very
-                                 mechanism that loads KafkaAvroSerializer by class name)
-                                 and by SLF4J binding discovery. Minimization in this
+                                 SLF4J binding discovery and Spring's reflective
+                                 auto-configuration loading. Minimization in this
                                  project costs more bugs than it saves megabytes. -->
 
                             <transformers>
@@ -762,20 +452,16 @@
                                     </manifestEntries>
                                 </transformer>
                                 <!-- Merge META-INF/services/* from all jars. Critical for
-                                     Kafka serializer discovery and SLF4J provider lookup. -->
+                                     SLF4J provider lookup. -->
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
-                                <!-- Merge Avro SpecificData service files. -->
-                                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
-                                    <resource>META-INF/services/org.apache.avro.specific.SpecificData</resource>
-                                </transformer>
                                 <!-- Merge Spring Boot 3.x auto-configuration imports. Without
                                      this, the shaded JAR carries only the LAST jar's imports
                                      file (last-jar-wins) and dozens of auto-config classes
                                      fail to register at boot — symptom: NoSuchBeanDefinitionException
-                                     on MeterRegistry / KafkaTemplate / etc. when the
-                                     orchestrator starts in a container.
-                                     spring-boot-actuator + micrometer-registry-prometheus +
-                                     spring-kafka all ship their own imports lines. -->
+                                     on MeterRegistry / etc. when the orchestrator starts
+                                     in a container. spring-boot-actuator +
+                                     micrometer-registry-prometheus ship their own
+                                     imports lines. -->
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
                                     <resource>META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports</resource>
                                 </transformer>

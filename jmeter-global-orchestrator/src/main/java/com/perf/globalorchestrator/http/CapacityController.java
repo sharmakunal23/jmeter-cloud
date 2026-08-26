@@ -2,14 +2,20 @@ package com.perf.globalorchestrator.http;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.perf.globalorchestrator.client.LocalOrchestratorClient;
 import com.perf.globalorchestrator.domain.Application;
 import com.perf.globalorchestrator.domain.ApplicationCapacity;
 import com.perf.globalorchestrator.domain.Pod;
+import com.perf.globalorchestrator.domain.PodSource;
 import com.perf.globalorchestrator.domain.Ulid;
 import com.perf.globalorchestrator.provision.PodNameAllocator;
 import com.perf.globalorchestrator.provision.PodProvisioner;
 import com.perf.globalorchestrator.provision.PodSpec;
 import com.perf.globalorchestrator.provision.PodSpinService;
+import com.perf.globalorchestrator.provision.ProvisioningDisabledException;
+import com.perf.globalorchestrator.provision.ProvisioningProperties;
+import com.perf.globalorchestrator.provision.ProvisioningRequiresStaticException;
+import com.perf.globalorchestrator.provision.StaticPodDeclaration;
 import com.perf.globalorchestrator.repo.ApplicationCapacityRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.PodRepository;
@@ -27,6 +33,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
@@ -37,32 +44,15 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Phase 3 of the capacity rework — operator-facing capacity surface.
+ * The operator-facing capacity surface, every route scoped to one
+ * {@code (applicationId, region)}: set {@code maxAvailable}, list the pods
+ * provisioned for that pair, and spin, restart or drain one. The routes and
+ * their responses are specified in {@code api/openapi.yaml}.
  *
- * <p>All endpoints scoped to a single {@code (applicationId, region)}:
- *
- * <ul>
- *   <li>{@code PUT /api/v1/applications/{id}/capacity/{region}}
- *       — set {@code maxAvailable} directly. Replaces the Phase 2 admin
- *       {@code requestIncrease} stub. No sponsor approval (per the
- *       2026-05-12 design decision).</li>
- *   <li>{@code GET /api/v1/applications/{id}/capacity/{region}/pods}
- *       — list the pods currently provisioned for this (app, region) with
- *       per-pod state (READY / IN_USE / LOST).</li>
- *   <li>{@code POST /api/v1/applications/{id}/capacity/{region}/pods}
- *       — spin up one new Ready pod. 409 if would exceed
- *       {@code maxAvailable}.</li>
- *   <li>{@code POST /api/v1/applications/{id}/capacity/{region}/pods/{podName}/restart}
- *       — recycle one container in place.</li>
- *   <li>{@code DELETE /api/v1/applications/{id}/capacity/{region}/pods/{podName}}
- *       — drain. 409 + {@code blockedBy: { runId, ... }} if the pod is
- *       currently held by an in-flight run.</li>
- * </ul>
- *
- * <p>The Phase 2 {@code AdminController} variants ({@code POST /admin/spinPod},
- * {@code DELETE /admin/pods/{name}}) stay as escape hatches — they bypass
- * the capacity + in-use checks. Operators should always use the Phase 3
- * endpoints; admin endpoints only when something's stuck.
+ * <p>Two guards are the reason to prefer these over {@link AdminController}'s
+ * equivalents, which bypass both: spinning refuses with 409 when it would exceed
+ * {@code maxAvailable}, and draining refuses with 409 plus
+ * {@code blockedBy: { runId, ... }} when an in-flight run still holds the pod.
  */
 @RestController
 @RequestMapping("/api/v1/applications/{applicationId:" + Ulid.PATTERN + "}/capacity/{region}")
@@ -78,6 +68,9 @@ public class CapacityController {
     private final PodProvisioner provisioner;
     private final PodNameAllocator allocator;
     private final PodSpinService spinService;
+    private final ProvisioningProperties provisioning;
+    /** STATIC-FLEET Phase 3 — declare-time reachability check. */
+    private final LocalOrchestratorClient localOrchestrators;
 
     public CapacityController(
             ApplicationRepository apps,
@@ -86,7 +79,10 @@ public class CapacityController {
             RunRepository runs,
             PodProvisioner provisioner,
             PodNameAllocator allocator,
-            PodSpinService spinService) {
+            PodSpinService spinService,
+            ProvisioningProperties provisioning,
+            LocalOrchestratorClient localOrchestrators) {
+        this.localOrchestrators = localOrchestrators;
         this.apps         = apps;
         this.capacityRepo = capacityRepo;
         this.pods         = pods;
@@ -94,6 +90,7 @@ public class CapacityController {
         this.provisioner  = provisioner;
         this.allocator    = allocator;
         this.spinService  = spinService;
+        this.provisioning = provisioning;
     }
 
     // ── PUT /capacity/{region} — set maxAvailable directly ────────────
@@ -103,6 +100,14 @@ public class CapacityController {
             @PathVariable String applicationId,
             @PathVariable String region,
             @RequestBody SetMaxRequest req) {
+        // Capacity is DERIVED from the declared worker
+        // count in static mode (D8). The operator already controls the count
+        // directly by declaring and undeclaring; a second editable knob would
+        // only be a way to make Max and reality disagree, and the next declare
+        // would silently overwrite whatever was set here.
+        provisioning.requireDynamic("set maxAvailable manually",
+                "capacity is derived from the declared worker count — declare or "
+                + "release workers instead");
         requireApp(applicationId);
         if (req == null) {
             throw new CapacityValidationException("request body is required");
@@ -190,6 +195,9 @@ public class CapacityController {
     public ResponseEntity<Map<String, Object>> spin(
             @PathVariable String applicationId,
             @PathVariable String region) {
+        // Guard BEFORE the capacity lookups so the
+        // operator gets "provisioning is disabled", not "no capacity row".
+        provisioning.requireDynamic("spin a worker");
         Application app = requireApp(applicationId);
         int max = capacityRepo.find(applicationId, region)
                 .map(ApplicationCapacity::maxAvailable)
@@ -209,6 +217,110 @@ public class CapacityController {
         return ResponseEntity.status(HttpStatus.CREATED).body(body);
     }
 
+    // ── PUT /capacity/{region}/pods/{podName} — declare a worker ───────
+
+    /**
+     * Declares an operator-deployed worker against
+     * this (application, region). Static mode only; {@code 409
+     * PROVISIONING_REQUIRES_STATIC} otherwise.
+     *
+     * <p>PUT rather than a parallel {@code /staticPods} collection: the
+     * operator names the resource (they deployed it and know its name), the
+     * call is idempotent, and it keeps ONE worker resource with the verbs
+     * carrying the meaning — {@code POST .../pods} allocates a name and
+     * spins (dynamic), {@code PUT .../pods/{name}} declares an existing one
+     * (static), {@code DELETE .../pods/{name}} releases either. A second
+     * collection would have duplicated the release path for no gain.
+     *
+     * <p>Reachability is checked before accepting so a typo'd address fails
+     * here, where the operator is looking, instead of at the next run
+     * launch. {@code ?force=true} declares anyway — for a worker that is
+     * deployed but not up yet.
+     *
+     * @return {@code 201} when the worker was newly declared, {@code 200}
+     *         when an existing declaration was updated
+     */
+    @PutMapping("/pods/{podName}")
+    public ResponseEntity<Map<String, Object>> declare(
+            @PathVariable String applicationId,
+            @PathVariable String region,
+            @PathVariable String podName,
+            @RequestParam(name = "force", defaultValue = "false") boolean force,
+            @RequestBody DeclarePodRequest req) {
+        provisioning.requireStatic("declare worker " + podName);
+        requireApp(applicationId);
+        if (req == null) {
+            throw new CapacityValidationException("request body is required");
+        }
+        StaticPodDeclaration declaration;
+        try {
+            declaration = StaticPodDeclaration.of(podName, req.baseUrl());
+        } catch (IllegalArgumentException e) {
+            throw new CapacityValidationException(e.getMessage());
+        }
+
+        Optional<Pod> existing = pods.findByPodId(declaration.podName());
+        boolean isNew = existing.isEmpty();
+        if (existing.isPresent()) {
+            Pod pod = existing.get();
+            // Never let a declaration silently steal a worker from another
+            // application — that would let two apps' runs land on one worker.
+            if (!applicationId.equals(pod.applicationId())) {
+                throw new PodBoundElsewhereException(
+                        declaration.podName(), pod.applicationId(), pod.region());
+            }
+            // Re-addressing a worker mid-run would break every follow-up call
+            // the run makes to it (status polls, drain, abort).
+            boolean addressChanged = !declaration.baseUrl().equals(pod.baseUrl())
+                    || !region.equals(pod.region());
+            if (addressChanged) {
+                pods.findActiveRunBindingFor(declaration.podName())
+                        .ifPresent(b -> { throw new PodInUseException(declaration.podName(), b); });
+            }
+        }
+
+        boolean reachable = localOrchestrators.isHealthy(declaration.baseUrl());
+        if (!reachable && !force) {
+            throw new WorkerUnreachableException(declaration.podName(), declaration.baseUrl());
+        }
+
+        pods.declareStatic(declaration.podName(), region, declaration.baseUrl(), applicationId);
+        int maxAvailable = syncDerivedCapacity(applicationId, region);
+
+        LOG.info("Declared operator-managed worker {} at {} for applicationId={} region={} "
+                + "(new={}, reachable={}, derived maxAvailable={})",
+                declaration.podName(), declaration.baseUrl(), applicationId, region,
+                isNew, reachable, maxAvailable);
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("podName",       declaration.podName());
+        body.put("applicationId", applicationId);
+        body.put("region",        region);
+        body.put("baseUrl",       declaration.baseUrl());
+        body.put("source",        PodSource.STATIC.name());
+        body.put("reachable",     reachable);
+        body.put("declared",      pods.countByApplicationAndRegion(applicationId, region));
+        body.put("maxAvailable",  maxAvailable);
+        return ResponseEntity.status(isNew ? HttpStatus.CREATED : HttpStatus.OK).body(body);
+    }
+
+    /**
+     * STATIC-FLEET Phase 3 (D8) — in static mode {@code maxAvailable} is
+     * DERIVED: it always equals the number of declared workers for this
+     * (application, region). The operator controls the count by declaring
+     * and releasing, so there is nothing to approve and no second knob to
+     * drift. Keeping the row in sync means every downstream capacity check
+     * (run-launch cap, the capacity snapshot, the shortfall message) keeps
+     * working untouched.
+     *
+     * @return the value written
+     */
+    private int syncDerivedCapacity(String applicationId, String region) {
+        int declared = pods.countByApplicationAndRegion(applicationId, region);
+        capacityRepo.upsert(applicationId, region, declared);
+        return declared;
+    }
+
     // ── POST /capacity/{region}/pods/{podName}/restart ─────────────────
 
     @PostMapping("/pods/{podName}/restart")
@@ -216,6 +328,7 @@ public class CapacityController {
             @PathVariable String applicationId,
             @PathVariable String region,
             @PathVariable String podName) {
+        provisioning.requireDynamic("restart worker " + podName);
         requireApp(applicationId);
         requirePodBoundToAppRegion(applicationId, region, podName);
         provisioner.restart(podName);
@@ -224,6 +337,23 @@ public class CapacityController {
 
     // ── DELETE /capacity/{region}/pods/{podName} — drain ───────────────
 
+    /**
+     * Releases a worker from this (application, region).
+     *
+     * <p>Under {@code PROVISIONING_MODE=DYNAMIC} this is a full drain: the
+     * container is stopped and removed, then the registry row is deleted.
+     * Under {@code STATIC} it is an <b>undeclare</b> — the registry row is
+     * deleted and the operator's worker keeps running, because the control
+     * plane does not own it. The in-use guard, the stale-binding release
+     * and the response shape are identical in both modes; only
+     * {@code containerStopped} in the body differs, so existing clients
+     * keep working unchanged.
+     *
+     * <p>The stale-binding path stays correct in static mode because
+     * {@code StaticPodProvisioner.isRunning} answers from the registry: a
+     * worker swept to {@code LOST} reads as not-running, so its zombie
+     * binding is released rather than blocking the undeclare forever.
+     */
     @DeleteMapping("/pods/{podName}")
     public ResponseEntity<Map<String, Object>> drain(
             @PathVariable String applicationId,
@@ -262,11 +392,23 @@ public class CapacityController {
                     podName, blocker.get().runId(), released,
                     blocker.get().state(), blocker.get().runId());
         }
-        provisioner.stopAndRemove(podName);
+        boolean containerStopped = provisioning.isDynamic();
+        if (containerStopped) {
+            provisioner.stopAndRemove(podName);
+        } else {
+            LOG.info("Undeclared operator-managed worker {} from applicationId={} region={} — "
+                    + "registry row removed; the worker itself is left running.",
+                    podName, applicationId, region);
+        }
         pods.deleteByPodId(podName);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("podName", podName);
         body.put("drained", true);
+        body.put("containerStopped", containerStopped);
+        if (provisioning.isStatic()) {
+            // D8 — Max tracks the declared count, so releasing lowers it.
+            body.put("maxAvailable", syncDerivedCapacity(applicationId, region));
+        }
         if (staleBindingReleased) {
             body.put("staleBindingReleased", true);
         }
@@ -317,6 +459,14 @@ public class CapacityController {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record SetMaxRequest(int maxAvailable) {}
+
+    /**
+     * Body of the declare PUT. Only the address is
+     * supplied; the worker's name is the path variable (it IS the resource)
+     * and the application + region come from the path too.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record DeclarePodRequest(String baseUrl) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PodView(
@@ -390,6 +540,29 @@ public class CapacityController {
             this.podName = podName;
         }
     }
+    /** STATIC-FLEET Phase 3 — declaring a worker another application already owns. */
+    static final class PodBoundElsewhereException extends RuntimeException {
+        final String podName, boundApplicationId, boundRegion;
+        PodBoundElsewhereException(String podName, String boundApplicationId, String boundRegion) {
+            super("worker " + podName + " is already declared to applicationId="
+                    + boundApplicationId + " region=" + boundRegion
+                    + "; release it there before declaring it here");
+            this.podName = podName;
+            this.boundApplicationId = boundApplicationId;
+            this.boundRegion = boundRegion;
+        }
+    }
+    /** STATIC-FLEET Phase 3 — declare-time reachability check failed. */
+    static final class WorkerUnreachableException extends RuntimeException {
+        final String podName, baseUrl;
+        WorkerUnreachableException(String podName, String baseUrl) {
+            super("worker " + podName + " did not answer at " + baseUrl
+                    + "/actuator/health; check the address, or declare with ?force=true "
+                    + "if the worker is deployed but not up yet");
+            this.podName = podName;
+            this.baseUrl = baseUrl;
+        }
+    }
     static final class RegionNotEmptyException extends RuntimeException {
         final int provisioned;
         RegionNotEmptyException(String region, int provisioned) {
@@ -456,5 +629,38 @@ public class CapacityController {
                 "code",        "REGION_NOT_EMPTY",
                 "message",     e.getMessage(),
                 "provisioned", e.provisioned));
+    }
+    /** STATIC-FLEET Phase 2 — spin / restart refused on an operator-managed fleet. */
+    @ExceptionHandler(ProvisioningDisabledException.class)
+    public ResponseEntity<Map<String, Object>> handleProvisioningDisabled(
+            ProvisioningDisabledException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(e.toBody());
+    }
+    /** STATIC-FLEET Phase 3 — declare refused on a self-provisioning deployment. */
+    @ExceptionHandler(ProvisioningRequiresStaticException.class)
+    public ResponseEntity<Map<String, Object>> handleRequiresStatic(
+            ProvisioningRequiresStaticException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(e.toBody());
+    }
+    @ExceptionHandler(PodBoundElsewhereException.class)
+    public ResponseEntity<Map<String, Object>> handleBoundElsewhere(PodBoundElsewhereException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                "code",               "POD_BOUND_ELSEWHERE",
+                "message",            e.getMessage(),
+                "podName",            e.podName,
+                "boundApplicationId", e.boundApplicationId,
+                "boundRegion",        e.boundRegion));
+    }
+    /**
+     * 400, not 5xx: the request is what's wrong (a bad address), and the fix
+     * is the operator's — correct it, or re-issue with {@code ?force=true}.
+     */
+    @ExceptionHandler(WorkerUnreachableException.class)
+    public ResponseEntity<Map<String, Object>> handleUnreachable(WorkerUnreachableException e) {
+        return ResponseEntity.badRequest().body(Map.of(
+                "code",    "WORKER_UNREACHABLE",
+                "message", e.getMessage(),
+                "podName", e.podName,
+                "baseUrl", e.baseUrl));
     }
 }

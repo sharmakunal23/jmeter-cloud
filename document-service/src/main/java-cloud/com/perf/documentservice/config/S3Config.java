@@ -11,24 +11,15 @@ import software.amazon.awssdk.services.s3.S3ClientBuilder;
 import java.net.URI;
 
 /**
- * Wires the {@link S3Client} singleton used by
- * {@link com.perf.documentservice.store.S3BlobStore}. Active only when
- * {@code documentService.backend=s3}, which is gated by the {@code -Pcloud}
- * Maven profile (the default JAR doesn't carry the AWS SDK on the
- * classpath).
+ * Wires the {@link S3Client} used by
+ * {@link com.perf.documentservice.store.S3BlobStore}, active only when
+ * {@code documentService.backend=s3} — which requires the {@code -Pcloud} build,
+ * since the default JAR carries no AWS SDK.
  *
- * <p>Authentication is via the AWS SDK's default credentials provider
- * chain: env vars → ~/.aws/credentials → IAM role (EC2/EKS/ECS).
- * Local-dev / IT path uses LocalStack with explicit access key + secret
- * via {@code aws.accessKeyId} / {@code aws.secretAccessKey} system
- * properties (the SDK picks them up automatically).
- *
- * <p>{@code endpoint} + {@code pathStyle} accommodate non-AWS S3
- * implementations (LocalStack, MinIO, R2): a custom endpoint URL
- * overrides the default {@code s3.<region>.amazonaws.com}, and
- * {@code forcePathStyle(true)} switches from virtual-host-style URLs
- * (which require DNS that those implementations don't always provide)
- * to {@code <endpoint>/<bucket>/<key>}.
+ * <p>Credentials come from the SDK's default provider chain (env vars →
+ * {@code ~/.aws/credentials} → IAM role). Setting {@code endpoint} plus
+ * {@code pathStyle} targets a non-AWS implementation such as LocalStack, MinIO
+ * or R2, whose DNS usually cannot serve virtual-host-style URLs.
  */
 @Configuration
 @ConditionalOnProperty(name = "documentService.backend", havingValue = "s3")

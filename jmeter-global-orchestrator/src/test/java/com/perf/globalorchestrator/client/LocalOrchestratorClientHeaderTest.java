@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * OBSERVABILITY Phase D — verifies the X-Run-Id header is set on
+ * Verifies the X-Run-Id header is set on
  * outbound fanout calls. Uses the JDK's bundled HttpServer (zero new
  * deps) to capture inbound headers without booting WireMock.
  *

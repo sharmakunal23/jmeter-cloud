@@ -28,8 +28,7 @@ import java.util.Optional;
  * REST surface for the singleton test plan: {@code POST/GET/GET-file/DELETE
  * /api/v1/testPlan}.
  *
- * <p><b>Migrated to Spring MVC in Step 4.4c.</b> The controller is a thin
- * shell — all validation, atomic-swap and extraction logic lives in
+ * <p>The controller is a thin shell — all validation, atomic-swap and extraction logic lives in
  * {@link ArtifactStager}; status codes match {@code api/openapi.yaml};
  * exceptions are mapped to JSON envelopes by {@link GlobalErrorHandler}.
  *

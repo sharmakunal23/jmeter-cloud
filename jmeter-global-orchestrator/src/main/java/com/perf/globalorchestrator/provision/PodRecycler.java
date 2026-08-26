@@ -11,8 +11,6 @@ import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.PodRepository;
 import com.perf.globalorchestrator.repo.RunRepository;
 import com.perf.globalorchestrator.service.RunAuditWriter;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -28,42 +26,33 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * WORKER-HYGIENE Phase D — periodic recycle sweep. Walks every pod row
- * bound to an application, evaluates {@link RecycleEvaluator} against the
- * application's policy, and drain-and-replaces pods whose threshold fires.
+ * Periodic recycle sweep: walks every application-bound pod, evaluates
+ * {@link RecycleEvaluator} against the application's policy, and
+ * drain-and-replaces the ones whose threshold fires. It is separate from
+ * {@code PodReconciler} (idempotent drift repair) and {@code PodSweeper}
+ * (stale → LOST) because recycle is policy-driven and state-changing, and its
+ * cadence should be tunable without touching theirs.
  *
- * <h2>Why a separate component</h2>
- * The existing {@code PodReconciler} reconciles container ↔ row drift
- * (idempotent, no policy). {@code PodSweeper} flips stale pods to LOST.
- * Recycle is policy-driven and state-changing — folding it into either
- * conflates concerns. The 60s default cadence is independent so operators
- * can tune one without affecting the others.
+ * <p><b>A pod whose most-recent run is not yet globally terminal is never
+ * recycled.</b> The check is
+ * {@link PodRepository#isWorkerBoundToNonTerminalRun(String)}, which holds until
+ * the whole RUN ends rather than until this member does — keying on the member
+ * let a fan-out worker that finished its slice early get drained mid-run,
+ * destroying its forensics and surfacing the member as unreachable.
  *
- * <h2>Active-run safety (RELIABILITY Round 8)</h2>
- * A pod whose most-recent run is not yet globally terminal is <em>never</em>
- * recycled — the doc's decision #3 forbids mid-test recycle. The check is
- * {@link PodRepository#isWorkerBoundToNonTerminalRun(String)}: it holds recycle
- * until the whole RUN ends, regardless of the individual member's state.
- * (The older check keyed on the member being non-terminal, which let a
- * fan-out worker that finished/failed its slice early be drained mid-run —
- * tearing the pod and its forensics down and surfacing the member as
- * "unreachable"/FAILED.) Next tick re-evaluates once the run is terminal.
+ * <p><b>{@link PodRepository#markDrainingForRecycle(String)} is the cut-over
+ * point</b> against a concurrent claim: a guarded UPDATE that only moves
+ * IDLE → DRAINING_FOR_RECYCLE and returns rowcount 0 if the claim won. On zero
+ * we skip and let the next tick re-evaluate. The replacement spin reuses
+ * {@link PodSpinService#spin} but bypasses the cap check, since the row just
+ * removed was holding that slot.
  *
- * <h2>Race with concurrent claim</h2>
- * Between "decide to recycle" and "execute recycle" the run-claim path
- * could grab this pod. {@link PodRepository#markDrainingForRecycle(String)}
- * is the cut-over point: it's a guarded UPDATE that only flips IDLE →
- * DRAINING_FOR_RECYCLE, and it returns 0 rowcount if the claim got there
- * first (state had already moved off IDLE). On zero rowcount we skip and
- * let the next tick try again.
- *
- * <h2>Replacement policy</h2>
- * The replacement spin uses {@link PodSpinService#spin}, which goes
- * through the same allocator + register + createAndStart sequence as
- * an operator-driven spin. The cap-check is bypassed (the row we just
- * removed was occupying its slot; the replacement is a 1-for-1 swap).
+ * <p>Not wired under {@code PROVISIONING_MODE=STATIC} — destroying a worker and
+ * creating a replacement is not ours to do when the operator owns the fleet.
+ * Injectors treat it as optional and refuse or SKIP when absent.
  */
 @Component
+@ConditionalOnProvisioningMode(ProvisioningMode.DYNAMIC)
 public class PodRecycler {
 
     private static final Logger LOG = LoggerFactory.getLogger(PodRecycler.class);
@@ -78,13 +67,6 @@ public class PodRecycler {
     private final RunRepository runs;
     private final RunAuditWriter audit;
 
-    private final Counter recycledMaxRuns;
-    private final Counter recycledMaxAge;
-    private final Counter recycledEveryRun;
-    private final Counter recycledDrainAfterRun;
-    private final Counter recycledImage;
-    private final Counter recycledFailed;
-
     public PodRecycler(
             PodRepository pods,
             ApplicationRepository apps,
@@ -93,8 +75,7 @@ public class PodRecycler {
             LocalOrchestratorClient localClient,
             RecycleEvaluator evaluator,
             RunRepository runs,
-            RunAuditWriter audit,
-            MeterRegistry meterRegistry) {
+            RunAuditWriter audit) {
         this.pods = pods;
         this.apps = apps;
         this.provisioner = provisioner;
@@ -103,24 +84,6 @@ public class PodRecycler {
         this.evaluator = evaluator;
         this.runs = runs;
         this.audit = audit;
-        this.recycledMaxRuns = Counter.builder("globalOrchestrator.pods.recycled.maxRuns")
-                .description("Pods recycled because runsServed crossed the MAX_RUNS / BOTH threshold.")
-                .register(meterRegistry);
-        this.recycledMaxAge = Counter.builder("globalOrchestrator.pods.recycled.maxAge")
-                .description("Pods recycled because age crossed the MAX_AGE / BOTH threshold.")
-                .register(meterRegistry);
-        this.recycledEveryRun = Counter.builder("globalOrchestrator.pods.recycled.everyRun")
-                .description("Pods recycled by the EVERY_RUN paranoid-mode policy.")
-                .register(meterRegistry);
-        this.recycledDrainAfterRun = Counter.builder("globalOrchestrator.pods.recycled.drainAfterRun")
-                .description("Pods drained (no replacement) by the DRAIN_AFTER_RUN cost-saving policy.")
-                .register(meterRegistry);
-        this.recycledImage = Counter.builder("globalOrchestrator.pods.recycled.image")
-                .description("Pods recycled because their imageDigest no longer matches the current image.")
-                .register(meterRegistry);
-        this.recycledFailed = Counter.builder("globalOrchestrator.pods.recycled.failed")
-                .description("Recycle attempts that errored mid-flight.")
-                .register(meterRegistry);
     }
 
     @Scheduled(fixedDelayString = "${globalOrchestrator.pod.recycleIntervalMs:60000}",
@@ -175,13 +138,11 @@ public class PodRecycler {
             }
             try {
                 if (recycle(pod, app, reason)) {
-                    incrementCounter(reason);
                     summary.recycled.put(pod.podId(), reason);
                 } else {
                     summary.skipped.add(pod.podId());
                 }
             } catch (RuntimeException e) {
-                recycledFailed.increment();
                 summary.errors.put(pod.podId(), e.toString());
                 LOG.warn("Recycle of {} (reason={}) failed mid-flight: {}",
                         pod.podId(), reason, e.toString());
@@ -196,7 +157,7 @@ public class PodRecycler {
     }
 
     /**
-     * AUDIT-TRAIL — append a WORKERS_RECYCLED event to each affected run's
+     * Append a WORKERS_RECYCLED event to each affected run's
      * timeline (best-effort). A recycle is per-pod and system-driven, so we
      * attribute each recycled pod to its most-recent run and aggregate one
      * event per run (system actor). Pods that never served a run are skipped —
@@ -224,7 +185,7 @@ public class PodRecycler {
     }
 
     /**
-     * AUTOMATION Phase C — public entry point for scheduled DRAIN_REGION /
+     * Public entry point for scheduled DRAIN_REGION /
      * PROVISION_REGION jobs to recycle one pod via the same handshake the
      * hygiene sweep uses (markDrainingForRecycle race guard → drain RPC →
      * container removal → optional replacement spin governed by
@@ -259,7 +220,7 @@ public class PodRecycler {
         // pod is unreachable, we still stop+remove below.
         try {
             // PodRecycler operates outside a specific run — pass null so
-            // the X-Run-Id header is omitted (the local-orch's TracingFilter
+            // the X-Run-Id header is omitted (the local-orch's MdcEnrichmentFilter
             // is null-safe and skips the header when missing).
             localClient.drainTest(null, pod.baseUrl());
         } catch (RuntimeException e) {
@@ -324,17 +285,6 @@ public class PodRecycler {
             }
         } catch (RuntimeException e) {
             LOG.warn("[DRAINED-FORENSICS] pod={} — log capture failed: {}", pod.podId(), e.toString());
-        }
-    }
-
-    private void incrementCounter(RecycleReason reason) {
-        switch (reason) {
-            case MAX_RUNS        -> recycledMaxRuns.increment();
-            case MAX_AGE         -> recycledMaxAge.increment();
-            case EVERY_RUN       -> recycledEveryRun.increment();
-            case DRAIN_AFTER_RUN -> recycledDrainAfterRun.increment();
-            case IMAGE_MISMATCH  -> recycledImage.increment();
-            case NONE            -> { /* unreachable here */ }
         }
     }
 

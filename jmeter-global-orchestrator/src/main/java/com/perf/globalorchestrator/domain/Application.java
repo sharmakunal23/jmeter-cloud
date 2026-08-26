@@ -38,7 +38,7 @@ public record Application(
         HealthStatus lastHealthStatus,
         List<Map<String, Object>> lastHealthDetails,
         /**
-         * WORKER-HYGIENE Phase C — pod recycle policy for this app. See
+         * Pod recycle policy for this app. See
          * {@link RecyclePolicy} for the per-policy threshold rules.
          * Backward-compat default is {@link RecyclePolicy#REUSE}; existing
          * apps pre-Phase-C land here via the V14 column default.
@@ -49,7 +49,7 @@ public record Application(
         /** WORKER-HYGIENE Phase C — required for MAX_AGE / BOTH; null otherwise. */
         Integer podMaxAgeHours,
         /**
-         * AUTOMATION Phase C — when true, scheduled DRAIN_REGION jobs SKIP for
+         * When true, scheduled DRAIN_REGION jobs SKIP for
          * this app (production-like, never auto-drained). PROVISION_REGION and
          * LAUNCH_RUN are unaffected. V22 column default is false.
          */

@@ -13,7 +13,7 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * AUTOMATION — append-only access for {@code globalOrchestrator.cronJobFireHistory}
+ * Append-only access for {@code globalOrchestrator.cronJobFireHistory}
  * (Flyway V20). One row per fire attempt; never updated or deleted (the role
  * has only SELECT + INSERT, like {@code runEvent}).
  */

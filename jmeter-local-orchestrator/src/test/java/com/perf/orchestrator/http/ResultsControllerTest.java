@@ -224,10 +224,7 @@ class ResultsControllerTest {
                     "TEST_REGION",         "us-east-1",
                     "RUN_ID",              "results-test",
                     "JTL_PATH",            "/results/results.jtl",
-                    "SENTINEL_PATH",       "/results/.done",
-                    "KAFKA_BROKERS",       "kafka:9092",
-                    "SCHEMA_REGISTRY_URL", "http://schema-registry:8081",
-                    "KAFKA_TOPIC",         "jmeter.metrics.perSecond"
+                    "SENTINEL_PATH",       "/results/.done"
             ));
             env.put("BASE_DIR",       baseDir.toString());
             env.put("RESULTS_DIR",    baseDir.resolve("results").toString());

@@ -191,7 +191,7 @@ class JtlRowTest {
         @DisplayName("rejects null label because it is the primary aggregation key")
         void rejects_null_label() {
             // A null label would silently group all unlabelled requests together and
-            // produce a nonsensical "null" metric in Kafka — reject it immediately.
+            // produce a nonsensical "null" metric downstream — reject it immediately.
             assertThatThrownBy(() ->
                     new JtlRow(TIMESTAMP, EPOCH_SEC, 187L, null,
                             "200", "OK", THREAD, "text", true,

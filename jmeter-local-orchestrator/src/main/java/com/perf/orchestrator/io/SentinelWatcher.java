@@ -71,7 +71,7 @@ public final class SentinelWatcher {
      * Reads the JMeter process exit code from the sentinel file content.
      *
      * <p>A non-zero exit code means JMeter reported test failures or an internal
-     * error — useful for the run-completion event published to Kafka in Section 5.
+     * error — useful for run-completion classification and reporting.
      *
      * @return the exit code if the sentinel exists and contains a parseable integer;
      *         {@link Optional#empty()} if the file is absent, empty, or non-numeric

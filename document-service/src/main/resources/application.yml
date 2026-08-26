@@ -12,21 +12,19 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus
+        # SLIMDOWN (2026-07-21) — health,info ONLY. Never drop health:
+        # the compose healthcheck and the UI Home checklist depend on it.
+        include: health,info
   endpoint:
     health:
       show-details: always
-  # OBSERVABILITY Phase B — distributed tracing.
-  # See jmeter-global-orchestrator/application.yml for the locked-in
-  # decisions on sampling rate (0.01 default) + OTLP transport (HTTP at
-  # 4318, gRPC swap is a single config flip).
-  tracing:
-    sampling:
-      probability: ${MANAGEMENT_TRACING_SAMPLING_PROBABILITY:0.01}
-  otlp:
-    tracing:
-      endpoint: ${MANAGEMENT_OTLP_TRACING_ENDPOINT:http://jaeger:4318/v1/traces}
-      transport: http
+  # SLIMDOWN (2026-07-21) — the tracing/otlp blocks are gone with the
+  # Micrometer/OTel stack; belt-and-braces so the default in-memory
+  # registry doesn't pretend to export anything.
+  defaults:
+    metrics:
+      export:
+        enabled: false
 
 # Swagger UI — points at the hand-curated /openapi.yaml served from the
 # JAR's static/ root (api/openapi.yaml is mapped there by the pom's

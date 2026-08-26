@@ -62,8 +62,8 @@ public final class CurrentRun {
     private String failureReason;
     private long rowsIngested;
     private long windowsPublished;
-    private long kafkaSendErrors;
-    private Long lastKafkaAckMs;
+    private long publishErrors;
+    private Long lastPublishAckMs;
     private String uploadState = "SKIPPED";
     private String uploadTarget;
     private String uploadFailureReason;
@@ -90,8 +90,8 @@ public final class CurrentRun {
                 run.failureReason    = nullableText(n, "failureReason");
                 run.rowsIngested     = n.path("rowsIngested").asLong(0L);
                 run.windowsPublished = n.path("windowsPublished").asLong(0L);
-                run.kafkaSendErrors  = n.path("kafkaSendErrors").asLong(0L);
-                run.lastKafkaAckMs   = n.has("lastKafkaAckMs") && !n.get("lastKafkaAckMs").isNull() ? n.get("lastKafkaAckMs").asLong() : null;
+                run.publishErrors  = n.path("publishErrors").asLong(0L);
+                run.lastPublishAckMs   = n.has("lastPublishAckMs") && !n.get("lastPublishAckMs").isNull() ? n.get("lastPublishAckMs").asLong() : null;
                 run.uploadState         = n.path("uploadState").asText("SKIPPED");
                 run.uploadTarget        = nullableText(n, "uploadTarget");
                 run.uploadFailureReason = nullableText(n, "uploadFailureReason");
@@ -126,8 +126,8 @@ public final class CurrentRun {
         this.failureReason    = null;
         this.rowsIngested     = 0;
         this.windowsPublished = 0;
-        this.kafkaSendErrors  = 0;
-        this.lastKafkaAckMs   = null;
+        this.publishErrors  = 0;
+        this.lastPublishAckMs   = null;
         this.uploadState         = "SKIPPED";
         this.uploadTarget        = null;
         this.uploadFailureReason = null;
@@ -198,7 +198,7 @@ public final class CurrentRun {
     }
 
     /**
-     * MID-TEST-SCALING Phase B — graceful drain reached its terminal state.
+     * Graceful drain reached its terminal state.
      * Called when JMeter exited cleanly after the operator triggered drain
      * via {@code POST /api/v1/test/drain}. Distinct from {@link #recordAborted}
      * (force-stop) and the {@link TestState#COMPLETED} natural exit.
@@ -210,11 +210,11 @@ public final class CurrentRun {
     }
 
     public synchronized void updateMetrics(long rowsIngested, long windowsPublished,
-                                           long kafkaSendErrors, Long lastKafkaAckMs) {
+                                           long publishErrors, Long lastPublishAckMs) {
         this.rowsIngested     = rowsIngested;
         this.windowsPublished = windowsPublished;
-        this.kafkaSendErrors  = kafkaSendErrors;
-        this.lastKafkaAckMs   = lastKafkaAckMs;
+        this.publishErrors  = publishErrors;
+        this.lastPublishAckMs   = lastPublishAckMs;
         // No persist — counters update during RUNNING and persisting on every
         // change would dominate disk I/O. The next state transition or an
         // explicit flush picks them up.
@@ -238,7 +238,7 @@ public final class CurrentRun {
         return new Snapshot(
                 state, runId, region, startedAt, completedAt,
                 jmeterPid, exitCode, failureReason,
-                rowsIngested, windowsPublished, kafkaSendErrors, lastKafkaAckMs,
+                rowsIngested, windowsPublished, publishErrors, lastPublishAckMs,
                 uploadState, uploadTarget, uploadFailureReason);
     }
 
@@ -263,8 +263,8 @@ public final class CurrentRun {
             String failureReason,
             long rowsIngested,
             long windowsPublished,
-            long kafkaSendErrors,
-            Long lastKafkaAckMs,
+            long publishErrors,
+            Long lastPublishAckMs,
             String uploadState,
             String uploadTarget,
             String uploadFailureReason) {
@@ -286,8 +286,8 @@ public final class CurrentRun {
         if (failureReason != null) node.put("failureReason", failureReason);
         node.put("rowsIngested",     rowsIngested);
         node.put("windowsPublished", windowsPublished);
-        node.put("kafkaSendErrors",  kafkaSendErrors);
-        if (lastKafkaAckMs != null) node.put("lastKafkaAckMs", lastKafkaAckMs);
+        node.put("publishErrors",  publishErrors);
+        if (lastPublishAckMs != null) node.put("lastPublishAckMs", lastPublishAckMs);
         node.put("uploadState", uploadState);
         if (uploadTarget != null) node.put("uploadTarget", uploadTarget);
         if (uploadFailureReason != null) node.put("uploadFailureReason", uploadFailureReason);

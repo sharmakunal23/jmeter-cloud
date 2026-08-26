@@ -3,7 +3,7 @@ package com.perf.globalorchestrator.domain;
 import java.time.Instant;
 
 /**
- * AUTOMATION Phase F — a frozen aggregate snapshot of one COMPLETED run.
+ * A frozen aggregate snapshot of one COMPLETED run.
  * Mirrors the {@code globalOrchestrator.runTrend} row (Flyway V24). Written
  * exactly once when global-orch observes a run reach COMPLETED; read back as
  * the cheap 7-day baseline for the daily perf-test report (Phase D).

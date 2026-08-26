@@ -21,12 +21,12 @@ import java.util.Optional;
  * REST surface for {@code /api/v1/metrics/jmeterJvm},
  * {@code /api/v1/metrics/orchestrator}, and {@code /api/v1/logs}.
  *
- * <p><b>Spring MVC since Step 4.4g.</b> Prometheus exposition for the
- * orchestrator's internal counters lives at {@code /actuator/prometheus}
- * now (Micrometer registry, wired by Spring Boot Actuator autoconfig).
- * The bespoke {@code /api/v1/metrics} text-format endpoint that the
- * legacy controller served was dropped in 4.4b along with the
- * {@code /api/v1/health} / {@code /api/v1/info} aliases.
+ * <p><b>Spring MVC since Step 4.4g.</b> These app-level JSON/text endpoints
+ * are the orchestrator's whole metrics surface since SLIMDOWN (2026-07-21):
+ * the Prometheus exposition that 4.4g moved the counters to left with the
+ * Micrometer stack ({@code /actuator/prometheus} is 404 by design). The
+ * counters here were never Micrometer — {@code CountersSupplier} reads
+ * {@code CurrentRun} snapshots + {@code LongAdder}s directly.
  */
 @RestController
 public final class ObservabilityController {

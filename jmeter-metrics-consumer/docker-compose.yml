@@ -1,14 +1,10 @@
 # jmeter-metrics-consumer subsystem — Compose fragment.
-#
-# Build context is the REPO ROOT because the Dockerfile COPYs from sibling
-# kafka/ for the Avro schema.
-
 services:
 
   metrics-consumer:
     build:
-      context: ..
-      dockerfile: jmeter-metrics-consumer/Dockerfile
+      context: .
+      dockerfile: Dockerfile
     image: jmeter-metrics-consumer:dev
     profiles: [default]
     # Reliability: self-heal. This is the
@@ -16,17 +12,10 @@ services:
     # `-XX:+ExitOnOutOfMemoryError` (Dockerfile), so any OOM deliberately
     # exits the JVM; without a restart policy the container then stayed dead
     # and no metrics reached Postgres/Grafana. `unless-stopped` brings it
-    # straight back, and at-least-once Kafka delivery + the idempotent
-    # ON CONFLICT DO NOTHING write make the replay loss-free. The on-restart
-    # consumer resumes from its last committed offset.
+    # straight back, and the workers' disk-backed buffer + retry plus the
+    # idempotent ON CONFLICT DO NOTHING write make the replay loss-free.
     restart: unless-stopped
     depends_on:
-      kafka:
-        condition: service_healthy
-      schema-registry:
-        condition: service_healthy
-      topic-init:
-        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       # Wait for Flyway to land the metrics schema before connecting —
@@ -39,14 +28,7 @@ services:
     environment:
       HTTP_PORT:           "8083"
       HTTP_BIND_ADDRESS:   0.0.0.0
-      KAFKA_BROKERS:       ${KAFKA_BROKERS_INTERNAL:-kafka:29092}
-      SCHEMA_REGISTRY_URL: ${SCHEMA_REGISTRY_URL_INTERNAL:-http://schema-registry:8081}
-      # Phase E (2026-05-16): KAFKA_TOPIC env removed. Listener now uses
-      # topicPattern (jmeter.metrics.<app>) — see KAFKA_TOPIC_PATTERN in
-      # application.yml. The DLQ replayer's single-topic dlqTopic still
-      # honors DLQ_TOPIC if set.
-      KAFKA_GROUP_ID:      ${KAFKA_GROUP_ID:-jmeter-metrics-consumer}
-      # Improvement #5 (2026-05-16) — see application.yml comment for the
+      # See the application.yml comment for the
       # nuance (no-op on our hot path because we already use multi-row
       # VALUES, but free defense-in-depth + skips a version-detection
       # round-trip at connect time).
@@ -56,30 +38,30 @@ services:
       # GRANTs.
       POSTGRES_USER:       ${POSTGRES_METRICS_WRITER_USER:-metricsWriter}
       POSTGRES_PASSWORD:   ${POSTGRES_METRICS_WRITER_PASSWORD:-localdev}
-      # OBSERVABILITY Phase B — distributed tracing.
-      # Local dev override: 100% sampling so every Kafka poll carries a span
-      # in Jaeger (the production default of 1% is in application.yml).
-      MANAGEMENT_TRACING_SAMPLING_PROBABILITY: ${MANAGEMENT_TRACING_SAMPLING_PROBABILITY:-1.0}
-      MANAGEMENT_OTLP_TRACING_ENDPOINT:        ${MANAGEMENT_OTLP_TRACING_ENDPOINT:-http://jaeger:4318/v1/traces}
+      # SLIMDOWN (2026-07-20): the MANAGEMENT_TRACING_* / MANAGEMENT_OTLP_*
+      # env is gone — the service no longer carries Micrometer/OTel.
     # Heap-dump output volume — survives container restart so the operator
     # can analyze the .hprof from a -XX:+HeapDumpOnOutOfMemoryError event
     # offline. Bind-mounted to ./heapdumps so it shows up in the repo
     # checkout (gitignore the directory).
     volumes:
-      - ./jmeter-metrics-consumer/heapdumps:/app/heapdumps
-    # Phase G follow-up (G-fix-2): pin per-container memory so a Kafka OOM
-    # doesn't cascade through the consumer. JVM heap is 1 GB (see Dockerfile);
+      # Fragment-relative (include: resolves against this file's directory).
+      # Was ./jmeter-metrics-consumer/heapdumps — a doubled path that sent
+      # dumps to jmeter-metrics-consumer/jmeter-metrics-consumer/heapdumps.
+      - ./heapdumps:/app/heapdumps
+    # Phase G follow-up (G-fix-2): pin per-container memory so an ingest-side
+    # OOM can't take the host down. JVM heap is 1 GB (see Dockerfile);
     # 1.2 GiB caps the container so JVM overhead + native buffers fit
     # without forcing the host OOM killer onto a noisy neighbour.
     mem_limit: 1200m
     mem_reservation: 768m
     healthcheck:
       # Reliability: probe the READINESS
-      # group (DB + broker reachable), NOT the aggregate health. The aggregate
-      # flips DOWN after 5 min idle (kafkaConsumerProgress) — e.g. the quiet
+      # group (DB reachable), NOT the aggregate health. The aggregate
+      # flips DOWN after 5 min idle (ingestProgress) — e.g. the quiet
       # window after a 12 h test ends — which would otherwise mark the
       # container UNHEALTHY between runs even though it's perfectly fine.
-      # Readiness stays UP when idle and only goes DOWN on a real DB/broker loss.
+      # Readiness stays UP when idle and only goes DOWN on a real DB loss.
       test: ["CMD-SHELL", "wget -qO- http://localhost:8083/actuator/health/readiness | grep -q '\"status\":\"UP\"'"]
       interval: 10s
       timeout: 5s

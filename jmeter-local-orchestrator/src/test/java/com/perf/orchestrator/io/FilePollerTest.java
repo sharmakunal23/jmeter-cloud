@@ -74,9 +74,6 @@ class FilePollerTest {
         env.put("RUN_ID",              "test-20250413");
         env.put("JTL_PATH",            jtl.toString());
         env.put("SENTINEL_PATH",       tempDir.resolve(".done").toString());
-        env.put("KAFKA_BROKERS",       "kafka:9092");
-        env.put("SCHEMA_REGISTRY_URL", "http://schema-registry:8081");
-        env.put("KAFKA_TOPIC",         "jmeter.metrics.perSecond");
         env.put("STATE_FILE_PATH",     stateFile.toString());
         // Large interval so offset is not auto-flushed during tests (controlled manually)
         env.put("STATE_FLUSH_INTERVAL_MS", "3600000");

@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { RegionPicker } from "../RegionPicker";
+import { __resetPlatformCapabilitiesCache } from "../../hooks/usePlatformCapabilities";
 
 function rowFor(container: HTMLElement, regionId: string): HTMLElement {
   const row = [...container.querySelectorAll<HTMLElement>(".regionChecklist__row")]
@@ -50,5 +51,71 @@ describe("RegionPicker", () => {
   it("Save is disabled with no changes", () => {
     render(<RegionPicker appName="x" current={["us-east-1"]} onSubmit={vi.fn()} onCancel={vi.fn()} />);
     expect(screen.getByRole("button", { name: /Save regions/ })).toBeDisabled();
+  });
+
+  // ── STATIC-FLEET Phase 7 — deployment-supplied placement options ──────
+
+  describe("on a private cloud with named data centers", () => {
+    beforeEach(() => {
+      __resetPlatformCapabilitiesCache();
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          provisioningMode: "STATIC",
+          dynamicScalingEnabled: false,
+          podRecyclingEnabled: false,
+          regions: ["na-east", "na-west", "eu-central"],
+          regionLabel: "dataCenter",
+        }),
+      }));
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      __resetPlatformCapabilitiesCache();
+    });
+
+    it("offers the deployment's data centers instead of the four AWS regions", async () => {
+      const { container } = render(
+        <RegionPicker appName="x" current={["na-east"]} onSubmit={vi.fn()} onCancel={vi.fn()} />,
+      );
+
+      await waitFor(() => {
+        const inputs = container.querySelectorAll('.regionChecklist input[type="checkbox"]');
+        expect(inputs).toHaveLength(3);
+      });
+      expect(rowFor(container, "eu-central")).toBeTruthy();
+    });
+
+    it("drops the US map — a data center has no place on it, and a pin in the wrong "
+       + "spot is worse than no map", async () => {
+      const { container } = render(
+        <RegionPicker appName="x" current={["na-east"]} onSubmit={vi.fn()} onCancel={vi.fn()} />,
+      );
+
+      await waitFor(() => expect(container.querySelector(".regionChecklist")).toBeTruthy());
+      expect(container.querySelector(".regionMap")).toBeNull();
+      expect(container.querySelectorAll(".regionPin")).toHaveLength(0);
+    });
+
+    it("uses the data-center vocabulary in its copy", async () => {
+      render(<RegionPicker appName="x" current={["na-east"]} onSubmit={vi.fn()} onCancel={vi.fn()} />);
+      expect(await screen.findByRole("button", { name: /Save data centers/ })).toBeInTheDocument();
+    });
+
+    it("surfaces a placement the deployment no longer offers so it can be removed", async () => {
+      const { container } = render(
+        <RegionPicker
+          appName="x"
+          current={["na-east", "retired-dc"]}
+          onSubmit={vi.fn()}
+          onCancel={vi.fn()}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(container.querySelector(".regionPicker__legacy")).toBeTruthy());
+      expect(screen.getByText(/Not offered by this deployment/)).toBeInTheDocument();
+    });
   });
 });

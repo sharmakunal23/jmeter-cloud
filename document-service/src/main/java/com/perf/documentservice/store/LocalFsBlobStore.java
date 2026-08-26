@@ -23,29 +23,19 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * Filesystem-backed {@link BlobStore} for local-dev (and any deployment that
- * doesn't need cloud object storage).
+ * Filesystem-backed {@link BlobStore}, the default backend.
  *
- * <p>Layout under {@code rootPath}:
+ * <p>Layout under {@code rootPath}, sharded on the ULID's random suffix
+ * ({@code blobId[22..23]} then {@code [24..25]}) so directory entry counts stay
+ * bounded and {@code blobId} still resolves to a path without a metadata read:
  * <pre>
  *   {root}/{shard1}/{shard2}/{blobId}              — blob bytes
  *   {root}/{shard1}/{shard2}/{blobId}.meta.json    — sidecar metadata
  * </pre>
- * where {@code shard1} = {@code blobId[22..23]} and {@code shard2} =
- * {@code blobId[24..25]} (the random suffix of the ULID — uniformly
- * distributed, so sharding stays balanced even when many blobs are
- * uploaded in the same millisecond).
  *
- * <p>The Phase 2 plan called for sha256-prefix sharding. The functional
- * goal — bound directory entry counts so the kernel's getdents() stays
- * fast — is the same; sharding by the blobId's random suffix keeps
- * lookup direct (blobId → path) without an extra metadata read on every
- * GET.
- *
- * <p>All writes are atomic: bytes go to a {@code .tmp} sibling first,
- * then {@code Files.move(..., ATOMIC_MOVE)} swaps in. A crash mid-upload
- * leaves a {@code .tmp} that's safely ignorable; nothing visible at the
- * blob's final path.
+ * <p>Writes are atomic: bytes land in a {@code .tmp} sibling, then
+ * {@code Files.move(..., ATOMIC_MOVE)}. A crash mid-upload leaves an ignorable
+ * {@code .tmp} and nothing at the blob's final path.
  */
 @Component
 @ConditionalOnProperty(name = "documentService.backend", havingValue = "local", matchIfMissing = true)
@@ -162,9 +152,8 @@ public class LocalFsBlobStore implements BlobStore {
     }
 
     private List<BlobMetadata> readAllMetadata() throws IOException {
-        // Walk the shard tree, read every .meta.json. Acceptable up to a
-        // few thousand blobs at local-FS scale; larger deployments use
-        // the S3 backend (Step 13) which paginates natively.
+        // Walks the shard tree reading every sidecar — fine to a few thousand
+        // blobs, which is what the local backend is for. S3 paginates natively.
         List<BlobMetadata> all = new ArrayList<>();
         if (Files.exists(rootPath)) {
             try (var stream = Files.walk(rootPath)) {

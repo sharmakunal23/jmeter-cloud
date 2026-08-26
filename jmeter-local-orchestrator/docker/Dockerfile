@@ -18,10 +18,11 @@ FROM maven:3.9-eclipse-temurin-21@sha256:1bb51c5ed28b95aef2bc7b46bff6940da43747c
 WORKDIR /build
 
 # Copy pom first so Docker layer-caches dependency downloads separately
-# from source. The Avro schema lives in the sibling kafka/ subsystem;
-# the build context must be the repo root for this COPY to resolve.
+# from source. The build context must be the repo root — this Dockerfile
+# also COPYs jmeter/user.properties from the sibling jmeter/ subsystem
+# (cross-component contract #3). JSON-INGEST 2026-07-20: the kafka/schemas
+# COPY left with the Avro toolchain.
 COPY jmeter-local-orchestrator/pom.xml ./pom.xml
-COPY kafka/schemas ../kafka/schemas
 
 RUN mvn dependency:go-offline -q 2>/dev/null || true
 
@@ -84,7 +85,7 @@ COPY jmeter/user.properties ${JMETER_HOME}/bin/user.properties
 FROM eclipse-temurin:21-jre@sha256:010e0a06bd4e0184dec58626afb3ba727b42c56c91b977e2f0a9e0837e0fa3fb
 
 LABEL org.opencontainers.image.title="jmeter-local-orchestrator" \
-      org.opencontainers.image.description="HTTP-driven orchestrator: launches JMeter as a child process, tails the JTL, and streams per-second metrics to Kafka" \
+      org.opencontainers.image.description="HTTP-driven orchestrator: launches JMeter as a child process, tails the JTL, and POSTs per-second JSON metrics to the metrics-consumer" \
       org.opencontainers.image.source="https://github.com/your-org/jmeter-local-orchestrator"
 
 ARG JMETER_VERSION=5.6.3

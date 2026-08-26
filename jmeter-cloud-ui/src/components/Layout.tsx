@@ -1,17 +1,25 @@
 import { Link, NavLink, Outlet } from "react-router-dom";
 
+import { usePlatformCapabilities } from "../hooks/usePlatformCapabilities";
 import { ActorControl } from "./ActorControl";
 import { BrandMark } from "./BrandMark";
 
 /**
  * Top-level chrome — header + nav + Outlet for the active route.
  *
- * <p>UI-D1 reshaped the nav from {@code Runs / New run / Blobs} →
+ * <p>The nav was reshaped from {@code Runs / New run / Blobs} to
  * {@code Home / Applications / Documents / Templates / Automation}.
  * The legacy URLs were hard-removed (no redirects); a hit on one
  * lands on {@code <NotFoundPage>} which surfaces the new equivalent.
+ *
+ * <p>STATIC-FLEET Phase 7 — the Capacity tab is hidden when the deployment
+ * does not provision its own workers. Capacity is entirely built around
+ * spin / restart / drain, none of which apply to an operator-managed fleet;
+ * there the equivalent surface is the per-application Data centers section.
+ * Exactly one of the two is live at a time.
  */
 export function Layout() {
+  const { dynamicScalingEnabled } = usePlatformCapabilities();
   return (
     <div className="appShell">
       <header className="appHeader">
@@ -25,7 +33,7 @@ export function Layout() {
               detection so the brand stays "selected-looking" via styling
               but isn't a duplicate tab. */}
           <NavLink to="/applications">Applications</NavLink>
-          <NavLink to="/capacity">Capacity</NavLink>
+          {dynamicScalingEnabled && <NavLink to="/capacity">Capacity</NavLink>}
           <NavLink to="/documents">Documents</NavLink>
           <NavLink to="/templates">Templates</NavLink>
           <NavLink to="/automation">Automation</NavLink>

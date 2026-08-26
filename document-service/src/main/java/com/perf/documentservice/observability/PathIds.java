@@ -5,15 +5,12 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Extracts the {@code blobId} identifier from BlobController paths:
- * <pre>
- *   /api/v1/blob/{blobId}
- *   /api/v1/blob/{blobId}/metadata
- * </pre>
+ * Extracts {@code blobId} from a request path by taking the segment after
+ * {@code blob} — covering both {@code /api/v1/blob/{blobId}} and
+ * {@code /api/v1/blob/{blobId}/metadata}.
  *
- * <p>Walks path segments and picks the token after each recognised label,
- * mirroring the global-orchestrator's PathIds utility. Pure utility for
- * unit-test isolation.
+ * <p>Unresolved template segments ({@code {blobId}}) are skipped, so an
+ * unmatched route yields no id rather than a literal brace.
  */
 public final class PathIds {
 

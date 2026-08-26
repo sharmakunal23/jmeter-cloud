@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type { Run } from "../api/runs";
 
 /**
- * UI-C1 — animated region pill, replaces the legacy "us-east-1 (1) + us-west-2 (1)"
+ * Animated region pill, replaces the legacy "us-east-1 (1) + us-west-2 (1)"
  * text rendering. Visual shape matches the existing `.badge` (state badge) for
  * parity; adds a colored dot prefix whose color is deterministic per region
  * name (so the same region always gets the same hue across the app).
@@ -27,7 +27,7 @@ export function RegionBadge({ name }: { name: string }) {
 }
 
 /**
- * UI-C1 — multi-region wrapper. Walks the run's fleet members to find the
+ * Multi-region wrapper. Walks the run's fleet members to find the
  * distinct regions that actually carried work; renders one pill per region.
  * Falls back to {@code originRegion} when no members exist yet (skeleton state).
  *

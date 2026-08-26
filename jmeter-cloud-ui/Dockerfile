@@ -23,7 +23,13 @@ LABEL org.opencontainers.image.title="jmeter-cloud-ui" \
 
 # Default nginx config from the runtime image already serves /usr/share/nginx/html.
 # Replace with our own to add the /api/* reverse-proxy + SPA fallback.
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# KUBE-6: shipped as a TEMPLATE — the entrypoint's envsubst step renders
+# it to /etc/nginx/conf.d/default.conf, filling ${DNS_RESOLVER} (see
+# resolverEnv.envsh: docker's 127.0.0.11 vs Kubernetes' CoreDNS, both
+# derived from /etc/resolv.conf at start). Only defined env vars are
+# substituted, so nginx's own $lowercase variables pass through.
+COPY nginx.conf /etc/nginx/templates/default.conf.template
+COPY --chmod=0755 resolverEnv.envsh /docker-entrypoint.d/05-resolverEnv.envsh
 
 COPY --from=build /build/dist /usr/share/nginx/html
 

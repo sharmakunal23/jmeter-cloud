@@ -12,7 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * AUTOMATION Phase E — on-demand preview of the report emails, so a report is
+ * On-demand preview of the report emails, so a report is
  * never email-only: an operator (or the UI) can fetch the same content the
  * scheduled fire would send. Covered by {@code CriticalPaths} (/api/v1/**),
  * so no observability config change.

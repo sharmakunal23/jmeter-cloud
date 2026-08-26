@@ -1,0 +1,18 @@
+# KUBE-2 — privateCloud overlay.
+#
+# CREDENTIALS (required before first apply — never committed):
+#   kubectl -n jmeter-cloud create secret generic metrics-consumer-credentials \
+#     --from-literal=postgresUser=metricsWriter \
+#     --from-literal=postgresPassword=<rotated>
+# (initdb creates metricsWriter with 'localdev' — rotate with ALTER USER;
+# tracked under KUBE-11.)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+
+# Private-registry rewrite — set the real registry, then uncomment:
+# images:
+#   - name: jmeter-metrics-consumer
+#     newName: registry.internal.example.com/jmeter-cloud/jmeter-metrics-consumer
+#     newTag: "1.0.0"

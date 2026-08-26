@@ -13,7 +13,7 @@ import { getActor } from "../actor";
 export type CronJobFireStatus = "LAUNCHED" | "SKIPPED" | "FAILED" | "DISABLED";
 
 /**
- * AUTOMATION Phase C — what a fire does:
+ * What a fire does:
  *   LAUNCH_RUN       fire a saved template;
  *   DRAIN_REGION     drain every IDLE worker in (app, region) (cost saving);
  *   PROVISION_REGION spin workers up to the configured cap.

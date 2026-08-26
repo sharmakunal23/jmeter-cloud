@@ -5,17 +5,13 @@ info:
   version: 0.1.0
   summary: HTTP gateway abstracting blob storage (test plans, data files, JTL results).
   description: |
-    Owns persistence of every artifact the orchestrator fleet exchanges:
-    test plans (`.jmx`), data-files zips (`.zip`), and post-run JTL
-    uploads. The service abstracts over the storage backend — locally
-    it's a host-mounted directory; in cloud it's S3.
+    Persists every artifact the orchestrator fleet exchanges: test plans
+    (`.jmx`), data-files zips (`.zip`) and post-run JTL uploads.
 
-    Two backends share this contract — selection is purely
-    deployment-time config (`DOCUMENT_SERVICE_BACKEND=local|s3`):
-    `LocalFsBlobStore` (default) bind-mounts a host directory;
-    `S3BlobStore` (`-Pcloud` Maven profile) targets any S3-compatible
-    service (AWS S3, LocalStack, MinIO, R2). Same REST surface; tags +
-    listings round-trip identically across both.
+    `DOCUMENT_SERVICE_BACKEND=local|s3` selects the backend at deploy time.
+    `LocalFsBlobStore` (default) bind-mounts a host directory; `S3BlobStore`
+    (`-Pcloud` build) targets any S3-compatible service. Both expose this
+    identical surface, and tags and listings round-trip the same on each.
   contact:
     name: Performance Engineering
   license:
@@ -46,21 +42,20 @@ paths:
       tags: [blob]
       summary: Upload a blob
       description: |
-        Streams the request body into the configured backend, computing
-        sha256 and size on the fly via `DigestInputStream` (no in-memory
-        buffering — safe for 1-GB data zips). Returns a server-issued
-        ULID `blobId` plus computed `sizeBytes` and `sha256`.
+        Streams the **raw request body** into the backend, computing sha256 and
+        size in flight, and returns a server-issued ULID `blobId`. This is not a
+        multipart endpoint — a `multipart/form-data` upload (curl `-F`) stores
+        0 bytes.
 
-        **Uploader-supplied tagging.** Four optional headers:
-          * `X-Name` — human-readable label (the UI dropdown shows this).
-          * `X-Description` — free-form description.
-          * `X-Type` — one of `testPlan`, `dataFiles`, `result`, `other`.
-          * `X-Application` — application tag (Step 28). Trimmed; max 64
-            chars; empty header treated as null. Gates the launcher's
-            downstream test-plan / data-files pickers and feeds the
-            `GET /api/v1/applications` rollup.
-        Stored alongside the bytes (filesystem sidecar / S3 user-metadata)
-        and round-tripped on `GET /blob/{id}/metadata`.
+        The four optional tag headers are stored beside the bytes (filesystem
+        sidecar or S3 user-metadata) and round-trip on
+        `GET /blob/{blobId}/metadata`. `X-Application` is trimmed and capped at
+        64 chars; it gates the launcher's downstream pickers and feeds the
+        `GET /api/v1/applications` rollup.
+
+        A body tagged `X-Type: dataFiles` must begin with the ZIP magic
+        (`PK\x03\x04`) or it is rejected `400 INVALID_ARCHIVE` — otherwise a
+        bad archive surfaces much later, as a run-launch failure.
       parameters:
         - { name: X-Name,        in: header, required: false, schema: { type: string } }
         - { name: X-Description, in: header, required: false, schema: { type: string } }
@@ -91,10 +86,9 @@ paths:
       tags: [blob]
       summary: List stored blobs
       description: |
-        Returns a paginated list of blob metadata, filtered by `type`
-        and / or `application` when provided. Filters AND together.
-        Newest-first. Used by the `/runs/new` launcher's test-plan /
-        data-files dropdowns and by the `/blobs` library page.
+        Paginated blob metadata, newest first, matching every filter supplied
+        (`type` and `application` AND together). Backs the launcher's test-plan
+        and data-files dropdowns and the Documents library page.
       parameters:
         - name: type
           in: query
@@ -104,9 +98,8 @@ paths:
           in: query
           required: false
           description: |
-            Filter to a single application's blobs. Empty string
-            (`?application=`) selects only blobs that have no
-            application tag (legacy uploads).
+            Filter to one application's blobs. An **empty string**
+            (`?application=`) selects only blobs with no application tag.
           schema: { type: string, maxLength: 64 }
         - { name: offset, in: query, required: false, schema: { type: integer, default: 0,  minimum: 0 } }
         - { name: limit,  in: query, required: false, schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
@@ -122,11 +115,9 @@ paths:
       tags: [blob]
       summary: Distinct application tags + blob counts
       description: |
-        Step 28 discovery endpoint. Returns one row per distinct
-        `application` tag across all stored blobs. Untagged blobs
-        appear under a row with `application = null`. Sorted by
-        `blobCount` DESC then by name. Polled by the launcher's
-        Application picker so newly-tagged apps surface without a
+        One row per distinct `application` tag, ordered by `blobCount` then
+        name, with untagged blobs under `application = null`. The launcher's
+        Application picker polls this so newly tagged apps appear without a
         manual refresh.
       responses:
         "200":
@@ -144,29 +135,21 @@ paths:
       tags: [blob]
       summary: Stream a blob's bytes
       description: |
-        Returns the raw bytes with the original `Content-Type` round-tripped
-        from upload. The `X-blobId` and `X-sha256` response headers expose
-        identity + integrity for client-side verification.
+        Streams the raw bytes with the upload's `Content-Type` round-tripped,
+        plus `X-blobId` and `X-sha256` for client-side integrity checks.
 
-        When `?download=true` is set, the response carries
-        `Content-Disposition: attachment; filename="<inferred>"` so the
-        browser saves the bytes under a meaningful filename instead of
-        the bare ULID. The filename is built from the upload's `X-Name`
-        plus a type-conventional extension (`.jmx` for `testPlan`,
-        `.zip` for `dataFiles`, `.jtl.gz` for `result`, `.bin` for
-        `other`/unset); if `X-Name` already carries a `.` it is used as-is.
-        Without the flag the response stays inline so curl scripts and
-        the local-orchestrator's blob fetch are unaffected.
+        `?download=true` adds `Content-Disposition: attachment`, naming the file
+        from `X-Name` plus an extension implied by `X-Type` (`.jmx`, `.zip`,
+        `.jtl.gz`, else `.bin`); a name that already has an extension is used
+        as-is. The default stays inline, which curl scripts and the
+        local-orchestrator's blob fetch depend on.
       parameters:
         - name: download
           in: query
           required: false
           schema: { type: boolean, default: false }
           description: |
-            When `true`, the response sets
-            `Content-Disposition: attachment; filename="<name.ext>"` so the
-            browser saves the file under a meaningful name. Default `false`
-            keeps the inline behavior expected by curl + the orchestrator.
+            Attach rather than inline, naming the file from `X-Name` + `X-Type`.
       responses:
         "200":
           description: Blob bytes.
@@ -195,9 +178,10 @@ paths:
       tags: [blob]
       summary: Delete a blob (idempotent)
       description: |
-        Local-FS delete is hard. Cloud delete is soft — S3 versioning
-        leaves a delete marker for the operator to recover from.
-        Idempotent: deleting an unknown blobId still returns 204.
+        Removes the bytes and metadata, returning 204 whether or not the blob
+        existed. On the local backend this is unrecoverable; on S3 it is
+        recoverable only if the bucket has versioning enabled, which this
+        service does not configure.
       responses:
         "204":
           description: Deleted (or already gone).
@@ -212,20 +196,16 @@ paths:
       - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
     get:
       tags: [blob]
-      summary: Download all of a run's saved results as one zip (Save Results)
+      summary: Download a run's saved results as one zip
       description: |
-        Save Results — streams a single `application/zip` containing every
-        worker's result for the run, one entry per worker. Result blobs are
-        those uploaded with `X-Type=result` and a name shaped
-        `results-{runId}-{workerId}.jtl.gz`; this endpoint matches them by the
-        `results-{runId}-` name prefix (a runId is a hyphen-free ULID, so the
-        prefix is unambiguous) and zips them on the fly — no temp file, no
-        full-archive buffering.
+        Streams one `application/zip` holding every worker's result for the run,
+        one entry per worker, built on the fly with no temp file or full-archive
+        buffering.
 
-        Lives under `/api/v1/blob/...` so the UI's nginx proxy routes it
-        straight to document-service (the rest of `/api/v1` proxies to the
-        global-orchestrator). The run-detail page links to it as
-        "Download results" once a `saveResults` run is terminal.
+        Matching is by the `results-{runId}-` name prefix over blobs uploaded
+        with `X-Type=result`, which is unambiguous only because a runId is a
+        hyphen-free ULID. The route sits under `/api/v1/blob/` so the UI's nginx
+        proxy sends it here rather than to the global-orchestrator.
       responses:
         "200":
           description: Zip of the run's per-worker results (one `.jtl.gz` entry per worker).
@@ -288,17 +268,6 @@ paths:
           content:
             application/json:
               schema: { type: object, additionalProperties: true }
-
-  /actuator/prometheus:
-    get:
-      tags: [platform]
-      summary: Prometheus exposition (text format)
-      responses:
-        "200":
-          description: Prometheus metrics.
-          content:
-            text/plain; version=0.0.4:
-              schema: { type: string }
 
 components:
 

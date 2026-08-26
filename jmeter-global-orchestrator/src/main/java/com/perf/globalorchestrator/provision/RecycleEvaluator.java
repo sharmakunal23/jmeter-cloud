@@ -3,6 +3,8 @@ package com.perf.globalorchestrator.provision;
 import com.perf.globalorchestrator.domain.Application;
 import com.perf.globalorchestrator.domain.Pod;
 import com.perf.globalorchestrator.domain.RecyclePolicy;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.time.Clock;
@@ -10,7 +12,7 @@ import java.time.Duration;
 import java.time.Instant;
 
 /**
- * WORKER-HYGIENE Phase D — pure decision logic. Given a pod, its bound
+ * Pure decision logic. Given a pod, its bound
  * application, the current image digest, and "now", returns the first
  * {@link RecycleReason} that fires (NONE if none).
  *
@@ -27,22 +29,35 @@ import java.time.Instant;
 @Component
 public class RecycleEvaluator {
 
+    /** Default IMAGE_MISMATCH grace window — see {@link #withinImageMismatchGrace}. */
+    static final long DEFAULT_IMAGE_MISMATCH_MIN_AGE_MS = 600_000L;
+
     private final Clock clock;
+    private final Duration imageMismatchMinAge;
 
     /**
      * Production constructor — uses the system UTC clock. The test seam below
      * lets a unit test inject a {@link Clock#fixed} for deterministic MAX_AGE
      * comparisons. A Spring {@code @Bean Clock} would be cleaner, but adding
      * one to this module risks colliding with one a future caller wires; the
-     * default-arg constructor keeps the choice local.
+     * config-arg constructor keeps the choice local.
      */
-    public RecycleEvaluator() {
-        this(Clock.systemUTC());
+    @Autowired
+    public RecycleEvaluator(
+            @Value("${globalOrchestrator.pod.imageMismatchMinAgeMs:600000}")
+            long imageMismatchMinAgeMs) {
+        this(Clock.systemUTC(), imageMismatchMinAgeMs);
     }
 
     /** Test seam. */
     public RecycleEvaluator(Clock clock) {
+        this(clock, DEFAULT_IMAGE_MISMATCH_MIN_AGE_MS);
+    }
+
+    /** Test seam with an explicit grace window. */
+    public RecycleEvaluator(Clock clock, long imageMismatchMinAgeMs) {
         this.clock = clock;
+        this.imageMismatchMinAge = Duration.ofMillis(imageMismatchMinAgeMs);
     }
 
     public RecycleReason decide(Pod pod, Application application, String currentImageDigest) {
@@ -56,7 +71,8 @@ public class RecycleEvaluator {
         // pod.imageDigest eventually).
         if (currentImageDigest != null
                 && pod.imageDigest() != null
-                && !currentImageDigest.equals(pod.imageDigest())) {
+                && !currentImageDigest.equals(pod.imageDigest())
+                && !withinImageMismatchGrace(pod)) {
             return RecycleReason.IMAGE_MISMATCH;
         }
 
@@ -74,6 +90,23 @@ public class RecycleEvaluator {
                 yield RecycleReason.NONE;
             }
         };
+    }
+
+    /**
+     * IMAGE_MISMATCH grace window. During a
+     * rolling update two orchestrator replicas briefly run different images,
+     * and each would see the other's freshly-spun replacement pods as
+     * mismatched — draining them in a ping-pong loop until the old replica
+     * dies. A pod provisioned inside the grace window is left alone this
+     * tick; a genuine image change still recycles on the first sweep after
+     * the window (default 10 min ≫ a normal rollout). Null
+     * {@code provisionedAt} (an adopted row before the reconciler back-fill)
+     * keeps the pre-grace behavior — recycle allowed.
+     */
+    private boolean withinImageMismatchGrace(Pod pod) {
+        return pod.provisionedAt() != null
+                && Duration.between(pod.provisionedAt(), clock.instant())
+                        .compareTo(imageMismatchMinAge) < 0;
     }
 
     private boolean tripsMaxRuns(Pod pod, Application app) {

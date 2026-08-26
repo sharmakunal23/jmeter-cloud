@@ -1,7 +1,7 @@
 package com.perf.globalorchestrator.domain;
 
 /**
- * AUDIT-TRAIL — who performed a state-changing action, and how the server
+ * Who performed a state-changing action, and how the server
  * learned their identity. Built from the {@code X-Actor} request header today
  * (self-attested, unauthenticated); when the cloud auth filter lands it will
  * construct verified actors tagged {@link #SOURCE_OIDC_SUBJECT} /
@@ -51,7 +51,7 @@ public record Actor(String name, String source) {
      * Classify an incoming {@code X-Actor} header value. Null / blank /
      * whitespace-only → {@link #ANONYMOUS_ACTOR}; otherwise the trimmed value
      * tagged {@link #SOURCE_HEADER}. Mirrors the trim semantics of
-     * {@code TracingFilter.resolveActor} so the audit actor and the MDC actor
+     * {@code MdcEnrichmentFilter.resolveActor} so the audit actor and the MDC actor
      * always agree for a given request.
      */
     public static Actor fromHeader(String headerValue) {

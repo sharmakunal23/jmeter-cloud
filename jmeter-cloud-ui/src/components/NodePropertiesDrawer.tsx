@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 /**
- * Track G (Step 31) — per-node JMeter properties editor. Triggered
+ * Per-node JMeter properties editor. Triggered
  * from {@code <NodeVisualizationPanel>} when the operator clicks a
  * node icon. Edits a single pod's property map; "Apply to all in
  * region" promotes the current rows to every pod within the region

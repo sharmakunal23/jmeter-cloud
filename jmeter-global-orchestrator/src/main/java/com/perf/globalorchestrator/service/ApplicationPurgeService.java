@@ -5,14 +5,11 @@ import com.perf.globalorchestrator.domain.Actor;
 import com.perf.globalorchestrator.domain.Application;
 import com.perf.globalorchestrator.domain.Run;
 import com.perf.globalorchestrator.domain.Ulid;
-import com.perf.globalorchestrator.observability.SpanAttributes;
 import com.perf.globalorchestrator.repo.ApplicationHealthHistoryRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.PodRepository;
 import com.perf.globalorchestrator.repo.PurgeAuditRepository;
 import com.perf.globalorchestrator.repo.RunRepository;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -27,8 +24,8 @@ import java.util.Map;
 /**
  * HARD-DELETE / purge Phase 2 — the irreversible
  * second tier for applications. {@code DELETE /applications/{id}} "hides" an app
- * (renames it to an archived name, frees the original name, deletes its Kafka
- * topics, re-tags its runs to the archived name — see {@code ApplicationController});
+ * (renames it to an archived name, frees the original name, re-tags its
+ * runs to the archived name — see {@code ApplicationController});
  * this PHYSICALLY removes a hidden app and everything still bound to it:
  *
  * <ol>
@@ -44,8 +41,7 @@ import java.util.Map;
  * <p>Precondition: the app must already be HIDDEN ({@code 409 APPLICATION_NOT_PURGEABLE}
  * otherwise; {@code 404} when unknown). A hidden app has no active runs (the hide
  * guard enforces it), so its runs are all terminal and its pods are idle registry
- * rows. The Kafka topics were already deleted at hide time, so the purge doesn't
- * touch them (the archived name no longer maps to the original topic).
+ * rows.
  *
  * <p>Retry-safe: every step is idempotent. Each run purge is independently
  * committed, so a failure partway leaves the app hidden with fewer runs; a retry
@@ -68,16 +64,13 @@ public class ApplicationPurgeService {
     @Lazy
     private ApplicationPurgeService self;
 
-    private final Counter applicationsPurged;
-
     public ApplicationPurgeService(ApplicationRepository applications,
                                    RunRepository runs,
                                    RunPurgeService runPurge,
                                    PodRepository pods,
                                    ApplicationHealthHistoryRepository healthHistory,
                                    PurgeAuditRepository purgeAudit,
-                                   ObjectMapper json,
-                                   MeterRegistry meterRegistry) {
+                                   ObjectMapper json) {
         this.applications = applications;
         this.runs = runs;
         this.runPurge = runPurge;
@@ -85,9 +78,6 @@ public class ApplicationPurgeService {
         this.healthHistory = healthHistory;
         this.purgeAudit = purgeAudit;
         this.json = json;
-        this.applicationsPurged = Counter.builder("globalOrchestrator.applications.purged")
-                .description("Applications permanently deleted (hard delete / purge).")
-                .register(meterRegistry);
     }
 
     /**
@@ -98,9 +88,6 @@ public class ApplicationPurgeService {
      *                                            been hidden first (409).
      */
     public AppPurgeResult purgeApplication(String applicationId, Actor actor, String reason) {
-        SpanAttributes.tag("applicationId", applicationId);
-        SpanAttributes.tag("actor", actor.name());
-
         Application app = applications.findHiddenById(applicationId).orElseGet(() -> {
             // Not hidden — distinguish "exists but visible" (must hide first, 409)
             // from "unknown" (404).
@@ -134,7 +121,6 @@ public class ApplicationPurgeService {
         self.commitApplicationPurge(applicationId, archivedName, actor, reason,
                 totalMetricRows, totalBlobs, childRunsPurged, detailsJson);
 
-        applicationsPurged.increment();
         LOG.info("Application {} (archived '{}') purged by {}: {} runs, {} metric rows, {} blobs "
                 + "(blobStepComplete={})",
                 applicationId, archivedName, actor.name(), childRunsPurged, totalMetricRows,

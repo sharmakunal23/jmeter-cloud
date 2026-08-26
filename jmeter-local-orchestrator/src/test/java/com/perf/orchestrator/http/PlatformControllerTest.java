@@ -164,10 +164,10 @@ class PlatformControllerTest {
                     "DOCUMENT_SERVICE_URL", "DOCUMENT_SERVICE_AUTH_HEADER",
                     "DOCUMENT_SERVICE_TIMEOUT_S", "DOCUMENT_SERVICE_RETRY_COUNT",
                     "S3_REGION",
-                    "LOG_BUFFER_LINES", "KAFKA_HEALTH_CHECK_INTERVAL_MS",
-                    "KAFKA_HEALTH_CHECK_TIMEOUT_MS", "MIN_FREE_DISK_MB",
+                    "LOG_BUFFER_LINES", "INGEST_HEALTH_CHECK_INTERVAL_MS",
+                    "INGEST_HEALTH_CHECK_TIMEOUT_MS", "MIN_FREE_DISK_MB",
                     "ORCHESTRATOR_SHUTDOWN_GRACE_S",
-                    "KAFKA_BROKERS", "SCHEMA_REGISTRY_URL", "KAFKA_TOPIC",
+                    "METRICS_INGEST_URL",
                     "TEST_REGION", "POD_NAME", "WORKER_ID_SOURCE");
         }
 
@@ -214,36 +214,36 @@ class PlatformControllerTest {
             mvc.perform(get("/api/v1/ready"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.status").value("UP"))
-                    .andExpect(jsonPath("$.kafkaReachable").value(true))
+                    .andExpect(jsonPath("$.ingestReachable").value(true))
                     .andExpect(jsonPath("$.diskFreeBytes").value(5L * 1024 * 1024 * 1024))
                     .andExpect(jsonPath("$.testState").value("IDLE"))
                     .andExpect(jsonPath("$.reason").doesNotExist());
         }
 
         @Test
-        @DisplayName("returns 503 with reason and kafkaReachable=false when Kafka is unreachable")
-        void kafka_down_returns_503() throws Exception {
+        @DisplayName("returns 503 with reason and ingestReachable=false when the consumer is unreachable")
+        void ingest_down_returns_503() throws Exception {
             when(readinessProbe.snapshot()).thenReturn(
-                    ReadinessProbe.Snapshot.down("kafka_unreachable", 1024L, "RUNNING"));
+                    ReadinessProbe.Snapshot.down("ingest_unreachable", 1024L, "RUNNING"));
 
             mvc.perform(get("/api/v1/ready"))
                     .andExpect(status().isServiceUnavailable())
                     .andExpect(jsonPath("$.status").value("DOWN"))
-                    .andExpect(jsonPath("$.kafkaReachable").value(false))
-                    .andExpect(jsonPath("$.reason").value("kafka_unreachable"));
+                    .andExpect(jsonPath("$.ingestReachable").value(false))
+                    .andExpect(jsonPath("$.reason").value("ingest_unreachable"));
         }
 
         @Test
-        @DisplayName("returns 503 with reason=disk_pressure but kafkaReachable=true — disk failure does not contradict the live Kafka signal")
-        void disk_pressure_returns_503_with_kafka_up() throws Exception {
+        @DisplayName("returns 503 with reason=disk_pressure but ingestReachable=true — disk failure does not contradict the live ingest signal")
+        void disk_pressure_returns_503_with_ingest_up() throws Exception {
             when(readinessProbe.snapshot()).thenReturn(
-                    ReadinessProbe.Snapshot.downKafkaUp("disk_pressure", 100L, "IDLE"));
+                    ReadinessProbe.Snapshot.downIngestUp("disk_pressure", 100L, "IDLE"));
 
             mvc.perform(get("/api/v1/ready"))
                     .andExpect(status().isServiceUnavailable())
                     .andExpect(jsonPath("$.status").value("DOWN"))
-                    .andExpect(jsonPath("$.kafkaReachable")
-                            .value(true)) // sibling failure mode does not flip the Kafka flag
+                    .andExpect(jsonPath("$.ingestReachable")
+                            .value(true)) // sibling failure mode does not flip the ingest flag
                     .andExpect(jsonPath("$.reason").value("disk_pressure"));
         }
 
@@ -279,7 +279,7 @@ class PlatformControllerTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.AUTH_TOKEN").value("***"))
                     .andExpect(jsonPath("$.HTTP_PORT").value(8080))
-                    .andExpect(jsonPath("$.KAFKA_BROKERS").value("kafka:9092"))
+                    .andExpect(jsonPath("$.METRICS_INGEST_URL").value("http://metrics-consumer:8083/api/v1/ingest"))
                     .andExpect(jsonPath("$.WORKER_ID_SOURCE").value("POD_NAME"));
         }
 
@@ -312,10 +312,7 @@ class PlatformControllerTest {
                 "TEST_REGION",         "us-east-1",
                 "RUN_ID",              "test-run",
                 "JTL_PATH",            "/results/results.jtl",
-                "SENTINEL_PATH",       "/results/.done",
-                "KAFKA_BROKERS",       "kafka:9092",
-                "SCHEMA_REGISTRY_URL", "http://schema-registry:8081",
-                "KAFKA_TOPIC",         "jmeter.metrics.perSecond"
+                "SENTINEL_PATH",       "/results/.done"
         ));
     }
 }

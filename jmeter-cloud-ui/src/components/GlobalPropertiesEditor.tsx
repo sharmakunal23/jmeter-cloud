@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 
 /**
- * UI-C2.b polish — fleet-wide JMeter property defaults.
+ * Fleet-wide JMeter property defaults.
  *
  * <p>Defaults snapshotted into every newly-added worker at click time.
  * Changing globals after a worker exists does NOT mutate that worker's

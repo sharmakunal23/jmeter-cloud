@@ -77,7 +77,7 @@ async function request<T>(
 ): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  // AUDIT-TRAIL — attribute state-changing calls (e.g. the purge tombstone).
+  // Attribute state-changing calls (e.g. the purge tombstone).
   if (method === "POST" || method === "PUT" || method === "DELETE") {
     const actor = getActor();
     if (actor) headers["X-Actor"] = actor;

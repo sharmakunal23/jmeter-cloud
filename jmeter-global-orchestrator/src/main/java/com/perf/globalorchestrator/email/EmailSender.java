@@ -3,16 +3,10 @@ package com.perf.globalorchestrator.email;
 import java.util.List;
 
 /**
- * AUTOMATION Phase E — send a (HTML) email. Two implementations select by the
- * {@code automation.email.backend} property, mirroring document-service's
- * local-FS-vs-S3 blob-store split:
- *
- * <ul>
- *   <li>{@link SmtpEmailSender} (default, {@code local}) — JavaMailSender → a
- *       MailHog container in dev compose; the full path is testable locally.</li>
- *   <li>{@code SesEmailSender} ({@code ses}, only on the {@code -Pcloud} build,
- *       in {@code src/main/java-cloud}) — AWS SES.</li>
- * </ul>
+ * Send a (HTML) email. {@link SmtpEmailSender} is the
+ * single implementation (K8S-SLIMDOWN C-A removed the {@code -Pcloud} SES
+ * backend): JavaMailSender over SMTP — a MailHog container in dev compose,
+ * the deploy environment's relay in production (spring.mail env vars).
  *
  * <p>Used by the daily-report cron kinds (INFRA_READINESS now; DAILY_REPORT in
  * Phase D). Failures raise {@link EmailException} so the fire records FAILED.

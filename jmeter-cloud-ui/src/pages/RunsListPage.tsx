@@ -27,7 +27,7 @@ type ListState =
 const POLL_INTERVAL_MS = 5_000;
 
 /**
- * HM-7 — comparison view is strictly two runs. Selecting a third in
+ * Comparison view is strictly two runs. Selecting a third in
  * the table replaces the oldest pick rather than blocking the click.
  */
 const MAX_COMPARE_SELECTION = 2;
@@ -106,7 +106,7 @@ function RunsTable({ searchParams, setSearchParams }: RunsTableProps) {
     setSearchParams(next);
   };
 
-  // Unlimited multi-select — bulk delete (UI-RUNDELETE) needs to act on any
+  // Unlimited multi-select — bulk delete needs to act on any
   // number of runs. Compare is a separate gate that lights up only at exactly
   // MAX_COMPARE_SELECTION; selecting a third no longer auto-evicts the oldest
   // (that only made sense when 2 was the hard cap).

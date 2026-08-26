@@ -1,0 +1,106 @@
+# KUBE-2 — metrics-consumer: the JSON ingest edge (POST /api/v1/ingest →
+# idempotent multi-row INSERT into metrics."workerMetric"). K8s
+# equivalent of the compose `metrics-consumer` service — same env, same
+# JVM (image ENTRYPOINT: -Xmx1g, ExitOnOutOfMemoryError, heap dumps to
+# /app/heapdumps).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics-consumer
+  labels:
+    app: metrics-consumer
+spec:
+  # Single replica matches compose. Scaling out is safe by design
+  # (stateless; ingest idempotency via ON CONFLICT DO NOTHING) — bump
+  # replicas + let the Service load-balance if one pod's ingest rate is
+  # ever the bottleneck.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: metrics-consumer
+  template:
+    metadata:
+      labels:
+        app: metrics-consumer
+    spec:
+      # Convention 5 (infra/deploy/k8s/README.md).
+      enableServiceLinks: false
+      containers:
+        - name: metrics-consumer
+          image: jmeter-metrics-consumer:dev
+          ports:
+            - name: http
+              containerPort: 8083
+          env:
+            - name: HTTP_PORT
+              value: "8083"
+            - name: HTTP_BIND_ADDRESS
+              value: 0.0.0.0
+            # Same JDBC options as compose (reWriteBatchedInserts is free
+            # defense-in-depth; assumeMinServerVersion skips a
+            # version-detection round-trip). `postgres` resolves by
+            # Service-name parity (KUBE-1).
+            - name: POSTGRES_METRICS_URL
+              value: jdbc:postgresql://postgres:5432/jmetercloud_metrics?reWriteBatchedInserts=true&assumeMinServerVersion=16
+            # Per-app least-privilege role (INSERT-only on metrics.*),
+            # created by initdb; grants confered by the Flyway migrations.
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: metrics-consumer-credentials
+                  key: postgresUser
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: metrics-consumer-credentials
+                  key: postgresPassword
+          volumeMounts:
+            # Heap-dump destination (-XX:+HeapDumpOnOutOfMemoryError).
+            # emptyDir survives the in-place container restart an
+            # ExitOnOutOfMemoryError triggers (same pod), which is the
+            # case that matters — grab the .hprof with `kubectl cp`
+            # before deleting the pod. A PVC overlay is deliberate
+            # overkill for best-effort diagnostics.
+            - name: heapdumps
+              mountPath: /app/heapdumps
+          # Probe wiring is THE load-bearing detail of this service
+          # (application.yml rationale): liveness must NEVER see the
+          # aggregate health — the idle-staleness indicator
+          # (ingestProgress) flips the aggregate DOWN 5 min after the
+          # last envelope (e.g. right after a long test ends) and a
+          # liveness probe on it would kill the consumer during every
+          # idle gap, re-creating "metrics died after the test".
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 24   # up to 120 s for a cold JVM start
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            # Compose G-fix-2 measured the ceiling at 1200 MiB (1 GiB
+            # heap + metaspace + native). Memory request = limit
+            # (convention 7: Guaranteed-QoS memory so the node's OOM
+            # killer never picks this pod first — the compose 768 MiB
+            # `mem_reservation` was only a soft scheduler hint). CPU has
+            # a request but no limit: cfs throttling on a JVM buys
+            # latency spikes, not safety.
+            requests:
+              memory: 1200Mi
+              cpu: 250m
+            limits:
+              memory: 1200Mi
+      volumes:
+        - name: heapdumps
+          emptyDir: {}

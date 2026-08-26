@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * AUTOMATION — server-side mirror of the UI's launcher-form snapshot
+ * Server-side mirror of the UI's launcher-form snapshot
  * ({@code jmeter-cloud-ui/src/api/templates.ts#TemplateBody}), fetched from
  * document-service at fire time by {@link DocumentServiceClient}.
  *

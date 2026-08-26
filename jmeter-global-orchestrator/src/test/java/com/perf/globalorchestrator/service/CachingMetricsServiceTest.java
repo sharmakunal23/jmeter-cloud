@@ -27,7 +27,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * CACHE C-1 — pins the terminal-only caching contract of
+ * Pins the terminal-only caching contract of
  * {@link CachingMetricsService} through the real Spring cache proxy (so the
  * {@code @Cacheable(condition=…)} SpEL is actually exercised), against an
  * in-memory {@link ConcurrentMapCacheManager}. No Redis, no DB — the gating is

@@ -28,8 +28,7 @@ import java.util.Map;
  * {@code GET /api/v1/results/file?format=raw|zip} (stream),
  * {@code DELETE /api/v1/results}.
  *
- * <p><b>Migrated to Spring MVC in Step 4.4f.</b> Reads from
- * {@code ${RESULTS_DIR}}. Returns 404 when no JTL exists; the DELETE
+ * <p>Reads from {@code ${RESULTS_DIR}}. Returns 404 when no JTL exists; the DELETE
  * endpoint short-circuits with 409 while a test is RUNNING (the JTL is
  * being written to and removing it would lose live data).
  *
@@ -126,7 +125,7 @@ public final class ResultsController {
 
     /**
      * Resolves the JTL path for the run that produced the artifact.
-     * WORKER-HYGIENE Phase A — results live at
+     * Results live at
      * {@code results/{runId}/results.jtl}. Returns the path under the
      * current run's id (the last run the orchestrator handled, even if
      * terminal). If no run has executed yet, returns the legacy flat

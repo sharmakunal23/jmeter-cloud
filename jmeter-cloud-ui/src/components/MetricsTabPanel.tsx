@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import type { MetricsTimeseries, MetricsTimeseriesSeries, MetricsWindow, RunState, TimeseriesPoint } from "../api/runs";
-import { useMetricsTimeseries } from "../hooks/useMetricsTimeseries";
+import { isTerminalRunState, useMetricsTimeseries } from "../hooks/useMetricsTimeseries";
 import { useAiStatus } from "../hooks/useAiStatus";
 import { useRunInsights } from "../hooks/useRunInsights";
 import { RunInsightsPanel } from "./RunInsightsPanel";
@@ -15,27 +15,19 @@ import {
 } from "./charts/TimeseriesChart";
 
 /**
- * HM-3 — historical metrics view for the run-detail Metrics tab.
- * Replaces the previous Grafana iframe with four native uPlot charts
- * driven by {@code GET /api/v1/runs/{runId}/timeseries}. Why native:
+ * Historical metrics for the run-detail Metrics tab: four native uPlot charts
+ * driven by `GET /api/v1/runs/{runId}/timeseries`, in place of a Grafana
+ * iframe.
  *
- * <ul>
- *   <li><b>Historical correctness.</b> Grafana embeds default to
- *       {@code now-3h}; finished runs from yesterday show nothing.
- *       The native query is keyed by runId, so any run renders.</li>
- *   <li><b>AI-readiness (Phase 3).</b> The chart data lives in this
- *       app's memory as plain JS arrays — a future
- *       {@code metricsExport(runId)} accessor can pass them straight
- *       to Claude for analysis. Cross-origin iframes are opaque.</li>
- *   <li><b>Comparison-ready (Phase 2).</b> The same
- *       {@code <TimeseriesChart>} primitive will overlay multiple
- *       runs in {@code RunsComparePage} without any backend change.</li>
- * </ul>
+ * **The reason it is native is historical correctness.** Grafana embeds default
+ * to `now-3h`, so a run that finished yesterday renders empty; this query is
+ * keyed by runId and any run renders. Keeping the data in this app's memory as
+ * plain arrays is also what lets the compare page and the AI panels reuse it —
+ * a cross-origin iframe is opaque.
  *
- * <p>Operators who want full Grafana drill-down still get it via the
- * "↗ Open in Grafana" deep-link in the header, with EXPLICIT
- * {@code from} / {@code to} bounds derived from the run's window so
- * the dashboard renders correctly even for old runs.
+ * Full Grafana drill-down is still one click away via the header deep-link,
+ * which passes explicit `from` / `to` bounds derived from the run's own window
+ * so old runs render correctly there too.
  */
 export interface MetricsTabPanelProps {
   runId: string;
@@ -54,7 +46,12 @@ const REGION_STORAGE_KEY = "jmeterCloud.metricsSplitByRegion";
 const WINDOW_STORAGE_KEY = "jmeterCloud.metricsWindow";
 type Layout = "grid" | "stacked";
 
-/** Time-window options for the metrics charts. Whole test is the default. */
+/**
+ * Time-window options for the metrics charts. The default depends on the
+ * run's state — see {@link initialTimeWindow}: terminal runs open on
+ * "Whole test" (served from the orchestrator's Redis cache), live runs
+ * open on {@link LIVE_DEFAULT_WINDOW}.
+ */
 const WINDOW_OPTIONS: ReadonlyArray<{ value: MetricsWindow; label: string }> = [
   { value: "all", label: "Whole test" },
   { value: "5m",  label: "Last 5 min" },
@@ -65,11 +62,34 @@ const WINDOW_OPTIONS: ReadonlyArray<{ value: MetricsWindow; label: string }> = [
   { value: "4h",  label: "Last 4 hours" },
 ];
 
-function readStoredWindow(): MetricsWindow {
+/** Stored window preference, or null when nothing valid was ever picked. */
+function readStoredWindow(): MetricsWindow | null {
   try {
     const v = window.localStorage.getItem(WINDOW_STORAGE_KEY);
-    return WINDOW_OPTIONS.some((o) => o.value === v) ? (v as MetricsWindow) : "all";
-  } catch { return "all"; }
+    return WINDOW_OPTIONS.some((o) => o.value === v) ? (v as MetricsWindow) : null;
+  } catch { return null; }
+}
+
+/**
+ * Default window for a run that is still producing data. "Whole test" on a
+ * long LIVE run re-aggregates every raw row of the run on each 5 s poll —
+ * measured (2026-07-24, 34M-row bench): that shape can't keep up with ~10
+ * concurrent watchers, while bounded windows have >10× headroom. Terminal
+ * runs are exempt: their whole-test snapshot is computed once and served
+ * from the Redis cache.
+ */
+const LIVE_DEFAULT_WINDOW: MetricsWindow = "30m";
+
+/**
+ * Initial window for the picker: the operator's stored preference, else
+ * "Whole test" — except that a LIVE run never *starts* on "Whole test"
+ * (bounded to {@link LIVE_DEFAULT_WINDOW}, see above). Explicitly picking
+ * "Whole test" mid-run still works and persists; only the initial state
+ * is bounded, so the expensive shape is a deliberate act, not a default.
+ */
+function initialTimeWindow(isTerminal: boolean): MetricsWindow {
+  const preferred = readStoredWindow() ?? "all";
+  return !isTerminal && preferred === "all" ? LIVE_DEFAULT_WINDOW : preferred;
 }
 
 function readStoredLayout(): Layout {
@@ -96,13 +116,18 @@ export function MetricsTabPanel({ runId, runState }: MetricsTabPanelProps) {
     catch { /* private mode */ }
   }, [splitByRegion]);
 
-  // Time window — "Whole test" by default. For a 10-hour run this lets the
-  // operator pull just the recent slice (faster query + finer resolution).
-  const [timeWindow, setTimeWindow] = useState<MetricsWindow>(readStoredWindow);
-  useEffect(() => {
-    try { window.localStorage.setItem(WINDOW_STORAGE_KEY, timeWindow); }
+  // Time window — stored preference, bounded to "Last 30 min" while the
+  // run is live (see initialTimeWindow). Persisted only on an explicit
+  // pick, so the live-run bound never overwrites the stored preference
+  // and terminal runs keep defaulting to "Whole test".
+  const [timeWindow, setTimeWindow] = useState<MetricsWindow>(
+    () => initialTimeWindow(isTerminalRunState(runState)),
+  );
+  const pickTimeWindow = (w: MetricsWindow) => {
+    setTimeWindow(w);
+    try { window.localStorage.setItem(WINDOW_STORAGE_KEY, w); }
     catch { /* private mode */ }
-  }, [timeWindow]);
+  };
 
   const { status, data, lastUpdated, isPaused, pauseReason } =
     useMetricsTimeseries(runId, runState, splitByRegion, timeWindow);
@@ -261,7 +286,7 @@ export function MetricsTabPanel({ runId, runState }: MetricsTabPanelProps) {
             <select
               className="formSelect"
               value={timeWindow}
-              onChange={(e) => setTimeWindow(e.target.value as MetricsWindow)}
+              onChange={(e) => pickTimeWindow(e.target.value as MetricsWindow)}
               title="Show only the most recent slice of the run — faster to pull on long (e.g. 10-hour) tests"
             >
               {WINDOW_OPTIONS.map((o) => (

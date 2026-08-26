@@ -1,0 +1,32 @@
+# KUBE-6 — sourced by the nginx image's docker-entrypoint.sh (as
+# /docker-entrypoint.d/05-resolverEnv.envsh, before the 20-envsubst
+# template step) to give nginx.conf's `resolver ${DNS_RESOLVER}` the
+# right DNS server for wherever the container is running:
+#   * docker/compose  → 127.0.0.11 (embedded DNS on user-defined networks)
+#   * Kubernetes      → the CoreDNS ClusterIP the kubelet wrote
+# Both come from the first `nameserver` line in /etc/resolv.conf, so no
+# per-environment config is needed; setting DNS_RESOLVER explicitly
+# still wins. The 127.0.0.11 fallback covers a resolv.conf with no
+# nameserver line (never expected — belt and braces).
+export DNS_RESOLVER="${DNS_RESOLVER:-$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf)}"
+export DNS_RESOLVER="${DNS_RESOLVER:-127.0.0.11}"
+
+# SVC_SUFFIX qualifies nginx.conf's upstream names. nginx's `resolver`
+# ignores resolv.conf search domains, so on Kubernetes a short name like
+# `global-orchestrator` is queried as an FQDN — CoreDNS forwards the
+# unknown zone upstream (NXDOMAIN → 502, or worse, a wrong-backend hit).
+# Docker's embedded DNS resolves short names natively, so there the
+# suffix must stay empty. Detect via KUBERNETES_SERVICE_HOST (kubelet
+# always injects it); in-cluster, take the first resolv.conf search
+# domain (→ ".jmeter-cloud.svc.cluster.local"). An explicit SVC_SUFFIX
+# env var — even an explicit empty one — always wins. Always exported,
+# else envsubst leaves the literal ${SVC_SUFFIX} in the rendered config
+# and nginx dies on an unknown variable.
+if [ -z "${SVC_SUFFIX+set}" ]; then
+  SVC_SUFFIX=""
+  if [ -n "${KUBERNETES_SERVICE_HOST:-}" ]; then
+    searchDomain="$(awk '/^search/ {print $2; exit}' /etc/resolv.conf)"
+    [ -n "$searchDomain" ] && SVC_SUFFIX=".$searchDomain"
+  fi
+fi
+export SVC_SUFFIX

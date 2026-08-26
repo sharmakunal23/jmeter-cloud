@@ -13,7 +13,7 @@ import { NotFoundPage } from "../pages/NotFoundPage";
 import { TemplatesListPage } from "../pages/TemplatesListPage";
 
 /**
- * UI-D1 — IA cutover. Asserts the new route table:
+ * IA cutover. Asserts the new route table:
  *   - new patterns resolve to their new pages
  *   - legacy patterns 404 (no silent redirect)
  *   - the 404 page surfaces a hint pointing at the new equivalent

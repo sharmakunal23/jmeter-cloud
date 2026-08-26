@@ -64,7 +64,7 @@ public class ApplicationHealthPoller {
     }
 
     /**
-     * AUTOMATION Phase E — record a health-transition row when an app's
+     * Record a health-transition row when an app's
      * aggregate status differs from the snapshot's previous status (including
      * the first observation, null → status). Transitions only — not every poll
      * — so the log stays compact for the daily readiness email's downtime

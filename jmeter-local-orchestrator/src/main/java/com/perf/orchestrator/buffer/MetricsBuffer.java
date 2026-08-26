@@ -1,6 +1,6 @@
 package com.perf.orchestrator.buffer;
 
-import com.perf.orchestrator.WorkerMetricBatch;
+import com.perf.orchestrator.model.WorkerMetricBatch;
 
 import java.io.Closeable;
 import java.util.Optional;
@@ -10,8 +10,8 @@ import java.util.Optional;
  *
  * <p>The producer's poll thread calls {@link #enqueue} (sub-millisecond);
  * a separate dispatch thread (see {@code MetricsDispatcher}) reads the
- * oldest persisted envelope via {@link #peekOldest}, publishes it to Kafka,
- * and removes it via {@link #delete} on success.
+ * oldest persisted envelope via {@link #peekOldest}, POSTs it to the
+ * metrics-consumer, and removes it via {@link #delete} on success.
  *
  * <p><b>Reliability contract:</b> once {@link #enqueue} returns a non-empty
  * {@link Optional}, the envelope survives a process crash. The disk-backed
@@ -40,28 +40,23 @@ import java.util.Optional;
 public interface MetricsBuffer extends Closeable {
 
     /**
-     * Persist {@code envelope} together with its destination {@code topic}. May
-     * internally TTL-sweep stale envelopes, evict the oldest, or refuse the new
-     * envelope outright (oversize / low free disk).
-     *
-     * <p>Topic is persisted alongside the envelope (sidecar metadata in the
-     * disk-backed impl) so cross-restart replay routes to the same per-app
-     * topic the envelope was originally bound for.
+     * Persist {@code envelope}. May internally TTL-sweep stale envelopes,
+     * evict the oldest, or refuse the new envelope outright (oversize / low
+     * free disk).
      *
      * @param envelope payload; must not be null
-     * @param topic    destination Kafka topic; must not be null/blank
      * @return a {@link BufferedEnvelope} handle the caller passes to
      *         {@link #delete} on successful publish; {@link Optional#empty()}
      *         if refused
      */
-    Optional<BufferedEnvelope> enqueue(WorkerMetricBatch envelope, String topic);
+    Optional<BufferedEnvelope> enqueue(WorkerMetricBatch envelope);
 
     /** Returns the oldest envelope currently in the buffer, or empty if none. */
     Optional<BufferedEnvelope> peekOldest();
 
     /**
      * Removes the envelope from the buffer. No-op if already deleted (idempotent
-     * — the dispatcher may signal delete twice on a Kafka retry race).
+     * — the dispatcher may signal delete twice on a retry race).
      */
     void delete(BufferedEnvelope envelope);
 

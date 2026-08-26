@@ -13,7 +13,6 @@ import com.perf.globalorchestrator.repo.RunRepository;
 import com.perf.globalorchestrator.repo.RunTrendRepository;
 import com.perf.globalorchestrator.service.RunPurgeService.PurgeResult;
 import com.perf.globalorchestrator.service.RunPurgeService.RunNotPurgeableException;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -62,7 +61,7 @@ class RunPurgeServiceTest {
         docClient = mock(DocumentServiceClient.class);
         purgeAudit = mock(PurgeAuditRepository.class);
         svc = new RunPurgeService(runs, runTrends, aiResponses, metricsPurge, docClient,
-                purgeAudit, new ObjectMapper(), new SimpleMeterRegistry());
+                purgeAudit, new ObjectMapper());
         // Wire the @Lazy self-proxy to this instance so the @Transactional tail
         // executes inline (no Spring context in a unit test).
         Field self = RunPurgeService.class.getDeclaredField("self");

@@ -1,8 +1,6 @@
 package com.perf.globalorchestrator.security;
 
 import com.perf.globalorchestrator.observability.CriticalPaths;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -23,6 +21,8 @@ import java.util.Collections;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * SECURITY S-1 — per-(client IP, endpoint-class) rate limit, the in-process
@@ -38,7 +38,7 @@ import java.util.Map;
  * {@code SECURITY_RATE_LIMIT_ENABLED=true} to exercise the rejection path.
  *
  * <h2>Filter ordering</h2>
- * {@code HIGHEST_PRECEDENCE + 30} — runs <em>after</em> {@code TracingFilter}
+ * {@code HIGHEST_PRECEDENCE + 30} — runs <em>after</em> {@code MdcEnrichmentFilter}
  * (+10, populates MDC) and {@code AccessLogFilter} (+20, wraps the chain), so a
  * rejected request still emits an access-log line at status 429 carrying the
  * operator's trace/run ids. Only the critical {@code /api/v1/**} surface is
@@ -81,16 +81,25 @@ public class RateLimitFilter extends OncePerRequestFilter {
         Category(double ratePerSec, long burst) { this.ratePerSec = ratePerSec; this.burst = burst; }
     }
 
+    /**
+     * SLIMDOWN SL-E (D-4): the `security.ratelimit.exceeded` counter was the
+     * sole signal of a rejection storm (the S-0 abuse signal), so it became a
+     * log line. Throttled to one WARN per category per interval with a
+     * suppressed count — an attack must not be able to flood the log through
+     * the very filter that exists to stop floods.
+     */
+    private static final long WARN_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(10);
+
     private final boolean enabled;
     private final boolean trustForwardedFor;
     private final Map<String, TokenBucket> buckets;
-    private final Map<Category, Counter> rejected = new EnumMap<>(Category.class);
+    private final Map<Category, AtomicLong> lastWarnNanos = new EnumMap<>(Category.class);
+    private final Map<Category, AtomicLong> pendingRejections = new EnumMap<>(Category.class);
 
     public RateLimitFilter(
             @Value("${security.rateLimit.enabled:false}") boolean enabled,
             @Value("${security.rateLimit.trustForwardedFor:false}") boolean trustForwardedFor,
-            @Value("${security.rateLimit.maxTrackedClients:100000}") int maxTrackedClients,
-            MeterRegistry meterRegistry) {
+            @Value("${security.rateLimit.maxTrackedClients:100000}") int maxTrackedClients) {
         this.enabled = enabled;
         this.trustForwardedFor = trustForwardedFor;
         // Access-ordered LRU: removeEldestEntry evicts the least-recently-seen
@@ -105,10 +114,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
                     }
                 });
         for (Category c : Category.values()) {
-            rejected.put(c, Counter.builder("security.ratelimit.exceeded")
-                    .description("Requests rejected by the per-(IP,endpoint) rate-limit filter (S-1).")
-                    .tag("endpoint", c.name())
-                    .register(meterRegistry));
+            lastWarnNanos.put(c, new AtomicLong(0L));
+            pendingRejections.put(c, new AtomicLong(0L));
         }
         if (enabled) {
             log.info("SECURITY S-1 rate limiting ENABLED (trustForwardedFor={}, maxTrackedClients={})",
@@ -143,13 +150,30 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
 
         long retryAfter = bucket.retryAfterSeconds(now);
-        rejected.get(category).increment();
+        logRejection(category, clientIp(request), now);
         response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
         response.setHeader(HttpHeaders.RETRY_AFTER, Long.toString(retryAfter));
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.getWriter().write(
                 "{\"code\":\"RATE_LIMITED\",\"message\":\"Too many requests; retry after "
                         + retryAfter + "s.\"}");
+    }
+
+    /**
+     * One WARN per category per {@link #WARN_INTERVAL_NANOS}, carrying how
+     * many rejections were folded into it. The CAS on lastWarnNanos elects a
+     * single warning thread; losers just leave their rejection in the pending
+     * count for the next winner to report.
+     */
+    private void logRejection(Category category, String clientIp, long now) {
+        long pending = pendingRejections.get(category).incrementAndGet();
+        AtomicLong last = lastWarnNanos.get(category);
+        long prev = last.get();
+        if (now - prev >= WARN_INTERVAL_NANOS && last.compareAndSet(prev, now)) {
+            pendingRejections.get(category).addAndGet(-pending);
+            log.warn("RATE_LIMITED: {} request(s) rejected on {} since last report (latest clientIp={})",
+                    pending, category, clientIp);
+        }
     }
 
     private static Category classify(HttpServletRequest request) {

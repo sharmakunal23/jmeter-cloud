@@ -3,8 +3,6 @@ package com.perf.globalorchestrator.client;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.perf.globalorchestrator.observability.ErrorContext;
-import com.perf.globalorchestrator.observability.SpanAttributes;
-import io.micrometer.observation.annotation.Observed;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -47,12 +45,7 @@ public class LocalOrchestratorClient {
         public boolean ok() { return statusCode >= 200 && statusCode < 300; }
     }
 
-    @Observed(name = "globalOrchestrator.localOrchestratorClient.startTest",
-              contextualName = "localOrchestrator.startTest",
-              lowCardinalityKeyValues = {"action", "startTest"})
     public StartTestResult startTest(String runId, String podBaseUrl, Map<String, Object> body) {
-        SpanAttributes.tag("runId", runId);
-        SpanAttributes.tag("podBaseUrl", podBaseUrl);
         URI target = URI.create(stripTrailingSlash(podBaseUrl) + "/api/v1/test");
         try {
             String payload = mapper.writeValueAsString(body);
@@ -74,19 +67,14 @@ public class LocalOrchestratorClient {
     }
 
     /**
-     * MID-TEST-SCALING Phase B — fires {@code POST /api/v1/test/drain} on
+     * Fires {@code POST /api/v1/test/drain} on
      * the pod's local-orchestrator. Empty body, returns 202 on accepted /
      * 404 NO_ACTIVE_RUN. The local-orch handles the drain asynchronously
      * (TCP shutdown port → SIGTERM fallback → JMeter exits → DRAINED);
      * this client does NOT wait for convergence — caller polls
      * {@link #getTestStatus} for the eventual terminal state.
      */
-    @Observed(name = "globalOrchestrator.localOrchestratorClient.drainTest",
-              contextualName = "localOrchestrator.drainTest",
-              lowCardinalityKeyValues = {"action", "drainTest"})
     public DrainTestResult drainTest(String runId, String podBaseUrl) {
-        SpanAttributes.tag("runId", runId);
-        SpanAttributes.tag("podBaseUrl", podBaseUrl);
         URI target = URI.create(stripTrailingSlash(podBaseUrl) + "/api/v1/test/drain");
         try {
             HttpRequest.Builder builder = HttpRequest.newBuilder()
@@ -120,12 +108,7 @@ public class LocalOrchestratorClient {
      * force-marks the run/member ABORTED regardless of this result; the RPC is
      * only a courtesy so a healthy worker stops its JMeter child promptly.
      */
-    @Observed(name = "globalOrchestrator.localOrchestratorClient.abortTest",
-              contextualName = "localOrchestrator.abortTest",
-              lowCardinalityKeyValues = {"action", "abortTest"})
     public AbortTestResult abortTest(String runId, String podBaseUrl) {
-        SpanAttributes.tag("runId", runId);
-        SpanAttributes.tag("podBaseUrl", podBaseUrl);
         URI target = URI.create(stripTrailingSlash(podBaseUrl) + "/api/v1/test/abort");
         try {
             HttpRequest.Builder builder = HttpRequest.newBuilder()
@@ -219,7 +202,7 @@ public class LocalOrchestratorClient {
     }
 
     /**
-     * WORKER-HYGIENE Phase E — readiness ping. Returns true when the
+     * Readiness ping. Returns true when the
      * pod's actuator health endpoint reports 2xx. Used after spinning
      * a fresh pod via {@link com.perf.globalorchestrator.provision.PodSpinService}
      * to wait until the container has bound 8080 before fanning out
@@ -246,8 +229,8 @@ public class LocalOrchestratorClient {
     }
 
     /**
-     * OBSERVABILITY Phase D — propagates the runId across the service
-     * boundary as the {@code X-Run-Id} header. Local-orch's TracingFilter
+     * Propagates the runId across the service
+     * boundary as the {@code X-Run-Id} header. Local-orch's MdcEnrichmentFilter
      * (Phase C) picks the value up into MDC so log lines on the receiving
      * side carry the runId automatically. No-op when {@code runId} is
      * null / blank — the fanout still works for paths that don't have a

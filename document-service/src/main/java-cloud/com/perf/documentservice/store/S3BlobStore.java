@@ -31,27 +31,17 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * S3-backed {@link BlobStore} for cloud deployments.
+ * S3-backed {@link BlobStore} for cloud deployments, using {@code blobId} (ULID)
+ * directly as the object key and SSE-S3 ({@code AES256}) at rest.
  *
- * <p>{@code blobId} (ULID) becomes the S3 object key directly — no
- * sharding needed because S3 partitions internally on key prefixes and
- * ULIDs are uniformly distributed in their suffix. The first 10 chars of
- * a ULID are time-derived (so a hot prefix during a burst is possible);
- * relying on the ULID's random suffix for entropy keeps S3's request-rate
- * scaling happy without us having to randomise the key ourselves.
+ * <p>{@link #put} stages the stream to a local temp file before
+ * {@code PutObject}, because S3 needs {@code Content-Length} up front while the
+ * {@link BlobStore} contract forbids buffering the body in memory. That also
+ * yields the exact size and sha256 for the user-metadata block, with heap use
+ * bounded to the 8-KiB transfer buffer.
  *
- * <p>Server-side encryption is SSE-S3 ({@code AES256}). Step 13 leaves
- * SSE-KMS-with-CMK as a Phase 2 hardening — toggle via the {@code sse}
- * config knob once a customer ask appears.
- *
- * <p>{@link #put} stages the input to a local temp file before calling
- * {@code PutObject}. S3 needs {@code Content-Length} up front, and the
- * {@link BlobStore} contract forbids buffering the whole stream in
- * memory (a 512-MB data zip would exhaust the heap). Disk-staging gives
- * us exact size + sha256 for the user-metadata block while keeping heap
- * usage bounded to the 8-KiB transfer buffer. Multi-part for blobs >
- * a few hundred MB is a future optimisation — single-part PutObject
- * supports up to 5 GB which covers every artifact this platform handles.
+ * <p>Single-part upload caps a blob at 5 GB, which covers every artifact this
+ * platform handles; multi-part is not implemented.
  */
 @Component
 @ConditionalOnProperty(name = "documentService.backend", havingValue = "s3")
@@ -63,11 +53,11 @@ public class S3BlobStore implements BlobStore {
     private static final String META_SHA256      = "sha256";
     /** S3 user-metadata key for the upload Instant (ISO-8601). */
     private static final String META_UPLOADED_AT = "uploadedat";
-    /** Step 18 — UI tagging fields. AWS folds keys to lowercase. */
+    /** UI tagging fields. AWS folds user-metadata keys to lowercase. */
     private static final String META_NAME        = "name";
     private static final String META_DESCRIPTION = "description";
     private static final String META_TYPE        = "type";
-    /** Step 28 — application tag (gates the launcher's downstream pickers). */
+    /** Application tag gating the launcher's downstream pickers. */
     private static final String META_APPLICATION = "application";
 
     private final S3Client s3;

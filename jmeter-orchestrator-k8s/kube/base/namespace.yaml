@@ -1,0 +1,12 @@
+# KUBE-8 — the k8s-orchestrator owns its OWN namespace, isolated from the
+# platform's `jmeter-cloud` namespace (infra/deploy/k8s/). This is what
+# lets both stacks coexist on one cluster: this track's `workers` headless
+# Service and its compose-bridge Services (postgres, redis,
+# metrics-consumer, document-service — pointing at COMPOSE containers)
+# keep their parity DNS names here without clobbering the umbrella's REAL
+# Services of the same names in `jmeter-cloud`. Resource names are
+# DNS-1123 (camelCase exemption).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jmeter-orchestrator-k8s

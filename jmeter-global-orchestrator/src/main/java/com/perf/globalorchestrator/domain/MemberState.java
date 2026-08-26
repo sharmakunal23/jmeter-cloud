@@ -28,7 +28,7 @@ public enum MemberState {
     }
 
     /**
-     * MID-TEST-SCALING Phase B — true for states that count toward the
+     * True for states that count toward the
      * per-(app, region) capacity gate (a draining worker still occupies
      * its pod) AND should NOT be re-claimed by another run. See
      * {@code PodRepository.claimIdleByRegionAndApp} active filter +

@@ -5,12 +5,12 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 
 /**
- * Whitelist of request-path prefixes that count as "critical" for the
- * observability stack. Metrics-consumer is primarily a Kafka consumer;
- * the only HTTP surface is {@code /api/v1/ingest} (a fallback replay
- * endpoint), so the critical list is a single prefix.
+ * Request-path prefixes that count as critical for logging: only these run
+ * {@link MdcEnrichmentFilter} and {@link AccessLogFilter}, keeping actuator and
+ * springdoc traffic out of the logs.
  *
- * <p>Non-critical paths (actuator, swagger, openapi spec) are skipped.
+ * <p>One prefix is enough here — {@code /api/v1/ingest} is this service's only
+ * business surface, and it is the platform's sole metrics path.
  */
 public final class CriticalPaths {
 

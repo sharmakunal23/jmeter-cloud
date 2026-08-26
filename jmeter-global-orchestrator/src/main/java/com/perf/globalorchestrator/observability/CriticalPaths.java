@@ -5,21 +5,13 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 
 /**
- * Whitelist of request-path prefixes that count as "critical" for the
- * observability stack — TracingFilter enriches MDC for them, and
- * ObservationConfig keeps tracing spans for them.
+ * Request-path prefixes that count as critical for logging: only these run
+ * {@link MdcEnrichmentFilter} and {@link AccessLogFilter}, so actuator,
+ * springdoc, the spec and static assets stay out of the log stream entirely.
  *
- * <p>The complementary blacklist (paths that are skipped) covers actuator,
- * springdoc, openapi spec, static assets. The design intent:
- * "I want observability only around critical endpoints, non-critical
- * endpoints like health checks can be ignored." Dropping non-critical
- * paths at the observation predicate level prevents low-value spans
- * (every 10-second healthcheck) from flooding Jaeger and lets the
- * operator-targeted 1% sampling rate budget go to the calls that matter.
- *
- * <p>This is a pure utility (no Spring dependency) so it can be unit-tested
- * in isolation and reused from the TracingFilter and the ObservationPredicate
- * without classpath surprises.
+ * <p>A pure utility with no Spring dependency, so both filters and the unit
+ * tests can use it without classpath surprises. Adding a controller under a new
+ * prefix means adding it here too, or its requests are logged by neither filter.
  */
 public final class CriticalPaths {
 

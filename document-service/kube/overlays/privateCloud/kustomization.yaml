@@ -1,0 +1,28 @@
+# KUBE-3 — privateCloud overlay.
+#
+# OBJECT-STORE ALTERNATIVE (v2 path): if the private cloud offers an
+# S3-compatible store, build with `-Pcloud` (S3BlobStore ships in the
+# jar) and set DOCUMENT_SERVICE_BACKEND=s3 + bucket/credential env — that
+# removes the PVC, the single-replica constraint, and the Recreate
+# strategy. Until then the PVC posture below applies.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+
+# Private-registry rewrite — set the real registry, then uncomment:
+# images:
+#   - name: document-service
+#     newName: registry.internal.example.com/jmeter-cloud/document-service
+#     newTag: "1.0.0"
+
+# Mandated storageClass / larger blob volume — adjust, then uncomment:
+# patches:
+#   - target: { kind: PersistentVolumeClaim, name: document-service-data }
+#     patch: |-
+#       - op: add
+#         path: /spec/storageClassName
+#         value: <storage-class>
+#       - op: replace
+#         path: /spec/resources/requests/storage
+#         value: 200Gi

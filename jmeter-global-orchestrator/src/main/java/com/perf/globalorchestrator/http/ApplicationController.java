@@ -5,19 +5,17 @@ import com.perf.globalorchestrator.domain.Application;
 import com.perf.globalorchestrator.domain.ApplicationCapacity;
 import com.perf.globalorchestrator.domain.RecyclePolicy;
 import com.perf.globalorchestrator.domain.Ulid;
+import com.perf.globalorchestrator.provision.ProvisioningProperties;
 import com.perf.globalorchestrator.config.CacheConfig;
-import com.perf.globalorchestrator.kafka.KafkaTopicProvisioner;
-import com.perf.globalorchestrator.kafka.KafkaTopicProvisioner.KafkaTopicProvisionException;
 import com.perf.globalorchestrator.repo.ApplicationCapacityRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.RunRepository;
 import com.perf.globalorchestrator.service.ApplicationPurgeService;
 import com.perf.globalorchestrator.service.ApplicationPurgeService.AppPurgeResult;
 import com.perf.globalorchestrator.domain.Actor;
-import com.perf.globalorchestrator.observability.TracingFilter;
+import com.perf.globalorchestrator.observability.MdcEnrichmentFilter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
@@ -93,11 +91,15 @@ public class ApplicationController {
             List.of("us-east-1", "us-east-2", "us-west-1", "us-west-2");
 
     /**
-     * Newly-registered apps land with a single primary region seeded at 0
+     * Fallback starter region for a deployment that declares no region
+     * vocabulary of its own: a single primary region seeded at 0
      * ({@code us-east-1}); operators add the other USA regions (up to 4) via
      * the Capacity tab's region picker. Capacity ceilings still go through
      * {@code PUT /capacity/{region}} — seeding at 0 means "region exists, no
      * workers yet."
+     *
+     * <p>Superseded per-deployment by {@code PROVISIONING_REGIONS} — see
+     * {@link #seedRegions()}.
      */
     private static final List<String> DEFAULT_SEEDED_REGIONS = List.of("us-east-1");
 
@@ -106,23 +108,38 @@ public class ApplicationController {
     private final ApplicationRepository repo;
     private final ApplicationCapacityRepository capacityRepo;
     private final RunRepository runRepo;
-    private final KafkaTopicProvisioner topicProvisioner;
     private final ApplicationPurgeService purgeService;
-    private final boolean deleteTopicsOnAppDelete;
+    private final ProvisioningProperties provisioning;
 
     public ApplicationController(ApplicationRepository repo,
                                  ApplicationCapacityRepository capacityRepo,
                                  RunRepository runRepo,
-                                 KafkaTopicProvisioner topicProvisioner,
                                  ApplicationPurgeService purgeService,
-                                 @Value("${globalOrchestrator.kafka.deleteTopicsOnAppDelete:true}")
-                                 boolean deleteTopicsOnAppDelete) {
+                                 ProvisioningProperties provisioning) {
         this.repo = repo;
         this.capacityRepo = capacityRepo;
         this.runRepo = runRepo;
-        this.topicProvisioner = topicProvisioner;
         this.purgeService = purgeService;
-        this.deleteTopicsOnAppDelete = deleteTopicsOnAppDelete;
+        this.provisioning = provisioning;
+    }
+
+    /**
+     * The regions a newly-registered application starts with, seeded at 0.
+     *
+     * <p>A deployment that declares its own region vocabulary
+     * ({@code PROVISIONING_REGIONS} — the operator's data centers in static
+     * mode) seeds exactly those, so the app opens showing the places workers
+     * can actually be declared into. Otherwise the historical single primary
+     * region stands.
+     *
+     * <p>Registration goes through this controller rather than
+     * {@code CapacityController}, so without this the seed was always
+     * {@code us-east-1} — which in a private cloud that has never heard of
+     * AWS regions renders as an empty data center that does not exist.
+     */
+    private List<String> seedRegions() {
+        List<String> declared = provisioning.regions();
+        return declared.isEmpty() ? DEFAULT_SEEDED_REGIONS : declared;
     }
 
     @GetMapping
@@ -156,7 +173,7 @@ public class ApplicationController {
         // workflow is the only path to a non-zero ceiling.
         validate(req.name(), req.sealId(), req.description(), req.healthEndpoints(),
                 /* capacity */ null);
-        // WORKER-HYGIENE Phase C — recyclePolicy default is REUSE (zero
+        // RecyclePolicy default is REUSE (zero
         // behavior change for new apps); operators opt-in to recycle by
         // setting it on POST or via a subsequent PUT.
         RecyclePolicy policy = resolveRecyclePolicy(req.recyclePolicy());
@@ -179,29 +196,14 @@ public class ApplicationController {
         } catch (DuplicateKeyException e) {
             throw new ApplicationConflictException(req.name());
         }
-        // Auto-seed capacity rows at 0 for the default starter regions.
-        List<ApplicationCapacity> seeded = DEFAULT_SEEDED_REGIONS.stream()
+        // Auto-seed capacity rows at 0 for this deployment's starter regions.
+        List<ApplicationCapacity> seeded = seedRegions().stream()
                 .map(r -> new ApplicationCapacity(stored.applicationId(), r, 0, null, null))
                 .toList();
         capacityRepo.replaceAll(stored.applicationId(), seeded);
-        // KAFKA-PER-APP Phase B — provision the per-app Kafka topic + DLT
-        // AFTER the row insert. Failure rolls back the row so the registry
-        // never advertises an app whose topics don't exist (which would
-        // make subsequent runs fail-on-first-publish).
-        try {
-            topicProvisioner.createForApplication(stored.name());
-        } catch (KafkaTopicProvisionException e) {
-            LOG.error("Topic provisioning failed for application '{}' (id={}); rolling back row",
-                    stored.name(), stored.applicationId(), e);
-            try {
-                repo.delete(stored.applicationId());
-            } catch (RuntimeException rollbackEx) {
-                LOG.error("Row rollback failed for application id={}; manual cleanup required",
-                        stored.applicationId(), rollbackEx);
-            }
-            throw new TopicProvisionFailedException("createTopics for '" + stored.name()
-                    + "': " + e.getMessage());
-        }
+        // Registration is a pure DB operation —
+        // workers POST metrics straight to the metrics-consumer, so app
+        // registration is a pure DB operation.
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(withCapacity(stored, capacityRepo.findByApplicationId(stored.applicationId())));
     }
@@ -215,7 +217,7 @@ public class ApplicationController {
         // it. App settings updates metadata only; capacity changes go
         // through the "Request more capacity" sponsor workflow.
         validate(req.name(), req.sealId(), req.description(), req.healthEndpoints(), /* capacity */ null);
-        // WORKER-HYGIENE Phase C — PUT body's recyclePolicy may be null
+        // PUT body's recyclePolicy may be null
         // (operator updated other metadata only). Repo treats null as
         // "no change"; thresholds are only validated when policy is
         // supplied.
@@ -258,9 +260,7 @@ public class ApplicationController {
     public ResponseEntity<Void> delete(@PathVariable String applicationId) {
         // Soft delete ("hide") — the registry row, its capacity rows, this
         // app's run history, metrics, audit events, and uploaded blobs are all
-        // RETAINED (a future purge job reclaims them). The per-app Kafka
-        // topics, by contrast, ARE deleted — nothing consumes/produces them
-        // after retirement.
+        // RETAINED (a future purge job reclaims them).
         //
         // The original name is FREED: we rename the hidden row to an archived
         // name (original + "__deleted__" + id) and re-tag its runs to match,
@@ -285,20 +285,8 @@ public class ApplicationController {
         boolean hidden = repo.softDelete(applicationId, archivedName);
         if (hidden) {
             // Re-tag this app's (terminal) runs to the archived name in the
-            // same transaction, then delete the topics (best-effort,
-            // idempotent — outside the DB transaction by nature).
+            // same transaction.
             runRepo.reassignApplication(app.name(), archivedName);
-            if (deleteTopicsOnAppDelete) {
-                try {
-                    topicProvisioner.deleteForApplication(app.name());
-                } catch (KafkaTopicProvisionException e) {
-                    // The app is already hidden; we don't roll that back. Log
-                    // loudly so the operator can clean orphaned topics manually
-                    // (kafka-topics.sh --delete --topic jmeter.metrics.<name>).
-                    LOG.error("Topic delete failed for hidden application '{}' (id={}); orphan topics may need manual cleanup",
-                            app.name(), applicationId, e);
-                }
-            }
         }
         return ResponseEntity.noContent().build();
     }
@@ -321,7 +309,7 @@ public class ApplicationController {
     public ResponseEntity<Map<String, Object>> purge(
             @PathVariable String applicationId,
             @RequestBody(required = false) DeleteApplicationRequest request,
-            @RequestHeader(value = TracingFilter.HEADER_ACTOR, required = false) String actorHeader) {
+            @RequestHeader(value = MdcEnrichmentFilter.HEADER_ACTOR, required = false) String actorHeader) {
         String reason = request == null ? null : request.reason();
         AppPurgeResult result = purgeService.purgeApplication(
                 applicationId, Actor.fromHeader(actorHeader), reason);
@@ -534,9 +522,6 @@ public class ApplicationController {
             super("application name already exists: " + name);
         }
     }
-    static final class TopicProvisionFailedException extends RuntimeException {
-        TopicProvisionFailedException(String message) { super(message); }
-    }
     static final class ApplicationHasActiveRunsException extends RuntimeException {
         ApplicationHasActiveRunsException(String name, int activeRuns) {
             super("application '" + name + "' has " + activeRuns
@@ -592,9 +577,4 @@ public class ApplicationController {
                 .body(Map.of("code", "APPLICATION_NOT_FOUND", "message", e.getMessage()));
     }
 
-    @org.springframework.web.bind.annotation.ExceptionHandler(TopicProvisionFailedException.class)
-    public ResponseEntity<Map<String, String>> handleTopicProvision(TopicProvisionFailedException e) {
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(Map.of("code", "TOPIC_CREATE_FAILED", "message", e.getMessage()));
-    }
 }

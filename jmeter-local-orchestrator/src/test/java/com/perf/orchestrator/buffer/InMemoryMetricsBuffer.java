@@ -1,6 +1,6 @@
 package com.perf.orchestrator.buffer;
 
-import com.perf.orchestrator.WorkerMetricBatch;
+import com.perf.orchestrator.model.WorkerMetricBatch;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * idempotent {@link #delete}, no gzip / atomic-rename / boot-scrubber concerns.
  *
  * <p>{@link BufferedEnvelope#file()} is always {@code null}; {@code sizeBytes}
- * is a rough estimate from {@code envelope.getEntries().size()}.
+ * is a rough estimate from {@code envelope.entries().size()}.
  */
 public final class InMemoryMetricsBuffer implements MetricsBuffer {
 
@@ -35,14 +35,11 @@ public final class InMemoryMetricsBuffer implements MetricsBuffer {
     }
 
     @Override
-    public Optional<BufferedEnvelope> enqueue(WorkerMetricBatch envelope, String topic) {
-        if (topic == null || topic.isBlank()) {
-            throw new IllegalArgumentException("topic must be non-blank");
-        }
+    public Optional<BufferedEnvelope> enqueue(WorkerMetricBatch envelope) {
         long size = estimateSize(envelope);
         Instant now = clock.instant();
         String id = String.format("%013d-%06d", now.toEpochMilli(), idCounter.incrementAndGet());
-        BufferedEnvelope handle = new BufferedEnvelope(id, null, size, now, envelope, topic);
+        BufferedEnvelope handle = new BufferedEnvelope(id, null, size, now, envelope);
         index.put(id, handle);
         totalBytes.addAndGet(size);
         return Optional.of(handle);
@@ -85,6 +82,6 @@ public final class InMemoryMetricsBuffer implements MetricsBuffer {
 
     /** Roughly proportional to envelope size — useful for tests asserting cap behavior. */
     private static long estimateSize(WorkerMetricBatch env) {
-        return 100L + 110L * env.getEntries().size();
+        return 100L + 110L * env.entries().size();
     }
 }

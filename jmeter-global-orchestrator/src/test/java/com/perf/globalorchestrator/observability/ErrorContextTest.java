@@ -13,13 +13,10 @@ import org.slf4j.MDC;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * OBSERVABILITY Phase F — exercises the ErrorContext helper.
- *
- * <p>The test pins MDC lifecycle (set before the log call, removed in
- * finally) and verifies the SLF4J level + throwable propagation. The
- * span-tagging path is exercised indirectly — SpanAttributes is itself
- * unit-tested separately and is null-safe when no observation is in
- * scope, which is the case in these tests.
+ * Exercises the ErrorContext helper: pins MDC lifecycle (set before the
+ * log call, removed in finally) and verifies the SLF4J level + throwable
+ * propagation. (The span-tagging half left with distributed tracing in
+ * SLIMDOWN SL-E.)
  */
 class ErrorContextTest {
 

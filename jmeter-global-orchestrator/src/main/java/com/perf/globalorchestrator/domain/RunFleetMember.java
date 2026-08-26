@@ -34,7 +34,7 @@ public record RunFleetMember(
         Map<String, String> properties,
         Long joinedAtSecond,
         /**
-         * WORKER-HYGIENE Phase F2 — joined from {@code pod.runsServed} at
+         * Joined from {@code pod.runsServed} at
          * read-time. Null on INSERT (write path) and when the pod row is
          * gone (deleted-and-not-yet-cleaned member). The UI uses this to
          * flag a worker whose pod is near its recycle threshold.

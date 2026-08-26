@@ -30,9 +30,12 @@ const hookState = vi.hoisted(() => ({
   current: null as ReturnType<typeof makeHookReturn> | null,
 }));
 
-vi.mock("../../hooks/useMetricsTimeseries", () => ({
-  useMetricsTimeseries: () => hookState.current,
-}));
+vi.mock("../../hooks/useMetricsTimeseries", async (importOriginal) => {
+  // Keep the real sibling exports (isTerminalRunState) — the panel uses
+  // them to pick the initial time window.
+  const actual = await importOriginal<typeof import("../../hooks/useMetricsTimeseries")>();
+  return { ...actual, useMetricsTimeseries: () => hookState.current };
+});
 
 import { MetricsTabPanel } from "../MetricsTabPanel";
 
@@ -88,7 +91,7 @@ afterEach(() => {
 });
 
 /**
- * HM-4 — dedicated axe sweep for the historical Metrics tab panel
+ * Dedicated axe sweep for the historical Metrics tab panel
  * across the three states the operator actually sees:
  *
  * 1. **populated** — the common case: 4 charts + header + status

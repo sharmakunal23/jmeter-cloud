@@ -5,17 +5,17 @@
 # Usage:
 #
 #   docker compose up                            # default profile
-#                                                # = full stack: kafka + UI + 1 orchestrator
-#                                                #   + postgres + global-orchestrator
+#                                                # = full stack: postgres
+#                                                #   + global-orchestrator
 #                                                #   + metrics-consumer + document-service
-#                                                #   + jmeter-cloud-ui
-#
-#   docker compose --profile minimal up          # kafka core only (no UI,
-#                                                # no postgres, no greenfield services)
+#                                                #   + jmeter-cloud-ui + grafana
 #
 # The default-profile activation comes from COMPOSE_PROFILES=default in
 # repo-root .env, so plain `docker compose up` does the right thing without
 # requiring a flag.
+#
+# Workers POST per-second metrics straight to the metrics-consumer over HTTP
+# (`POST /api/v1/ingest`, JSON).
 #
 # Worker containers (formerly the static `orchestrator-1` / `orchestrator-2`
 # services) are no longer in compose — they're spun up dynamically per
@@ -23,7 +23,6 @@
 # Capacity tab in the UI (`/capacity/{appName}`) to add workers.
 
 include:
-  - path: ./kafka/docker-compose.yml
   - path: ./postgres/docker-compose.yml
   - path: ./jmeter-local-orchestrator/docker-compose.yml
   - path: ./document-service/docker-compose.yml

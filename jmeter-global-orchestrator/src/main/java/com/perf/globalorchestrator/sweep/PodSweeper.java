@@ -2,8 +2,6 @@ package com.perf.globalorchestrator.sweep;
 
 import com.perf.globalorchestrator.repo.PodRepository;
 import com.perf.globalorchestrator.service.RunService;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -33,19 +31,14 @@ public class PodSweeper {
     private final PodRepository pods;
     private final RunService runService;
     private final long lostAfterMs;
-    private final Counter podsLostCounter;
 
     public PodSweeper(
             PodRepository pods,
             RunService runService,
-            MeterRegistry meterRegistry,
             @Value("${globalOrchestrator.pod.lostAfterMs:90000}") long lostAfterMs) {
         this.pods = pods;
         this.runService = runService;
         this.lostAfterMs = lostAfterMs;
-        this.podsLostCounter = Counter.builder("globalOrchestrator.pods.markedLost")
-                .description("Pods flipped from IDLE to LOST by the heartbeat sweeper.")
-                .register(meterRegistry);
     }
 
     @Scheduled(fixedDelayString = "${globalOrchestrator.pod.sweepIntervalMs:30000}",
@@ -55,7 +48,6 @@ public class PodSweeper {
             Instant cutoff = Instant.now().minus(Duration.ofMillis(lostAfterMs));
             int n = pods.markLostBefore(cutoff);
             if (n > 0) {
-                podsLostCounter.increment(n);
                 LOG.info("PodSweeper marked {} pod(s) LOST (heartbeat older than {} ms)", n, lostAfterMs);
             }
             // Reliability — cascade pod-LOST onto the runFleetMember rows. A

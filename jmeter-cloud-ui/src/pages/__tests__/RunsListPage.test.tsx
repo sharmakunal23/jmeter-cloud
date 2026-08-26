@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 // Selection contract: unlimited multi-select (bulk delete needs any number).
-// Compare lights up only at exactly 2 (HM-7);
+// Compare lights up only at exactly 2;
 // Delete selected appears at >= 1. The page is otherwise covered by the
 // integration smoke when the comparison panel is mounted (RunsComparePage tests).
 

@@ -1,0 +1,12 @@
+# KUBE-6 — kind overlay. Nothing over the base: the validation cluster
+# has no Ingress controller and its node wasn't created with NodePort
+# extraPortMappings, so browser access on kind is
+#   kubectl -n jmeter-cloud port-forward svc/jmeter-cloud-ui 8086:80
+# Side-load the image first (BuildKit attestations break `kind load` with
+# "ctr: content digest not found"):
+#   docker build --provenance=false -t jmeter-cloud-ui:dev jmeter-cloud-ui/
+#   kind load docker-image jmeter-cloud-ui:dev --name jmeter-cloud
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base

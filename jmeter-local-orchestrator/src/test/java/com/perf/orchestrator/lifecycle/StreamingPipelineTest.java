@@ -1,6 +1,6 @@
 package com.perf.orchestrator.lifecycle;
 
-import com.perf.orchestrator.WorkerMetricBatch;
+import com.perf.orchestrator.model.WorkerMetricBatch;
 import com.perf.orchestrator.testsupport.WorkerMetricRow;
 import com.perf.orchestrator.config.OrchestratorConfig;
 import org.junit.jupiter.api.AfterEach;
@@ -30,7 +30,8 @@ import static org.assertj.core.api.SoftAssertions.assertSoftly;
  * End-to-end black-box test of the {@code StreamingPipeline} wiring.
  *
  * <p>Drives a synthetic JTL file through the real parser, aggregator, and
- * state machine, with a recording publisher in place of Kafka. The
+ * state machine, with a recording dispatcher in place of the HTTP ingest
+ * path. The
  * comprehensive lifecycle coverage lives in {@code TailerStateMachineTest};
  * this suite is narrower — its purpose is to prove that constructing a
  * {@link StreamingPipeline} produces a working assembly that the
@@ -57,7 +58,7 @@ class StreamingPipelineTest {
     private Path jtlFile;
     private Path sentinelFile;
     private Path stateFile;
-    private RecordingMetricPublisher publisher;
+    private com.perf.orchestrator.buffer.SynchronousMetricsDispatcher publisher;
     private ExecutorService executor;
 
     @BeforeEach
@@ -70,7 +71,7 @@ class StreamingPipelineTest {
         // map column indices on first read.
         Files.writeString(jtlFile, JTL_HEADER, StandardOpenOption.CREATE);
 
-        publisher = new RecordingMetricPublisher();
+        publisher = new com.perf.orchestrator.buffer.SynchronousMetricsDispatcher();
         executor  = Executors.newSingleThreadExecutor();
     }
 
@@ -92,7 +93,7 @@ class StreamingPipelineTest {
         @DisplayName("publishes one window per second worth of rows — proves parser → aggregator → publisher are wired")
         void publishes_one_window_per_second_of_rows() throws Exception {
             OrchestratorConfig config = configFor(jtlFile, sentinelFile, stateFile);
-            StreamingPipeline pipeline = new StreamingPipeline(config, publisher, new com.perf.orchestrator.buffer.SynchronousMetricsDispatcher(publisher));
+            StreamingPipeline pipeline = new StreamingPipeline(config, publisher);
 
             Future<?> done = executor.submit(pipeline::run);
 
@@ -125,20 +126,20 @@ class StreamingPipelineTest {
         @DisplayName("returns from run() once the sentinel is observed and rows have drained — pipeline owns the publisher lifecycle")
         void run_returns_after_sentinel_and_drain() throws Exception {
             OrchestratorConfig config = configFor(jtlFile, sentinelFile, stateFile);
-            StreamingPipeline pipeline = new StreamingPipeline(config, publisher, new com.perf.orchestrator.buffer.SynchronousMetricsDispatcher(publisher));
+            StreamingPipeline pipeline = new StreamingPipeline(config, publisher);
 
             Future<?> done = executor.submit(pipeline::run);
 
             writeRows(row("2026/05/03 10:00:00"));
             writeSentinel();
 
-            // run() returning is the contract — KafkaMetricPublisher.close()
-            // is invoked inside the state machine's finally block, so a
-            // non-blocking caller (TestRunManager in step 7) can rely on
-            // "future done = pipeline shut down".
+            // run() returning is the contract — the state machine drains the
+            // dispatch queue inside its finally block, so a non-blocking
+            // caller (TestRunManager) can rely on "future done = pipeline
+            // shut down".
             done.get(10, TimeUnit.SECONDS);
 
-            assertThat(publisher.getPublishedCount())
+            assertThat(publisher.publishedCount())
                     .as("at least one window published before drain")
                     .isGreaterThan(0L);
         }
@@ -155,19 +156,19 @@ class StreamingPipelineTest {
         @Test
         @DisplayName("rejects a null config — fail loud at wiring time, not at run() time")
         void rejects_null_config() {
-            assertThat(catchThrowable(() -> new StreamingPipeline(null, publisher, new com.perf.orchestrator.buffer.SynchronousMetricsDispatcher(publisher))))
+            assertThat(catchThrowable(() -> new StreamingPipeline(null, publisher)))
                     .isInstanceOf(NullPointerException.class)
                     .hasMessageContaining("config");
         }
 
         @Test
-        @DisplayName("rejects a null publisher — same fail-fast contract")
-        void rejects_null_publisher() {
+        @DisplayName("rejects a null dispatcher — same fail-fast contract")
+        void rejects_null_dispatcher() {
             OrchestratorConfig config = configFor(jtlFile, sentinelFile, stateFile);
 
-            assertThat(catchThrowable(() -> new StreamingPipeline(config, null, new com.perf.orchestrator.buffer.SynchronousMetricsDispatcher(publisher))))
+            assertThat(catchThrowable(() -> new StreamingPipeline(config, null)))
                     .isInstanceOf(NullPointerException.class)
-                    .hasMessageContaining("publisher");
+                    .hasMessageContaining("dispatcher");
         }
 
         private Throwable catchThrowable(Runnable r) {
@@ -186,9 +187,6 @@ class StreamingPipelineTest {
         env.put("RUN_ID",              "pipeline-test");
         env.put("JTL_PATH",            jtl.toString());
         env.put("SENTINEL_PATH",       sentinel.toString());
-        env.put("KAFKA_BROKERS",       "kafka:9092");
-        env.put("SCHEMA_REGISTRY_URL", "http://schema-registry:8081");
-        env.put("KAFKA_TOPIC",         "jmeter.metrics.perSecond");
         env.put("STATE_FILE_PATH",     state.toString());
         env.put("POLL_INTERVAL_MS",          "20");
         env.put("FILE_WAIT_POLL_INTERVAL_MS", "20");

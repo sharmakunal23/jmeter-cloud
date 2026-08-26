@@ -38,7 +38,7 @@ class ActorTest {
     @Test
     void surroundingWhitespaceIsTrimmed() {
         // Proxies can pad header values; the trim keeps the audit actor and
-        // the MDC actor (TracingFilter.resolveActor) byte-identical.
+        // the MDC actor (MdcEnrichmentFilter.resolveActor) byte-identical.
         Actor a = Actor.fromHeader("  bob  ");
         assertThat(a.name()).isEqualTo("bob");
         assertThat(a.source()).isEqualTo(Actor.SOURCE_HEADER);

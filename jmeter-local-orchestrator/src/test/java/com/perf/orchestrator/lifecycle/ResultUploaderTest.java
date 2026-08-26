@@ -180,10 +180,7 @@ class ResultUploaderTest {
                 "TEST_REGION",         "us-east-1",
                 "RUN_ID",              "uploader-test",
                 "JTL_PATH",            "/results/results.jtl",
-                "SENTINEL_PATH",       "/results/.done",
-                "KAFKA_BROKERS",       "kafka:9092",
-                "SCHEMA_REGISTRY_URL", "http://schema-registry:8081",
-                "KAFKA_TOPIC",         "jmeter.metrics.perSecond"
+                "SENTINEL_PATH",       "/results/.done"
         ));
         env.put("BASE_DIR",       base.toString());
         env.put("RESULTS_DIR",    base.resolve("results").toString());

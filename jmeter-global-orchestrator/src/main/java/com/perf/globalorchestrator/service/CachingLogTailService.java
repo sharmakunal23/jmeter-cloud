@@ -7,40 +7,25 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 /**
- * CACHE C-5 (2026-05-26) — caches the per-pod log tail that
- * {@code GET /runs/{runId}/members/{workerId}/logs} proxies from the local
- * orchestrator, but only for <b>terminal</b> members.
+ * Caches the per-pod log tail behind
+ * {@code GET /runs/{runId}/members/{workerId}/logs}, but only for
+ * <b>terminal</b> members — a running member's JMeter child appends every
+ * second, so its tail must always be fetched live, while a finished member's
+ * buffer is frozen and can be served from cache.
  *
- * <p>Why terminal-only: while a member is running its JMeter child appends to
- * the log ring buffer every second, so an active member's tail must always be
- * re-fetched live. Once the member reaches a terminal state ({@code COMPLETED}
- * / {@code FAILED} / {@code ABORTED} / {@code DRAINED}) its buffer is frozen, so
- * an operator re-opening a finished run to copy a stack trace can be served from
- * cache instead of round-tripping to the local orchestrator on every poll.
+ * <p><b>The key is {@code runId|workerId|stream|tail}, and the {@code runId} is
+ * load-bearing.</b> A pod can be reused across runs under the REUSE recycle
+ * policy, so a workerId-only key would serve run A's logs for run B. Including
+ * runId is not just collision-safe but <i>more</i> correct than a live fetch:
+ * after reuse, the live buffer holds the new run's logs, while the cache still
+ * has the terminal member's own tail.
  *
- * <h2>Cache key — why {@code runId} is in it</h2>
- * The key is {@code runId|workerId|stream|tail}, not just
- * {@code workerId|stream|tail} as the original C-5 sketch had it. A pod
- * ({@code workerId}) can be <b>reused across runs</b> under the REUSE recycle
- * policy, so a workerId-only key would serve run A's cached logs for run B's
- * member. Keying on {@code runId} too is both collision-safe and <i>more</i>
- * correct than a live fetch — after a pod is reused, hitting the live buffer
- * would return the <i>new</i> run's logs, whereas the cache preserves the
- * terminal member's own frozen tail. Different {@code tail} values and
- * {@code stream}s are independent responses, so they're keyed separately
- * (caller passes the already-clamped {@code tail}).
+ * <p>Active members bypass the cache via {@code condition}, and non-200 results
+ * are dropped by {@code unless} — so an unreachable pod or a 404 for a terminal
+ * member whose pod is gone is never pinned.
  *
- * <h2>What is NOT cached</h2>
- * <ul>
- *   <li>Active members — {@code condition = "#terminal"} bypasses the cache.</li>
- *   <li>Non-200 results — {@code unless} drops them, so a "pod unreachable" (0)
- *       or "no buffer yet" (404) for a terminal member whose pod may be gone is
- *       never pinned; only a genuine 200 log body is cached.</li>
- * </ul>
- *
- * <p>Caching applies only when invoked through the Spring proxy — callers must
- * inject this bean (as {@code RunController} does), not the
- * {@link LocalOrchestratorClient} directly.
+ * <p>Caching only applies through the Spring proxy: callers must inject this
+ * bean, not {@link LocalOrchestratorClient} directly.
  */
 @Service
 public class CachingLogTailService {

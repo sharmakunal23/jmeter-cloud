@@ -16,7 +16,7 @@ import java.nio.file.Path;
  * is served from local disk by the controller); {@code DocumentServiceResultSink}
  * (Maven profile {@code -Pstorage-docservice}, added in step 9). S3 is
  * intentionally <b>not</b> implemented as a sink — see
- * {@code docs/ORCHESTRATOR-PLAN.md} "Storage Backends".
+ * {@code docs/orchestratorPlan.md} "Storage Backends".
  */
 @FunctionalInterface
 public interface ResultSink {

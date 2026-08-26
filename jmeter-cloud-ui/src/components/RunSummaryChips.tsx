@@ -1,7 +1,7 @@
 import type { FleetAllocationEntry } from "../api/runs";
 
 /**
- * UI-5 — at-a-glance summary above the `/runs/new` form. Mirrors the
+ * At-a-glance summary above the `/runs/new` form. Mirrors the
  * pgMustard reference screenshot's `Plan Cost · Nodes · Max Depth`
  * pattern but with this app's dimensions: total pods, regions, plan
  * name, status. Reads directly from the form's existing state — no

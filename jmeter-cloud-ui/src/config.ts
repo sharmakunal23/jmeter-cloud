@@ -35,7 +35,7 @@ export function grafanaPerTestEmbed(runId: string): string {
 }
 
 /**
- * HM-3 — full-Grafana deep link for a finished run. Same dashboard as
+ * Full-Grafana deep link for a finished run. Same dashboard as
  * {@link grafanaPerTestEmbed}, but with {@code kiosk} omitted (so the
  * operator gets Grafana's full chrome for drill-down) and an EXPLICIT
  * {@code from} / {@code to} time range. The explicit range matters
@@ -70,9 +70,8 @@ export function grafanaPerTestDeepLink(
  * the docker host, we rewrite container hosts to {@code localhost} +
  * the published port.
  *
- * <p>This is local-dev convenience only — production deployments
- * front per-pod logs through a centralized log aggregator (Loki /
- * CloudWatch); Step 19 will inline the tail in the UI itself.
+ * <p>Local-dev convenience only. Production deployments front per-pod logs
+ * through a centralized aggregator; the in-app tail is `LogTailPanel`.
  */
 export function podLogTailUrl(member: RunFleetMember): string | null {
   if (!member.podBaseUrl) return null;

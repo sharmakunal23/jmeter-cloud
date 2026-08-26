@@ -3,7 +3,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 
 import type { MetricsTimeseries } from "../../api/runs";
 
-// a11y assertions live in MetricsTabPanel.a11y.test.tsx (HM-4) so this
+// a11y assertions live in MetricsTabPanel.a11y.test.tsx so this
 // file stays focused on behavior. Kept in mind here when picking
 // data-* attribute names + roles, but not asserted.
 
@@ -60,9 +60,12 @@ const hookState = vi.hoisted(() => ({
   current: null as ReturnType<typeof makeHookReturn> | null,
 }));
 
-vi.mock("../../hooks/useMetricsTimeseries", () => ({
-  useMetricsTimeseries: () => hookState.current,
-}));
+vi.mock("../../hooks/useMetricsTimeseries", async (importOriginal) => {
+  // Keep the real sibling exports (isTerminalRunState) — the panel uses
+  // them to pick the initial time window.
+  const actual = await importOriginal<typeof import("../../hooks/useMetricsTimeseries")>();
+  return { ...actual, useMetricsTimeseries: () => hookState.current };
+});
 
 import { MetricsTabPanel } from "../MetricsTabPanel";
 
@@ -383,25 +386,59 @@ describe("MetricsTabPanel — Split by region", () => {
 });
 
 describe("MetricsTabPanel — time-window selector", () => {
-  it("defaults to 'Whole test' and offers the fixed window set", () => {
+  const windowSelect = () =>
+    screen.getByRole("combobox", { name: /Time window/i }) as HTMLSelectElement;
+
+  it("LIVE run defaults to 'Last 30 min' (whole-test is bounded while data is still arriving) and offers the fixed window set", () => {
     render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    const select = screen.getByRole("combobox", { name: /Time window/i }) as HTMLSelectElement;
-    expect(select.value).toBe("all");
-    const labels = Array.from(select.options).map((o) => o.textContent);
+    expect(windowSelect().value).toBe("30m");
+    const labels = Array.from(windowSelect().options).map((o) => o.textContent);
     expect(labels).toEqual([
       "Whole test", "Last 5 min", "Last 10 min", "Last 30 min",
       "Last 1 hour", "Last 2 hours", "Last 4 hours",
     ]);
   });
 
-  it("persists the selected window to localStorage and restores it on remount", () => {
+  it("terminal run defaults to 'Whole test' (served from the terminal-run cache)", () => {
+    render(<MetricsTabPanel runId="01J000RUN" runState="COMPLETED" />);
+    expect(windowSelect().value).toBe("all");
+  });
+
+  it("a stored 'Whole test' preference is honored on terminal runs but bounded to 30 min on live runs", () => {
+    window.localStorage.setItem("jmeterCloud.metricsWindow", "all");
     const { unmount } = render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    fireEvent.change(screen.getByRole("combobox", { name: /Time window/i }), { target: { value: "30m" } });
-    expect(window.localStorage.getItem("jmeterCloud.metricsWindow")).toBe("30m");
+    expect(windowSelect().value).toBe("30m");
+    unmount();
+
+    render(<MetricsTabPanel runId="01J000RUN" runState="COMPLETED" />);
+    expect(windowSelect().value).toBe("all");
+  });
+
+  it("a stored bounded window is honored on live and terminal runs alike", () => {
+    window.localStorage.setItem("jmeterCloud.metricsWindow", "1h");
+    const { unmount } = render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
+    expect(windowSelect().value).toBe("1h");
+    unmount();
+
+    render(<MetricsTabPanel runId="01J000RUN" runState="COMPLETED" />);
+    expect(windowSelect().value).toBe("1h");
+  });
+
+  it("persists an explicit selection to localStorage and restores it on remount", () => {
+    const { unmount } = render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
+    fireEvent.change(windowSelect(), { target: { value: "1h" } });
+    expect(window.localStorage.getItem("jmeterCloud.metricsWindow")).toBe("1h");
     unmount();
 
     render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    expect((screen.getByRole("combobox", { name: /Time window/i }) as HTMLSelectElement).value).toBe("30m");
+    expect(windowSelect().value).toBe("1h");
+  });
+
+  it("picking 'Whole test' mid-run is honored for the session and stored", () => {
+    render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
+    fireEvent.change(windowSelect(), { target: { value: "all" } });
+    expect(windowSelect().value).toBe("all");
+    expect(window.localStorage.getItem("jmeterCloud.metricsWindow")).toBe("all");
   });
 });
 

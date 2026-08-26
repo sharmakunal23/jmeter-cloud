@@ -69,10 +69,7 @@ class DocumentServiceArtifactSourceTest {
                 "TEST_REGION",         "us-east-1",
                 "RUN_ID",              "doc-art-src-test",
                 "JTL_PATH",            "/results/results.jtl",
-                "SENTINEL_PATH",       "/results/.done",
-                "KAFKA_BROKERS",       "kafka:9092",
-                "SCHEMA_REGISTRY_URL", "http://schema-registry:8081",
-                "KAFKA_TOPIC",         "jmeter.metrics.perSecond"
+                "SENTINEL_PATH",       "/results/.done"
         ));
         env.put("DOCUMENT_SERVICE_URL", "http://127.0.0.1:" + port);
         env.put("DOCUMENT_SERVICE_TIMEOUT_SECONDS", "5");
@@ -205,10 +202,7 @@ class DocumentServiceArtifactSourceTest {
                     "TEST_REGION",         "us-east-1",
                     "RUN_ID",              "doc-art-src-test",
                     "JTL_PATH",            "/results/results.jtl",
-                    "SENTINEL_PATH",       "/results/.done",
-                    "KAFKA_BROKERS",       "kafka:9092",
-                    "SCHEMA_REGISTRY_URL", "http://schema-registry:8081",
-                    "KAFKA_TOPIC",         "jmeter.metrics.perSecond"
+                    "SENTINEL_PATH",       "/results/.done"
             ));
             env.put("DOCUMENT_SERVICE_URL", "");
 

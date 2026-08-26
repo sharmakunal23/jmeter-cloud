@@ -1,7 +1,7 @@
 package com.perf.orchestrator.aggregator;
 
-import com.perf.orchestrator.WorkerMetricBatch;
-import com.perf.orchestrator.WorkerMetricEntry;
+import com.perf.orchestrator.model.WorkerMetricBatch;
+import com.perf.orchestrator.model.WorkerMetricEntry;
 import com.perf.orchestrator.model.JtlRow;
 import com.perf.orchestrator.observability.WarningThrottle;
 
@@ -17,71 +17,31 @@ import java.util.TreeMap;
 import java.util.logging.Logger;
 
 /**
- * Routes incoming {@link JtlRow} records into one-second tumbling windows,
- * closes windows after a configurable grace period, and produces
- * {@link WorkerMetricBatch} envelopes ready for Kafka publication.
+ * Routes {@link JtlRow} records into one-second tumbling windows and drains
+ * them as {@link WorkerMetricBatch} envelopes, one per
+ * {@code (workerId, windowSecond)} — per-label aggregates ride in
+ * {@code entries[]}, and a window with more than
+ * {@link #MAX_ENTRIES_PER_ENVELOPE} labels splits across envelopes sharing the
+ * same envelope-level metadata.
  *
- * <h2>Envelope grouping (K-1)</h2>
- * Each drain returns one envelope per {@code (workerId, windowSecond)} pair —
- * not one record per {@code (workerId, label, windowSecond)} as the legacy
- * per-row path did. The 5 envelope-level fields ({@code windowSecond},
- * {@code windowTimestamp}, {@code region}, {@code workerId}, {@code runId})
- * appear once per envelope; per-label aggregates ride in the {@code entries[]}
- * array. Pathological test plans with more than {@link #MAX_ENTRIES_PER_ENVELOPE}
- * labels in a single window split into multiple envelopes carrying the same
- * envelope-level metadata.
+ * <p><b>The leading-edge window is never closed</b>, even at
+ * {@code graceSeconds == 0}: rows arrive in poll order, so more rows for the
+ * newest second can still turn up in the next batch, and closing it early
+ * drops them.
  *
- * <h2>Window lifecycle</h2>
- * <ol>
- *   <li>A row arrives with {@code epochSecond = T} and {@code label = L}.</li>
- *   <li>The aggregator finds or creates a {@link SecondBucket} for {@code (T, L)}.</li>
- *   <li>After each {@link #record} call, any window at epoch second {@code W}
- *       where {@code latestEpochSecond >= W + graceSeconds} AND
- *       {@code W < latestEpochSecond} is considered closed and returned by
- *       {@link #drainCloseable()}.</li>
- *   <li>Closed windows are evicted from the internal map — they will never
- *       receive more rows.</li>
- * </ol>
- *
- * <h2>Close rule: never evict the leading edge</h2>
- * The leading-edge window (the one at {@code latestEpochSecond}) is never
- * closed, even when {@code graceSeconds == 0}. Rationale: the poll loop
- * processes rows in arrival order and the leading edge is, by definition,
- * the most recent second observed. More rows for that second may still
- * arrive in the next poll batch. Closing it prematurely would cause those
- * rows to be dropped as late arrivals. Grace period still applies to
- * non-leading-edge windows.
- *
- * <h2>Grace period</h2>
- * JMeter workers flush in batches; a row timestamped at second {@code T} may
- * arrive after rows from {@code T+1} due to OS scheduling. The grace period
- * absorbs this jitter. A row that arrives after its window is already evicted
- * is silently dropped with a WARNING log. Increase {@code GRACE_PERIOD_SECONDS}
- * if dropped rows appear in the logs during high-load tests.
- *
- * <h2>TreeMap structure</h2>
- * {@code windows: TreeMap<epochSecond, Map<label, SecondBucket>>}
- * <ul>
- *   <li>Outer key ({@code Long}): enables {@code headMap()} to find all
- *       closeable windows in O(log n) time.</li>
- *   <li>Inner key ({@code String}): label — multiple endpoints can be active
- *       in the same second.</li>
- * </ul>
- *
- * <h2>Thread safety</h2>
- * Not thread-safe. Must be called exclusively from the single poll-loop thread.
+ * <p>The grace period absorbs the reordering that JMeter's batched flushes
+ * cause — a row stamped second {@code T} can arrive after rows from
+ * {@code T+1}. A row arriving after its window was evicted is dropped with a
+ * WARNING; sustained drops mean {@code GRACE_PERIOD_SECONDS} is too low.
  */
 public final class TumblingWindowAggregator {
 
     private static final Logger LOG = Logger.getLogger(TumblingWindowAggregator.class.getName());
 
     /**
-     * Hard cap on entries per {@link WorkerMetricBatch} envelope. A pod-window
-     * with more than this many distinct labels splits into multiple envelopes
-     * carrying the same envelope-level metadata. Guards against pathological
-     * test plans (e.g. 10k-endpoint stress tests) producing oversized Kafka
-     * records — at typical entry size (~100 B Avro binary), 500 entries land
-     * around 50 KB, well under the 1 MB Kafka default.
+     * Hard cap on entries per envelope, so a 10k-endpoint test plan cannot emit
+     * one oversized envelope. At ~300 B per entry, 500 entries land near 50 KB —
+     * well under the consumer's body cap and the buffer's per-file cap.
      */
     static final int MAX_ENTRIES_PER_ENVELOPE = 500;
 
@@ -90,10 +50,9 @@ public final class TumblingWindowAggregator {
     private final String region;
     private final String runId;
     /**
-     * MID-TEST-SCALING Phase C — stamped on every emitted
-     * {@link WorkerMetricBatch}. {@code 0} for original-fleet members;
-     * {@code > 0} for mid-test scale-up joiners (seconds since
-     * {@code run.startedAt}). Source: {@code OrchestratorConfig.getJoinedAtSecond()}.
+     * Seconds after {@code run.startedAt} at which this worker joined, stamped on
+     * every envelope. {@code 0} for the original fleet, {@code > 0} for a
+     * mid-test scale-up joiner.
      */
     private final long joinedAtSecond;
 
@@ -104,32 +63,30 @@ public final class TumblingWindowAggregator {
     private final int graceSeconds;
 
     /**
-     * When {@code true}, the per-row worker ID is extracted from {@link JtlRow#threadName()}
-     * rather than using the fixed {@link #workerId}. Used in master-slave deployments where
-     * the master JTL contains rows from all slaves, each stamped with the slave's FQDN in
-     * the {@code threadName} column.
+     * When {@code true} ({@code WORKER_ID_SOURCE=THREAD_NAME}), each row's worker
+     * ID comes from {@link JtlRow#threadName()} instead of the fixed
+     * {@link #workerId}, so one JTL can carry rows from several workers.
+     *
+     * <p>This was built for the master-slave layout, which the platform no longer
+     * runs — single-worker-per-pod is the only execution model. The code is live
+     * and wired end to end, but nothing in the platform sets it.
      */
     private final boolean useThreadName;
 
     /**
-     * Live windows keyed by epoch second (outer) and composite {@code "workerId|label"} (inner).
-     * The composite key separates per-slave buckets in THREAD_NAME mode and is uniform across
-     * both modes so {@link #flushAll} never needs to branch.
-     * TreeMap order allows O(log n) range queries for closeable windows.
+     * Live windows, keyed by epoch second then by {@code "workerId|label"}. The
+     * composite inner key is used in both modes so {@link #flushAll} never
+     * branches, and the TreeMap gives O(log n) range queries for closeable
+     * windows.
      */
     private final TreeMap<Long, Map<String, SecondBucket>> windows;
 
-    /**
-     * Highest epoch second seen across all recorded rows.
-     * Drives the grace-period calculation in {@link #drainCloseable()}.
-     */
+    /** Highest epoch second seen — the leading edge {@link #drainCloseable()} measures grace against. */
     private long latestEpochSecond;
 
     /**
-     * Rate-limiter for the per-row "dropping late-arriving row" WARNING. If
-     * GRACE_PERIOD_SECONDS is too small for the workload (e.g. slow samples
-     * written to the JTL well after their start second) this would otherwise
-     * fire once per dropped row. Per-instance (per-run), single-threaded.
+     * Throttles the late-row WARNING, which would otherwise fire once per dropped
+     * row when {@code GRACE_PERIOD_SECONDS} is too small for the workload.
      */
     private final WarningThrottle lateRowWarnings = new WarningThrottle();
 
@@ -138,30 +95,30 @@ public final class TumblingWindowAggregator {
     // -----------------------------------------------------------------------
 
     /**
-     * @param workerId     Kubernetes pod name, e.g. {@code jmeter-worker-4}
-     * @param region       AWS region, e.g. {@code us-east-1}
-     * @param runId        test run identifier, e.g. {@code 20250413-east}
-     * @param graceSeconds seconds to hold a non-leading-edge window open after
-     *                     the leading edge has advanced past it; must be >= 0
+     * @param workerId     pod name, e.g. {@code acaps-na-east-worker-1}
+     * @param region       placement region, e.g. {@code na-east}
+     * @param runId        run identifier (ULID)
+     * @param graceSeconds how long to hold a non-leading-edge window open after
+     *                     the leading edge passes it; must be >= 0
      */
     public TumblingWindowAggregator(String workerId, String region,
                                     String runId, int graceSeconds) {
         this(workerId, region, runId, graceSeconds, false, 0L);
     }
 
-    /** Pre-MID-TEST-SCALING-Phase-C convenience constructor (joinedAtSecond defaults to 0). */
+    /** Convenience overload for an original-fleet worker ({@code joinedAtSecond = 0}). */
     public TumblingWindowAggregator(String workerId, String region,
                                     String runId, int graceSeconds, boolean useThreadName) {
         this(workerId, region, runId, graceSeconds, useThreadName, 0L);
     }
 
     /**
-     * @param workerId       Kubernetes pod name used when {@code useThreadName=false}
-     * @param region         AWS region, e.g. {@code us-east-1}
-     * @param runId          test run identifier, e.g. {@code 20250413-east}
-     * @param graceSeconds   seconds to hold a non-leading-edge window open; must be >= 0
-     * @param useThreadName  when {@code true}, extract workerId per-row from threadName
-     *                       (set via {@code WORKER_ID_SOURCE=THREAD_NAME} for master-slave)
+     * @param workerId       pod name, used when {@code useThreadName=false}
+     * @param region         placement region, e.g. {@code na-east}
+     * @param runId          run identifier (ULID)
+     * @param graceSeconds   how long to hold a non-leading-edge window open; must be >= 0
+     * @param useThreadName  when {@code true}, take each row's worker ID from
+     *                       {@code threadName} — see the field's Javadoc
      * @param joinedAtSecond MID-TEST-SCALING Phase C — seconds since {@code run.startedAt}
      *                       at which this worker joined. {@code 0} for original-fleet;
      *                       {@code > 0} for mid-test scale-up joiners. Stamped on every
@@ -407,15 +364,9 @@ public final class TumblingWindowAggregator {
                     for (int i = from; i < to; i++) {
                         entries.add(buckets.get(i).toMetricEntry());
                     }
-                    envelopes.add(WorkerMetricBatch.newBuilder()
-                            .setWindowSecond(windowSec)
-                            .setWindowTimestamp(windowTimestamp)
-                            .setRegion(region)
-                            .setWorkerId(bucketWorkerId)
-                            .setRunId(runId)
-                            .setJoinedAtSecond(joinedAtSecond)
-                            .setEntries(entries)
-                            .build());
+                    envelopes.add(new WorkerMetricBatch(
+                            windowSec, windowTimestamp, region,
+                            bucketWorkerId, runId, joinedAtSecond, entries));
                 }
             }
         }

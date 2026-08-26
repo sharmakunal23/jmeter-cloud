@@ -1,36 +1,27 @@
 package com.perf.globalorchestrator.domain;
 
 /**
- * AUTOMATION Phase C — what a CRON fire DOES. Stored on {@code cronJob.kind}
- * (Flyway V22); the {@code CronFireService} dispatches on this.
+ * What a CRON fire does; {@code CronFireService} dispatches on it.
  *
  * <ul>
- *   <li>{@link #LAUNCH_RUN} — fire a saved template via
- *       {@code RunService.startRun}. Phase A+B behaviour. Requires
- *       {@code templateBlobId}; {@code region} is unused (the run picks
- *       regions from the template's fleetAllocation).</li>
+ *   <li>{@link #LAUNCH_RUN} — launch a saved template through
+ *       {@code RunService.startRun}. Requires {@code templateBlobId};
+ *       {@code region} is unused, since the template's fleetAllocation picks
+ *       the regions.</li>
  *   <li>{@link #DRAIN_REGION} — drain every IDLE worker in
- *       {@code (applicationName, region)} without replacement via
- *       {@code PodRecycler.recycle(..., DRAIN_AFTER_RUN)}. Skips IN_USE
- *       workers (existing recycler safeguard) and is a no-op for
- *       {@code application.alwaysOn=true} (production-like apps). Requires
+ *       {@code (applicationName, region)} without replacement. Skips IN_USE
+ *       workers and is a no-op when {@code application.alwaysOn}. Requires
  *       {@code region}.</li>
  *   <li>{@link #PROVISION_REGION} — bring {@code (applicationName, region)}
- *       back up to {@code applicationCapacity.maxAvailable} via
- *       {@code PodSpinService.spin}. Requires {@code region}.</li>
+ *       back up to {@code applicationCapacity.maxAvailable}. Requires
+ *       {@code region}.</li>
+ *   <li>{@link #INFRA_READINESS} / {@link #DAILY_REPORT} — platform-wide report
+ *       singletons: no application, template or region, just a cron and
+ *       recipients. They ride the same HA-safe scheduler and email the result.</li>
  * </ul>
  *
- * <p>Operators schedule {@code DRAIN_REGION at 19:00 UTC} +
- * {@code PROVISION_REGION at 06:00 UTC} per (app, region) for overnight
- * cost saving (operator goal #4).
- *
- * <p>Phase E/D add two <b>platform-wide report</b> kinds — singletons with no
- * application / template / region, just a cron + recipients. They ride the same
- * HA-safe scheduler and email the result:
- * <ul>
- *   <li>{@link #INFRA_READINESS} (goal #2) — daily "all healthy" / list-of-failures.</li>
- *   <li>{@link #DAILY_REPORT} (goal #1, Phase D) — daily perf-test summary.</li>
- * </ul>
+ * <p>Pairing {@code DRAIN_REGION} in the evening with {@code PROVISION_REGION}
+ * in the morning is the intended overnight cost-saving shape.
  */
 public enum CronJobKind {
     LAUNCH_RUN,

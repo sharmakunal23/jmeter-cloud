@@ -3,7 +3,7 @@ package com.perf.globalorchestrator.domain;
 import java.time.Instant;
 
 /**
- * AUTOMATION — one persistent CRON schedule. Mirrors the
+ * One persistent CRON schedule. Mirrors the
  * {@code globalOrchestrator.cronJob} row (Flyway V20) and the UI contract in
  * {@code jmeter-cloud-ui/src/api/automation.ts} ({@code CronJobSummary}) —
  * keep the field names aligned across all three so the wire shape stays the
@@ -29,16 +29,16 @@ import java.time.Instant;
  * @param lastFireStatus  last {@link CronJobFireOutcome} name (nullable).
  * @param nextFireAt      materialised next trigger time, UTC (nullable when disabled).
  * @param claimedAt       in-flight fence stamped by the sweep; cleared on fire.
- * @param kind            AUTOMATION Phase C — what the fire does. Required;
+ * @param kind            what the fire does. Required;
  *                        LAUNCH_RUN for legacy rows via the V22 default.
- * @param region          AUTOMATION Phase C — target region for DRAIN/PROVISION;
+ * @param region          target region for DRAIN/PROVISION;
  *                        null for LAUNCH_RUN (template fleetAllocation drives regions).
- * @param recipients      AUTOMATION Phase E — comma-separated emails for report
+ * @param recipients      comma-separated emails for report
  *                        kinds (INFRA_READINESS / DAILY_REPORT); null otherwise.
  *                        {@code applicationName} is null for report kinds (platform-wide).
- * @param customSubject   AUTOMATION — optional custom email subject for report
+ * @param customSubject   optional custom email subject for report
  *                        kinds (V25); null → the composer's default subject.
- * @param customIntro     AUTOMATION — optional intro/note rendered above the
+ * @param customIntro     optional intro/note rendered above the
  *                        report body for report kinds (V25); null → no intro.
  */
 public record CronJob(

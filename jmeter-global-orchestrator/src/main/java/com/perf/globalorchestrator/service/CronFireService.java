@@ -19,6 +19,8 @@ import com.perf.globalorchestrator.report.DailyReportComposer;
 import com.perf.globalorchestrator.report.InfraReadinessComposer;
 import com.perf.globalorchestrator.provision.PodRecycler;
 import com.perf.globalorchestrator.provision.PodSpinService;
+import com.perf.globalorchestrator.provision.ProvisioningMode;
+import com.perf.globalorchestrator.provision.ProvisioningProperties;
 import com.perf.globalorchestrator.provision.RecycleEvaluator.RecycleReason;
 import com.perf.globalorchestrator.repo.ApplicationCapacityRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
@@ -28,6 +30,7 @@ import com.perf.globalorchestrator.repo.PodRepository;
 import com.perf.globalorchestrator.repo.RunRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,7 +41,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * AUTOMATION — the fire path: claim due schedules, and launch a run from a
+ * The fire path: claim due schedules, and launch a run from a
  * schedule's saved Template. The launch reuses {@link RunService#startRun}, so
  * a scheduled run is byte-for-byte the run a human click would have produced
  * (same capacity gates, same fan-out, same audit trail — just a
@@ -56,18 +59,29 @@ public class CronFireService {
 
     private static final Logger LOG = LoggerFactory.getLogger(CronFireService.class);
     private static final int MAX_ERROR_LEN = 1000;
+    /** STATIC-FLEET Phase 2 — fire detail for the two provisioning cron kinds. */
+    private static final String PROVISIONING_STATIC_DETAIL =
+            "provisioning is disabled (" + ProvisioningMode.PROPERTY + "=STATIC) — "
+            + "workers are operator-managed in this deployment";
 
     private final CronJobRepository cronJobs;
     private final CronJobFireHistoryRepository fireHistory;
     private final DocumentServiceClient documentService;
     private final RunService runService;
     private final RunRepository runs;
-    // AUTOMATION Phase C — drain/provision dependencies.
+    // Drain/provision dependencies.
     private final ApplicationRepository applications;
     private final ApplicationCapacityRepository capacities;
     private final PodRepository pods;
-    private final PodRecycler recycler;
+    /**
+     * Absent under {@code PROVISIONING_MODE=STATIC}
+     * (recycling an operator-managed worker is not ours to do). Only
+     * dereferenced from {@link #fireDrainRegion}, which returns SKIPPED
+     * before reaching it in that mode.
+     */
+    private final ObjectProvider<PodRecycler> recycler;
     private final PodSpinService spinService;
+    private final ProvisioningProperties provisioning;
     // AUTOMATION Phase E/D — report email dependencies.
     private final EmailSender emailSender;
     private final InfraReadinessComposer infraComposer;
@@ -83,8 +97,9 @@ public class CronFireService {
                            ApplicationRepository applications,
                            ApplicationCapacityRepository capacities,
                            PodRepository pods,
-                           PodRecycler recycler,
+                           ObjectProvider<PodRecycler> recycler,
                            PodSpinService spinService,
+                           ProvisioningProperties provisioning,
                            EmailSender emailSender,
                            InfraReadinessComposer infraComposer,
                            DailyReportComposer dailyComposer,
@@ -100,6 +115,7 @@ public class CronFireService {
         this.pods = pods;
         this.recycler = recycler;
         this.spinService = spinService;
+        this.provisioning = provisioning;
         this.emailSender = emailSender;
         this.infraComposer = infraComposer;
         this.dailyComposer = dailyComposer;
@@ -273,7 +289,7 @@ public class CronFireService {
     }
 
     /**
-     * AUTOMATION Phase C — drain every IDLE worker for (app, region) without
+     * Drain every IDLE worker for (app, region) without
      * replacement, via {@link PodRecycler#drainOne}. SKIPs when the app is
      * {@code alwaysOn} (production-like protection). IN_USE workers are left
      * alone (the recycler's existing IDLE-only race guard). The fire is a
@@ -283,6 +299,13 @@ public class CronFireService {
      */
     private FireResult fireDrainRegion(CronJob job) {
         Instant firedAt = Instant.now();
+        // The recycler is not wired on an
+        // operator-managed fleet. SKIPPED (not FAILED): the schedule is
+        // valid, it just has nothing it may do in this deployment, and a
+        // recurring FAILED would look like a broken job forever.
+        if (provisioning.isStatic()) {
+            return record(job, firedAt, null, CronJobFireOutcome.SKIPPED, PROVISIONING_STATIC_DETAIL);
+        }
         Application app = applications.findByName(job.applicationName()).orElse(null);
         if (app == null) {
             return record(job, firedAt, null, CronJobFireOutcome.FAILED,
@@ -300,7 +323,7 @@ public class CronFireService {
             if (p.state() != PodState.IDLE) continue;
             idle++;
             try {
-                if (recycler.drainOne(p, app, RecycleReason.DRAIN_AFTER_RUN)) drained++;
+                if (recycler.getObject().drainOne(p, app, RecycleReason.DRAIN_AFTER_RUN)) drained++;
             } catch (RuntimeException e) {
                 // Per-pod failure shouldn't abort the batch.
                 LOG.warn("DRAIN_REGION {} ({}): drain of pod {} failed",
@@ -312,7 +335,7 @@ public class CronFireService {
     }
 
     /**
-     * AUTOMATION Phase C — spin workers in (app, region) up to
+     * Spin workers in (app, region) up to
      * {@code applicationCapacity.maxAvailable}. SKIPs when the region has no
      * capacity row (the operator must configure a cap before scheduling
      * provision). A per-spin failure logs and breaks early so we don't hammer
@@ -320,6 +343,10 @@ public class CronFireService {
      */
     private FireResult fireProvisionRegion(CronJob job) {
         Instant firedAt = Instant.now();
+        // See fireDrainRegion.
+        if (provisioning.isStatic()) {
+            return record(job, firedAt, null, CronJobFireOutcome.SKIPPED, PROVISIONING_STATIC_DETAIL);
+        }
         Application app = applications.findByName(job.applicationName()).orElse(null);
         if (app == null) {
             return record(job, firedAt, null, CronJobFireOutcome.FAILED,

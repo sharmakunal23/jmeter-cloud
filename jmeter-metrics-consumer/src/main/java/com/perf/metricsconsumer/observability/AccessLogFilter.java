@@ -17,12 +17,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * OBSERVABILITY Phase E — emits one structured access-log record per
- * critical request. Mirrors the global-orchestrator's AccessLogFilter;
- * see that class's Javadoc for the full design rationale. Metrics-consumer
- * is primarily a Kafka consumer; the only HTTP surface is
- * {@code POST /api/v1/ingest} (replay fallback), so this filter sees
- * very few requests in steady state — by design.
+ * Emits one structured access-log record per critical request, carrying method,
+ * path, status and latency.
+ *
+ * <p>Scoped by {@link CriticalPaths}. This service's only critical surface is
+ * {@code POST /api/v1/ingest}, which every worker hits once a second — so
+ * unlike the other services, this filter is the high-volume one.
  */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 20)

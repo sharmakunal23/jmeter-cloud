@@ -24,7 +24,7 @@ import { formatFuture, formatRelative } from "../lib/time";
  *       UNKNOWN badge. Backends use {@code /actuator/health}; apps use
  *       the registry's poller-populated {@code lastHealthStatus}.</li>
  *   <li><strong>Upcoming CRON jobs</strong> — currently a stub. The
- *       Automation track (UI-D6) ships the real scheduler; this section
+ *       Automation track ships the real scheduler; this section
  *       reserves the layout slot.</li>
  * </ul>
  *

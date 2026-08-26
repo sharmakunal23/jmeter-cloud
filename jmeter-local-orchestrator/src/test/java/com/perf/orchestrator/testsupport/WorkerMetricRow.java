@@ -1,7 +1,7 @@
 package com.perf.orchestrator.testsupport;
 
-import com.perf.orchestrator.WorkerMetricBatch;
-import com.perf.orchestrator.WorkerMetricEntry;
+import com.perf.orchestrator.model.WorkerMetricBatch;
+import com.perf.orchestrator.model.WorkerMetricEntry;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -51,27 +51,27 @@ public record WorkerMetricRow(
      */
     public static WorkerMetricRow from(WorkerMetricBatch env, WorkerMetricEntry entry) {
         return new WorkerMetricRow(
-                env.getWindowSecond(),
-                env.getWindowTimestamp().toString(),
-                env.getRegion().toString(),
-                env.getWorkerId().toString(),
-                env.getRunId().toString(),
-                entry.getLabel().toString(),
-                entry.getThroughput(),
-                entry.getErrorCount(),
-                entry.getErrorRate(),
-                entry.getAvgRespTimeMs(),
-                entry.getP50Ms(),
-                entry.getP90Ms(),
-                entry.getP95Ms(),
-                entry.getP99Ms(),
-                entry.getMinMs(),
-                entry.getMaxMs(),
-                entry.getRawMaxMs(),
-                entry.getBytesReceived(),
-                entry.getBytesSent(),
-                copyStatusCodes(entry.getStatusCodes()),
-                entry.getActiveThreads()
+                env.windowSecond(),
+                env.windowTimestamp().toString(),
+                env.region().toString(),
+                env.workerId().toString(),
+                env.runId().toString(),
+                entry.label().toString(),
+                entry.throughput(),
+                entry.errorCount(),
+                entry.errorRate(),
+                entry.avgRespTimeMs(),
+                entry.p50Ms(),
+                entry.p90Ms(),
+                entry.p95Ms(),
+                entry.p99Ms(),
+                entry.minMs(),
+                entry.maxMs(),
+                entry.rawMaxMs(),
+                entry.bytesReceived(),
+                entry.bytesSent(),
+                copyStatusCodes(entry.statusCodes()),
+                entry.activeThreads()
         );
     }
 
@@ -83,7 +83,7 @@ public record WorkerMetricRow(
     public static List<WorkerMetricRow> flatten(List<WorkerMetricBatch> envelopes) {
         List<WorkerMetricRow> out = new ArrayList<>();
         for (WorkerMetricBatch env : envelopes) {
-            for (WorkerMetricEntry entry : env.getEntries()) {
+            for (WorkerMetricEntry entry : env.entries()) {
                 out.add(from(env, entry));
             }
         }

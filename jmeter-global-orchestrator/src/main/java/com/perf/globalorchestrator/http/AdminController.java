@@ -9,9 +9,13 @@ import com.perf.globalorchestrator.provision.PodReconciler;
 import com.perf.globalorchestrator.provision.PodReconciler.ReconcileSummary;
 import com.perf.globalorchestrator.provision.PodRecycler;
 import com.perf.globalorchestrator.provision.PodSpec;
+import com.perf.globalorchestrator.provision.ProvisioningDisabledException;
+import com.perf.globalorchestrator.provision.ProvisioningProperties;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -23,53 +27,53 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Operator-initiated admin endpoints. Only authenticated operators should
- * reach these in cloud mode — the local profile leaves auth off.
+ * Operator escape hatches under {@code /api/v1/admin} — forced reconcile and
+ * recycle sweeps, plus a raw pod spin and teardown. The routes and their
+ * responses are specified in {@code api/openapi.yaml}.
  *
- * <h2>Endpoints</h2>
- * <ul>
- *   <li>{@code POST /api/v1/admin/reconcilePods} — Phase 2 of the capacity
- *       rework. Forces a {@link PodReconciler} sweep without restarting the
- *       global-orchestrator. Useful after a manual {@code docker rm}, an
- *       interrupted spin-up, or any operator-initiated drift.</li>
- *   <li>{@code POST /api/v1/admin/spinPod} — Phase 2 smoke endpoint. Allocates
- *       the next free name + creates + starts a container for an
- *       {@code (applicationId, region)} pair. <strong>No capacity check</strong>
- *       — the proper {@code POST /capacity/{region}/pods} endpoint in Phase 3
- *       wraps this with the {@code applicationCapacity.maxAvailable} guard.
- *       Kept around as an admin escape hatch.</li>
- *   <li>{@code DELETE /api/v1/admin/pods/{podName}} — Phase 2 teardown
- *       counterpart. Stops + removes the container + deletes the registry
- *       row. <strong>No in-use check</strong> — the proper drain endpoint
- *       in Phase 3 refuses 409 when an active run is using the pod.</li>
- * </ul>
+ * <p><b>The spin and teardown routes deliberately skip the capacity and in-use
+ * checks</b> that {@link CapacityController}'s equivalents enforce. They exist
+ * for when something is stuck; normal operation should never use them.
+ *
+ * <p>Every route here mutates worker lifecycle, so all four answer
+ * {@code 409 PROVISIONING_DISABLED} under {@code PROVISIONING_MODE=STATIC}.
+ * {@link PodReconciler} and {@link PodRecycler} are not beans in that mode —
+ * their sweeps would destroy an operator-managed fleet — which is why they are
+ * injected via {@link ObjectProvider}: absence is the expected state, not a
+ * wiring failure.
+ *
+ * <p>Only authenticated operators should reach these in cloud mode; the local
+ * profile leaves auth off.
  */
 @RestController
 @RequestMapping("/api/v1/admin")
 public class AdminController {
 
-    private final PodReconciler reconciler;
-    private final PodRecycler recycler;
+    private final ObjectProvider<PodReconciler> reconciler;
+    private final ObjectProvider<PodRecycler> recycler;
     private final PodProvisioner provisioner;
     private final PodNameAllocator nameAllocator;
     private final ApplicationRepository applications;
+    private final ProvisioningProperties provisioning;
 
     public AdminController(
-            PodReconciler reconciler,
-            PodRecycler recycler,
+            ObjectProvider<PodReconciler> reconciler,
+            ObjectProvider<PodRecycler> recycler,
             PodProvisioner provisioner,
             PodNameAllocator nameAllocator,
-            ApplicationRepository applications) {
+            ApplicationRepository applications,
+            ProvisioningProperties provisioning) {
         this.reconciler    = reconciler;
         this.recycler      = recycler;
         this.provisioner   = provisioner;
         this.nameAllocator = nameAllocator;
         this.applications  = applications;
+        this.provisioning  = provisioning;
     }
 
     @PostMapping("/reconcilePods")
     public ResponseEntity<Map<String, Object>> reconcilePods() {
-        ReconcileSummary summary = reconciler.reconcile();
+        ReconcileSummary summary = requireBean(reconciler, "reconcile workers").reconcile();
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("adopted",        summary.adopted);
         body.put("started",        summary.started);
@@ -79,13 +83,14 @@ public class AdminController {
     }
 
     /**
-     * WORKER-HYGIENE Phase D — forces an immediate recycle sweep. Same body
+     * Forces an immediate recycle sweep. Same body
      * shape as the scheduled tick. Useful for smoke testing the threshold
      * policies without waiting the 60s default cadence.
      */
     @PostMapping("/recyclePods")
     public ResponseEntity<Map<String, Object>> recyclePods() {
-        PodRecycler.RecycleSummary summary = recycler.doSweep();
+        PodRecycler.RecycleSummary summary =
+                requireBean(recycler, "recycle workers").doSweep();
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("recycled", summary.recycled);
         body.put("skipped",  summary.skipped);
@@ -95,6 +100,7 @@ public class AdminController {
 
     @PostMapping("/spinPod")
     public ResponseEntity<Map<String, Object>> spinPod(@RequestBody SpinPodRequest req) {
+        provisioning.requireDynamic("spin a worker");
         if (req == null || req.applicationId() == null || req.applicationId().isBlank()
                 || req.region() == null || req.region().isBlank()) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
@@ -120,10 +126,32 @@ public class AdminController {
 
     @DeleteMapping("/pods/{podName}")
     public ResponseEntity<Map<String, Object>> tearDownPod(@PathVariable String podName) {
+        provisioning.requireDynamic("tear down worker " + podName);
         provisioner.stopAndRemove(podName);
         // Registry row will be GC'd by the next reconciler sweep — caller
         // can also POST /admin/reconcilePods immediately to force it.
         return ResponseEntity.ok(Map.of("podName", podName, "stopped", true));
+    }
+
+    /**
+     * Resolves a bean that only exists under {@code PROVISIONING_MODE=DYNAMIC},
+     * translating absence into the same {@code 409} an explicit mode guard
+     * produces. Absence and static mode are the same fact here — the beans are
+     * conditional on exactly that property — so this can't mask a real wiring
+     * failure.
+     */
+    private static <T> T requireBean(ObjectProvider<T> provider, String action) {
+        T bean = provider.getIfAvailable();
+        if (bean == null) {
+            throw new ProvisioningDisabledException(action);
+        }
+        return bean;
+    }
+
+    @ExceptionHandler(ProvisioningDisabledException.class)
+    public ResponseEntity<Map<String, Object>> handleProvisioningDisabled(
+            ProvisioningDisabledException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(e.toBody());
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

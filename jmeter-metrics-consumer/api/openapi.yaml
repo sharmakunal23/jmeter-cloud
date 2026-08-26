@@ -3,22 +3,24 @@ openapi: 3.0.3
 info:
   title: jmeter-metrics-consumer
   version: 1.0.0
-  summary: Spring Kafka consumer that lands WorkerMetricBatch envelopes into Postgres.
+  summary: HTTP ingest service that lands WorkerMetricBatch envelopes into Postgres.
   description: |
-    Consumes Avro-encoded `WorkerMetricBatch` envelopes from
-    `jmeter.metrics.perSecond` and writes per-row aggregates into
-    `metrics."workerMetric"` via multi-row INSERT with `ON CONFLICT DO NOTHING`.
+    Accepts JSON `WorkerMetricBatch` envelopes at `POST /api/v1/ingest` — the
+    platform's only metrics path — and writes them into
+    `metrics."workerMetric"` with `ON CONFLICT DO NOTHING`, so duplicates from
+    a worker's retry machinery collapse at the database.
 
-    **Operating model.** The Kafka path is the primary ingest. The
-    HTTP `/api/v1/ingest` endpoint exists as the K-4 fallback path used by
-    the local-orchestrator's `MetricsDispatcher` (K-5)
-    when Kafka is unreachable. Both paths share the same writer +
-    idempotency contract: the Postgres PK
-    `(runId, workerId, label, windowSecond)` absorbs duplicates from a
-    Kafka recovery race.
+    **This document is the canonical wire contract.** The producer
+    (`jmeter-local-orchestrator`) keeps a structurally identical record, and a
+    shared golden-payload test (`goldenWorkerMetricBatch.json`) in both trees
+    pins the two together. The shape is fixed per deploy — there is no schema
+    registry.
 
-    **Local dev posture.** No auth (matches the platform's local profile).
-    Cloud profile gates `/api/v1/ingest` behind bearer-JWT (S-4).
+    Decoders ignore unknown fields, so **adding** a field is producer-first
+    safe. Renaming or removing one rebuilds both sides together.
+
+    No auth locally, matching the platform's local profile; the cloud profile
+    gates this endpoint behind a bearer JWT.
   contact:
     name: Performance Engineering
   license:
@@ -37,40 +39,37 @@ servers:
 
 tags:
   - name: ingest
-    description: HTTP fallback ingest path (K-4). Used when Kafka send fails.
+    description: THE metrics ingest path — JSON envelope POSTs from the workers.
   - name: actuator
-    description: Spring Boot Actuator — health, info, Prometheus metrics.
+    description: |
+      Health and info only — `/actuator/prometheus` is 404 by design.
 
 paths:
 
   /api/v1/ingest:
     post:
       tags: [ingest]
-      summary: Ingest a single WorkerMetricBatch envelope (HTTP fallback).
+      summary: Ingest a single WorkerMetricBatch envelope.
       description: |
-        Used by the local-orchestrator's `MetricsDispatcher` (K-5) when a
-        Kafka send fails. Body is raw Avro binary — no Schema Registry
-        consultation; the `WorkerMetricBatch` schema is fixed at deploy
-        time per the K-0 hard-cutover decision.
-
-        The internal write path is identical to the Kafka path —
-        `WorkerMetricWriter.writeBatch(List.of(envelope))` — so the
-        idempotency contract `(runId, workerId, label, windowSecond)` PK
-        absorbs duplicates from a Kafka recovery race.
+        Called by every worker's dispatcher, one envelope per (worker, second).
+        The `WorkerMetricBatch` schema below is the canonical definition of the
+        body, and the `(runId, workerId, label, windowSecond)` PK absorbs
+        duplicates from the workers' buffer retries.
 
         **Body size cap** is `metricsConsumer.ingest.maxBodyBytes` (default
-        2 MB). Checked before Avro deserialise so an oversize garbage payload
-        can't pin reader memory.
+        2 MB). Checked before parse so an oversize garbage payload can't
+        pin parser memory. **Semantic validation** after decode: missing
+        or blank identity fields (`runId`, `workerId`, `region`,
+        `windowTimestamp`, any `entries[].label`, or a null `entries`
+        array) are terminal `400`s — never a retryable `503`.
       operationId: ingestEnvelope
       requestBody:
-        description: Avro-binary `WorkerMetricBatch`. See `kafka/schemas/WorkerMetricBatch.avsc`.
+        description: JSON `WorkerMetricBatch` — the canonical wire schema.
         required: true
         content:
-          application/avro:
+          application/json:
             schema:
-              type: string
-              format: binary
-              description: Raw Avro binary encoding of WorkerMetricBatch.
+              $ref: '#/components/schemas/WorkerMetricBatch'
       responses:
         '202':
           description: Accepted. `rowsInserted` may be less than entry count if duplicates collapsed on the PK.
@@ -93,20 +92,22 @@ paths:
                     message: null
         '400':
           description: |
-            Body could not be deserialised as `WorkerMetricBatch`. The
-            dispatcher should NOT retry — payload is corrupt.
+            Body is not valid JSON, or a required field is missing/blank
+            (semantic validation). The dispatcher should NOT retry —
+            payload is malformed.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/IngestResponse'
-              example:
-                rowsInserted: 0
-                code: INVALID_AVRO
-                message: "Malformed data. Length is negative: -56"
+              examples:
+                malformed:
+                  value: { rowsInserted: 0, code: INVALID_JSON, message: "Unexpected character..." }
+                missingField:
+                  value: { rowsInserted: 0, code: INVALID_JSON, message: "runId is required" }
         '413':
           description: |
             Body exceeded `metricsConsumer.ingest.maxBodyBytes`. Defense
-            in depth — checked before Avro deserialise.
+            in depth — checked before parse.
           content:
             application/json:
               schema:
@@ -115,10 +116,17 @@ paths:
                 rowsInserted: 0
                 code: PAYLOAD_TOO_LARGE
                 message: "body 3500000 bytes exceeds maxBodyBytes 2097152"
+        '415':
+          description: |
+            Non-JSON `Content-Type` (e.g. a pre-JSON-INGEST worker still
+            POSTing `application/avro`). Spring's `consumes` guard —
+            body is Spring's default error shape, not `IngestResponse`.
+            The old worker treats 415 as retryable and keeps the envelope
+            in its disk buffer until the worker image is rebuilt.
         '503':
           description: |
             Postgres unreachable (`DataAccessException`). The dispatcher
-            SHOULD retry via the K-5 retry sweeper.
+            SHOULD retry via its disk-buffer retry sweeper.
           content:
             application/json:
               schema:
@@ -131,15 +139,17 @@ paths:
   /actuator/health:
     get:
       tags: [actuator]
-      summary: Aggregate health — DB connectivity + Kafka reachability.
+      summary: Aggregate health — DB connectivity + ingest-progress staleness.
       description: |
-        DOWN if Postgres is unreachable or the Kafka broker is unreachable
-        (the `KafkaHealthIndicator` probes the broker on every health check).
+        DOWN if Postgres is unreachable or no envelope has been ingested for
+        `metricsConsumer.heartbeat.staleAfterSeconds` (the `ingestProgress`
+        indicator). Probe paths: `/actuator/health/liveness` (process up),
+        `/actuator/health/readiness` (DB reachable).
       responses:
         '200':
-          description: UP — service can read/write Postgres and reach Kafka.
+          description: UP — service can read/write Postgres and is ingesting.
         '503':
-          description: DOWN — Postgres or Kafka is unreachable.
+          description: DOWN — Postgres unreachable or ingest is stale.
 
   /actuator/info:
     get:
@@ -149,26 +159,134 @@ paths:
         '200':
           description: Build / version metadata.
 
-  /actuator/prometheus:
-    get:
-      tags: [actuator]
-      summary: Prometheus-format metrics scrape endpoint.
-      description: |
-        Exposes Micrometer counters / gauges including:
-
-        - `metricsConsumer.records.{consumed,inserted,duplicates,failures}` — Kafka path
-        - `metricsConsumer.envelopes.consumed` — Kafka envelope grain
-        - `metricsConsumer.batch.duration` — wall-time per Kafka batch
-        - `metricsConsumer.ingest.{envelopesAccepted,rejectedBadRequest,rejectedTooLarge,rejectedDbDown}` — HTTP fallback path (K-4)
-        - `kafka.consumer.*` — kafka-clients consumer metrics
-        - `hikaricp.*` — Postgres connection pool
-        - `jvm.*`, `process.*`, `system.*` — standard Spring Boot Actuator metrics
-      responses:
-        '200':
-          description: Prometheus exposition format.
-
 components:
   schemas:
+    WorkerMetricBatch:
+      type: object
+      description: |
+        The metrics-ingest wire envelope — one per (workerId, windowSecond),
+        POSTed by each worker every second. **This schema is the canonical wire
+        contract.** Decoders ignore unknown fields.
+      required: [windowSecond, windowTimestamp, region, workerId, runId, entries]
+      properties:
+        windowSecond:
+          type: integer
+          format: int64
+          description: Epoch second of the 1-s tumbling window (idempotency-key component).
+          example: 1784600000
+        windowTimestamp:
+          type: string
+          description: Human-readable timestamp of the window (stored verbatim).
+          example: "2026-07-20T21:33:20Z"
+        region:
+          type: string
+          description: Worker's region tag.
+          example: us-east-1
+        workerId:
+          type: string
+          description: Pod/worker identity (idempotency-key component).
+          example: acaps-us-east-1-worker-1
+        runId:
+          type: string
+          description: Run this window belongs to (idempotency-key component).
+          example: 01KY1535CHHF9WG5HHZETVEQBZ
+        joinedAtSecond:
+          type: integer
+          format: int64
+          default: 0
+          description: |
+            MID-TEST-SCALING — seconds after run start at which this worker
+            joined the fleet. 0 (or absent) = original-fleet worker.
+        entries:
+          type: array
+          description: One per-label aggregate per entry. May be empty (202 with rowsInserted 0), never absent.
+          items:
+            $ref: '#/components/schemas/WorkerMetricEntry'
+
+    WorkerMetricEntry:
+      type: object
+      description: |
+        One per-label aggregate inside an envelope. Envelope-level identity
+        (runId, workerId, region, windowSecond, …) is projected onto each
+        Postgres row at insert time — this object carries only the
+        per-label numbers. All response-time fields are milliseconds.
+      required: [label]
+      properties:
+        label:
+          type: string
+          description: JMeter sampler label (idempotency-key component).
+          example: "GET /api/v1/checkout/items"
+        throughput:
+          type: integer
+          format: int64
+          description: Samples completed in this window.
+        errorCount:
+          type: integer
+          format: int64
+        errorRate:
+          type: number
+          format: double
+          description: errorCount / throughput. Finite — JSON cannot carry NaN/Infinity; the producer guarantees finite values.
+        avgRespTimeMs:
+          type: number
+          format: double
+          description: |
+            sumElapsedMs / throughput. **Derived and lossy** — kept on the wire
+            for backward compatibility only. Since SCHEMA-OPT Phase 2 the
+            consumer stores `sumElapsedMs` instead, and falls back to
+            `round(avgRespTimeMs × throughput)` only when a producer predating
+            that field omits it.
+        sumElapsedMs:
+          type: integer
+          format: int64
+          description: |
+            Exact total elapsed milliseconds across every sample in this window
+            — the response-time fact. Stored verbatim; readers divide by
+            `throughput` at the end, which is why a sum can be folded across
+            workers, labels and time without weighting drift and a mean cannot.
+            Optional: absent from producers older than SCHEMA-OPT Phase 2
+            (2026-07-30), in which case the consumer reconstructs it from
+            `avgRespTimeMs`.
+        p50Ms:
+          type: number
+          format: double
+        p90Ms:
+          type: number
+          format: double
+        p95Ms:
+          type: number
+          format: double
+        p99Ms:
+          type: number
+          format: double
+        minMs:
+          type: number
+          format: double
+        maxMs:
+          type: number
+          format: double
+        rawMaxMs:
+          type: integer
+          format: int64
+          description: Un-histogrammed max (exact, not 2-significant-digit-quantized).
+        bytesReceived:
+          type: integer
+          format: int64
+        bytesSent:
+          type: integer
+          format: int64
+        statusCodes:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+          description: HTTP status code → count for this window. Null/absent is treated as empty.
+          example: { "200": 240, "404": 3, "500": 1 }
+        activeThreads:
+          type: integer
+          format: int64
+          description: JMeter active thread count during this window.
+
     IngestResponse:
       type: object
       description: Response shape for `POST /api/v1/ingest`.
@@ -183,12 +301,12 @@ components:
           example: 200
         code:
           type: string
-          enum: [ACCEPTED, INVALID_AVRO, PAYLOAD_TOO_LARGE, POSTGRES_UNAVAILABLE]
+          enum: [ACCEPTED, INVALID_JSON, PAYLOAD_TOO_LARGE, POSTGRES_UNAVAILABLE]
           description: |
             Short status code.
 
             - `ACCEPTED` — happy path (HTTP 202)
-            - `INVALID_AVRO` — body could not be deserialised (HTTP 400; do not retry)
+            - `INVALID_JSON` — body malformed or a required field missing (HTTP 400; do not retry)
             - `PAYLOAD_TOO_LARGE` — body exceeded `maxBodyBytes` (HTTP 413; do not retry)
             - `POSTGRES_UNAVAILABLE` — DB unreachable (HTTP 503; retry)
           example: ACCEPTED

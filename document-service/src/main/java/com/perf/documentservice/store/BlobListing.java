@@ -5,12 +5,10 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import java.util.List;
 
 /**
- * Page of blob metadata returned by {@link BlobStore#list}.
+ * One page of {@link BlobStore#list} results.
  *
- * <p>{@code total} is a count of items matching the filter <em>before</em>
- * paging — useful for UI pagination ("page 2 of 17"). For backends where
- * counting requires a full scan (S3), implementations may return
- * {@code -1} to mean "unknown"; the UI then renders "1-50 of many".
+ * <p>{@code total} counts matches before paging, or {@code -1} when the backend
+ * cannot count without a full scan (S3) — the UI renders "1-50 of many" for -1.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record BlobListing(

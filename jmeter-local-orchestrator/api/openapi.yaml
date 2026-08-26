@@ -5,16 +5,15 @@ info:
   version: 1.1.0
   summary: HTTP-driven orchestrator that runs alongside one JMeter worker per host.
   description: |
-    A lightweight HTTP API that owns the full lifecycle of a single JMeter test
-    on one Kubernetes pod or EC2 instance: accept artifacts, launch JMeter as a
-    child process, tail the JTL output, stream 1-second tumbling windows to
-    Kafka, and (optionally) upload the post-test JTL to a configured backend.
+    Owns the full lifecycle of a single JMeter test on one pod or instance:
+    accept artifacts, launch JMeter as a child process, tail its JTL, stream
+    1-second windows to the metrics-consumer, and optionally upload the JTL
+    afterwards.
 
-    **Operating model.** One process per host. One JMeter worker. One test at a
-    time. Every REST resource is a singleton — no `runId` (or any other) path
-    parameter. `POST /test` clears the previous run's `results/` and `logs/`
-    before starting; uploaded artifacts (test plan, data files) persist until
-    they are re-uploaded.
+    **One process, one worker, one test at a time.** Every resource here is a
+    singleton — there is no `runId` or any other path parameter. `POST /test`
+    clears the previous run's `results/` and `logs/` first; uploaded artifacts
+    persist until re-uploaded.
   contact:
     name: Performance Engineering
   license:
@@ -43,7 +42,7 @@ tags:
   - name: observability
     description: JMeter JVM metrics, orchestrator counters, and log tail.
   - name: platform
-    description: Health, readiness, build info, Prometheus, effective config.
+    description: Health, readiness, build info, effective config.
 
 security:
   - bearerAuth: []
@@ -266,23 +265,17 @@ paths:
       tags: [test]
       summary: Graceful drain via JMeter TCP shutdown port → DRAINED
       description: |
-        MID-TEST-SCALING Phase B. Sends `Shutdown` to JMeter's TCP shutdown
-        port (default `4445`, configurable via `JMETER_SHUTDOWN_PORT`).
-        In-flight samplers complete; no new ones start. Run lands in
-        `DRAINED` on clean exit (distinct from `COMPLETED`/`ABORTED`).
+        Sends `Shutdown` to JMeter's TCP shutdown port (`JMETER_SHUTDOWN_PORT`,
+        default 4445) so in-flight samplers finish and no new ones start; the
+        run lands `DRAINED`, distinct from `COMPLETED` and `ABORTED`.
 
-        If the TCP send fails (port not yet listening, JMeter already
-        exited), falls back to `SIGTERM` — JMeter's signal handler treats
-        SIGTERM as a less-graceful stop (StopTestNow-equivalent). The run
-        still lands `DRAINED` on clean exit.
+        Returns 202 immediately — poll `GET /api/v1/test` for convergence.
+        Idempotent within a drain window.
 
-        If JMeter does not exit within `JMETER_DRAIN_TIMEOUT_S` (default
-        60 s), the lifecycle escalates to `SIGKILL` and the run lands
-        `ABORTED` with reason `drainTimeoutExpired`.
-
-        Returns 202 immediately — caller polls `GET /api/v1/test` for
-        state convergence. Idempotent; repeated calls during the same
-        drain window are no-ops.
+        A failed TCP send falls back to `SIGTERM`, which JMeter treats as the
+        less graceful StopTestNow but still ends `DRAINED`. Exceeding
+        `JMETER_DRAIN_TIMEOUT_S` (default 60 s) escalates to `SIGKILL` and the
+        run lands `ABORTED` with reason `drainTimeoutExpired`.
       responses:
         "202": { description: Drain accepted. }
         "404":
@@ -381,21 +374,15 @@ paths:
       tags: [observability]
       summary: Tail of the JMeter child's stdout/stderr (console) or jmeter.log
       description: |
-        `stream` selects the source. The two surfaces are intentionally
-        not merged so a UI tab labelled "Console" doesn't sprout JMeter
-        log4j lines and vice versa.
+        `stream` picks the source; the two are deliberately not merged, so a UI
+        tab labelled "Console" never sprouts log4j lines. Any other value is a
+        400.
 
-        * `console` (default) — orchestrator's in-memory ring buffer of
-          the JMeter child process's stdout + stderr, captured by the
-          drainer in `JmeterProcessManager`. Capped at `LOG_BUFFER_LINES`
-          (default 1000). Available as soon as JMeter starts writing.
-        * `jmeter` — tail of `jmeter.log` on disk, written by JMeter's
-          own log4j logger. Distinct content (much more verbose:
-          internal scheduler, thread group lifecycle, etc.). Returns an
-          empty body when the file doesn't exist yet (e.g. `IDLE` /
-          `PREPARING` state, before the child has started writing).
-
-        Any other value returns 400 BAD_REQUEST.
+        * `console` (default) — in-memory ring buffer of the JMeter child's
+          stdout and stderr, capped at `LOG_BUFFER_LINES` (default 1000).
+          Available as soon as JMeter writes.
+        * `jmeter` — tail of `jmeter.log`, JMeter's own log4j output, far more
+          verbose. Empty body until the child creates the file.
       parameters:
         - in: query
           name: tail
@@ -423,12 +410,14 @@ paths:
   # Platform
   #
   # /api/v1/health, /api/v1/info, and /api/v1/metrics were dropped when the
-  # orchestrator migrated to Spring Boot — those concerns are served by
-  # Spring Boot Actuator at /actuator/health, /actuator/info, and
-  # /actuator/prometheus respectively. /api/v1/ready and /api/v1/config
-  # stay because they implement orchestrator-specific logic that actuator
-  # doesn't cover (Kafka + disk readiness composition; resolved-config
-  # snapshot with secrets redacted).
+  # orchestrator migrated to Spring Boot — health/info are served by Spring
+  # Boot Actuator at /actuator/health and /actuator/info.
+  # (2026-07-21): /actuator/prometheus is 404 by design — the Micrometer/
+  # OTel stack was removed (hosting infra provides observability); the
+  # app-level counters live on /api/v1/metrics/orchestrator. /api/v1/ready
+  # and /api/v1/config stay because they implement orchestrator-specific
+  # logic that actuator doesn't cover (ingest + disk readiness composition;
+  # resolved-config snapshot with secrets redacted).
   # ────────────────────────────────────────────────────────────────────────
   /api/v1/ready:
     get:
@@ -436,9 +425,17 @@ paths:
       summary: Readiness — pod can accept HTTP traffic
       description: |
         Independent of the test lifecycle. Returns 200 whenever the
-        orchestrator can serve traffic (Kafka client connected, disk OK).
-        A `RUNNING` test never causes a 503; `testState` is reported as
-        informational only.
+        orchestrator can serve traffic (metrics-consumer reachable, disk OK,
+        no unresolved orphan JMeter). A `RUNNING` test never causes a 503;
+        `testState` is reported as informational only.
+
+        `reason` is null when UP; otherwise one of, in precedence order:
+        the metrics-consumer reason (e.g. `ingest_unreachable`),
+        `disk_pressure`, or `orphanJmeterProcess: …` (
+        a JMeter child outlived its run and could not be terminated, or
+        `ORPHAN_JMETER_POLICY=REPORT` left it running deliberately). An
+        orphan means the next run would contend with a full-heap leftover,
+        so the worker takes itself out of rotation.
       security: []
       responses:
         "200":
@@ -447,7 +444,9 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ReadyResponse" }
         "503":
-          description: Not ready (Kafka unreachable, disk full, startup not finished).
+          description: |
+            Not ready (metrics-consumer unreachable, disk full, unresolved
+            orphan JMeter, startup not finished).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ReadyResponse" }
@@ -475,8 +474,8 @@ components:
         Static token from the `AUTH_TOKEN` env var. When `AUTH_TOKEN` is
         empty (default), all endpoints accept anonymous requests. When set,
         every `/api/v1/*` endpoint except `/api/v1/ready` and the Spring
-        Boot Actuator endpoints (`/actuator/health`, `/actuator/info`,
-        `/actuator/prometheus`) requires `Authorization: Bearer ${AUTH_TOKEN}`.
+        Boot Actuator endpoints (`/actuator/health`, `/actuator/info`)
+        requires `Authorization: Bearer ${AUTH_TOKEN}`.
 
   responses:
     NoFile:
@@ -543,7 +542,7 @@ components:
       description: |
         Outer test lifecycle (owned by `TestRunManager`).
 
-        `DRAINED` (MID-TEST-SCALING Phase B) — graceful drain via
+        `DRAINED` — graceful drain via
         `POST /api/v1/test/drain` succeeded; in-flight samplers completed
         and JMeter exited cleanly. Distinct from `COMPLETED` (natural
         end-of-test) and `ABORTED` (forced stop). Treated as a successful
@@ -645,7 +644,7 @@ components:
           type: object
           additionalProperties: { type: string }
           description: |
-            Track G (Step 31) — JMeter system properties. Each entry
+            JMeter system properties. Each entry
             forwarded to the child process as `-J<key>=<value>`. Keys
             must match `[A-Za-z_][A-Za-z0-9_.]{0,63}`; values ≤ 256
             chars, no control characters. Validated at request time —
@@ -657,9 +656,6 @@ components:
           example:
             REGION: "us-east-1"
             USER_OFFSET: "0"
-        kafkaBrokers:        { type: string, example: "b1:9092,b2:9092" }
-        schemaRegistryUrl:   { type: string, format: uri }
-        kafkaTopic:          { type: string, example: "jmeter.metrics.perSecond" }
         workerIdSource:      { $ref: "#/components/schemas/WorkerIdSource" }
         resultSink:          { $ref: "#/components/schemas/ResultSinkType" }
         autoUploadResults:
@@ -671,12 +667,12 @@ components:
           minimum: 0
           nullable: true
           description: |
-            MID-TEST-SCALING Phase C — seconds since `run.startedAt` at
+            Seconds since `run.startedAt` at
             which this worker joined. `0`/null for original-fleet workers
             (joined at run start); `> 0` for mid-test scale-up joiners
             (set by the global-orchestrator's
             `POST /api/v1/runs/{runId}/scaleUp` fan-out). Stamped onto
-            every published `WorkerMetricBatch` Avro envelope so the
+            every published `WorkerMetricBatch` JSON envelope so the
             consumer + UI can compute per-second fleet rollups (sum over
             members live at second X).
         application:
@@ -756,8 +752,8 @@ components:
         elapsedMs:        { type: integer, format: int64, example: 45321 }
         rowsIngested:     { type: integer, format: int64, example: 12890 }
         windowsPublished: { type: integer, format: int64, example: 44 }
-        lastKafkaAckMs:   { type: integer, format: int64, nullable: true }
-        kafkaSendErrors:  { type: integer, format: int64, example: 0 }
+        lastPublishAckMs: { type: integer, format: int64, nullable: true }
+        publishErrors:    { type: integer, format: int64, example: 0 }
         jmeterPid:        { type: integer, nullable: true, example: 12345 }
         jmeterAlive:      { type: boolean }
         exitCode:         { type: integer, nullable: true }
@@ -811,27 +807,27 @@ components:
 
     OrchestratorMetrics:
       type: object
-      description: Orchestrator's own counters (subset; full list in /api/v1/metrics Prometheus output).
+      description: Orchestrator's own app-level counters — the whole metrics surface this service exposes.
       properties:
         rowsParsedTotal:           { type: integer, format: int64 }
         windowsPublishedTotal:     { type: integer, format: int64 }
-        kafkaSendErrorsTotal:      { type: integer, format: int64 }
-        kafkaLastAckEpochMs:       { type: integer, format: int64 }
+        publishErrorsTotal:        { type: integer, format: int64 }
+        publishLastAckEpochMs:     { type: integer, format: int64 }
         uploadInflightBytes:       { type: integer, format: int64, description: Bytes currently buffered into staging .tmp files across all in-flight uploads. Zero when idle. }
         diskFreeBytes:             { type: integer, format: int64 }
-        offsetSaveFailuresTotal:   { type: integer, format: int64, description: Cumulative JTL byte-offset persist failures since process start. Each failure means up to one flush interval of rows is reprocessed and de-duplicated by Kafka on the next restart. Alert on a non-zero rate of increase. }
+        offsetSaveFailuresTotal:   { type: integer, format: int64, description: Cumulative JTL byte-offset persist failures since process start. Each failure means up to one flush interval of rows is reprocessed and de-duplicated by the metrics-consumer's idempotent insert on the next restart. Alert on a non-zero rate of increase. }
 
     # ──────────────────────────────────────────────────────────────────────
     # Platform
     # ──────────────────────────────────────────────────────────────────────
     ReadyResponse:
       type: object
-      required: [status, kafkaReachable, diskFreeBytes, testState]
+      required: [status, ingestReachable, diskFreeBytes, testState]
       properties:
         status:
           type: string
           enum: [UP, DOWN]
-        kafkaReachable: { type: boolean }
+        ingestReachable: { type: boolean }
         diskFreeBytes:  { type: integer, format: int64 }
         testState:
           allOf:
@@ -842,7 +838,7 @@ components:
         reason:
           type: string
           nullable: true
-          description: Present only when `status=DOWN` (e.g. `kafka_unreachable`, `disk_full`, `starting`).
+          description: Present only when `status=DOWN` (e.g. `ingest_unreachable`, `disk_pressure`, `startup_in_progress`).
 
     ConfigResponse:
       type: object
@@ -856,9 +852,7 @@ components:
         BASE_DIR: "/opt/jmeter"
         JMETER_HOME: "/opt/jmeter"
         JMETER_JVM_ARGS: "-Xms2g -Xmx2g"
-        KAFKA_BROKERS: "b1:9092,b2:9092"
-        SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
-        KAFKA_TOPIC: "jmeter.metrics.perSecond"
+        METRICS_INGEST_URL: "http://metrics-consumer:8083/api/v1/ingest"
         TEST_REGION: "us-east-1"
         ARTIFACT_SOURCE: "HTTP_UPLOAD"
         RESULT_SINK: "HTTP_UPLOAD"

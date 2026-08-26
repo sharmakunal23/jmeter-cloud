@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 300" font-family="-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <!-- SLIMDOWN SL-D (2026-07-21): Prometheus, postgres-exporter and Jaeger
+       retired — hosting infra provides observability. Grafana survives with
+       the Application Performance dashboard on the Postgres datasource
+       (operator decision D-1). -->
+  <defs>
+    <marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 z" fill="#4f46e5"/></marker>
+    <marker id="ag" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 z" fill="#475569"/></marker>
+  </defs>
+  <rect width="1020" height="300" fill="#ffffff"/>
+  <text x="30" y="34" font-size="19" font-weight="700" fill="#0f172a">grafana — Application Performance dashboard</text>
+  <text x="30" y="56" font-size="12.5" fill="#64748b">Grafana reads per-run series straight from Postgres. Prometheus / postgres-exporter / Jaeger retired (SLIMDOWN 2026-07-21) — hosting infra provides observability.</text>
+
+  <!-- source -->
+  <g font-size="11.5">
+    <rect x="30" y="150" width="220" height="64" rx="8" fill="#d1fae5" stroke="#059669" stroke-width="1.5"/>
+    <text x="140" y="178" text-anchor="middle" font-weight="600" font-size="12" fill="#065f46">Postgres</text>
+    <text x="140" y="198" text-anchor="middle" font-size="10" fill="#047857" font-family="monospace">metrics."workerMetric"</text>
+  </g>
+
+  <!-- grafana -->
+  <g font-size="12.5">
+    <rect x="420" y="142" width="180" height="80" rx="8" fill="#e0e7ff" stroke="#4f46e5" stroke-width="1.5"/>
+    <text x="510" y="172" text-anchor="middle" font-weight="600" fill="#3730a3">Grafana</text>
+    <text x="510" y="191" text-anchor="middle" font-size="10.5" fill="#4f46e5" font-family="monospace">:3000</text>
+    <text x="510" y="208" text-anchor="middle" font-size="10" fill="#4f46e5">1 datasource (Postgres)</text>
+
+    <!-- dashboard -->
+    <rect x="770" y="120" width="220" height="124" rx="10" fill="#eef2ff" stroke="#c7d2fe"/>
+    <text x="880" y="146" text-anchor="middle" font-size="11" font-weight="700" fill="#4338ca">Application Performance</text>
+    <text x="880" y="166" text-anchor="middle" font-size="10.5" fill="#3730a3" font-family="monospace">perTestLiveMetrics</text>
+    <text x="880" y="192" text-anchor="middle" font-size="9.5" fill="#4f46e5">$runId + $label vars</text>
+    <text x="880" y="212" text-anchor="middle" font-size="9.5" fill="#4f46e5">deep-linked / embedded</text>
+    <text x="880" y="226" text-anchor="middle" font-size="9.5" fill="#4f46e5">from the UI by runId</text>
+  </g>
+
+  <!-- postgres -> grafana datasource -->
+  <g stroke="#475569" stroke-width="1.6" fill="none" marker-end="url(#ag)">
+    <line x1="250" y1="182" x2="418" y2="182"/>
+  </g>
+  <!-- grafana -> dashboard -->
+  <g stroke="#4f46e5" stroke-width="1.4" fill="none" marker-end="url(#a)">
+    <line x1="600" y1="182" x2="768" y2="182"/>
+  </g>
+
+  <g font-size="10.5" fill="#475569"><text x="334" y="174" text-anchor="middle">SQL datasource (per-run series)</text></g>
+  <g font-size="10.5" fill="#4f46e5"><text x="684" y="174" text-anchor="middle">renders</text></g>
+</svg>

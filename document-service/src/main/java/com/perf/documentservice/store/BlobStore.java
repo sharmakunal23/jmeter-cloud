@@ -4,37 +4,28 @@ import java.io.IOException;
 import java.io.InputStream;
 
 /**
- * Single contract for the document-service's storage backends.
+ * Storage contract for the document-service, implemented by
+ * {@link LocalFsBlobStore} (default) and {@code S3BlobStore} ({@code -Pcloud}
+ * only — the AWS SDK is not in the default JAR).
  *
- * <p>Two implementations are planned:
- * <ul>
- *   <li>{@link LocalFsBlobStore} (default) — host-mounted directory under
- *       {@code DOCUMENT_SERVICE_LOCAL_FS_ROOT}. Always built.</li>
- *   <li>{@code S3BlobStore} (Step 13, {@code -Pcloud} profile) — pulls AWS
- *       SDK; not in the default JAR.</li>
- * </ul>
- *
- * <p>All methods operate on a server-issued {@code blobId} (ULID,
- * URL-safe). Implementations must never trust a caller-provided digest —
- * the sha256 in {@link BlobMetadata} is computed from the byte stream as
- * it lands.
- *
- * <p>Streams are passed through directly (no buffering in memory) so a
- * 512-MB data-files zip doesn't blow up the heap.
+ * <p>Every method keys off a server-issued {@code blobId} (ULID, URL-safe) and
+ * streams bytes through without buffering, so a 512-MB data-files zip never
+ * lands in the heap. Implementations compute the {@link BlobMetadata} sha256
+ * from the stream as it arrives — a caller-supplied digest is never trusted.
  */
 public interface BlobStore {
 
     /**
      * Stores the bytes from {@code input} and returns the computed metadata.
-     * Implementations must compute the sha256 + size during the read, not
-     * by re-scanning the persisted bytes.
+     * Compute sha256 and size during the read, never by re-scanning the
+     * persisted bytes.
      *
-     * @param input        the byte source — closed by the caller, not the store.
-     * @param contentType  optional Content-Type header value to round-trip on GET. May be null.
-     * @param name         optional human-readable label (Step 18 — surfaced in the UI dropdown).
-     * @param description  optional free-form description (Step 18).
-     * @param type         optional purpose tag (testPlan / dataFiles / result / other).
-     * @param application  optional application tag (Step 28 — gates the launcher's downstream pickers).
+     * @param input        byte source — closed by the caller, not the store.
+     * @param contentType  Content-Type to round-trip on GET. Nullable.
+     * @param name         human-readable label shown in the UI dropdown. Nullable.
+     * @param description  free-form description. Nullable.
+     * @param type         purpose tag: testPlan / dataFiles / result / other. Nullable.
+     * @param application  application tag gating the launcher's pickers. Nullable.
      * @return server-issued metadata including the new {@code blobId}.
      */
     BlobMetadata put(InputStream input, String contentType,
@@ -47,25 +38,21 @@ public interface BlobStore {
     }
 
     /**
-     * Lists stored blobs filtered by {@code type} and / or {@code application}
-     * (when non-null). Filters AND together. Pagination via {@code offset} +
-     * {@code limit}; ordering is by {@code uploadedAt} DESC so the newest
-     * blob lands first.
+     * Lists blobs matching every non-null filter, newest {@code uploadedAt}
+     * first.
      *
-     * @param typeFilter         filter to a single type tag, or {@code null} for all types.
-     * @param applicationFilter  filter to a single application tag, or {@code null} for all apps.
-     *                           Empty string matches blobs that have no application tag (legacy).
-     * @param offset             number of items to skip.
-     * @param limit              maximum items returned. Caller must clamp.
+     * @param typeFilter         a single type tag, or {@code null} for all.
+     * @param applicationFilter  a single application tag, or {@code null} for all.
+     *                           <b>Empty string</b> matches only untagged blobs.
+     * @param offset             items to skip.
+     * @param limit              maximum items returned. The caller must clamp this.
      */
     BlobListing list(String typeFilter, String applicationFilter,
                      int offset, int limit) throws IOException;
 
     /**
-     * Returns distinct application tags across all stored blobs, with the
-     * blob count per application. Sorted by {@code blobCount} DESC so the
-     * busiest applications surface first. Blobs without an application
-     * tag (legacy uploads pre-Step-28) appear under a {@code null} key.
+     * Returns each distinct application tag with its blob count, busiest first.
+     * Untagged blobs appear under a {@code null} key.
      */
     java.util.List<ApplicationSummary> listApplications() throws IOException;
 
@@ -87,9 +74,8 @@ public interface BlobStore {
     BlobMetadata stat(String blobId) throws IOException;
 
     /**
-     * Deletes a blob plus its metadata sidecar. Returns {@code true} if the
-     * blob existed (and was removed) — {@code false} if it was already gone.
-     * Idempotent on absent blobs; safe to call repeatedly.
+     * Deletes a blob and its metadata, returning whether it existed. Idempotent
+     * — calling it on an absent blob is not an error.
      */
     boolean delete(String blobId) throws IOException;
 }

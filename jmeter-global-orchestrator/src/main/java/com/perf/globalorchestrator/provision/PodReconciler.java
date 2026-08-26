@@ -2,8 +2,6 @@ package com.perf.globalorchestrator.provision;
 
 import com.perf.globalorchestrator.domain.Pod;
 import com.perf.globalorchestrator.repo.PodRepository;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -16,66 +14,42 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Phase 2 of the capacity rework: keeps the {@code pod} registry table and
- * the docker daemon's container set in sync for every per-application pod.
+ * Keeps the {@code pod} registry table and the provisioner's live workers in
+ * sync, in two idempotent passes.
  *
- * <h2>What gets reconciled</h2>
- * Two passes, both idempotent:
+ * <p>The <b>worker-first</b> pass lists everything this control plane manages
+ * and, for each, either ensures it is running or — when no registry row exists —
+ * adopts it by inserting one, which is what recovers a reset registry whose
+ * workers survived. The <b>row-first</b> pass then deletes registry rows whose
+ * worker the provisioner cannot see.
  *
- * <ol>
- *   <li><b>Container-first pass.</b> List every container labelled
- *       {@code com.perf.jmeterCloud.managedBy=global-orchestrator}. For each:
- *       <ul>
- *         <li>If a matching {@code pod} row exists → ensure the container
- *             is running (start if exited).</li>
- *         <li>If no row exists → adopt by inserting one. Used when the
- *             registry was reset but containers survived.</li>
- *       </ul></li>
- *   <li><b>Row-first pass.</b> For every {@code pod} row with
- *       {@code applicationId} set: if no matching container exists, delete
- *       the orphan row. Legacy static pods (rows where {@code applicationId}
- *       IS NULL) are <em>never</em> touched — they belong to the static
- *       compose services until Phase 6 deletes them.</li>
- * </ol>
+ * <p>Runs once at boot on {@link ApplicationReadyEvent}, and on demand via
+ * {@code POST /api/v1/admin/reconcilePods} — useful after a manual delete or an
+ * interrupted spin-up. Errors are logged at WARN and the sweep continues to the
+ * next pod; it never throws, because capacity drift beats a boot failure when
+ * the substrate is briefly unreachable.
  *
- * <h2>When it runs</h2>
- * Once at boot via {@link ApplicationReadyEvent} (after Spring + DataSource
- * are fully up). Operators can also force a sweep via
- * {@code POST /api/v1/admin/reconcilePods} — useful after a manual
- * {@code docker rm} or to recover from an interrupted spin-up.
- *
- * <h2>Failure handling</h2>
- * Any error is logged at WARN and the reconciler continues with the next
- * pod. The sweep never throws — capacity drift is preferred to a boot
- * failure when the docker daemon is briefly unreachable.
+ * <p><b>Not wired under {@code PROVISIONING_MODE=STATIC}</b>, and the bean's
+ * absence is the point rather than an in-method guard: "the reconciler does not
+ * exist in static mode" is a structural guarantee where "every entry point
+ * remembers to check a flag" is only a promise. The row-first pass deletes any
+ * row whose worker the provisioner cannot see, and with an operator-managed
+ * fleet there is nothing to ask — so it would read the entire declared fleet as
+ * orphaned and delete it on the next boot. {@code AdminController} injects it
+ * optionally and answers {@code 409 PROVISIONING_DISABLED} when absent.
  */
 @Component
+@ConditionalOnProvisioningMode(ProvisioningMode.DYNAMIC)
 public class PodReconciler {
 
     private static final Logger LOG = LoggerFactory.getLogger(PodReconciler.class);
 
     private final PodRepository pods;
     private final PodProvisioner provisioner;
-    private final Counter adopted;
-    private final Counter started;
-    private final Counter orphansDeleted;
-    private final Counter errors;
 
-    public PodReconciler(PodRepository pods, PodProvisioner provisioner, MeterRegistry meterRegistry) {
+    public PodReconciler(PodRepository pods, PodProvisioner provisioner) {
         this.pods = pods;
         this.provisioner = provisioner;
-        this.adopted = Counter.builder("globalOrchestrator.podReconciler.adopted")
-                .description("Containers seen on the daemon with no matching pod row → row inserted.")
-                .register(meterRegistry);
-        this.started = Counter.builder("globalOrchestrator.podReconciler.started")
-                .description("Containers found stopped that the reconciler started.")
-                .register(meterRegistry);
-        this.orphansDeleted = Counter.builder("globalOrchestrator.podReconciler.orphansDeleted")
-                .description("Pod rows pointing at containers that no longer exist → row deleted.")
-                .register(meterRegistry);
-        this.errors = Counter.builder("globalOrchestrator.podReconciler.errors")
-                .description("Per-pod reconciler errors. Sweep continues on each.")
-                .register(meterRegistry);
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -117,7 +91,6 @@ public class PodReconciler {
             allManaged = listAllManaged();
         } catch (Exception e) {
             LOG.warn("PodReconciler: failed to list managed containers: {}", e.toString());
-            errors.increment();
             summary.errors.add("list-managed: " + e.getMessage());
             return summary;
         }
@@ -140,11 +113,10 @@ public class PodReconciler {
                     // baseUrl is reconstructed from podName + the configured local-orch port.
                     pods.register(c.podName(), c.region(), defaultBaseUrlFor(c.podName()), c.applicationId());
                     summary.adopted.add(c.podName());
-                    adopted.increment();
                     LOG.info("PodReconciler adopted orphan container {} (app={}, region={})",
                             c.podName(), c.applicationId(), c.region());
                 }
-                // WORKER-HYGIENE Phase B — back-fill the recycle-tracking
+                // Back-fill the recycle-tracking
                 // columns from the container's daemon-truth. recordProvisionMetadata
                 // uses COALESCE so it only writes columns that are currently
                 // null on the row, leaving freshly-spun pods (which got
@@ -157,12 +129,10 @@ public class PodReconciler {
                 if (!provisioner.isRunning(c.podName())) {
                     provisioner.start(c.podName());
                     summary.started.add(c.podName());
-                    started.increment();
                     LOG.info("PodReconciler started stopped container {}", c.podName());
                 }
             } catch (Exception e) {
                 LOG.warn("PodReconciler: error handling container {}: {}", c.podName(), e.toString());
-                errors.increment();
                 summary.errors.add(c.podName() + ": " + e.getMessage());
             }
         }
@@ -178,12 +148,10 @@ public class PodReconciler {
                 int n = pods.deleteByPodId(row.podId());
                 if (n > 0) {
                     summary.orphansDeleted.add(row.podId());
-                    orphansDeleted.increment();
                     LOG.info("PodReconciler deleted orphan row {} (container missing)", row.podId());
                 }
             } catch (Exception e) {
                 LOG.warn("PodReconciler: error deleting orphan row {}: {}", row.podId(), e.toString());
-                errors.increment();
                 summary.errors.add(row.podId() + ": " + e.getMessage());
             }
         }
@@ -221,7 +189,6 @@ public class PodReconciler {
             } catch (Exception e) {
                 LOG.warn("PodReconciler: listFor({},{}) failed: {}",
                         row.applicationId(), row.region(), e.toString());
-                errors.increment();
             }
         }
         return new ArrayList<>(merged.values());
@@ -234,10 +201,11 @@ public class PodReconciler {
      * route fan-out to the pod.
      */
     private String defaultBaseUrlFor(String podName) {
-        // Mirror the provisioner's baseUrlFor() logic. Hardcoded port 8080
-        // because that's the local-orch HTTP_PORT; configurable via
-        // ProvisionerProperties when we wire that injection in Phase 3.
-        return "http://" + podName + ":8080";
+        // KUBE-5 Option A — delegate: the URL shape is substrate-specific
+        // ({podName}:8080 on docker, {podName}.{headlessService}:8080 on
+        // K8s), so hardcoding the docker shape here would mis-address
+        // adopted orphans in-cluster.
+        return provisioner.baseUrlFor(podName);
     }
 
     /** Summary returned by {@link #reconcile()} — surfaced via the admin endpoint. */

@@ -3,7 +3,7 @@ package com.perf.globalorchestrator.domain;
 import java.time.Instant;
 
 /**
- * AUTOMATION Phase E — one health-transition record for an application
+ * One health-transition record for an application
  * (a row in {@code globalOrchestrator.applicationHealthHistory}, Flyway V23).
  * Written only when an app's aggregate status CHANGES (not every poll), so the
  * log stays compact; the daily infra-readiness email reads the last 24h to

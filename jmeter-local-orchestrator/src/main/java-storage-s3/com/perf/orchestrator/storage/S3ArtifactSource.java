@@ -39,7 +39,7 @@ import java.util.Optional;
  * {@link Optional#empty()} — that is normal control flow, not an error.
  *
  * <h2>S3 not as a sink</h2>
- * Per {@code ORCHESTRATOR-PLAN.md} §"Storage Backends", S3 is intentionally
+ * Per {@code docs/orchestratorPlan.md} §"Storage Backends", S3 is intentionally
  * not implemented as a {@link ResultSink}. {@code RESULT_SINK=S3} is
  * rejected at startup by {@code OrchestratorConfig}.
  */

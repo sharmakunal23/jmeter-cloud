@@ -18,7 +18,7 @@ import type { RegionCapacity } from "../api/regions";
 import { utilizationTier } from "../util/utilization";
 
 /**
- * UI-C2.b → C2.b polish — fleet allocation + visualization, lane-style.
+ * Fleet allocation and visualization, lane-style.
  *
  * <p>One column per region; each region card carries its name,
  * capacity, Add/Remove controls, and a grid of worker tiles below.
@@ -28,7 +28,7 @@ import { utilizationTier } from "../util/utilization";
  *
  * <h3>Add / Remove vs. set-count</h3>
  * The original stepper let the operator type an absolute count
- * ("set this region to 5 pods"). UI-C2.b polish split it into two
+ * ("set this region to 5 pods"). It was later split into two
  * delta controls — "Add N" / "Remove N" — to mirror the mid-test
  * scaling operations the backend will expose later
  * ({@code POST/DELETE /api/v1/runs/{id}/members}). Add snapshots the
@@ -43,7 +43,7 @@ import { utilizationTier } from "../util/utilization";
  * <code>{app}-{runId6}-{region}-worker-{N}</code>.
  */
 
-// UX7 — flow layout constants. Each region is now SPLIT across two node
+// Flow layout constants. Each region is now SPLIT across two node
 // types (HeaderNode + one PodNode per worker) wired by edges, so the
 // diagram reads like a real tree instead of a card-with-grid.
 const HEADER_NODE_WIDTH   = 280;
@@ -55,7 +55,7 @@ const POD_V_GAP           = 14;
 const HEADER_TO_POD_GAP   = 60;
 const PODS_PER_ROW        = 4;
 
-// UX8 — multi-row region layout. 1-3 regions fit comfortably on a
+// Multi-row region layout. 1-3 regions fit comfortably on a
 // single row; 4+ wraps so individual headers stay readable instead of
 // shrinking with fitView.
 const REGIONS_PER_ROW     = 3;
@@ -75,7 +75,7 @@ export interface FleetFlowDiagramProps {
      */
     workerStatuses?: Record<string, WorkerStatus[]>;
     /**
-     * UX3 hybrid view (WORKER-HYGIENE UI rework). When set, the diagram
+     * When set, the diagram
      * renders a per-worker click target but does NOT expose any inline
      * +/- controls — those moved to the sibling allocation form so
      * editing the count doesn't churn the React Flow viewport. Kept
@@ -84,7 +84,7 @@ export interface FleetFlowDiagramProps {
      */
     onWorkerClick?: (region: string, nodeIndex: number) => void;
     /**
-     * UX1 — per-region capacity ceiling from the application's
+     * Per-region capacity ceiling from the application's
      * `capacity[]` grid. Displayed as the denominator in "X / max"
      * instead of IDLE-pod count, so the operator sees the policy
      * ceiling, not the live registry view.
@@ -138,7 +138,7 @@ function FleetFlowDiagramInner({
             appLabel, onWorkerClick, maxByRegion],
     );
 
-    // UX6 — auto-refit whenever the node count or region count changes.
+    // Auto-refit whenever the node count or region count changes.
     // ReactFlow's `fitView` prop only fires on mount; without this, adding
     // a worker via the form panel grows the diagram off-viewport until
     // the operator manually hits the Fit View control.
@@ -237,8 +237,8 @@ interface BuildGraphArgs {
 }
 
 /**
- * UX7 — emits a HEADER node per region + one POD node per worker, plus
- * edges connecting each header to its pods. UX8 — when there are more
+ * Emits a HEADER node per region + one POD node per worker, plus
+ * edges connecting each header to its pods. When there are more
  * than {@link REGIONS_PER_ROW} regions, wraps to additional rows.
  */
 function buildGraph({
@@ -262,7 +262,7 @@ function buildGraph({
         return { width, height, rows };
     }
 
-    // Walk regions row-by-row (UX8) so a wide allocation in row 1 doesn't
+    // Walk regions row-by-row so a wide allocation in row 1 doesn't
     // collide with row 2.
     const rowsOfRegions: typeof sortedRegions[] = [];
     for (let i = 0; i < totalRegions; i += REGIONS_PER_ROW) {
@@ -310,7 +310,7 @@ function buildGraph({
             });
 
             // Pod row(s): centred under the header, stacked rows of PODS_PER_ROW.
-            // UX18 — per-pod edges scaled badly: with 10+ pods the
+            // Per-pod edges scaled badly: with 10+ pods the
             // smoothstep curves routed through the gaps between tiles,
             // making the diagram noisy. Instead we draw ONE trunk edge
             // per region (header → invisible anchor at the centre-top of
@@ -389,7 +389,7 @@ const nodeTypes = {
     trunkAnchor: TrunkAnchorNode,
 };
 
-// UX18 — invisible target node for the per-region trunk edge. The edge
+// Invisible target node for the per-region trunk edge. The edge
 // runs header → this anchor (positioned just above the pod block's top
 // centre) so the visual is "one connector dropping into the pod
 // cluster" instead of N criss-crossing per-pod connectors.
@@ -410,7 +410,7 @@ function TrunkAnchorNode() {
     );
 }
 
-// UX7 — HeaderNode keeps the visual identity of the old region card
+// HeaderNode keeps the visual identity of the old region card
 // (the user explicitly asked to preserve it). It's now a true node,
 // disconnected from the pod grid; pods live in their own nodes wired
 // by edges, which gives the diagram its tree-style "flow" feel.
@@ -517,7 +517,7 @@ function PodNode({ data }: NodeProps) {
 }
 
 /**
- * UX6 + container-resize — re-runs ReactFlow's `fitView`:
+ * Re-runs ReactFlow's `fitView` on container resize:
  *   1. On any change to {@code refitKey} (passed in from the parent;
  *      includes the node count + region count) — so adding a worker
  *      from the form panel keeps the diagram centred.
@@ -526,7 +526,7 @@ function PodNode({ data }: NodeProps) {
  */
 function AutoFitOnResize({ refitKey }: { refitKey: string }) {
     const { fitView } = useReactFlow();
-    // UX6 — refit whenever the node/region count shifts. A short delay
+    // Refit whenever the node/region count shifts. A short delay
     // gives React Flow a tick to render the new node positions before
     // we measure them.
     useEffect(() => {
@@ -558,7 +558,7 @@ function AutoFitOnResize({ refitKey }: { refitKey: string }) {
 
 // ── Add / Remove delta controls ────────────────────────────────────
 
-// UX3 hybrid view — DeltaControls + DeltaButton (the in-node +/-) removed.
+// DeltaControls + DeltaButton (the in-node +/-) removed.
 // Edit ergonomics live in the sibling allocation form so adjusting the
 // count doesn't churn the React Flow viewport.
 

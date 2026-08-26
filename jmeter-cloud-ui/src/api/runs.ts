@@ -21,12 +21,12 @@ export type MemberState =
   | "REQUESTED"
   | "ACCEPTED"
   | "RUNNING"
-  // MID-TEST-SCALING Phase B — operator drained via POST /runs/{runId}/scaleDown.
+  // Operator drained via POST /runs/{runId}/scaleDown.
   | "DRAINING"
   | "COMPLETED"
   | "FAILED"
   | "ABORTED"
-  // MID-TEST-SCALING Phase B — successful terminal after graceful drain.
+  // Successful terminal after graceful drain.
   | "DRAINED";
 
 export interface RunFleetMember {
@@ -41,13 +41,13 @@ export interface RunFleetMember {
   startedAt?: string | null;
   completedAt?: string | null;
   /**
-   * MID-TEST-SCALING Phase A — null for original-fleet members; >= 0 for
+   * Null for original-fleet members; >= 0 for
    * mid-test scale-up joiners (seconds since `run.startedAt`). UI renders
    * a "joined +Xm" chip on rows with a non-null value.
    */
   joinedAtSecond?: number | null;
   /**
-   * WORKER-HYGIENE Phase F2 — joined from `pod.runsServed` server-side.
+   * Joined from `pod.runsServed` server-side.
    * Null when the pod row is gone. UI uses this to flag workers whose
    * pod is near its recycle threshold.
    */
@@ -99,7 +99,7 @@ export type RunEventType =
 export type ActorSource = "anonymous" | "headerActor" | "oidcSubject" | "iamRole" | "system";
 
 /**
- * AUDIT-TRAIL — one append-only audit event from
+ * One append-only audit event from
  * {@code GET /api/v1/runs/{runId}/events}. `result` is `ok` / `partial` /
  * `rejected:CODE`. `payload` is a per-eventType contract (see openapi.yaml).
  */
@@ -121,9 +121,9 @@ export interface RunEventsListing {
 }
 
 /**
- * HM-1 — per-second timeseries returned by
+ * Per-second timeseries returned by
  * {@code GET /api/v1/runs/{runId}/timeseries}. Drives the four native
- * charts in the run-detail Metrics tab (HM-3).
+ * charts in the run-detail Metrics tab.
  */
 export interface TimeseriesPoint {
   /** Unix epoch second. */
@@ -165,9 +165,9 @@ export interface MetricsTimeseries {
 }
 
 /**
- * HM-5 — batched per-run timeseries returned by
+ * Batched per-run timeseries returned by
  * {@code GET /api/v1/runs/timeseries?ids=A,B}. Drives the two-run
- * comparison view (HM-6 / HM-7). Partial-200 shape: if one of the
+ * comparison view. Partial-200 shape: if one of the
  * two ids has been purged, the other still surfaces in {@link runs}
  * and the missing id appears in {@link missing}.
  *
@@ -211,7 +211,7 @@ export type WorkerStatus =
   | "STOPPED";     // terminal — completed/failed/aborted
 
 /**
- * MID-TEST-SCALING Phase A — body of `POST /api/v1/runs/{runId}/scaleUp`.
+ * Body of `POST /api/v1/runs/{runId}/scaleUp`.
  * The original run's testPlan + dataFiles blob IDs come from the persisted
  * run row; the request only carries the per-region allocation.
  */
@@ -220,7 +220,7 @@ export interface ScaleUpRunRequest {
 }
 
 /**
- * MID-TEST-SCALING Phase A — response of `POST /api/v1/runs/{runId}/scaleUp`.
+ * Response of `POST /api/v1/runs/{runId}/scaleUp`.
  * `run` is the post-scale snapshot (original + newly added members).
  * `partial` is true iff `granted < requested` (only with bestEffort=true).
  */
@@ -233,7 +233,7 @@ export interface ScaleUpRunResponse {
 }
 
 /**
- * MID-TEST-SCALING Phase B — body of `POST /api/v1/runs/{runId}/scaleDown`.
+ * Body of `POST /api/v1/runs/{runId}/scaleDown`.
  * Supply EXACTLY ONE of {@link workerIds} or {@link allocations}:
  *   - {@code workerIds} — explicit list of pod ids to drain.
  *   - {@code allocations} — per-region drain count; the service picks the
@@ -245,7 +245,7 @@ export interface ScaleDownRunRequest {
 }
 
 /**
- * MID-TEST-SCALING Phase B — response of `POST /api/v1/runs/{runId}/scaleDown`.
+ * Response of `POST /api/v1/runs/{runId}/scaleDown`.
  * {@link drained} lists workerIds that were targeted and accepted by their
  * local-orch. {@link skipped} lists targets that were already terminal,
  * already DRAINING, or whose drain RPC failed — each with a one-line reason.
@@ -269,7 +269,7 @@ export interface StartRunRequest {
   labelFilter?: string[];
   initiatedBy?: string;
   /**
-   * WORKER-HYGIENE Phase E — when true, a shortfall during claim
+   * When true, a shortfall during claim
    * triggers an on-the-fly spin (subject to the application capacity
    * ceiling). Default false. The launcher sets this only after the
    * operator confirms a shortfall dialog rendered from the 503 body.
@@ -284,7 +284,7 @@ export interface StartRunRequest {
 }
 
 /**
- * UI-D3 — paginated listing result. {@code total} comes from the
+ * Paginated listing result. {@code total} comes from the
  * {@code X-Total-Count} response header so the body wire format stays
  * a flat array.
  */
@@ -353,7 +353,7 @@ export async function request<T>(
 ): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  // AUDIT-TRAIL — attach the operator's self-attested identity on every
+  // Attach the operator's self-attested identity on every
   // state-changing call so the global-orchestrator can record who did it.
   // Reads are unaffected. Absent actor → header omitted → server defaults
   // to "anonymous".
@@ -396,26 +396,19 @@ export const runsApi = {
   },
 
   /**
-   * MID-TEST-SCALING Phase A — adds workers to a RUNNING run. Strict by
-   * default; `bestEffort: true` accepts a partial claim instead of
-   * rolling back on a per-region shortfall (mirrors `start()`).
+   * Adds workers to a RUNNING run, strictly by default — `bestEffort` accepts a
+   * partial claim rather than rolling back on a per-region shortfall, and
+   * `spinShortfall` provisions the missing pods up to the capacity ceiling and
+   * retries, letting the operator go beyond the currently-IDLE count. Both
+   * mirror `start()`.
    *
-   * <p>May throw {@link GlobalOrchestratorError} with codes:
-   *   <ul>
-   *     <li>{@code RUN_NOT_FOUND} (404) — runId doesn't exist.</li>
-   *     <li>{@code RUN_NOT_SCALABLE} (409) — run state ≠ RUNNING.</li>
-   *     <li>{@code RUN_NOT_SCALABLE_NO_APPLICATION} (409) — legacy
-   *         untagged run can't gate capacity.</li>
-   *     <li>{@code APPLICATION_CAPACITY_EXCEEDED} (409) — per-(app,
-   *         region) maxAvailable cap hit.</li>
-   *     <li>{@code INSUFFICIENT_CAPACITY} (503) — strict-mode shortfall;
-   *         body carries structured {@link ApiError.shortfall}.</li>
-   *   </ul>
-   *
-   * <p>{@code spinShortfall: true} provisions the missing pods (up to the
-   * per-(app, region) max capacity) and retries — lets the operator add
-   * workers beyond the currently-IDLE count. Exceeding the ceiling →
-   * {@code APPLICATION_CAPACITY_EXCEEDED} (409). Mirrors {@link start}.
+   * Throws {@link GlobalOrchestratorError} with:
+   *   - `RUN_NOT_FOUND` (404)
+   *   - `RUN_NOT_SCALABLE` (409) — run is not RUNNING
+   *   - `RUN_NOT_SCALABLE_NO_APPLICATION` (409) — untagged run cannot gate capacity
+   *   - `APPLICATION_CAPACITY_EXCEEDED` (409) — per-(app, region) ceiling hit
+   *   - `INSUFFICIENT_CAPACITY` (503) — strict-mode shortfall; the body carries
+   *     a structured {@link ApiError.shortfall}
    */
   scaleUp: (
     runId: string,
@@ -436,7 +429,7 @@ export const runsApi = {
   },
 
   /**
-   * MID-TEST-SCALING Phase B — drains workers from a RUNNING run via
+   * Drains workers from a RUNNING run via
    * graceful drain (JMeter TCP shutdown port → in-flight samplers
    * complete → DRAINED on clean exit; drain timeout → ABORTED with
    * reason {@code drainTimeoutExpired}).
@@ -547,7 +540,7 @@ export const runsApi = {
   },
 
   /**
-   * UI-D3 — paginated + application-filtered listing. Reads the total
+   * Paginated + application-filtered listing. Reads the total
    * count from the {@code X-Total-Count} response header (the body
    * itself is a flat array per the OpenAPI spec).
    */
@@ -591,7 +584,7 @@ export const runsApi = {
     request<Run>("GET", `/api/v1/runs/${encodeURIComponent(runId)}`, undefined, signal),
 
   /**
-   * AUDIT-TRAIL — one page of the run's reverse-chronological audit timeline
+   * One page of the run's reverse-chronological audit timeline
    * (who started / scaled / drained, when, and with what result). A
    * long-running test can accumulate many events, so this is paginated:
    * `offset`/`limit` (default page size 25, newest first); the total rides on
@@ -635,7 +628,7 @@ export const runsApi = {
     ),
 
   /**
-   * HM-1 — per-second timeseries for the run-detail Metrics tab.
+   * Per-second timeseries for the run-detail Metrics tab.
    * Empty arrays during PREPARING (200, not 404) so the polling UI
    * doesn't flash a red error before metrics-consumer's first write.
    *
@@ -666,8 +659,8 @@ export const runsApi = {
   },
 
   /**
-   * HM-5 — batch fetch the per-second timeseries for two runs in one
-   * round-trip. Drives the two-run comparison view (HM-6 / HM-7).
+   * Batch fetch the per-second timeseries for two runs in one
+   * round-trip. Drives the two-run comparison view.
    * The backend enforces exactly two distinct ids; this client
    * reflects that in the signature so the constraint can't be
    * accidentally violated from app code.

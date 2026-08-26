@@ -1,12 +1,12 @@
 package com.perf.orchestrator;
 
+import com.perf.orchestrator.buffer.MetricsDispatcher;
 import com.perf.orchestrator.config.OrchestratorBeans;
 import com.perf.orchestrator.config.OrchestratorConfig;
 import com.perf.orchestrator.http.ReadinessProbe;
-import com.perf.orchestrator.kafka.MetricPublisher;
 import com.perf.orchestrator.lifecycle.TestRunManager;
 import com.perf.orchestrator.metrics.JmxMetricsCollector;
-import com.perf.orchestrator.metrics.KafkaReachabilityProbe;
+import com.perf.orchestrator.metrics.IngestReachabilityProbe;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.Banner;
@@ -23,16 +23,13 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Entry point for the orchestrator process. Boots the Spring application
- * context built from {@link OrchestratorBeans} (which declares every
- * orchestrator singleton as a {@code @Bean}), then registers the explicit
- * shutdown hook that owns lifecycle ordering.
+ * Process entry point: boots the Spring context from {@link OrchestratorBeans},
+ * then registers the shutdown hook that owns lifecycle ordering.
  *
- * <p>{@code main()} stays small on purpose: every singleton's construction
- * and dependency wiring lives in {@link OrchestratorBeans}; this class only
- * owns the runtime ordering that Spring's default destroy phase can't
- * express (Kafka probe DOWN before drain, drain before producer close,
- * producer close before context close).
+ * <p>{@code main()} stays small on purpose. Construction and wiring belong to
+ * {@link OrchestratorBeans}; this class owns only the ordering Spring's destroy
+ * phase cannot express — ingest probe DOWN before drain, drain before dispatcher
+ * close, dispatcher close before context close.
  */
 public final class OrchestratorMain {
 
@@ -50,7 +47,7 @@ public final class OrchestratorMain {
 
         // Shutdown ordering matters for correctness:
         //
-        //   1. kafkaProbe.close() — flips /actuator/health to DOWN
+        //   1. ingestProbe.close() — flips /actuator/health to DOWN
         //      immediately so the K8s Service stops routing new traffic to
         //      this pod within one probe interval. Cheap (≤2 s).
         //   2. runManager.shutdownGracefully(grace) — blocks while the
@@ -58,13 +55,14 @@ public final class OrchestratorMain {
         //      sentinel → drain pipeline → publish final window → terminal
         //      state. Tomcat is still up so operators can poll
         //      GET /api/v1/test and watch the state transition. The state
-        //      machine calls metricPublisher.flush() at end-of-run, so by
-        //      the time this returns the singleton publisher has already
-        //      drained its buffers for the last run.
-        //   3. metricPublisher.close() — flushes any laggards (defensive)
-        //      and disposes the underlying KafkaProducer. Must happen AFTER
-        //      runManager.shutdownGracefully so we don't kill the producer
-        //      while the in-flight run is still publishing.
+        //      machine drains the dispatch queue at end-of-run, so by the
+        //      time this returns every envelope from the last run has
+        //      reached the disk buffer (and ideally the consumer).
+        //   3. metricsDispatcher.close() — stops the dispatch thread. Must
+        //      happen AFTER runManager.shutdownGracefully so we don't kill
+        //      the dispatcher while the in-flight run is still publishing.
+        //      Unsent envelopes stay in the on-disk buffer and are replayed
+        //      by the next process (boot scrub + retry sweeper).
         //   4. jmx.close() — releases the JMX connector after the
         //      pipeline / observability path no longer needs it.
         //   5. springCtx.close() — last. Stops Tomcat (no new requests),
@@ -72,19 +70,19 @@ public final class OrchestratorMain {
         //      destroyMethod="" so closing the context does NOT double-close
         //      the resources we just released above.
         Duration shutdownGrace = Duration.ofSeconds(config.getOrchestratorShutdownGraceSeconds());
-        KafkaReachabilityProbe kafkaProbe = springCtx.getBean(KafkaReachabilityProbe.class);
+        IngestReachabilityProbe ingestProbe = springCtx.getBean(IngestReachabilityProbe.class);
         TestRunManager runManager = springCtx.getBean(TestRunManager.class);
-        MetricPublisher metricPublisher = springCtx.getBean(MetricPublisher.class);
+        MetricsDispatcher metricsDispatcher = springCtx.getBean(MetricsDispatcher.class);
         JmxMetricsCollector jmx = springCtx.getBean(JmxMetricsCollector.class);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             LOG.info("Shutdown hook firing — graceful drain budget: {}s", shutdownGrace.toSeconds());
-            kafkaProbe.close();
+            ingestProbe.close();
             runManager.shutdownGracefully(shutdownGrace);
             try {
-                metricPublisher.close();
+                metricsDispatcher.close();
             } catch (Exception e) {
-                LOG.warn("metricPublisher.close() failed during shutdown", e);
+                LOG.warn("metricsDispatcher.close() failed during shutdown", e);
             }
             jmx.close();
             springCtx.close();
@@ -150,12 +148,15 @@ public final class OrchestratorMain {
         // We don't use multipart/form-data anywhere — disable the filter
         // so it doesn't intercept octet-stream / zip POSTs.
         props.put("spring.servlet.multipart.enabled", false);
-        // Actuator — expose only the endpoints we actually want public.
-        // /actuator/prometheus is the scrape endpoint; health + info round
-        // out the K8s probe surface. Other actuator endpoints (env, beans,
-        // mappings) stay hidden by default.
-        props.put("management.endpoints.web.exposure.include", "health,info,prometheus");
+        // Actuator — SLIMDOWN (2026-07-21): health,info ONLY. Never drop
+        // health — compose healthchecks, both provisioners' health-waits,
+        // and K8s probes depend on it. /actuator/prometheus is 404 by
+        // design (the hosting infra provides observability); the export
+        // flag keeps the default in-memory registry from pretending
+        // otherwise.
+        props.put("management.endpoints.web.exposure.include", "health,info");
         props.put("management.endpoint.health.show-details", "always");
+        props.put("management.defaults.metrics.export.enabled", false);
         // Springdoc / Swagger UI — point the bundled UI at the
         // hand-curated YAML (bundled into the JAR via the pom's resource
         // mapping). Visitors hit /swagger-ui.html → redirect to
@@ -179,8 +180,9 @@ public final class OrchestratorMain {
      *
      * <p>Reason precedence is fixed and documented:
      * <ol>
-     *   <li>If Kafka is unreachable → DOWN with the probe's reason
-     *       (most severe — no metrics flow, no test can complete cleanly).</li>
+     *   <li>If the metrics-consumer is unreachable → DOWN with the probe's
+     *       reason (most severe — no metrics flow beyond the disk buffer,
+     *       new runs should not start).</li>
      *   <li>Else if disk free is below the configured threshold (and the
      *       threshold is > 0) → DOWN with {@code disk_pressure} (less
      *       severe — an in-flight test may still finish; new runs should
@@ -194,17 +196,43 @@ public final class OrchestratorMain {
      * purpose.
      */
     public static ReadinessProbe.Snapshot composeReadinessSnapshot(
-            KafkaReachabilityProbe.Snapshot kafkaSnap,
+            IngestReachabilityProbe.Snapshot ingestSnap,
             long diskFreeBytes,
             long minFreeDiskBytes,
             String testState) {
-        if (!kafkaSnap.reachable()) {
-            return ReadinessProbe.Snapshot.down(kafkaSnap.reason(), diskFreeBytes, testState);
+        return composeReadinessSnapshot(ingestSnap, diskFreeBytes, minFreeDiskBytes, testState, null);
+    }
+
+    /**
+     * STATIC-FLEET Phase 6 overload — adds the orphan-JMeter signal.
+     *
+     * <p>Precedence is unchanged at the top (ingest, then disk); the orphan
+     * check sits last because it is the least severe of the three: the
+     * worker is reachable and has room, it just has a leftover child that
+     * would contend with the next run. It is reported only when
+     * <em>unresolved</em> — the reaper's normal path kills the orphan and
+     * clears the signal, so a healthy worker never flaps. A non-null value
+     * means either the kill failed or the policy is REPORT, and in both
+     * cases this worker should stop being handed runs.
+     *
+     * @param unresolvedOrphan null when clean; otherwise the reason
+     */
+    public static ReadinessProbe.Snapshot composeReadinessSnapshot(
+            IngestReachabilityProbe.Snapshot ingestSnap,
+            long diskFreeBytes,
+            long minFreeDiskBytes,
+            String testState,
+            String unresolvedOrphan) {
+        if (!ingestSnap.reachable()) {
+            return ReadinessProbe.Snapshot.down(ingestSnap.reason(), diskFreeBytes, testState);
         }
         if (minFreeDiskBytes > 0 && diskFreeBytes < minFreeDiskBytes) {
-            // Kafka is fine — keep kafkaReachable=true in the JSON so
-            // operators see the actual Kafka state, not a false negative.
-            return ReadinessProbe.Snapshot.downKafkaUp("disk_pressure", diskFreeBytes, testState);
+            // The consumer is fine — keep ingestReachable=true in the JSON so
+            // operators see the actual consumer state, not a false negative.
+            return ReadinessProbe.Snapshot.downIngestUp("disk_pressure", diskFreeBytes, testState);
+        }
+        if (unresolvedOrphan != null) {
+            return ReadinessProbe.Snapshot.downIngestUp(unresolvedOrphan, diskFreeBytes, testState);
         }
         return ReadinessProbe.Snapshot.up(diskFreeBytes, testState);
     }

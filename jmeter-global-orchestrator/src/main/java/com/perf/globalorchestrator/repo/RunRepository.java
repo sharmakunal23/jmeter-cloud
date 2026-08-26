@@ -251,6 +251,25 @@ public class RunRepository {
                 state.name(), reason, state.name(), state.name(), runId);
     }
 
+    /**
+     * Claim the transition into a terminal
+     * state. Flips the run only when it is not already terminal and reports
+     * whether THIS caller won (rowcount 1). {@code refreshAndGet} runs
+     * concurrently across replicas (UI polls + ResultsSavedSweeper +
+     * PodSweeper reap on every instance); the winner-only contract is what
+     * keeps the terminal audit event and the runTrend snapshot single-shot.
+     * {@code completedAt} COALESCEs so the first stamp wins.
+     */
+    public int updateRunStateClaimingTerminal(String runId, RunState state, String reason) {
+        return jdbc.update(
+                "UPDATE \"globalOrchestrator\".\"run\" "
+                + "SET \"state\"=?, \"stateReason\"=?, "
+                + "\"completedAt\"=COALESCE(\"completedAt\", now()) "
+                + "WHERE \"runId\"=? "
+                + "  AND \"state\" NOT IN ('COMPLETED','FAILED','ABORTED')",
+                state.name(), reason, runId);
+    }
+
     public void updateMemberState(String runId, String workerId,
                                   MemberState state, String reason,
                                   Integer fanoutStatusCode) {
@@ -345,7 +364,7 @@ public class RunRepository {
     }
 
     /**
-     * AUDIT-TRAIL — the most-recent run a worker (pod) served, by {@code
+     * The most-recent run a worker (pod) served, by {@code
      * createdAt}. Drives PodRecycler's best-effort attribution of a recycle to
      * a run (a pod can serve many runs over its life, so "most recent" is the
      * pragmatic choice). Empty when the pod never served a run. Backed by the
@@ -461,7 +480,7 @@ public class RunRepository {
     }
 
     /**
-     * AUTOMATION Phase D — counts of this application's runs created since
+     * Counts of this application's runs created since
      * {@code since}, grouped by terminal/active state (state name → count).
      * Drives the daily perf-report's "launched / completed / failed" line:
      * launched = sum of all values; completed = COMPLETED; failed = FAILED +

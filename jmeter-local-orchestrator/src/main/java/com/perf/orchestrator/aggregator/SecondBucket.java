@@ -1,6 +1,6 @@
 package com.perf.orchestrator.aggregator;
 
-import com.perf.orchestrator.WorkerMetricEntry;
+import com.perf.orchestrator.model.WorkerMetricEntry;
 import com.perf.orchestrator.model.JtlRow;
 import org.HdrHistogram.Histogram;
 
@@ -8,46 +8,22 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Accumulates raw {@link JtlRow} data for a single {@code (label, windowSecond)} pair
- * and flushes it into a {@link WorkerMetricEntry} on demand.
+ * Accumulates {@link JtlRow} data for one {@code (label, windowSecond)} pair and
+ * flushes it as a {@link WorkerMetricEntry}. Package-private: callers reach the
+ * aggregation layer only through {@link TumblingWindowAggregator}, which supplies
+ * the envelope-level identity this bucket deliberately does not carry.
  *
- * <p>The bucket carries only label-scoped fields. The envelope-level identity
- * ({@code workerId}, {@code region}, {@code runId}, {@code windowSecond},
- * {@code windowTimestamp}) is supplied by {@link TumblingWindowAggregator} when it
- * groups buckets into a {@link com.perf.orchestrator.WorkerMetricBatch} envelope —
- * this matches the K-1 envelope-per-window publish path.
+ * <p>Percentiles come from an HDR {@link Histogram} tracking up to 3,600,000 ms
+ * — enough for JMeter's multi-minute connection-timeout rows — at <b>2</b>
+ * significant digits, which is a deliberate memory-over-precision trade. Two
+ * digits pre-allocate a ~16 KB counts array against ~104 KB at three; with a
+ * fresh bucket per label per second, 100 active labels cut allocation churn from
+ * ~10 MB/s to ~1.6 MB/s and live footprint from ~31 MB to ~5 MB, which is what
+ * makes a 12-hour run viable. The resulting ≤1% error is invisible on a
+ * dashboard; a caller needing the true extreme reads
+ * {@link WorkerMetricEntry#rawMaxMs()}, which is tracked raw.
  *
- * <p>Package-private — external callers interact with the aggregation layer only
- * through {@link TumblingWindowAggregator}.
- *
- * <h2>Percentile computation</h2>
- * Uses {@link Histogram} (HDRHistogram) with:
- * <ul>
- *   <li>{@code highestTrackableValue = 3_600_000ms} (1 hour) — safely covers JMeter
- *       connection-timeout rows which can have multi-minute elapsed times</li>
- *   <li>{@code numberOfSignificantValueDigits = 2} — ≤1% error at any percentile,
- *       sufficient for millisecond-resolution performance dashboards. <b>This is a
- *       deliberate memory-over-precision trade-off (RELIABILITY Round 6):</b> a
- *       2-digit histogram pre-allocates a ~16 KB counts array versus ~104 KB at 3
- *       digits — a 6.5× cut. A fresh bucket is allocated per {@code (label, second)};
- *       at 100 active labels/second that drops aggregator allocation churn from
- *       ~10 MB/s to ~1.6 MB/s and live aggregator footprint from ~31 MB to ~5 MB,
- *       which is pure GC-pressure and RSS headroom for long (12 h) runs. 1% error on
- *       a p99 latency is invisible on an operations dashboard; consumers needing an
- *       exact extreme use {@link WorkerMetricEntry#getRawMaxMs()} (tracked raw).</li>
- * </ul>
- *
- * <h2>Counter types</h2>
- * All counters are plain {@code long} fields. This class is single-threaded by
- * design — exclusively accessed by the poll-loop thread in
- * {@link TumblingWindowAggregator}. Volatile/atomic fields would add
- * unnecessary overhead at 333+ recordings per second.
- *
- * <h2>Lifecycle</h2>
- * A bucket is created when the first row for its window arrives, accumulated
- * across rows, and then flushed exactly once via {@link #toMetricEntry} when
- * {@link TumblingWindowAggregator} decides the window has closed. The bucket
- * is discarded after flushing; reset is never needed.
+ * <p>Counters are plain {@code long} — this class is single-threaded.
  */
 final class SecondBucket {
 
@@ -98,6 +74,10 @@ final class SecondBucket {
      * otherwise 10-ms second should pull the average up.
      *
      * <p>Field added 2026-05-10 (HM-1A) for the Avg Response Time chart.
+     * Since SCHEMA-OPT Phase 2 (2026-07-30) it is also emitted on the wire and
+     * stored verbatim — it stopped being a private intermediate and became the
+     * response-time fact, with {@code avgRespTimeMs} demoted to a derived
+     * convenience. Sums fold across workers/labels/time exactly; means do not.
      */
     private long sumElapsedMs;
 
@@ -175,11 +155,11 @@ final class SecondBucket {
     // -----------------------------------------------------------------------
 
     /**
-     * Produces a {@link WorkerMetricEntry} (Avro) from this bucket's accumulated
+     * Produces a {@link WorkerMetricEntry} wire record from this bucket's accumulated
      * state. Only label-scoped fields are populated — the envelope-level identity
      * (workerId, region, runId, windowSecond, windowTimestamp) is supplied by
      * {@link TumblingWindowAggregator} when it groups entries into a
-     * {@link com.perf.orchestrator.WorkerMetricBatch} envelope.
+     * {@link com.perf.orchestrator.model.WorkerMetricBatch} envelope.
      *
      * <p>This method may be called at most once per bucket. After calling it the
      * bucket's internal state is no longer meaningful — the histogram is not
@@ -198,24 +178,24 @@ final class SecondBucket {
                 ? (double) sumElapsedMs / requestCount
                 : 0.0;
 
-        return WorkerMetricEntry.newBuilder()
-                .setLabel(label)
-                .setThroughput(requestCount)
-                .setErrorCount(errorCount)
-                .setErrorRate(errorRate)
-                .setAvgRespTimeMs(avgRespTimeMs)
-                .setP50Ms(histogram.getValueAtPercentile(50.0))
-                .setP90Ms(histogram.getValueAtPercentile(90.0))
-                .setP95Ms(histogram.getValueAtPercentile(95.0))
-                .setP99Ms(histogram.getValueAtPercentile(99.0))
-                .setMinMs(histogram.getMinValue())
-                .setMaxMs(clampedMaxMs())              // see method doc — guards against bucket overshoot
-                .setRawMaxMs(rawMaxMs)                 // unclamped true maximum
-                .setBytesReceived(bytesReceived)
-                .setBytesSent(bytesSent)
-                .setStatusCodes(Map.copyOf(statusCodes))
-                .setActiveThreads(lastActiveThreads)
-                .build();
+        return new WorkerMetricEntry(
+                label,
+                requestCount,
+                errorCount,
+                errorRate,
+                avgRespTimeMs,
+                sumElapsedMs,                // exact total — what the consumer stores (SCHEMA-OPT Phase 2)
+                histogram.getValueAtPercentile(50.0),
+                histogram.getValueAtPercentile(90.0),
+                histogram.getValueAtPercentile(95.0),
+                histogram.getValueAtPercentile(99.0),
+                histogram.getMinValue(),
+                clampedMaxMs(),              // see method doc — guards against bucket overshoot
+                rawMaxMs,                    // unclamped true maximum
+                bytesReceived,
+                bytesSent,
+                Map.copyOf(statusCodes),
+                lastActiveThreads);
     }
 
     /**
@@ -242,7 +222,7 @@ final class SecondBucket {
      * </ol>
      *
      * <p>Consumers needing the true unclamped maximum (e.g. for outlier
-     * detection) should use {@link WorkerMetricEntry#getRawMaxMs()}.
+     * detection) should use {@link WorkerMetricEntry#rawMaxMs()}.
      */
     private double clampedMaxMs() {
         if (requestCount == 0) return 0.0;

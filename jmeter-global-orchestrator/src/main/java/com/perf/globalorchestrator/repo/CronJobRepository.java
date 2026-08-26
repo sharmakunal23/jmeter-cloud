@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * AUTOMATION — JDBC access for {@code globalOrchestrator.cronJob} (Flyway V20).
+ * JDBC access for {@code globalOrchestrator.cronJob} (Flyway V20).
  * Mirrors {@link RunRepository}'s conventions: the run-state JdbcTemplate,
  * inline-lambda RowMapper, quoted-camelCase SQL.
  *

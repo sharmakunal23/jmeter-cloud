@@ -51,20 +51,17 @@ public record StartTestRequest(
          * shell command line.
          */
         Map<String, String> properties,
-        String kafkaBrokers,
-        String schemaRegistryUrl,
-        String kafkaTopic,
         String workerIdSource,
         String resultSink,
         Boolean autoUploadResults,
         /**
-         * MID-TEST-SCALING Phase C — seconds since {@code run.startedAt} at
+         * Seconds since {@code run.startedAt} at
          * which this worker joined the run. {@code 0} (or null) for
          * original-fleet workers; {@code > 0} for mid-test scale-up
          * joiners (set by the global-orchestrator's
          * {@code POST /api/v1/runs/{runId}/scaleUp} fan-out).
          *
-         * <p>Forwarded onto every published {@link com.perf.orchestrator.WorkerMetricBatch}
+         * <p>Forwarded onto every published {@link com.perf.orchestrator.model.WorkerMetricBatch}
          * so the consumer + UI can compute per-second fleet rollups
          * (sum over members live at second X).
          */

@@ -30,10 +30,7 @@ class OrchestratorConfigTest {
                 "TEST_REGION",         "us-east-1",
                 "RUN_ID",              "20250413-east",
                 "JTL_PATH",            "/results/results.jtl",
-                "SENTINEL_PATH",       "/results/.done",
-                "KAFKA_BROKERS",       "kafka:9092",
-                "SCHEMA_REGISTRY_URL", "http://schema-registry:8081",
-                "KAFKA_TOPIC",         "jmeter.metrics.perSecond"
+                "SENTINEL_PATH",       "/results/.done"
         ));
     }
 
@@ -47,8 +44,7 @@ class OrchestratorConfigTest {
 
         @ParameterizedTest(name = "refuses to start when {0} is missing")
         @ValueSource(strings = {
-                "POD_NAME", "TEST_REGION", "RUN_ID", "JTL_PATH",
-                "SENTINEL_PATH", "KAFKA_BROKERS", "SCHEMA_REGISTRY_URL", "KAFKA_TOPIC"
+                "POD_NAME", "TEST_REGION", "RUN_ID", "JTL_PATH", "SENTINEL_PATH"
         })
         void refuses_to_start(String missingKey) {
             Map<String, String> env = fullValidEnv();
@@ -74,8 +70,7 @@ class OrchestratorConfigTest {
 
         @ParameterizedTest(name = "treats a blank value for {0} the same as absent")
         @ValueSource(strings = {
-                "POD_NAME", "TEST_REGION", "RUN_ID", "JTL_PATH",
-                "SENTINEL_PATH", "KAFKA_BROKERS", "SCHEMA_REGISTRY_URL", "KAFKA_TOPIC"
+                "POD_NAME", "TEST_REGION", "RUN_ID", "JTL_PATH", "SENTINEL_PATH"
         })
         void treats_blank_value_as_absent(String keyWithBlankValue) {
             // A variable set to whitespace (e.g. by a misconfigured ConfigMap) must be
@@ -98,8 +93,7 @@ class OrchestratorConfigTest {
             assertThatThrownBy(() -> OrchestratorConfig.from(env))
                     .isInstanceOf(OrchestratorConfigException.class)
                     .hasMessageContainingAll(
-                            "POD_NAME", "TEST_REGION", "RUN_ID", "JTL_PATH",
-                            "SENTINEL_PATH", "KAFKA_BROKERS", "SCHEMA_REGISTRY_URL", "KAFKA_TOPIC"
+                            "POD_NAME", "TEST_REGION", "RUN_ID", "JTL_PATH", "SENTINEL_PATH"
                     );
         }
     }
@@ -317,9 +311,8 @@ class OrchestratorConfigTest {
                 softly.assertThat(config.getRunId()).isEqualTo("20250413-east");
                 softly.assertThat(config.getJtlPath()).isEqualTo("/results/results.jtl");
                 softly.assertThat(config.getSentinelPath()).isEqualTo("/results/.done");
-                softly.assertThat(config.getKafkaBrokers()).isEqualTo("kafka:9092");
-                softly.assertThat(config.getSchemaRegistryUrl()).isEqualTo("http://schema-registry:8081");
-                softly.assertThat(config.getKafkaTopic()).isEqualTo("jmeter.metrics.perSecond");
+                softly.assertThat(config.getMetricsIngestUrl())
+                        .isEqualTo("http://metrics-consumer:8083/api/v1/ingest");
             });
         }
 
@@ -439,14 +432,14 @@ class OrchestratorConfigTest {
         }
 
         @Test
-        @DisplayName("apply observability buffer defaults — 1000 log lines, 30s Kafka health check, 5s probe timeout, disk gate disabled")
+        @DisplayName("apply observability buffer defaults — 1000 log lines, 30s ingest health check, 5s probe timeout, disk gate disabled")
         void applies_observability_defaults() {
             OrchestratorConfig config = OrchestratorConfig.from(fullValidEnv());
 
             assertSoftly(softly -> {
                 softly.assertThat(config.getLogBufferLines()).isEqualTo(1000);
-                softly.assertThat(config.getKafkaHealthCheckIntervalMs()).isEqualTo(30_000);
-                softly.assertThat(config.getKafkaHealthCheckTimeoutMs()).isEqualTo(5_000);
+                softly.assertThat(config.getIngestHealthCheckIntervalMs()).isEqualTo(30_000);
+                softly.assertThat(config.getIngestHealthCheckTimeoutMs()).isEqualTo(5_000);
                 softly.assertThat(config.getMinFreeDiskMb())
                         .as("disk gate is disabled by default — operators opt in by setting a positive MB value")
                         .isZero();
@@ -476,14 +469,14 @@ class OrchestratorConfigTest {
         }
 
         @Test
-        @DisplayName("KAFKA_HEALTH_CHECK_TIMEOUT_MS rejects zero — a zero-timeout probe would always fail, masking real Kafka faults")
-        void kafka_health_check_timeout_rejects_zero() {
+        @DisplayName("INGEST_HEALTH_CHECK_TIMEOUT_MS rejects zero — a zero-timeout probe would always fail, masking real consumer faults")
+        void ingest_health_check_timeout_rejects_zero() {
             Map<String, String> env = fullValidEnv();
-            env.put("KAFKA_HEALTH_CHECK_TIMEOUT_MS", "0");
+            env.put("INGEST_HEALTH_CHECK_TIMEOUT_MS", "0");
 
             assertThatThrownBy(() -> OrchestratorConfig.from(env))
                     .isInstanceOf(OrchestratorConfigException.class)
-                    .hasMessageContaining("KAFKA_HEALTH_CHECK_TIMEOUT_MS");
+                    .hasMessageContaining("INGEST_HEALTH_CHECK_TIMEOUT_MS");
         }
 
         @Test
@@ -664,7 +657,7 @@ class OrchestratorConfigTest {
         @DisplayName("rejects RESULT_SINK=S3 with a clear error — auto-upload targets the document service only")
         void rejects_s3_as_sink() {
             // S3-as-sink is intentionally unsupported per the design (see
-            // ORCHESTRATOR-PLAN.md "Storage Backends"). The orchestrator
+            // docs/orchestratorPlan.md "Storage Backends"). The orchestrator
             // never needs cloud-specific result-storage code paths because
             // the document service hides whatever underlying store it uses.
             Map<String, String> env = fullValidEnv();
@@ -822,7 +815,7 @@ class OrchestratorConfigTest {
                 "MAX_PLAN_SIZE_MB", "MAX_DATA_ZIP_SIZE_MB", "MAX_EXTRACTED_SIZE_MB",
                 "MAX_ENTRY_SIZE_MB", "MAX_FILE_COUNT",
                 "JMX_PORT", "DOCUMENT_SERVICE_TIMEOUT_S",
-                "LOG_BUFFER_LINES", "KAFKA_HEALTH_CHECK_INTERVAL_MS"
+                "LOG_BUFFER_LINES", "INGEST_HEALTH_CHECK_INTERVAL_MS"
         })
         void rejects_zero_for_positive_int_keys(String key) {
             Map<String, String> env = fullValidEnv();

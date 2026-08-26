@@ -10,10 +10,22 @@
 
 apiVersion: 1
 
+# SLIMDOWN SL-D (2026-07-21): purge the retired datasources from any
+# pre-existing grafana-data volume — deleting their provisioning files
+# alone does not remove previously-registered datasources.
+deleteDatasources:
+  - name: Prometheus
+    orgId: 1
+  - name: Jaeger
+    orgId: 1
+
 datasources:
   - name: Postgres
     type: postgres
     access: proxy
+    # Default since SLIMDOWN SL-D — the only datasource left (Prometheus,
+    # which previously held the flag, retired with the scrape stack).
+    isDefault: true
     url: postgres:5432
     user: metricsReader
     secureJsonData:

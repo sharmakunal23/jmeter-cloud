@@ -1,0 +1,42 @@
+# KUBE-7 — grafana base: Deployment + Service + three provisioning
+# ConfigMaps. Environment-neutral; overlays add credentials and registry
+# images.
+#
+# provisioning/dashboards/loader.yml and dashboards/perTestLiveMetrics.json
+# are VERBATIM COPIES of their grafana/ originals;
+# provisioning/datasources/postgres.yml is a NEAR-VERBATIM copy whose only
+# delta is the env-interpolated password (documented in the file). If you
+# touch an original, touch its copy — same discipline as
+# postgres/kube/base/initdb. `diff grafana/dashboards grafana/kube/base/dashboards`
+# and `diff grafana/provisioning/dashboards grafana/kube/base/provisioning/dashboards`
+# must stay empty.
+#
+# The `grafana-credentials` Secret (keys: adminUser, adminPassword,
+# metricsReaderPassword) is NOT defined here: the kind overlay generates
+# it with the local dev values; privateCloud creates it out-of-band.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml
+configMapGenerator:
+  # Fixed names (no hash suffix): the dashboard loader re-reads its
+  # directory every 30 s, so a dashboard edit propagates through the
+  # kubelet's ConfigMap sync WITHOUT a pod roll — a hash suffix would
+  # force one. Datasource provisioning is boot-only either way; restart
+  # the pod after editing it.
+  - name: grafana-provisioning-datasources
+    files:
+      - provisioning/datasources/postgres.yml
+    options:
+      disableNameSuffixHash: true
+  - name: grafana-provisioning-dashboards
+    files:
+      - provisioning/dashboards/loader.yml
+    options:
+      disableNameSuffixHash: true
+  - name: grafana-dashboards
+    files:
+      - dashboards/perTestLiveMetrics.json
+    options:
+      disableNameSuffixHash: true

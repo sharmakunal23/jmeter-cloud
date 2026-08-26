@@ -1,9 +1,8 @@
 package com.perf.orchestrator.buffer;
 
-import com.perf.orchestrator.WorkerMetricBatch;
-import com.perf.orchestrator.WorkerMetricEntry;
+import com.perf.orchestrator.model.WorkerMetricBatch;
+import com.perf.orchestrator.model.WorkerMetricEntry;
 import com.perf.orchestrator.buffer.DiskBackedMetricsBuffer.DiskBackedMetricsBufferConfig;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -35,17 +34,15 @@ class DiskBackedMetricsBufferTest {
 
     @TempDir Path bufferDir;
 
-    private SimpleMeterRegistry meterRegistry;
     private MutableClock clock;
 
     @BeforeEach
     void setUp() {
-        meterRegistry = new SimpleMeterRegistry();
         clock = new MutableClock(Instant.parse("2026-05-11T12:00:00Z"));
     }
 
     private DiskBackedMetricsBuffer newBuffer(DiskBackedMetricsBufferConfig cfg) {
-        return new DiskBackedMetricsBuffer(bufferDir, cfg, meterRegistry, clock);
+        return new DiskBackedMetricsBuffer(bufferDir, cfg, clock);
     }
 
     private DiskBackedMetricsBuffer newBuffer() {
@@ -66,12 +63,12 @@ class DiskBackedMetricsBufferTest {
             DiskBackedMetricsBuffer buf = newBuffer();
             WorkerMetricBatch original = envelope(1_700_000_000L, "worker-1", List.of("GET /a"));
 
-            BufferedEnvelope handle = buf.enqueue(original, "test.topic").orElseThrow();
+            BufferedEnvelope handle = buf.enqueue(original).orElseThrow();
 
             assertSoftly(softly -> {
-                softly.assertThat(handle.envelope().getWindowSecond()).isEqualTo(1_700_000_000L);
-                softly.assertThat(handle.envelope().getWorkerId().toString()).isEqualTo("worker-1");
-                softly.assertThat(handle.envelope().getEntries()).hasSize(1);
+                softly.assertThat(handle.envelope().windowSecond()).isEqualTo(1_700_000_000L);
+                softly.assertThat(handle.envelope().workerId().toString()).isEqualTo("worker-1");
+                softly.assertThat(handle.envelope().entries()).hasSize(1);
                 softly.assertThat(handle.file()).isNotNull();
                 softly.assertThat(handle.sizeBytes()).isGreaterThan(0);
             });
@@ -82,14 +79,14 @@ class DiskBackedMetricsBufferTest {
 
             BufferedEnvelope peeked = buf.peekOldest().orElseThrow();
             assertThat(peeked.id()).isEqualTo(handle.id());
-            assertThat(peeked.envelope().getWindowSecond()).isEqualTo(1_700_000_000L);
+            assertThat(peeked.envelope().windowSecond()).isEqualTo(1_700_000_000L);
         }
 
         @Test
         @DisplayName("delete removes the file from disk and clears the index entry")
         void delete_removes_from_disk_and_index() throws IOException {
             DiskBackedMetricsBuffer buf = newBuffer();
-            BufferedEnvelope handle = buf.enqueue(envelope(1_700_000_000L, "w-1", List.of("GET /a")), "test.topic").orElseThrow();
+            BufferedEnvelope handle = buf.enqueue(envelope(1_700_000_000L, "w-1", List.of("GET /a"))).orElseThrow();
 
             assertThat(Files.exists(handle.file())).isTrue();
 
@@ -105,7 +102,7 @@ class DiskBackedMetricsBufferTest {
         @DisplayName("delete is idempotent — second delete is a no-op")
         void delete_is_idempotent() {
             DiskBackedMetricsBuffer buf = newBuffer();
-            BufferedEnvelope handle = buf.enqueue(envelope(1_700_000_000L, "w-1", List.of("GET /a")), "test.topic").orElseThrow();
+            BufferedEnvelope handle = buf.enqueue(envelope(1_700_000_000L, "w-1", List.of("GET /a"))).orElseThrow();
 
             buf.delete(handle);
             buf.delete(handle); // must not throw
@@ -117,11 +114,11 @@ class DiskBackedMetricsBufferTest {
         @DisplayName("multiple envelopes preserve chronological order via peekOldest")
         void multiple_envelopes_chronological_order() {
             DiskBackedMetricsBuffer buf = newBuffer();
-            BufferedEnvelope first  = buf.enqueue(envelope(1_700_000_000L, "w-1", List.of("a")), "test.topic").orElseThrow();
+            BufferedEnvelope first  = buf.enqueue(envelope(1_700_000_000L, "w-1", List.of("a"))).orElseThrow();
             clock.advance(Duration.ofSeconds(1));
-            BufferedEnvelope second = buf.enqueue(envelope(1_700_000_001L, "w-1", List.of("b")), "test.topic").orElseThrow();
+            BufferedEnvelope second = buf.enqueue(envelope(1_700_000_001L, "w-1", List.of("b"))).orElseThrow();
             clock.advance(Duration.ofSeconds(1));
-            BufferedEnvelope third  = buf.enqueue(envelope(1_700_000_002L, "w-1", List.of("c")), "test.topic").orElseThrow();
+            BufferedEnvelope third  = buf.enqueue(envelope(1_700_000_002L, "w-1", List.of("c"))).orElseThrow();
 
             assertThat(buf.peekOldest().orElseThrow().id()).isEqualTo(first.id());
             buf.delete(first);
@@ -147,9 +144,8 @@ class DiskBackedMetricsBufferTest {
             DiskBackedMetricsBuffer probe = new DiskBackedMetricsBuffer(
                     bufferDir.resolveSibling(bufferDir.getFileName() + "-probe"),
                     DiskBackedMetricsBufferConfig.defaults(),
-                    new SimpleMeterRegistry(),
                     clock);
-            long oneEntryBytes = probe.enqueue(envelope(1L, "w-probe", List.of("a")), "test.topic")
+            long oneEntryBytes = probe.enqueue(envelope(1L, "w-probe", List.of("a")))
                     .orElseThrow().sizeBytes();
             // Now size the cap so 2 envelopes fit but a 3rd evicts the oldest.
             // Pad the per-file cap to comfortably exceed oneEntryBytes.
@@ -161,18 +157,17 @@ class DiskBackedMetricsBufferTest {
                     0L,                   // no free-disk reserve for this test
                     Duration.ofHours(6)));
 
-            BufferedEnvelope first  = buf.enqueue(envelope(1_700_000_000L, "w-1", List.of("a")), "test.topic").orElseThrow();
+            BufferedEnvelope first  = buf.enqueue(envelope(1_700_000_000L, "w-1", List.of("a"))).orElseThrow();
             clock.advance(Duration.ofMillis(1));
-            BufferedEnvelope second = buf.enqueue(envelope(1_700_000_001L, "w-1", List.of("b")), "test.topic").orElseThrow();
+            BufferedEnvelope second = buf.enqueue(envelope(1_700_000_001L, "w-1", List.of("b"))).orElseThrow();
             // Adding a third pushes past cap (3 × oneEntryBytes > 2.5 × oneEntryBytes); eviction kicks in.
             clock.advance(Duration.ofMillis(1));
-            BufferedEnvelope third  = buf.enqueue(envelope(1_700_000_002L, "w-1", List.of("c")), "test.topic").orElseThrow();
+            BufferedEnvelope third  = buf.enqueue(envelope(1_700_000_002L, "w-1", List.of("c"))).orElseThrow();
 
             // The first envelope (oldest) should have been evicted.
             assertThat(Files.exists(first.file())).isFalse();
             assertThat(buf.peekOldest().orElseThrow().id()).isEqualTo(second.id());
             assertThat(buf.depthEnvelopes()).isEqualTo(2L);
-            assertThat(meterRegistry.counter("metricsBuffer.dropsForCap").count()).isEqualTo(1.0);
         }
     }
 
@@ -193,18 +188,17 @@ class DiskBackedMetricsBufferTest {
                     0L,
                     Duration.ofHours(1)));
 
-            BufferedEnvelope ancient = buf.enqueue(envelope(1_700_000_000L, "w-1", List.of("a")), "test.topic").orElseThrow();
+            BufferedEnvelope ancient = buf.enqueue(envelope(1_700_000_000L, "w-1", List.of("a"))).orElseThrow();
 
             // Age the clock past the TTL.
             clock.advance(Duration.ofHours(2));
 
             // The next enqueue triggers TTL sweep — the ancient envelope drops.
-            BufferedEnvelope fresh = buf.enqueue(envelope(1_700_001_000L, "w-1", List.of("b")), "test.topic").orElseThrow();
+            BufferedEnvelope fresh = buf.enqueue(envelope(1_700_001_000L, "w-1", List.of("b"))).orElseThrow();
 
             assertThat(Files.exists(ancient.file())).isFalse();
             assertThat(buf.peekOldest().orElseThrow().id()).isEqualTo(fresh.id());
-            assertThat(meterRegistry.counter("metricsBuffer.dropsForAge").count()).isEqualTo(1.0);
-            assertThat(meterRegistry.counter("metricsBuffer.dropsForCap").count()).isZero();
+            assertThat(buf.depthEnvelopes()).isEqualTo(1L);
         }
     }
 
@@ -229,11 +223,10 @@ class DiskBackedMetricsBufferTest {
                     Duration.ofHours(6)));
 
             Optional<BufferedEnvelope> result =
-                    buf.enqueue(envelope(1_700_000_000L, "w-1", List.of("a")), "test.topic");
+                    buf.enqueue(envelope(1_700_000_000L, "w-1", List.of("a")));
 
             assertThat(result).as("enqueue must refuse when free disk < threshold").isEmpty();
             assertThat(buf.depthEnvelopes()).isZero();
-            assertThat(meterRegistry.counter("metricsBuffer.dropsForLowDisk").count()).isEqualTo(1.0);
         }
     }
 
@@ -256,11 +249,10 @@ class DiskBackedMetricsBufferTest {
                     Duration.ofHours(6)));
 
             Optional<BufferedEnvelope> result =
-                    buf.enqueue(envelope(1_700_000_000L, "w-1", List.of("GET /api/big")), "test.topic");
+                    buf.enqueue(envelope(1_700_000_000L, "w-1", List.of("GET /api/big")));
 
             assertThat(result).as("oversize envelope must be refused").isEmpty();
             assertThat(buf.depthEnvelopes()).isZero();
-            assertThat(meterRegistry.counter("metricsBuffer.dropsForOversize").count()).isEqualTo(1.0);
         }
     }
 
@@ -282,8 +274,32 @@ class DiskBackedMetricsBufferTest {
             DiskBackedMetricsBuffer buf = newBuffer();
 
             assertThat(Files.exists(orphan)).isFalse();
-            assertThat(meterRegistry.counter("metricsBuffer.bootOrphansRemoved").count()).isEqualTo(1.0);
             assertThat(buf.depthEnvelopes()).isZero();
+        }
+
+        @Test
+        @DisplayName("an undecodable buffered file is dropped at boot, valid ones survive")
+        void drops_undecodable_envelope_keeps_json() throws IOException {
+            // A valid (JSON-era) envelope persisted by a prior process...
+            DiskBackedMetricsBuffer first = newBuffer();
+            first.enqueue(envelope(1_700_000_000L, "w-1", List.of("GET /a"))).orElseThrow();
+
+            // ...plus a file this build cannot decode: gzipped bytes that are
+            // not JSON (a corrupt file, or one written by an older encoding).
+            Path legacy = bufferDir.resolve("0000000000001-000001.envelope.gz");
+            try (var out = new java.util.zip.GZIPOutputStream(Files.newOutputStream(legacy))) {
+                out.write(new byte[] {0x02, 0x30, 0x14, 0x00, 0x7f, (byte) 0xC3, 0x01});
+            }
+
+            DiskBackedMetricsBuffer rebooted = new DiskBackedMetricsBuffer(
+                    bufferDir, DiskBackedMetricsBufferConfig.defaults(), clock);
+
+            assertThat(rebooted.depthEnvelopes())
+                    .as("only the decodable JSON envelope survives the boot scrub")
+                    .isEqualTo(1);
+            assertThat(Files.exists(legacy))
+                    .as("the undecodable legacy file must be deleted")
+                    .isFalse();
         }
 
         @Test
@@ -294,18 +310,16 @@ class DiskBackedMetricsBufferTest {
             // must rediscover the persisted envelopes.
             DiskBackedMetricsBuffer first = newBuffer();
             BufferedEnvelope original =
-                    first.enqueue(envelope(1_700_000_000L, "w-1", List.of("GET /a")), "test.topic").orElseThrow();
+                    first.enqueue(envelope(1_700_000_000L, "w-1", List.of("GET /a"))).orElseThrow();
 
             // New buffer instance against the same dir
-            SimpleMeterRegistry registry2 = new SimpleMeterRegistry();
             DiskBackedMetricsBuffer second = new DiskBackedMetricsBuffer(
-                    bufferDir, DiskBackedMetricsBufferConfig.defaults(), registry2, clock);
+                    bufferDir, DiskBackedMetricsBufferConfig.defaults(), clock);
 
             assertThat(second.depthEnvelopes()).isEqualTo(1L);
             BufferedEnvelope recovered = second.peekOldest().orElseThrow();
             assertThat(recovered.id()).isEqualTo(original.id());
-            assertThat(recovered.envelope().getWindowSecond()).isEqualTo(1_700_000_000L);
-            assertThat(registry2.counter("metricsBuffer.bootRecovered").count()).isEqualTo(1.0);
+            assertThat(recovered.envelope().windowSecond()).isEqualTo(1_700_000_000L);
         }
 
         @Test
@@ -314,7 +328,7 @@ class DiskBackedMetricsBufferTest {
             // Pre-seed a .envelope.gz file that contains malformed gzip bytes.
             Path bad = bufferDir.resolve("9999999999999-000001.envelope.gz");
             try (OutputStream os = new GZIPOutputStream(Files.newOutputStream(bad))) {
-                os.write("not avro".getBytes());
+                os.write("not json {".getBytes());
             }
 
             DiskBackedMetricsBuffer buf = newBuffer();
@@ -340,8 +354,8 @@ class DiskBackedMetricsBufferTest {
             assertThat(buf.depthEnvelopes()).isZero();
             assertThat(buf.depthBytes()).isZero();
 
-            BufferedEnvelope first  = buf.enqueue(envelope(1L, "w-1", List.of("a")), "test.topic").orElseThrow();
-            BufferedEnvelope second = buf.enqueue(envelope(2L, "w-1", List.of("b")), "test.topic").orElseThrow();
+            BufferedEnvelope first  = buf.enqueue(envelope(1L, "w-1", List.of("a"))).orElseThrow();
+            BufferedEnvelope second = buf.enqueue(envelope(2L, "w-1", List.of("b"))).orElseThrow();
             assertThat(buf.depthEnvelopes()).isEqualTo(2L);
             assertThat(buf.depthBytes()).isEqualTo(first.sizeBytes() + second.sizeBytes());
 
@@ -394,25 +408,33 @@ class DiskBackedMetricsBufferTest {
         statusCodes.put("200", 1L);
         List<WorkerMetricEntry> entries = new ArrayList<>();
         for (String label : labels) {
-            entries.add(WorkerMetricEntry.newBuilder()
-                    .setLabel(label)
-                    .setThroughput(1L).setErrorCount(0L).setErrorRate(0.0)
-                    .setAvgRespTimeMs(10.0)
-                    .setP50Ms(10.0).setP90Ms(10.0).setP95Ms(10.0).setP99Ms(10.0)
-                    .setMinMs(10.0).setMaxMs(10.0).setRawMaxMs(10L)
-                    .setBytesReceived(100L).setBytesSent(50L)
-                    .setStatusCodes(statusCodes)
-                    .setActiveThreads(1L)
-                    .build());
+            entries.add(new WorkerMetricEntry(
+                label,
+                1L,
+                0L,
+                0.0,
+                10.0,
+                10L,   // sumElapsedMs — 1 sample × 10 ms
+                10.0,
+                10.0,
+                10.0,
+                10.0,
+                10.0,
+                10.0,
+                10L,
+                100L,
+                50L,
+                statusCodes,
+                1L));
         }
-        return WorkerMetricBatch.newBuilder()
-                .setWindowSecond(sec)
-                .setWindowTimestamp("2026/05/11 12:00:00")
-                .setRegion("us-east-1")
-                .setWorkerId(workerId)
-                .setRunId("test-run")
-                .setEntries(entries)
-                .build();
+        return new WorkerMetricBatch(
+                sec,
+                "2026/05/11 12:00:00",
+                "us-east-1",
+                workerId,
+                "test-run",
+                0L,
+                entries);
     }
 
     /** Minimal mutable Clock for advancing time in tests. */

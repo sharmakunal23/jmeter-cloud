@@ -36,7 +36,7 @@ import static org.assertj.core.api.SoftAssertions.assertSoftly;
 
 /**
  * Lifecycle tests for {@link TestRunManager} with a fake JMeter process —
- * no subprocess spawned, no Kafka broker required. Drives the manager's
+ * no subprocess spawned, no network required. Drives the manager's
  * outer state machine through every documented transition.
  */
 @DisplayName("TestRunManager — outer-state lifecycle")
@@ -239,7 +239,7 @@ class TestRunManagerTest {
         }
 
         @Test
-        @DisplayName("MID-TEST-SCALING Phase B — drain() falls back to SIGTERM when no JMeter listens; clean exit lands DRAINED, not COMPLETED")
+        @DisplayName("drain() falls back to SIGTERM when no JMeter listens; clean exit lands DRAINED, not COMPLETED")
         void drain_lands_drained() {
             launcher.exitCode.set(null);     // hangs until told to exit
             launcher.exitOnSigterm.set(0);   // SIGTERM fallback yields exit-0
@@ -506,9 +506,7 @@ class TestRunManagerTest {
             Path graceBase = baseDir.resolve("graceDefault");
             Map<String, String> env = new HashMap<>(Map.of(
                     "POD_NAME", "w", "TEST_REGION", "us-east-1", "RUN_ID", "boot",
-                    "JTL_PATH", "/results/results.jtl", "SENTINEL_PATH", "/results/.done",
-                    "KAFKA_BROKERS", "kafka:9092", "SCHEMA_REGISTRY_URL", "http://sr:8081",
-                    "KAFKA_TOPIC", "jmeter.metrics.perSecond"));
+                    "JTL_PATH", "/results/results.jtl", "SENTINEL_PATH", "/results/.done"));
             env.put("BASE_DIR",       graceBase.toString());
             env.put("TEST_PLAN_DIR",  graceBase.resolve("testPlan").toString());
             env.put("DATA_FILES_DIR", graceBase.resolve("dataFiles").toString());
@@ -552,7 +550,7 @@ class TestRunManagerTest {
                 null, null,           // testPlanBlobId, dataFilesBlobId
                 List.of(), List.of(),
                 java.util.Map.of(),
-                null, null, null, null, null, null,
+                null, null, null,
                 null,                 // joinedAtSecond — null = original-fleet (Phase C)
                 null,                 // application — untagged in these legacy tests
                 null);                // gracePeriodSeconds — null = use the orchestrator default
@@ -561,7 +559,7 @@ class TestRunManagerTest {
     private static StartTestRequest reqWithGrace(String runId, Integer gracePeriodSeconds) {
         return new StartTestRequest(runId, "us-east-1", null,
                 null, null, List.of(), List.of(), java.util.Map.of(),
-                null, null, null, null, null, null, null, null,
+                null, null, null, null, null,
                 gracePeriodSeconds);
     }
 
@@ -571,10 +569,7 @@ class TestRunManagerTest {
                 "TEST_REGION",         "us-east-1",
                 "RUN_ID",              "boot",
                 "JTL_PATH",            "/results/results.jtl",
-                "SENTINEL_PATH",       "/results/.done",
-                "KAFKA_BROKERS",       "kafka:9092",
-                "SCHEMA_REGISTRY_URL", "http://schema-registry:8081",
-                "KAFKA_TOPIC",         "jmeter.metrics.perSecond"
+                "SENTINEL_PATH",       "/results/.done"
         ));
         env.put("BASE_DIR",       base.toString());
         env.put("TEST_PLAN_DIR",  base.resolve("testPlan").toString());
@@ -684,14 +679,8 @@ class TestRunManagerTest {
         public StreamingPipeline apply(OrchestratorConfig cfg) {
             built.incrementAndGet();
             lastConfig = cfg;
-            com.perf.orchestrator.kafka.MetricPublisher pub = new com.perf.orchestrator.kafka.MetricPublisher() {
-                @Override public void publishAll(java.util.List<com.perf.orchestrator.WorkerMetricBatch> m, String topic) { }
-                @Override public long getPublishedCount() { return 0; }
-                @Override public long getFailedCount() { return 0; }
-                @Override public void close() { }
-            };
-            return new StreamingPipeline(cfg, pub,
-                    new com.perf.orchestrator.buffer.SynchronousMetricsDispatcher(pub)) {
+            return new StreamingPipeline(cfg,
+                    new com.perf.orchestrator.buffer.SynchronousMetricsDispatcher()) {
                 @Override public void run() { /* simulate a fast drain */ }
             };
         }

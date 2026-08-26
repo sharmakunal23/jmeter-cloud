@@ -40,27 +40,12 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
-        <dependency>
-            <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-registry-prometheus</artifactId>
-        </dependency>
-        <!-- OBSERVABILITY Phase B — distributed tracing.
-             micrometer-tracing-bridge-otel wires Spring Boot's
-             autoconfigured tracer onto the OpenTelemetry SDK.
-             opentelemetry-exporter-otlp ships spans to Jaeger over OTLP
-             HTTP (default transport — the bundled OkHttp sender keeps
-             us off netty/gRPC and saves ~3 MB per JAR). To switch to
-             gRPC later: set `management.otlp.tracing.transport=grpc`
-             and add `opentelemetry-exporter-sender-grpc-managed-channel`.
-             Both versions are BOM-managed by spring-boot-dependencies. -->
-        <dependency>
-            <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-tracing-bridge-otel</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.opentelemetry</groupId>
-            <artifactId>opentelemetry-exporter-otlp</artifactId>
-        </dependency>
+        <!-- SLIMDOWN (2026-07-21) — no metrics/tracing stack in this service:
+             the hosting infra provides observability out of the box.
+             Deliberately absent: micrometer-registry-prometheus,
+             micrometer-tracing-bridge-otel, opentelemetry-exporter-otlp.
+             Logs (below) + /actuator/{health,info} are the whole built-in
+             surface — do not reintroduce a registry or tracer. -->
 
         <!-- OBSERVABILITY Phase A — structured JSON logging.
              logstash-logback-encoder version pinned explicitly:
@@ -118,18 +103,6 @@
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
             <!-- Failsafe wires *IT.java behavior tests into `mvn verify`. -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-failsafe-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>integration-test</goal>
-                            <goal>verify</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
         </plugins>
     </build>
 
@@ -147,16 +120,6 @@
                     <groupId>software.amazon.awssdk</groupId>
                     <artifactId>s3</artifactId>
                     <version>2.25.50</version>
-                </dependency>
-                <dependency>
-                    <groupId>org.testcontainers</groupId>
-                    <artifactId>localstack</artifactId>
-                    <scope>test</scope>
-                </dependency>
-                <dependency>
-                    <groupId>org.testcontainers</groupId>
-                    <artifactId>junit-jupiter</artifactId>
-                    <scope>test</scope>
                 </dependency>
             </dependencies>
             <build>

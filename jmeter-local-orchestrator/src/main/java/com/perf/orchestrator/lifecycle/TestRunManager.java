@@ -3,9 +3,7 @@ package com.perf.orchestrator.lifecycle;
 import com.perf.orchestrator.config.Backend;
 import com.perf.orchestrator.config.OrchestratorConfig;
 import com.perf.orchestrator.observability.ErrorContext;
-import com.perf.orchestrator.observability.SpanAttributes;
 import com.perf.orchestrator.storage.ResultSink;
-import io.micrometer.observation.annotation.Observed;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,35 +30,25 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
 /**
- * Owns the test lifecycle:
- * {@code IDLE → PREPARING → STARTING → RUNNING → DRAINING → COMPLETED}
- * (or {@link TestState#FAILED} / {@link TestState#ABORTED}).
+ * Owns the test lifecycle
+ * {@code IDLE → PREPARING → STARTING → RUNNING → DRAINING → COMPLETED}, or
+ * {@link TestState#FAILED} / {@link TestState#ABORTED}.
  *
- * <h2>Threads</h2>
- * One single-thread executor for the run worker (sequential lifecycle), one
- * single-thread executor for the inner streaming pipeline (so it can drain
- * after JMeter exits while the run worker observes), plus the daemon
- * stdout/stderr drainers spawned inside {@link JmeterProcessManager}.
+ * <p>Two single-thread executors: one runs the lifecycle sequentially, the
+ * other the streaming pipeline, so the pipeline can keep draining after JMeter
+ * exits while the run worker watches. {@link #stop()} is SIGTERM escalating to
+ * SIGKILL after {@code JMETER_TERMINATION_GRACE_S}; {@link #abort()} is SIGKILL
+ * at once. Both then write the sentinel, drain, and classify.
  *
- * <h2>Stop / abort semantics</h2>
- * <ul>
- *   <li>{@link #stop()}: SIGTERM → wait {@code JMETER_TERMINATION_GRACE_S} →
- *       SIGKILL fallback → write sentinel → drain → COMPLETED if exit-code 0,
- *       otherwise ABORTED.</li>
- *   <li>{@link #abort()}: SIGKILL immediately → write sentinel → drain →
- *       ABORTED.</li>
- * </ul>
- *
- * <h2>Restart recovery</h2>
- * If {@link CurrentRun} loaded a non-terminal state from disk, the run is
- * marked FAILED on construction with reason {@code "orchestrator_restart"} —
- * the JMeter child died with the previous orchestrator and cannot be resumed.
+ * <p>A run found non-terminal in {@link CurrentRun} at construction is marked
+ * FAILED with reason {@code orchestrator_restart} — its JMeter child died with
+ * the previous orchestrator and cannot be resumed.
  */
-// NOT final: the @Observed methods below make Spring AOP wrap this bean in a
-// CGLIB proxy (Spring Boot's proxyTargetClass=true default). CGLIB can't
-// subclass a final class, so a final modifier here fails context startup with
-// "Cannot subclass final class TestRunManager" — which is exactly what bit the
-// worker once the OBSERVABILITY track added @Observed. Keep it subclassable.
+// NOT final: kept subclassable deliberately. The @Observed spans that forced
+// this (CGLIB can't subclass a final class) left with SLIMDOWN (2026-07-21),
+// but any future Spring proxying of this bean (@Transactional, @Async, a
+// re-added aspect) would hit the same "Cannot subclass final class" startup
+// failure — the modifier is not worth re-fighting.
 public class TestRunManager implements TestRunGate {
 
     private static final Logger LOG = LoggerFactory.getLogger(TestRunManager.class);
@@ -81,12 +69,18 @@ public class TestRunManager implements TestRunGate {
     /** MID-TEST-SCALING Phase B — sends Shutdown / StopTestNow to JMeter's TCP shutdown port. */
     private final JmeterShutdownPortClient shutdownPortClient;
     /**
-     * WORKER-HYGIENE Phase A — re-pointed at each per-run log file
+     * Re-pointed at each per-run log file
      * ({@code logs/{runId}/jmeter.log}) before launch and cleared on
      * post-run cleanup. Optional: when constructed without one (tests),
      * the file-fallback never engages.
      */
     private final com.perf.orchestrator.logs.LogTail logTail;
+    /**
+     * Pre-run worker hygiene. Nullable; when absent
+     * the run proceeds exactly as it did before this phase.
+     */
+    private final com.perf.orchestrator.hygiene.OrphanJmeterReaper orphanReaper;
+    private final com.perf.orchestrator.hygiene.RunArtifactRetention retention;
 
     private final ExecutorService runWorker = Executors.newSingleThreadExecutor(
             namedDaemon("orch-run-worker"));
@@ -141,6 +135,29 @@ public class TestRunManager implements TestRunGate {
                           com.perf.orchestrator.storage.ArtifactSource artifactSource,
                           Clock clock,
                           com.perf.orchestrator.logs.LogTail logTail) {
+        this(defaults, stager, currentRun, launcher, pipelineFactory, resultSink,
+                artifactSource, clock, logTail, null, null);
+    }
+
+    /**
+     * STATIC-FLEET Phase 6 overload — adds the two worker-hygiene
+     * collaborators. Both nullable: they matter on a worker that is never
+     * recycled, and passing null (as the shorter constructors do) simply
+     * skips the pre-run checks.
+     */
+    public TestRunManager(OrchestratorConfig defaults,
+                          ArtifactStager stager,
+                          CurrentRun currentRun,
+                          JmeterLauncher launcher,
+                          Function<OrchestratorConfig, StreamingPipeline> pipelineFactory,
+                          ResultSink resultSink,
+                          com.perf.orchestrator.storage.ArtifactSource artifactSource,
+                          Clock clock,
+                          com.perf.orchestrator.logs.LogTail logTail,
+                          com.perf.orchestrator.hygiene.OrphanJmeterReaper orphanReaper,
+                          com.perf.orchestrator.hygiene.RunArtifactRetention retention) {
+        this.orphanReaper    = orphanReaper;
+        this.retention       = retention;
         this.defaults        = Objects.requireNonNull(defaults);
         this.stager          = Objects.requireNonNull(stager);
         this.currentRun      = Objects.requireNonNull(currentRun);
@@ -150,7 +167,7 @@ public class TestRunManager implements TestRunGate {
         this.artifactSource  = Objects.requireNonNull(artifactSource);
         this.clock           = Objects.requireNonNull(clock);
         this.logTail         = logTail;
-        // MID-TEST-SCALING Phase B — the shutdown-port client itself is
+        // The shutdown-port client itself is
         // stateless; the port number is fixed at construction (matches
         // the launch-time -Jjmeterengine.nongui.port flag).
         this.shutdownPortClient = new JmeterShutdownPortClient(defaults.getJmeterShutdownPort());
@@ -190,12 +207,8 @@ public class TestRunManager implements TestRunGate {
      * with a stable code so the controller can map directly to the right
      * HTTP status.
      */
-    @Observed(name = "localOrchestrator.startTest",
-              contextualName = "startTest",
-              lowCardinalityKeyValues = {"action", "startTest"})
     public synchronized CurrentRun.Snapshot start(StartTestRequest request) {
         Objects.requireNonNull(request, "request");
-        SpanAttributes.tag("runId", request.runId());
         if (shuttingDown) {
             throw new StartRejection("SHUTTING_DOWN", 503,
                     "Orchestrator is shutting down; new tests cannot be accepted.");
@@ -293,9 +306,6 @@ public class TestRunManager implements TestRunGate {
     }
 
     /** Hard kill — SIGKILL, drain, ABORTED. Idempotent. */
-    @Observed(name = "localOrchestrator.abortTest",
-              contextualName = "abortTest",
-              lowCardinalityKeyValues = {"action", "abortTest"})
     public synchronized void abort() {
         Inflight i = inflight;
         if (i == null) return;
@@ -304,28 +314,15 @@ public class TestRunManager implements TestRunGate {
     }
 
     /**
-     * MID-TEST-SCALING Phase B — graceful drain. Sends "Shutdown" to
-     * JMeter's TCP shutdown port so in-flight samplers complete and
-     * JMeter exits cleanly. The lifecycle classifier sees the
-     * {@code drainRequested} flag on exit and lands the run in
-     * {@link TestState#DRAINED} rather than {@link TestState#COMPLETED}.
+     * Drains gracefully by sending "Shutdown" to JMeter's TCP shutdown port, so
+     * in-flight samplers finish and the run lands {@link TestState#DRAINED}
+     * rather than COMPLETED. Idempotent.
      *
-     * <p>If the TCP send fails (port not yet listening, JMeter already
-     * exited), falls back to SIGTERM — JMeter's signal handler treats
-     * SIGTERM as a less-graceful stop (equivalent to StopTestNow). Either
-     * way, the lifecycle worker observes the exit and classifies as
-     * DRAINED if {@code drainRequested} was set first.
-     *
-     * <p>If the drain budget ({@code JMETER_DRAIN_TIMEOUT_S}, default 60 s)
-     * elapses without exit, the {@link #waitForJmeter} polling loop
-     * escalates to abort (SIGKILL) — the run lands as ABORTED with reason
-     * {@code "drainTimeoutExpired"}.
-     *
-     * <p>Idempotent.
+     * <p>A failed TCP send (port not listening yet, JMeter already gone) falls
+     * back to SIGTERM, which JMeter treats as the less graceful StopTestNow.
+     * Exceeding {@code JMETER_DRAIN_TIMEOUT_S} escalates to SIGKILL and the run
+     * lands ABORTED with reason {@code drainTimeoutExpired}.
      */
-    @Observed(name = "localOrchestrator.drainTest",
-              contextualName = "drainTest",
-              lowCardinalityKeyValues = {"action", "drainTest"})
     public synchronized void drain() {
         Inflight i = inflight;
         if (i == null) return;
@@ -355,38 +352,20 @@ public class TestRunManager implements TestRunGate {
     }
 
     /**
-     * Graceful shutdown — drives any in-flight test through its normal
-     * stop → drain → terminal-state path before letting the JVM exit.
+     * Drives any in-flight test through its normal stop → drain → terminal path
+     * before the JVM exits, refusing new runs from the moment it is called.
+     * Idempotent.
      *
-     * <p>Sequence:
-     * <ol>
-     *   <li>Flip {@code shuttingDown} so further {@code POST /test} calls
-     *       fail fast (the controller can short-circuit).</li>
-     *   <li>If a test is running, fire the existing {@link #stop()} path
-     *       — sets {@code stopRequested} on the inflight task and sends
-     *       SIGTERM to the JMeter child via the next 500 ms poll. The run
-     *       worker already handles the rest: it waits for JMeter to exit
-     *       (escalating to SIGKILL after {@code JMETER_TERMINATION_GRACE_S}),
-     *       writes the sentinel, drains the pipeline, transitions to a
-     *       terminal state, and returns.</li>
-     *   <li>Call {@code shutdown()} on both executors so no new tasks are
-     *       accepted, then {@code awaitTermination(grace)} on each.</li>
-     *   <li>If either executor does not finish within the budget, log
-     *       loudly and fall back to {@code shutdownNow()} — the run loop
-     *       sees an {@link InterruptedException} and records the run as
-     *       {@code ABORTED/interrupted}.</li>
-     * </ol>
+     * <p>An executor that overruns its share of the budget is killed with
+     * {@code shutdownNow()}, and the run loop records the run as
+     * {@code ABORTED/interrupted}.
      *
-     * <p>Idempotent — second and subsequent calls are no-ops.
-     *
-     * @param grace total budget for the entire drain; split between the
-     *              two executors. The run worker (which owns SIGTERM
-     *              escalation + pipeline drain + auto-upload) gets the
-     *              first 90% of the budget; the pipeline worker gets the
-     *              remainder. A budget shorter than
-     *              {@code JMETER_TERMINATION_GRACE_S} guarantees the
-     *              JMeter child will be SIGKILL'd by the executor
-     *              interrupt rather than by the orderly SIGTERM path.
+     * @param grace total budget, split 90/10 between the run worker — which owns
+     *              SIGTERM escalation, pipeline drain and auto-upload — and the
+     *              pipeline worker. <b>A budget shorter than
+     *              {@code JMETER_TERMINATION_GRACE_S} guarantees the JMeter
+     *              child is SIGKILLed by the executor interrupt</b> rather than
+     *              stopped by the orderly SIGTERM path.
      */
     public synchronized void shutdownGracefully(Duration grace) {
         if (shuttingDown) return;
@@ -424,7 +403,7 @@ public class TestRunManager implements TestRunGate {
         }
         if (!pipelineOrderly) {
             LOG.warn("Pipeline worker did not drain within {} ms — forcing shutdownNow(). " +
-                    "Final 1-second metric window may not reach Kafka.", pipelineMs);
+                    "Final 1-second metric window may not reach the metrics-consumer.", pipelineMs);
             pipelineWorker.shutdownNow();
         }
     }
@@ -460,6 +439,14 @@ public class TestRunManager implements TestRunGate {
         OrchestratorConfig perRun = null;
         try {
             perRun = buildPerRunConfig(i.request);
+            // Clean slate before JMeter is launched.
+            // Deliberately here, on the run worker, and not in start(): a
+            // process scan plus a SIGTERM→SIGKILL escalation can take seconds,
+            // which must not block the Tomcat request thread. The run has
+            // already been accepted; if the slate can't be cleaned it lands
+            // FAILED with a reason, which is visible and correct.
+            requireNoOrphanJmeter();
+            sweepOldRunArtifacts(i.request.runId());
             // PREPARING — fresh per-run subdirs are created lazily by
             // buildLaunchSpec. WORKER-HYGIENE Phase A: the per-run dir layout
             // ({@code results/{runId}/}, {@code logs/{runId}/}) eliminates
@@ -512,7 +499,7 @@ public class TestRunManager implements TestRunGate {
             // we want that to land as ABORTED, not DRAINED).
             boolean reachedCompleted = false;
             if (i.abortRequested) {
-                // MID-TEST-SCALING Phase B — drain timeout escalation
+                // Drain timeout escalation
                 // sets both drainRequested=true and abortRequested=true.
                 // Distinguish "operator asked for abort" from "drain
                 // timed out" via the reason string so the run-detail
@@ -559,7 +546,7 @@ public class TestRunManager implements TestRunGate {
                     e);
             currentRun.recordFailure(e.getClass().getSimpleName() + ": " + e.getMessage());
         } finally {
-            // WORKER-HYGIENE Phase A — eager post-run cleanup. Sweeps
+            // Eager post-run cleanup. Sweeps
             // results/{runId}/ + logs/{runId}/ when the run terminated
             // cleanly. Preserved for:
             //   - FAILED / ABORTED (decision #7) — postmortem JTL + log.
@@ -630,7 +617,7 @@ public class TestRunManager implements TestRunGate {
                 i.process.sigkill();
                 continue;
             }
-            // MID-TEST-SCALING Phase B — drain timeout escalation. The
+            // Drain timeout escalation. The
             // drain endpoint already sent "Shutdown" via TCP (or fell back
             // to SIGTERM); if JMeter is still alive past the budget,
             // escalate to abort. The drainRequested flag stays set so the
@@ -665,16 +652,13 @@ public class TestRunManager implements TestRunGate {
         env.put("POD_NAME",            defaults.getPodName());
         env.put("TEST_REGION",         firstNonBlank(request.region(), defaults.getTestRegion()));
         env.put("RUN_ID",              request.runId());
-        // WORKER-HYGIENE Phase A — per-run subdirs. The JTL, sentinel,
+        // Per-run subdirs. The JTL, sentinel,
         // and offset state-file all land under results/{runId}/ so the
         // post-run cleanup is a single directory remove.
         env.put("JTL_PATH",            jtlPath(defaults, request.runId()).toString());
         env.put("SENTINEL_PATH",       sentinelPath(defaults, request.runId()).toString());
         env.put("STATE_FILE_PATH",     runResultsDir(defaults, request.runId())
                                                  .resolve(".jtlOffset").toString());
-        env.put("KAFKA_BROKERS",       firstNonBlank(request.kafkaBrokers(),       defaults.getKafkaBrokers()));
-        env.put("SCHEMA_REGISTRY_URL", firstNonBlank(request.schemaRegistryUrl(),  defaults.getSchemaRegistryUrl()));
-        env.put("KAFKA_TOPIC",         firstNonBlank(request.kafkaTopic(),         defaults.getKafkaTopic()));
         env.put("WORKER_ID_SOURCE",    firstNonBlank(request.workerIdSource(),
                 defaults.isUseThreadName() ? "THREAD_NAME" : "POD_NAME"));
         // Streaming knob: per-run aggregator grace period (seconds). Forwarded
@@ -713,7 +697,7 @@ public class TestRunManager implements TestRunGate {
         // sink is DOCUMENT_SERVICE, omitting this key made from(env) throw and
         // strand the run at PREPARING.
         env.put("DOCUMENT_SERVICE_URL", defaults.getDocumentServiceUrl());
-        // MID-TEST-SCALING Phase C — null/missing → 0 (original-fleet);
+        // Null/missing → 0 (original-fleet);
         // non-null → propagated onto every WorkerMetricBatch so the
         // consumer can compute "live members at second X" rollups.
         env.put("JOINED_AT_SECOND",
@@ -738,7 +722,7 @@ public class TestRunManager implements TestRunGate {
         Path planFile = stager.getPlanFile().orElseThrow(() ->
                 new IOException("test plan file disappeared between validation and launch"));
 
-        // WORKER-HYGIENE Phase A — every run gets its own subdirectory
+        // Every run gets its own subdirectory
         // under results/ and logs/ so post-run cleanup is a single
         // directory-remove and FAILED / ABORTED runs keep their artifacts
         // without colliding with the next run.
@@ -781,7 +765,7 @@ public class TestRunManager implements TestRunGate {
         command.add("-t"); command.add(planForRun.toString());
         command.add("-l"); command.add(jtl.toString());
         command.add("-j"); command.add(log.toString());
-        // MID-TEST-SCALING Phase B — open JMeter's TCP shutdown port so
+        // Open JMeter's TCP shutdown port so
         // POST /api/v1/test/drain can send a graceful "Shutdown" command
         // that lets in-flight samplers complete. Without this the only
         // stop mechanism is OS signals (StopTestNow-equivalent), which
@@ -853,7 +837,57 @@ public class TestRunManager implements TestRunGate {
     // -----------------------------------------------------------------------
 
     /**
-     * WORKER-HYGIENE Phase A — eager post-run cleanup. Deletes the
+     * Refuses to launch JMeter while a previous
+     * JMeter is still alive.
+     *
+     * <p>The orchestrator's own {@code recoverFromCrashIfNeeded} only fixes
+     * what it <em>believes</em> about the last run; it cannot see a child
+     * that outlived it. On a worker the control plane recycles, that gap is
+     * closed by replacing the container. On an operator-declared worker
+     * nothing closes it, and a leftover child holding {@code -Xmx2g} would
+     * contend with every subsequent run on the same host.
+     *
+     * <p>Under the default {@code KILL} policy the reaper clears the orphan
+     * and the run proceeds. Only an orphan that could not be killed (or
+     * {@code REPORT} policy) aborts the run — failing loudly beats running
+     * a test whose numbers are quietly wrong because two JMeters were
+     * sharing the box.
+     */
+    private void requireNoOrphanJmeter() {
+        if (orphanReaper == null) return;
+        com.perf.orchestrator.hygiene.OrphanJmeterReaper.Scan scan = orphanReaper.sweep();
+        String unresolved = orphanReaper.unresolvedOrphan();
+        if (unresolved != null) {
+            throw new IllegalStateException(
+                    "refusing to start a test — " + unresolved
+                    + "; a leftover JMeter would contend with this run for memory and CPU");
+        }
+        if (scan.found() > 0) {
+            LOG.warn("Cleared {} orphaned JMeter process(es) {} before starting the run.",
+                    scan.killed(), scan.pids());
+        }
+    }
+
+    /**
+     * The "clear existing results/logs" half. Applies
+     * the retention bounds before the run writes anything, so a worker that
+     * has accumulated preserved artifacts from earlier failures starts each
+     * run with bounded disk rather than discovering the ceiling mid-test.
+     * The incoming runId is protected — its directories are about to be
+     * created.
+     */
+    private void sweepOldRunArtifacts(String runId) {
+        if (retention == null || retention.isDisabled()) return;
+        try {
+            retention.sweep(runId == null ? java.util.Set.of() : java.util.Set.of(runId));
+        } catch (Exception e) {
+            // Housekeeping must never fail a run — the run may still have room.
+            LOG.warn("Pre-run artifact retention sweep failed: {}", e.toString());
+        }
+    }
+
+    /**
+     * Eager post-run cleanup. Deletes the
      * per-run subdirectories under {@code results/} and {@code logs/}.
      * Called from the {@link #runLifecycle} {@code finally} block on
      * COMPLETED / DRAINED only — FAILED / ABORTED preserve artifacts for

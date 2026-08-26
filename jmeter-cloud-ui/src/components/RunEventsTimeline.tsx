@@ -6,7 +6,7 @@ import { formatRelative } from "../lib/time";
 import { runsApi, type RunEvent, type RunEventType, type RunEventsListing } from "../api/runs";
 
 /**
- * AUDIT-TRAIL — the per-run audit timeline, shown on its own Events tab. One
+ * The per-run audit timeline, shown on its own Events tab. One
  * row per state-changing operator action (start / scale up / scale down /
  * drain), newest first. Paginated (25/page) because a long-running test can
  * accumulate many events. Polls the current page every 10s while the run is

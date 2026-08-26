@@ -66,7 +66,7 @@ public interface PodProvisioner {
     List<ProvisionedPod> listFor(String applicationId, String region);
 
     /**
-     * WORKER-HYGIENE Phase D — returns the sha256 ID of the configured
+     * Returns the sha256 ID of the configured
      * pod image (e.g. {@code jmeter-local-orchestrator:dev}) as the
      * daemon currently sees it. The recycler diffs this against
      * {@code pod.imageDigest} to detect "image was rebuilt; recycle
@@ -75,4 +75,15 @@ public interface PodProvisioner {
      * "skip the image-mismatch check this tick."
      */
     String currentImageDigest();
+
+    /**
+     * KUBE-5 Option A — the URL the orchestrator (and the fan-out path)
+     * reaches this pod at: the same value {@code createAndStart} returns in
+     * its {@link ProvisionResult}, computable without the pod existing. The
+     * shape is substrate-specific ({@code http://{podName}:8080} on the
+     * docker network vs {@code http://{podName}.{headlessService}:8080} on
+     * K8s), so the reconciler delegates here when adopting an orphan whose
+     * registry row is gone instead of hardcoding the docker shape.
+     */
+    String baseUrlFor(String podName);
 }

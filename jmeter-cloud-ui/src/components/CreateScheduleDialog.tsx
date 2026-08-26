@@ -12,7 +12,7 @@ import { browserTimeZone } from "../lib/cron";
 import { ScheduleBuilder, type ScheduleValue } from "./ScheduleBuilder";
 
 /**
- * AUTOMATION — modal to create a CRON schedule for one application. Invoked
+ * Modal to create a CRON schedule for one application. Invoked
  * from `<AutomationDetailPage>` (the app is fixed in that context). Supports
  * the three Phase-C kinds:
  *   LAUNCH_RUN       fire a saved Template;

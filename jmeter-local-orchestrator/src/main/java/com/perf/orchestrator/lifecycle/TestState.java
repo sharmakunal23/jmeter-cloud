@@ -39,7 +39,7 @@ public enum TestState {
     ABORTED,
 
     /**
-     * MID-TEST-SCALING Phase B — run was gracefully stopped via
+     * Run was gracefully stopped via
      * {@code POST /api/v1/test/drain} (JMeter TCP shutdown port → in-flight
      * samplers complete → clean exit). Distinct from {@link #COMPLETED}
      * (operator chose to stop) and {@link #ABORTED} (forced stop). Counts

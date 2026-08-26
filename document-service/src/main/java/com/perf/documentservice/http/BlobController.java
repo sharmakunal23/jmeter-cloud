@@ -5,10 +5,6 @@ import com.perf.documentservice.store.BlobMetadata;
 import com.perf.documentservice.store.BlobNotFoundException;
 import com.perf.documentservice.store.BlobStore;
 import com.perf.documentservice.store.Ulid;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.DistributionSummary;
-import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Timer;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,15 +27,14 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 /**
- * REST surface for the blob-store. Routes a request directly through the
- * configured {@link BlobStore} backend; no copying through Spring's MVC
- * {@code MultipartResolver}, so a 512-MB upload streams without
- * exhausting the heap.
+ * REST surface for the blob store, mounted at {@code /api/v1}.
  *
- * <p>camelCase route convention per the platform-wide rule.
+ * <p>Uploads read the raw request body rather than going through Spring's
+ * {@code MultipartResolver}, so a 512-MB artifact streams without exhausting
+ * the heap. <b>Callers must POST a raw body</b> — a {@code multipart/form-data}
+ * upload (curl {@code -F}) stores 0 bytes.
  */
 @RestController
 @RequestMapping("/api/v1")
@@ -48,83 +43,48 @@ public class BlobController {
     private static final Logger LOG = LoggerFactory.getLogger(BlobController.class);
 
     private final BlobStore store;
-    private final Counter uploads;
-    private final Counter downloads;
-    private final Counter deletes;
-    private final Counter notFound;
-    private final Timer uploadTimer;
-    private final DistributionSummary uploadBytes;
 
-    public BlobController(BlobStore store, MeterRegistry meterRegistry) {
+    public BlobController(BlobStore store) {
         this.store = store;
-        this.uploads = Counter.builder("documentService.blob.uploads")
-                .description("Successful blob uploads.")
-                .register(meterRegistry);
-        this.downloads = Counter.builder("documentService.blob.downloads")
-                .description("Successful blob downloads.")
-                .register(meterRegistry);
-        this.deletes = Counter.builder("documentService.blob.deletes")
-                .description("Successful blob deletes (existing or absent).")
-                .register(meterRegistry);
-        this.notFound = Counter.builder("documentService.blob.notFound")
-                .description("Requests that targeted an unknown blobId.")
-                .register(meterRegistry);
-        this.uploadTimer = Timer.builder("documentService.blob.upload.duration")
-                .description("Wall-time per blob upload (sha + write + meta).")
-                .publishPercentileHistogram()
-                .register(meterRegistry);
-        // SECURITY S-0 — distribution of accepted upload sizes. A spike in the
-        // upper percentiles (or a flood of large bodies) is the disk-fill /
-        // bandwidth-burn abuse signal; the alert rule watches the byte rate.
-        this.uploadBytes = DistributionSummary.builder("security.upload.bytes")
-                .description("Accepted blob upload sizes in bytes (S-0 abuse signal).")
-                .baseUnit("bytes")
-                .publishPercentileHistogram()
-                .register(meterRegistry);
     }
 
     @PostMapping("/blob")
     public ResponseEntity<BlobMetadata> uploadBlob(
             HttpServletRequest request,
             @RequestHeader(value = HttpHeaders.CONTENT_TYPE, required = false) String contentType,
-            // Step 18 — uploader-supplied tags. All optional; null when
-            // the header is missing. Headers are case-insensitive.
+            // Optional uploader tags; null when the header is absent.
             @RequestHeader(value = "X-Name",        required = false) String name,
             @RequestHeader(value = "X-Description", required = false) String description,
             @RequestHeader(value = "X-Type",        required = false) String type,
-            // Step 28 — application tag. Trimmed; max 64 chars enforced
-            // server-side so a malformed header can't poison the index.
+            // Trimmed and capped at 64 chars server-side so a malformed
+            // header can't poison the listing index.
             @RequestHeader(value = "X-Application", required = false) String application
     ) throws IOException {
-        long startNs = System.nanoTime();
         String app = sanitizeApplication(application);
-        description = sanitizeDescription(description);   // SECURITY S-7 — cap at 200 chars
-        // UI-D3 polish: when X-Type=dataFiles, sniff the first 4 bytes for
-        // the ZIP magic (PK\x03\x04). The local-orchestrator unzips
-        // dataFiles before launching JMeter — a non-zip upload turns into
-        // a confusing INVALID_ARCHIVE failure at run-launch (see the
-        // "data zip A bytes" test fixture that leaked into production).
-        // Catching it here gives a clean 400 with the upload metadata in
-        // hand instead of a deferred run failure.
+        description = sanitizeDescription(description);   // capped at 200 chars
+        // The local-orchestrator unzips dataFiles before launching JMeter, so a
+        // non-zip upload only fails much later at run-launch. Checking the ZIP
+        // magic here turns that deferred failure into a clean 400.
         try (InputStream in = "dataFiles".equals(type)
                 ? requireZipMagic(request.getInputStream())
                 : request.getInputStream()) {
             BlobMetadata meta = store.put(in, contentType, name, description, type, app);
-            uploads.increment();
-            uploadBytes.record(meta.sizeBytes());
+            // The access log carries status and latency but not body size, so
+            // this line is the only record of accepted upload sizes — the
+            // disk-fill / bandwidth-burn abuse signal infra alerting watches.
+            LOG.info("Blob uploaded: blobId={} type={} application={} sizeBytes={}",
+                    meta.blobId(), type, app, meta.sizeBytes());
             return ResponseEntity.status(HttpStatus.CREATED).body(meta);
-        } finally {
-            uploadTimer.record(System.nanoTime() - startNs, TimeUnit.NANOSECONDS);
         }
-        // NotAZipException (thrown by requireZipMagic) bubbles out and is
-        // turned into a 400 INVALID_ARCHIVE by the @ExceptionHandler below.
+        // NotAZipException bubbles out to notAZip() below, becoming a 400.
     }
 
     /**
-     * Wraps the upload stream and verifies the first 4 bytes match the
-     * ZIP local-file-header signature (PK\x03\x04 = 0x504B0304). Empty
-     * uploads are also rejected. The stream is buffered with PushbackInputStream
-     * so the magic bytes can be re-read by the downstream digest + writer.
+     * Verifies the stream opens with the ZIP local-file-header signature
+     * (PK\x03\x04), rejecting empty bodies too.
+     *
+     * <p>Returns a {@code PushbackInputStream} with the magic bytes unread, so
+     * the downstream digest and writer still see the whole file.
      */
     private static InputStream requireZipMagic(InputStream raw) throws IOException {
         java.io.PushbackInputStream pb = new java.io.PushbackInputStream(raw, 4);
@@ -147,15 +107,15 @@ public class BlobController {
         return sb.toString();
     }
 
-    /** Internal — converted to 400 INVALID_ARCHIVE by the catch block above. */
+    /** Converted to 400 {@code INVALID_ARCHIVE} by {@link #notAZip}. */
     private static final class NotAZipException extends IOException {
         NotAZipException(String message) { super(message); }
     }
 
     /**
-     * Spring's @ExceptionHandler dispatch consumes generic IOException
-     * from the upload path. We want a friendlier 400 body when the
-     * NotAZipException specifically fires.
+     * Maps the zip-magic rejection to 400 {@code INVALID_ARCHIVE}. Needed
+     * because {@code NotAZipException} extends {@link IOException}, which the
+     * handler below would otherwise turn into a 500.
      */
     @org.springframework.web.bind.annotation.ExceptionHandler(NotAZipException.class)
     public ResponseEntity<java.util.Map<String, String>> notAZip(NotAZipException e) {
@@ -171,17 +131,15 @@ public class BlobController {
             @RequestParam(name = "offset",      required = false, defaultValue = "0") int offset,
             @RequestParam(name = "limit",       required = false, defaultValue = "50") int limit
     ) throws IOException {
-        // Cap limit so a malicious caller can't ask the backend to
-        // materialise the whole bucket at once.
+        // Capped so a caller can't ask the backend to materialise everything.
         int safeLimit = Math.max(1, Math.min(limit, 500));
         return ResponseEntity.ok(store.list(typeFilter, applicationFilter,
                 Math.max(0, offset), safeLimit));
     }
 
     /**
-     * Step 28 — distinct application tags + blob counts. The launcher
-     * polls this so the Application picker reflects what's been
-     * uploaded as new apps come online.
+     * Distinct application tags with blob counts. The launcher polls this so its
+     * Application picker reflects newly uploaded artifacts.
      */
     @GetMapping("/applications")
     public ResponseEntity<List<BlobStore.ApplicationSummary>> listApplications() throws IOException {
@@ -189,11 +147,12 @@ public class BlobController {
     }
 
     /**
-     * SECURITY S-7 — server-side description cap (the UI's {@code maxLength=200}
-     * is bypassable by a direct caller). Trims, drops empty, and TRUNCATES to
-     * 200 chars rather than rejecting: a description is cosmetic, so silently
-     * capping an over-long one beats failing the upload. React escapes the value
-     * on render, so this is a payload-size guard, not an XSS fix.
+     * Caps a description at 200 chars server-side, since the UI's
+     * {@code maxLength} is bypassable by a direct caller.
+     *
+     * <p>Truncates rather than rejects — a description is cosmetic, so silently
+     * capping it beats failing the upload. This is a payload-size guard, not an
+     * XSS fix; React escapes the value on render.
      */
     static String sanitizeDescription(String raw) {
         if (raw == null) return null;
@@ -221,7 +180,6 @@ public class BlobController {
     ) throws IOException {
         BlobMetadata meta = store.stat(blobId);   // throws BlobNotFoundException
         InputStream stream = store.open(blobId);
-        downloads.increment();
         MediaType type = meta.contentType() != null
                 ? MediaType.parseMediaType(meta.contentType())
                 : MediaType.APPLICATION_OCTET_STREAM;
@@ -231,10 +189,7 @@ public class BlobController {
                 .header("X-blobId", meta.blobId())
                 .header("X-sha256", meta.sha256());
         if (download) {
-            // UI-D2 — when the operator clicks a Download link the browser
-            // should save the file with a meaningful filename, not the raw
-            // ULID. Inferred from {X-Name, X-Type} captured at upload time;
-            // missing X-Name falls back to blobId so we always emit a name.
+            // Save under a meaningful filename rather than the raw ULID.
             String filename = inferDownloadFilename(meta);
             rb.header("Content-Disposition", "attachment; filename=\"" + filename + "\"");
         }
@@ -242,16 +197,13 @@ public class BlobController {
     }
 
     /**
-     * Save Results — download every worker's result for a run as one zip.
-     * Result blobs are uploaded with {@code X-Type=result} and a name shaped
-     * {@code results-{runId}-{workerId}.jtl.gz}; since a runId is a
-     * hyphen-free ULID, {@code results-{runId}-} is an unambiguous name
-     * prefix. We scan result blobs, filter by that prefix, and stream a zip
-     * (one entry per worker). 404 when the run saved nothing.
+     * Streams every worker's saved result for one run as a single zip, one entry
+     * per worker, or 404 when the run saved nothing.
      *
-     * <p>Lives under {@code /api/v1/blob/...} so the UI's nginx proxy routes
-     * it straight to document-service (the rest of {@code /api/v1} goes to the
-     * global-orchestrator).
+     * <p>Matching is by name prefix {@code results-{runId}-}, which is
+     * unambiguous only because a runId is a hyphen-free ULID. The route sits
+     * under {@code /api/v1/blob/} so the UI's nginx proxy sends it here — the
+     * rest of {@code /api/v1} goes to the global-orchestrator.
      */
     @GetMapping("/blob/run/{runId:" + Ulid.PATTERN + "}/archive")
     public ResponseEntity<org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody>
@@ -271,7 +223,6 @@ public class BlobController {
         if (matches.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
-        downloads.increment();
         org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody body = out -> {
             try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(out)) {
                 for (BlobMetadata m : matches) {
@@ -290,19 +241,13 @@ public class BlobController {
     }
 
     /**
-     * Build the filename the browser should save under on a {@code ?download=true}
-     * GET. {@code name} is the operator-supplied label ({@code X-Name});
-     * {@code type} drives the conventional extension. The conventions match
-     * what document-service already uses internally for staged files:
-     * <ul>
-     *   <li>testPlan → .jmx</li>
-     *   <li>dataFiles → .zip</li>
-     *   <li>result → .jtl.gz</li>
-     *   <li>other (or unset) → .bin</li>
-     * </ul>
-     * If {@code name} already carries an extension we trust it; if it doesn't
-     * we append the conventional one. Falls back to the blobId when no name
-     * was uploaded so the download is never literally empty.
+     * Builds the filename for a {@code ?download=true} GET from the uploaded
+     * {@code X-Name}, falling back to the blobId so a download is never
+     * unnamed.
+     *
+     * <p>A name that already has an extension is trusted; otherwise {@code type}
+     * picks one: testPlan → {@code .jmx}, dataFiles → {@code .zip}, result →
+     * {@code .jtl.gz}, anything else → {@code .bin}.
      */
     static String inferDownloadFilename(BlobMetadata meta) {
         String base = (meta.name() != null && !meta.name().isBlank()) ? meta.name() : meta.blobId();
@@ -326,7 +271,6 @@ public class BlobController {
     @DeleteMapping("/blob/{blobId:" + Ulid.PATTERN + "}")
     public ResponseEntity<Void> deleteBlob(@PathVariable String blobId) throws IOException {
         store.delete(blobId);
-        deletes.increment();
         return ResponseEntity.noContent().build();
     }
 
@@ -334,7 +278,6 @@ public class BlobController {
 
     @ExceptionHandler(BlobNotFoundException.class)
     ResponseEntity<Map<String, Object>> handleNotFound(BlobNotFoundException e) {
-        notFound.increment();
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
                 "code",    "BLOB_NOT_FOUND",
                 "message", e.getMessage()));

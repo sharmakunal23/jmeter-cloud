@@ -131,10 +131,13 @@ public class DataSourceConfig {
         // connectivity problem. This also keeps every non-purge path (and the
         // test suite, which never purges) decoupled from this pool.
         cfg.setInitializationFailTimeout(-1);
-        // A run-scoped DELETE scans every weekly partition (runId is not the
-        // partition key), so it can run longer than a read query — a more
-        // generous default timeout than the read pool's 30 s, but still bounded
-        // so a pathological purge can't pin the connection forever.
+        // A run-scoped DELETE removes every row a whole test produced, so it can
+        // run longer than a read query — a more generous default timeout than the
+        // read pool's 30 s, but still bounded so a pathological purge can't pin
+        // the connection forever. (Since SCHEMA-OPT Phase 0 the DELETE is pruned
+        // to the partitions the run actually touched, using the windowSecond
+        // bounds recorded in metrics."runLabel" — it no longer scans every weekly
+        // partition. The generous timeout stays: the row count is unchanged.)
         if (statementTimeoutMs > 0) {
             cfg.setConnectionInitSql("SET statement_timeout TO " + statementTimeoutMs);
         }

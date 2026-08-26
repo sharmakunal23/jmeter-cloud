@@ -22,7 +22,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * CACHE C-5 — pins the terminal-member-only caching contract of
+ * Pins the terminal-member-only caching contract of
  * {@link CachingLogTailService} through the real Spring cache proxy, against an
  * in-memory cache. The underlying {@link LocalOrchestratorClient} is a Mockito
  * mock whose call count is the assertion surface (a cache hit = the local

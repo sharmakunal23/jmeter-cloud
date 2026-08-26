@@ -1,0 +1,36 @@
+# KUBE-7 — privateCloud overlay.
+#
+# CREDENTIALS (required before first apply — never committed):
+#   kubectl -n jmeter-cloud create secret generic grafana-credentials \
+#     --from-literal=adminUser=admin \
+#     --from-literal=adminPassword=<strong> \
+#     --from-literal=metricsReaderPassword=<rotated>
+# (initdb creates metricsReader with 'localdev' — rotate with ALTER USER;
+# tracked under KUBE-11. metricsReaderPassword must match whatever the DB
+# actually holds.)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+
+# Everything Grafana serves is re-provisioned from ConfigMaps on boot, so
+# the emptyDir default loses nothing. If operators save dashboard tweaks
+# in the UI and want them to survive restarts, add a PVC + patch:
+# resources:
+#   - pvc.yaml            # PVC grafana-data, RWO, 2Gi, your storageClass
+# patches:
+#   - patch: |
+#       - op: replace
+#         path: /spec/template/spec/volumes/3
+#         value: {name: grafana-data, persistentVolumeClaim: {claimName: grafana-data}}
+#     target: {kind: Deployment, name: grafana}
+# (JSON patch must address the volume by INDEX — 3 = grafana-data, last in
+# base/deployment.yaml's volumes list; re-check the index if that list
+# changes. A strategic merge would fuse emptyDir+PVC into one invalid
+# volume, so index it is.)
+
+# Private-registry rewrite — set the real registry, then uncomment:
+# images:
+#   - name: grafana/grafana
+#     newName: registry.internal.example.com/jmeter-cloud/grafana
+#     newTag: "11.4.0"

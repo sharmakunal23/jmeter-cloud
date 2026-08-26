@@ -1,0 +1,13 @@
+# KUBE-6 — privateCloud overlay: adds the platform's Ingress (edit
+# ingress.yaml — hostname, ingressClassName, TLS — before applying).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  - ingress.yaml
+
+# Private-registry rewrite — set the real registry, then uncomment:
+# images:
+#   - name: jmeter-cloud-ui
+#     newName: registry.internal.example.com/jmeter-cloud/jmeter-cloud-ui
+#     newTag: "1.0.0"

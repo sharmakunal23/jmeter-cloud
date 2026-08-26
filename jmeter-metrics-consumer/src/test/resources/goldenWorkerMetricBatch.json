@@ -1,0 +1,29 @@
+{
+  "windowSecond": 1784600000,
+  "windowTimestamp": "2026-07-20T21:33:20Z",
+  "region": "us-east-1",
+  "workerId": "acaps-us-east-1-worker-1",
+  "runId": "01KY1535CHHF9WG5HHZETVEQBZ",
+  "joinedAtSecond": 4,
+  "entries": [
+    {
+      "label": "GET /api/v1/checkout/items",
+      "throughput": 256,
+      "errorCount": 4,
+      "errorRate": 0.015625,
+      "avgRespTimeMs": 182.4375,
+      "sumElapsedMs": 46704,
+      "p50Ms": 151.0,
+      "p90Ms": 310.0,
+      "p95Ms": 402.0,
+      "p99Ms": 688.0,
+      "minMs": 42.0,
+      "maxMs": 1201.0,
+      "rawMaxMs": 1201,
+      "bytesReceived": 1284552,
+      "bytesSent": 96412,
+      "statusCodes": { "200": 240, "404": 3, "500": 1 },
+      "activeThreads": 50
+    }
+  ]
+}

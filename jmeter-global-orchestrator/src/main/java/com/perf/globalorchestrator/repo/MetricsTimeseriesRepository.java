@@ -14,39 +14,32 @@ import java.util.Map;
 import java.util.TreeMap;
 
 /**
- * Read-only access to {@code metrics."workerMetric"} for the per-run
- * <b>timeseries</b> endpoint (HM-1, served by
- * {@code GET /api/v1/runs/{runId}/timeseries}). Sibling to
- * {@link MetricsRollupRepository}, which serves the per-label rollup
- * for the existing {@code /metrics} endpoint.
+ * Read-only access to the {@code metrics."runSecond"} and
+ * {@code "runSecondStatus"} rollups behind
+ * {@code GET /api/v1/runs/{runId}/timeseries}. Two SQL queries — one for the
+ * numeric series, one unrolling status codes — assembled in Java, because
+ * merging them needs either a UNION of mismatched column shapes or a JSON
+ * build expression.
  *
- * <p>The repository runs two SQL queries (one for the four numeric
- * series, one for the status-code series) and aggregates them in
- * Java into a single {@link MetricsTimeseries} payload. Splitting the
- * status-code unrolling into its own query keeps both SQL statements
- * grokable; combining them into one would require a UNION-with-different-
- * column-shapes or a JSON build expression — neither pleasant.
+ * <p><b>It reads the rollups, never {@code workerMetric}.</b> Every query here
+ * folds the worker and label dimensions away, and the raw table stores one row
+ * per (worker, label, second): at 20 workers × 200 labels a 30-minute live
+ * window meant aggregating ~5.1M rows, ~1.5 GB of heap, twice per poll every
+ * 5 s — and a whole-test read of a long run simply blew the read pool's 30 s
+ * {@code statement_timeout}. The same poll now reads ~1,800 rows.
  *
- * <h2>Downsampling</h2>
- * Per-second resolution is preserved for short runs; for longer runs
- * the points are bucketed into one of a fixed set of <em>nice</em>
- * widths (1, 2, 5, 10, 15, 30, 60 seconds) so axis ticks land on
- * round boundaries. Bucket width is the smallest value that keeps
- * the rendered point count at or below {@link #BUCKET_TARGET},
- * capped at {@link #MAX_BUCKET_SECONDS} so the operator never sees
- * worse than 1-minute granularity even for multi-day runs.
+ * <p>The rollups carry component <b>sums, never ratios</b>, which is what lets
+ * the region path fold across regions and divide only at the end.
  *
- * <p>Each bucket aggregates by <b>arithmetic average</b> across the
- * raw per-second points: every series remains in its native
- * per-second unit (req/s, ms, %, count/s) regardless of bucket
- * width. We deliberately do NOT use a TPS-weighted mean here —
- * inflating a noisy 1-RPS second's weight isn't desirable, and the
- * unweighted average is what operators expect when reading "average
- * response time" off the bucketed series.
- *
- * <p>The point's {@code sec} is the first second of the bucket; the
- * response carries {@link MetricsTimeseries#bucketSize()} so the UI
- * can label the time axis correctly.
+ * <p>Longer runs are bucketed to one of a fixed set of nice widths (1, 2, 5,
+ * 10, 15, 30, 60 s) so axis ticks land on round boundaries — the smallest width
+ * keeping the point count under {@link #BUCKET_TARGET}, capped at
+ * {@link #MAX_BUCKET_SECONDS}. Buckets use an <b>unweighted</b> arithmetic mean
+ * so every series stays in its native per-second unit; a TPS-weighted mean
+ * would inflate a noisy 1-RPS second and is not what an operator reads off an
+ * "average response time" line. A point's {@code sec} is the bucket's first
+ * second, and {@link MetricsTimeseries#bucketSize()} tells the UI how to label
+ * the axis.
  */
 @Repository
 public class MetricsTimeseriesRepository {
@@ -97,8 +90,12 @@ public class MetricsTimeseriesRepository {
      *        second (not wall-clock {@code now()}), so it works identically for a
      *        live run and a finished one from days ago. {@code null} = whole test.
      *        This both shrinks the wire payload and — more importantly for a
-     *        10-hour run polled every 5 s — prunes the partition scan + aggregate
-     *        the orchestrator does on each poll to just the recent window.
+     *        10-hour run polled every 5 s — prunes the index range the
+     *        orchestrator scans and aggregates on each poll to just the recent
+     *        window. Since SCHEMA-OPT Phase 1 that scan is over the per-second
+     *        rollup rather than the raw fact rows, so the window is an
+     *        optimisation on an already-small read instead of the only thing
+     *        keeping the query inside its timeout.
      *
      * <p>The region path runs the same two queries but with {@code "region"}
      * added to the GROUP BY, then folds the raw component sums (throughput,
@@ -119,7 +116,7 @@ public class MetricsTimeseriesRepository {
      * @param settleSeconds when {@code > 0}, the newest {@code settleSeconds} of
      *        data are excluded from the response. Those most-recent seconds are
      *        still being produced: each worker holds a per-second window open for
-     *        a ~2 s close grace, and the metrics-consumer adds Kafka fetch-wait +
+     *        a ~2 s close grace, and the metrics-consumer adds ingest +
      *        batch-INSERT lag before the rows land in Postgres. So on a run polled
      *        every 5 s the trailing seconds are only partially aggregated and
      *        change shape each poll — a half-counted second shows as a transient
@@ -253,7 +250,7 @@ public class MetricsTimeseriesRepository {
         bySec.forEach((sec, s) -> out.add(new RawSecond(
                 sec,
                 s.throughput,
-                s.throughput > 0 ? s.rtWeighted / s.throughput : 0.0,
+                s.throughput > 0 ? s.sumElapsedMs / s.throughput : 0.0,
                 s.throughput > 0 ? 100.0 * s.errorCount / s.throughput : 0.0)));
         return out;
     }
@@ -297,23 +294,24 @@ public class MetricsTimeseriesRepository {
     // ── Raw queries ────────────────────────────────────────────────────
 
     private List<RawSecond> fetchNumericSeries(String runId, Bounds bounds) {
-        // Per-second aggregate across every (worker, label) row for the
-        // run. avg_rt_ms is a TPS-weighted mean of per-(worker, label)
-        // avgRespTimeMs — the per-row column itself is a TRUE mean
-        // (sum of sample elapsed / sample count), populated by HM-1A
-        // across Avro → aggregator → Postgres → consumer. Aggregating
-        // those means weighted by throughput recovers the proper
-        // cross-fleet mean for the whole second.
+        // Per-second aggregate across every region row for the run (each
+        // already folds every worker and label — see the class javadoc).
+        // avg_rt_ms divides total elapsed ms by total samples, which is the
+        // exact cross-fleet mean for the second; deriving the ratio only after
+        // summing is why the rollup stores component sums and not ratios.
+        // "sumElapsedMs" is DOUBLE PRECISION, so this stays float division —
+        // a BIGINT column here would silently truncate the mean to whole
+        // milliseconds, which is why V17 deliberately left the type alone.
         return jdbc.query(
                 "SELECT \"windowSecond\" AS sec, "
-                + "       sum(\"throughput\")::bigint AS tps, "
-                + "       CASE WHEN sum(\"throughput\") > 0 "
-                + "            THEN sum(\"avgRespTimeMs\" * \"throughput\") / sum(\"throughput\") "
+                + "       sum(\"samples\")::bigint AS tps, "
+                + "       CASE WHEN sum(\"samples\") > 0 "
+                + "            THEN sum(\"sumElapsedMs\") / sum(\"samples\") "
                 + "            ELSE 0 END AS avg_rt_ms, "
-                + "       CASE WHEN sum(\"throughput\") > 0 "
-                + "            THEN 100.0 * sum(\"errorCount\")::double precision / sum(\"throughput\") "
+                + "       CASE WHEN sum(\"samples\") > 0 "
+                + "            THEN 100.0 * sum(\"errors\")::double precision / sum(\"samples\") "
                 + "            ELSE 0 END AS error_pct "
-                + "FROM metrics.\"workerMetric\" "
+                + "FROM metrics.\"runSecond\" "
                 + "WHERE \"runId\" = ? " + windowClause(bounds)
                 + "GROUP BY \"windowSecond\" "
                 + "ORDER BY \"windowSecond\"",
@@ -326,17 +324,17 @@ public class MetricsTimeseriesRepository {
     }
 
     private Map<String, List<TimeseriesPoint>> fetchStatusCodeSeries(String runId, Bounds bounds) {
-        // jsonb_each_text expands the statusCodes JSONB into
-        // (key,value) text pairs; SUM(value::bigint) totals counts per
-        // (windowSecond, code).
+        // Codes were unrolled out of the JSONB at write time, so this is a
+        // plain sum over an integer column — the pre-rollup version expanded
+        // jsonb_each_text over every raw row of the window, which at fleet
+        // scale was ~10M function calls per poll.
         List<StatusCodeRow> rows = jdbc.query(
-                "SELECT \"windowSecond\" AS sec, j.key AS code, "
-                + "       sum((j.value)::bigint) AS n "
-                + "FROM metrics.\"workerMetric\", "
-                + "     LATERAL jsonb_each_text(\"statusCodes\") AS j "
+                "SELECT \"windowSecond\" AS sec, \"code\" AS code, "
+                + "       sum(\"n\") AS n "
+                + "FROM metrics.\"runSecondStatus\" "
                 + "WHERE \"runId\" = ? " + windowClause(bounds)
-                + "GROUP BY \"windowSecond\", j.key "
-                + "ORDER BY j.key, \"windowSecond\"",
+                + "GROUP BY \"windowSecond\", \"code\" "
+                + "ORDER BY \"code\", \"windowSecond\"",
                 (rs, i) -> new StatusCodeRow(
                         rs.getLong("sec"),
                         rs.getString("code"),
@@ -358,7 +356,7 @@ public class MetricsTimeseriesRepository {
      * region)} carrying the component sums needed to derive tps / avg RT
      * / error % at any aggregation level. We select SUMS (not the derived
      * ratios) so the caller can fold across regions to the total without
-     * weighting drift — {@code sum(rtWeighted)/sum(tps)} over all regions
+     * weighting drift — {@code sum(sumElapsedMs)/sum(tps)} over all regions
      * is the exact cross-fleet mean.
      */
     private Map<String, Map<Long, RawSums>> fetchNumericByRegion(String runId, Bounds bounds) {
@@ -368,10 +366,10 @@ public class MetricsTimeseriesRepository {
         Map<String, Map<Long, RawSums>> byRegion = new LinkedHashMap<>();
         jdbc.query(
                 "SELECT \"region\" AS region, \"windowSecond\" AS sec, "
-                + "       sum(\"throughput\")::bigint AS tps, "
-                + "       sum(\"avgRespTimeMs\" * \"throughput\") AS rt_weighted, "
-                + "       sum(\"errorCount\")::bigint AS errors "
-                + "FROM metrics.\"workerMetric\" "
+                + "       sum(\"samples\")::bigint AS tps, "
+                + "       sum(\"sumElapsedMs\") AS sum_elapsed_ms, "
+                + "       sum(\"errors\")::bigint AS errors "
+                + "FROM metrics.\"runSecond\" "
                 + "WHERE \"runId\" = ? " + windowClause(bounds)
                 + "GROUP BY \"region\", \"windowSecond\" "
                 + "ORDER BY \"region\", \"windowSecond\"",
@@ -380,7 +378,7 @@ public class MetricsTimeseriesRepository {
                     long sec      = rs.getLong("sec");
                     RawSums s = new RawSums();
                     s.throughput = rs.getLong("tps");
-                    s.rtWeighted = rs.getDouble("rt_weighted");
+                    s.sumElapsedMs = rs.getDouble("sum_elapsed_ms");
                     s.errorCount = rs.getLong("errors");
                     byRegion.computeIfAbsent(region, k -> new LinkedHashMap<>()).put(sec, s);
                     return null;
@@ -396,13 +394,12 @@ public class MetricsTimeseriesRepository {
     private Map<String, Map<String, List<TimeseriesPoint>>> fetchStatusByRegion(String runId, Bounds bounds) {
         Map<String, Map<String, List<TimeseriesPoint>>> byRegion = new LinkedHashMap<>();
         jdbc.query(
-                "SELECT \"region\" AS region, \"windowSecond\" AS sec, j.key AS code, "
-                + "       sum((j.value)::bigint) AS n "
-                + "FROM metrics.\"workerMetric\", "
-                + "     LATERAL jsonb_each_text(\"statusCodes\") AS j "
+                "SELECT \"region\" AS region, \"windowSecond\" AS sec, \"code\" AS code, "
+                + "       sum(\"n\") AS n "
+                + "FROM metrics.\"runSecondStatus\" "
                 + "WHERE \"runId\" = ? " + windowClause(bounds)
-                + "GROUP BY \"region\", \"windowSecond\", j.key "
-                + "ORDER BY \"region\", j.key, \"windowSecond\"",
+                + "GROUP BY \"region\", \"windowSecond\", \"code\" "
+                + "ORDER BY \"region\", \"code\", \"windowSecond\"",
                 (rs, i) -> {
                     String region = rs.getString("region");
                     long sec      = rs.getLong("sec");
@@ -446,10 +443,27 @@ public class MetricsTimeseriesRepository {
         return new Bounds(from, to);
     }
 
-    /** Latest data second for a run, or {@code null} if it has no rows yet. */
+    /**
+     * Latest data second for a run, or {@code null} if it has no rows yet.
+     *
+     * <p>This runs on <em>every</em> live poll (any window selector or settle
+     * margin needs it), so its plan matters more than its simplicity suggests.
+     * Against the raw table it was the single worst query in the platform: the
+     * only usable index is {@code ("runId","label","windowSecond")}, and with
+     * {@code runId} pinned by equality the index orders by {@code label} first —
+     * so there is no pathkey on {@code windowSecond} alone and the planner cannot
+     * reduce this to a backward index scan with {@code LIMIT 1}. It degenerated
+     * into reading every index entry for the run (~154M at fleet scale), across
+     * every partition, since it carries no {@code windowSecond} predicate to
+     * prune on.
+     *
+     * <p>{@code metrics."runSecond"} is keyed {@code ("runId","windowSecond",
+     * "region")} precisely so that {@code windowSecond} IS the next ordering
+     * column after the equality, and this collapses to one row.
+     */
     private Long maxWindowSecond(String runId) {
         return jdbc.queryForObject(
-                "SELECT max(\"windowSecond\") FROM metrics.\"workerMetric\" WHERE \"runId\" = ?",
+                "SELECT max(\"windowSecond\") FROM metrics.\"runSecond\" WHERE \"runId\" = ?",
                 (rs, i) -> { long v = rs.getLong(1); return rs.wasNull() ? null : v; },
                 runId);
     }
@@ -595,13 +609,16 @@ public class MetricsTimeseriesRepository {
      */
     static final class RawSums {
         long   throughput;
-        double rtWeighted;   // sum(avgRespTimeMs * throughput) — numerator of the weighted mean
+        // Σ elapsed ms — exact since SCHEMA-OPT Phase 2 (was reconstructed as
+        // sum(avgRespTimeMs × throughput)). Divided by throughput only after
+        // regions are folded, which is what makes the cross-fleet mean exact.
+        double sumElapsedMs;
         long   errorCount;
 
         void add(RawSums other) {
-            this.throughput += other.throughput;
-            this.rtWeighted += other.rtWeighted;
-            this.errorCount += other.errorCount;
+            this.throughput   += other.throughput;
+            this.sumElapsedMs += other.sumElapsedMs;
+            this.errorCount   += other.errorCount;
         }
     }
 }

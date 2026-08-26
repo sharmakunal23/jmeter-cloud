@@ -1,0 +1,15 @@
+# KUBE-3 — blob-store volume (test plans, dataFiles zips, saved results
+# archives). RWO: one writer by design (see deployment.yaml). 10Gi is a
+# local-validation default — saved-results archives of long runs are the
+# growth driver; the privateCloud overlay patches size + storageClass.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: document-service-data
+  labels:
+    app: document-service
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi

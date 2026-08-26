@@ -25,6 +25,11 @@ import java.time.Instant;
  *       legacy pods. Phase D anchors max-age checks here, not on
  *       {@code registeredAt} (which resets on local-orch restart).</li>
  * </ul>
+ *
+ * <p>STATIC-FLEET Phase 3 adds {@link PodSource} — who owns this worker's
+ * lifecycle. It is a property of the row, not of the process: a deployment
+ * flipped to {@code PROVISIONING_MODE=STATIC} still carries DYNAMIC rows
+ * from before the flip, and those must not be treated as declared.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record Pod(
@@ -37,5 +42,12 @@ public record Pod(
         String applicationId,
         long runsServed,
         String imageDigest,
-        Instant provisionedAt) {
+        Instant provisionedAt,
+        PodSource source) {
+
+    public Pod {
+        // Rows written before V29 read back as DYNAMIC via the column
+        // default; normalise a null defensively so callers never branch on it.
+        source = source == null ? PodSource.DYNAMIC : source;
+    }
 }

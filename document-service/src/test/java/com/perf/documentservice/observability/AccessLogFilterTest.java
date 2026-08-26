@@ -16,9 +16,8 @@ import org.springframework.mock.web.MockHttpServletResponse;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Wiring smoke test for document-service's AccessLogFilter. The full
- * edge-case matrix is exercised by the equivalent test in jmeter-
- * global-orchestrator; this one just confirms the copy wires up.
+ * Confirms this service's copy of {@code AccessLogFilter} is wired up. The
+ * edge-case matrix lives with the global-orchestrator's copy.
  */
 class AccessLogFilterTest {
 

@@ -1,7 +1,7 @@
 package com.perf.orchestrator.statemachine;
 
 import com.perf.orchestrator.aggregator.TumblingWindowAggregator;
-import com.perf.orchestrator.WorkerMetricBatch;
+import com.perf.orchestrator.model.WorkerMetricBatch;
 import com.perf.orchestrator.testsupport.WorkerMetricRow;
 import com.perf.orchestrator.config.OrchestratorConfig;
 import com.perf.orchestrator.io.SentinelWatcher;
@@ -33,8 +33,9 @@ import static org.assertj.core.api.SoftAssertions.assertSoftly;
  * Integration test for {@link TailerStateMachine}.
  *
  * <p>Runs the full pipeline end-to-end: real filesystem I/O, real aggregation,
- * and a {@link RecordingMetricPublisher} that captures what would be sent to Kafka.
- * No Kafka broker, no mocking, no fakes beyond the publisher.
+ * and a {@link com.perf.orchestrator.buffer.SynchronousMetricsDispatcher} that
+ * captures what would be POSTed to the metrics-consumer. No network, no
+ * mocking, no fakes beyond the dispatcher.
  *
  * <p>Each test runs the state machine in a background thread and controls it
  * by writing rows and the sentinel file from the test thread — exactly what
@@ -65,7 +66,7 @@ class TailerStateMachineTest {
     private Path jtlFile;
     private Path sentinelFile;
     private Path stateFile;
-    private RecordingMetricPublisher publisher;
+    private com.perf.orchestrator.buffer.SynchronousMetricsDispatcher publisher;
     private ExecutorService executor;
 
     @BeforeEach
@@ -73,7 +74,7 @@ class TailerStateMachineTest {
         jtlFile      = tempDir.resolve("results.jtl");
         sentinelFile = tempDir.resolve(".done");
         stateFile    = tempDir.resolve(".jtlOffset");
-        publisher    = new RecordingMetricPublisher();
+        publisher    = new com.perf.orchestrator.buffer.SynchronousMetricsDispatcher();
         executor     = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "state-machine-test-thread");
             t.setDaemon(true); // daemon so it doesn't block JVM exit on test failure
@@ -104,9 +105,6 @@ class TailerStateMachineTest {
         env.put("RUN_ID",              "test-run");
         env.put("JTL_PATH",            jtlFile.toString());
         env.put("SENTINEL_PATH",       sentinelFile.toString());
-        env.put("KAFKA_BROKERS",       "kafka:9092");
-        env.put("SCHEMA_REGISTRY_URL", "http://schema-registry:8081");
-        env.put("KAFKA_TOPIC",         "jmeter.metrics.perSecond");
         env.put("STATE_FILE_PATH",     stateFile.toString());
         env.put("POLL_INTERVAL_MS",         "20");
         env.put("FILE_WAIT_POLL_INTERVAL_MS","20");
@@ -124,9 +122,7 @@ class TailerStateMachineTest {
                 new TumblingWindowAggregator(
                         config.getPodName(), config.getTestRegion(),
                         config.getRunId(), config.getGracePeriodSeconds()),
-                publisher,
-                new com.perf.orchestrator.buffer.SynchronousMetricsDispatcher(publisher),
-                config.getKafkaTopic());
+                publisher);
     }
 
     private Future<?> runInBackground(TailerStateMachine machine) {

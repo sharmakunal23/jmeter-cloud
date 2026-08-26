@@ -2,7 +2,7 @@
 <!--
   Bounded async appender stack for the metrics-consumer.
 
-  Why this exists: a downstream client that misbehaves (sends bad Avro,
+  Why this exists: a downstream client that misbehaves (sends a malformed body,
   hits a 4xx path repeatedly, dead-letters every batch) can produce
   thousands of WARN lines per second. Without bounds on the in-flight
   log queue, those lines pile up in heap until the JVM gets OOM-killed
@@ -17,13 +17,11 @@
   Layered safety: the call-site rate limit handles steady-state spam;
   the queue bound handles a sudden burst before the rate limit converges.
 
-  OBSERVABILITY Phase A (2026-05-25): swapped the plaintext encoder for
-  logstash-logback-encoder so every line ships as a single JSON record
-  with the MDC keys populated by the upcoming TracingFilter (Phase C)
-  promoted to top-level fields. The async bound + discardingThreshold
-  apply identically to the JSON path; encoder swap is upstream of the
-  queue, so the OOM-safety guarantees are preserved. Operators who want
-  the original pretty plaintext during interactive dev set DEV_MODE_LOG=true.
+  logstash-logback-encoder ships every line as one JSON record, promoting the
+  MDC keys MdcEnrichmentFilter sets to top-level fields. The encoder sits
+  upstream of the async queue, so the bound and discardingThreshold above still
+  give the same OOM safety. Set DEV_MODE_LOG=true for plaintext during
+  interactive dev.
 -->
 <configuration>
 
@@ -54,7 +52,7 @@
             <includeMdcKeyName>topic</includeMdcKeyName>
             <includeMdcKeyName>partition</includeMdcKeyName>
             <includeMdcKeyName>offset</includeMdcKeyName>
-            <!-- OBSERVABILITY Phase E — access-log MDC keys. -->
+            <!-- Access-log keys, set by AccessLogFilter. -->
             <includeMdcKeyName>method</includeMdcKeyName>
             <includeMdcKeyName>path</includeMdcKeyName>
             <includeMdcKeyName>status</includeMdcKeyName>
@@ -112,12 +110,5 @@
     <!-- Quiet a couple of overly-chatty libraries that pre-Spring-Boot
          defaults would let through at INFO. Keeps the Async queue
          predominantly carrying our own diagnostic lines. -->
-    <logger name="org.apache.kafka.clients.NetworkClient" level="WARN"/>
-    <logger name="org.apache.kafka.clients.consumer.internals.ConsumerCoordinator" level="WARN"/>
-    <logger name="org.apache.kafka.clients.consumer.internals.SubscriptionState" level="WARN"/>
-    <logger name="org.apache.kafka.clients.consumer.internals.ConsumerUtils" level="WARN"/>
-    <logger name="org.apache.kafka.clients.consumer.internals.AbstractCoordinator" level="WARN"/>
-    <logger name="org.apache.kafka.clients.admin.internals.AdminMetadataManager" level="WARN"/>
-    <logger name="org.apache.kafka.clients.Metadata" level="WARN"/>
 
 </configuration>

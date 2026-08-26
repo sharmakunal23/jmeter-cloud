@@ -12,41 +12,20 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * The orchestrator's bespoke platform endpoints — {@code /api/v1/ready} and
- * {@code /api/v1/config}.
+ * The two platform endpoints that stay bespoke rather than deferring to
+ * Actuator: {@code /api/v1/ready} and {@code /api/v1/config}, served by Tomcat
+ * on {@code HTTP_PORT} like every other route.
  *
- * <p><b>Migrated to Spring MVC in Step 4.4b.</b> The Javalin {@code register}
- * scaffolding, alias routes ({@code /api/v1/health}, {@code /api/v1/info},
- * {@code /api/v1/metrics}), and hand-rolled JSON serialization are gone:
- * <ul>
- *   <li>{@code /api/v1/health} → use {@code /actuator/health} (Spring Boot
- *       Actuator's aggregator). The same K8s livenessProbe / readinessProbe
- *       definition that previously hit {@code /api/v1/health} should be
- *       updated to point at {@code /actuator/health}.</li>
- *   <li>{@code /api/v1/info} → use {@code /actuator/info}. Spring Boot's
- *       built-in info contributor (build properties from {@code MANIFEST.MF})
- *       returns the same Implementation-Version that {@code BuildInfo.detect}
- *       used to read.</li>
- *   <li>{@code /api/v1/metrics} → use {@code /actuator/prometheus} (Micrometer
- *       Prometheus registry). The custom {@code PrometheusExporter} is wired
- *       to a {@link io.micrometer.core.instrument.MeterRegistry} in 4.4g
- *       so the same orchestrator-counter metric names continue to be scraped.</li>
- * </ul>
+ * <p>{@code /api/v1/ready} combines metrics-consumer reachability with disk
+ * pressure in a documented precedence that Spring's health aggregator cannot
+ * express. {@code /api/v1/config} returns the redacted environment snapshot the
+ * orchestrator booted with — {@code /actuator/env} is a different shape and does
+ * not redact this platform's keys ({@code AUTH_TOKEN},
+ * {@code DOCUMENT_SERVICE_AUTH_HEADER}, {@code DOCUMENT_SERVICE_URL} userinfo).
  *
- * <p>{@code /api/v1/ready} stays bespoke because the readiness verdict combines
- * Kafka reachability and disk pressure with documented precedence — the
- * default Spring Boot health aggregator does not capture that ordering.
- * {@code /api/v1/config} stays bespoke because it surfaces the redacted env
- * snapshot the orchestrator was started with; Spring's {@code /actuator/env}
- * is a different shape and does not redact our specific keys
- * ({@code AUTH_TOKEN}, {@code DOCUMENT_SERVICE_AUTH_HEADER},
- * {@code DOCUMENT_SERVICE_URL} userinfo).
- *
- * <h2>Port</h2>
- * Wired by Spring MVC, this controller currently serves on
- * {@code ORCHESTRATOR_MGMT_PORT} (default 8081) — the same port as the
- * actuator endpoints. Step 4.4h collapses Tomcat onto {@code HTTP_PORT}
- * and Javalin disappears.
+ * <p>Health and info live at {@code /actuator/health} and {@code /actuator/info};
+ * counters at {@code /api/v1/metrics/orchestrator}. There is no
+ * {@code /actuator/prometheus} — 404 by design.
  */
 @RestController
 public final class PlatformController {
@@ -66,7 +45,7 @@ public final class PlatformController {
         ReadinessProbe.Snapshot snap = readiness.snapshot();
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("status", snap.isUp() ? "UP" : "DOWN");
-        body.put("kafkaReachable", snap.kafkaReachable());
+        body.put("ingestReachable", snap.ingestReachable());
         body.put("diskFreeBytes", snap.diskFreeBytes());
         body.put("testState", snap.testState());
         if (snap.reason() != null) {
@@ -85,7 +64,7 @@ public final class PlatformController {
      * Builds the effective resolved-config map shown by {@code GET /api/v1/config}.
      *
      * <p>Insertion order is intentional: HTTP / paths / limits / JMeter /
-     * backends / Kafka — same grouping as {@code OrchestratorConfig}'s field
+     * backends / ingest — same grouping as {@code OrchestratorConfig}'s field
      * declaration so operators reading the JSON see related settings together.
      *
      * <p>Package-private so the existing pure-Java tests can assert keys and
@@ -131,14 +110,12 @@ public final class PlatformController {
         out.put("S3_REGION",                       config.getS3Region());
 
         out.put("LOG_BUFFER_LINES",                config.getLogBufferLines());
-        out.put("KAFKA_HEALTH_CHECK_INTERVAL_MS",  config.getKafkaHealthCheckIntervalMs());
-        out.put("KAFKA_HEALTH_CHECK_TIMEOUT_MS",   config.getKafkaHealthCheckTimeoutMs());
+        out.put("INGEST_HEALTH_CHECK_INTERVAL_MS", config.getIngestHealthCheckIntervalMs());
+        out.put("INGEST_HEALTH_CHECK_TIMEOUT_MS",  config.getIngestHealthCheckTimeoutMs());
         out.put("MIN_FREE_DISK_MB",                config.getMinFreeDiskMb());
         out.put("ORCHESTRATOR_SHUTDOWN_GRACE_S",   config.getOrchestratorShutdownGraceSeconds());
 
-        out.put("KAFKA_BROKERS",       config.getKafkaBrokers());
-        out.put("SCHEMA_REGISTRY_URL", config.getSchemaRegistryUrl());
-        out.put("KAFKA_TOPIC",         config.getKafkaTopic());
+        out.put("METRICS_INGEST_URL",  redactUrlUserInfo(config.getMetricsIngestUrl()));
         out.put("TEST_REGION",         config.getTestRegion());
         out.put("POD_NAME",            config.getPodName());
         out.put("WORKER_ID_SOURCE",    config.isUseThreadName() ? "THREAD_NAME" : "POD_NAME");

@@ -26,7 +26,7 @@ import java.util.Map;
  * <p>Sources:
  * <ul>
  *   <li><b>Backends</b> — the global-orchestrator's own {@link HealthEndpoint}
- *       aggregate (covers db / redis / kafka indicators in-process) plus a
+ *       aggregate (covers db / redis indicators in-process) plus a
  *       document-service probe.</li>
  *   <li><b>Applications</b> — each registered app's current health from the
  *       registry + the last-24h downtime computed from the
@@ -63,7 +63,7 @@ public class InfraReadinessComposer {
         List<BackendStatus> backends = new ArrayList<>();
         // The global-orchestrator itself — we're running, so UP.
         backends.add(new BackendStatus("global-orchestrator", "UP", "this service"));
-        // In-process health indicators (db / redis / kafka / …).
+        // In-process health indicators (db / redis / …).
         try {
             HealthComponent root = healthEndpoint.health();
             if (root instanceof CompositeHealth ch) {

@@ -100,8 +100,8 @@ describe("FleetAllocationFormView — table + delta", () => {
         expect(onRemoveWorkers).toHaveBeenCalledWith("local-east-1", 2);
     });
 
-    // UX16 — Status column dropped (info lives in the flow view).
-    // UX20 — Capacity column dropped too (HeaderNode in the flow view
+    // Status column dropped (info lives in the flow view).
+    // Capacity column dropped too (HeaderNode in the flow view
     // already shows X/max + "ready now" + the "+N to spin" chip).
     it("renders exactly 3 columns: Region · Add · Remove", () => {
         setup({

@@ -1,0 +1,7 @@
+# KUBE-6 — jmeter-cloud-ui base. No Secret, no PVC — a stateless nginx
+# serving the SPA bundle and proxying /api/* + /actuator/*.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml

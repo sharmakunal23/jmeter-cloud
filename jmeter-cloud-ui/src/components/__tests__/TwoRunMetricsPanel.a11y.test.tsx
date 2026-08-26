@@ -82,7 +82,7 @@ afterEach(() => {
 });
 
 /**
- * HM-8 — axe sweep for the two-run comparison panel across the four
+ * Axe sweep for the two-run comparison panel across the four
  * states the operator actually sees:
  *
  * 1. **populated** — both runs present, three charts overlaid.

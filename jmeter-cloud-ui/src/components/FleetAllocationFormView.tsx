@@ -4,7 +4,7 @@ import type { FleetAllocationEntry, RegionShortfall, WorkerStatus } from "../api
 import type { RegionCapacity } from "../api/regions";
 
 /**
- * UI-C2.b polish — table-style allocator. Operator toggles between
+ * Table-style allocator. Operator toggles between
  * the data-flow diagram and this compact form via the toolbar's
  * view-mode switcher. Same Add/Remove semantics as the diagram —
  * delegates to the parent's {@code onAddWorkers} / {@code onRemoveWorkers}
@@ -21,7 +21,7 @@ export interface FleetAllocationFormViewProps {
     loading?: boolean;
     error?: string | null;
     /**
-     * UX1 — per-region capacity ceiling from the application's
+     * Per-region capacity ceiling from the application's
      * `capacity[]` grid. When provided, the +/- buttons clamp at
      * `maxAvailable - claimed` (the ceiling) rather than the live
      * IDLE-pod count. Selecting more than IDLE-now is fine — the
@@ -30,13 +30,10 @@ export interface FleetAllocationFormViewProps {
      */
     maxByRegion?: Record<string, number>;
     /**
-     * UX5 → UX15 — the Hide / Show Controls toggle briefly lived on
-     * the form's own header (UX5), but that left the operator
-     * stranded when the form column was hidden (the toggle hid with
-     * it). UX15 moved the toggle into the page header. Props kept
-     * for back-compat with any caller that hasn't migrated; the
-     * form-header chrome no longer renders when only one of them is
-     * passed.
+     * Legacy back-compat only — the Hide / Show Controls toggle lives in the
+     * page header now, because on the form's own header it hid along with the
+     * column it controlled. The form-header chrome no longer renders when only
+     * one of these is passed.
      */
     controlsHidden?: boolean;
     onToggleControls?: () => void;
@@ -47,7 +44,7 @@ export function FleetAllocationFormView({
     shortfall, loading, error, maxByRegion,
     controlsHidden, onToggleControls,
 }: FleetAllocationFormViewProps) {
-    // UX16 — workerStatuses is still accepted on the props interface
+    // WorkerStatuses is still accepted on the props interface
     // (callers pass it from the launcher) but the form no longer renders
     // statuses, so we don't destructure it here.
     const countsByRegion = useMemo(() => {
@@ -124,14 +121,14 @@ export function FleetAllocationFormView({
                 <tbody>
                     {sorted.map((r) => {
                         const claimed = countsByRegion.get(r.region) ?? 0;
-                        // UX1 — when maxByRegion is supplied (app launcher),
+                        // When maxByRegion is supplied (app launcher),
                         // the ceiling is the app's per-region maxAvailable.
                         // Otherwise fall back to the IDLE-pod count (legacy
                         // capacity-tab view).
                         const ceiling = maxByRegion?.[r.region] ?? r.idlePods;
                         const sf = shortfallByRegion.get(r.region) ?? null;
                         const remainingCap = Math.max(0, ceiling - claimed);
-                        // UX1 — "workers not ready" indicator: when the
+                        // "workers not ready" indicator: when the
                         // operator has selected more pods than are currently
                         // IDLE, the gap needs a spin.
                         const needsSpin = claimed > r.idlePods;
@@ -233,6 +230,6 @@ function FormDeltaButton({
     );
 }
 
-// UX16 — RegionStatusSummary removed along with the Status column. The
+// RegionStatusSummary removed along with the Status column. The
 // flow diagram already shows per-worker status via colour-coded pod-tile
 // borders; restating it in the form was duplicative.

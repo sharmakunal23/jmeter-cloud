@@ -73,7 +73,7 @@ public final class ResultUploader {
      * file before returning, success or failure.
      */
     public void upload(OrchestratorConfig perRun, CurrentRun currentRun, String workerId, String application) {
-        // WORKER-HYGIENE Phase A — JTL lives at
+        // JTL lives at
         // results/{runId}/results.jtl (per-run subdir). The .gz lands as
         // a sibling inside the same per-run dir so eager cleanup (which
         // removes the whole runId/ subtree) sweeps it along with the JTL.

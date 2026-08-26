@@ -38,7 +38,7 @@ const TYPES: BlobType[] = ["testPlan", "dataFiles", "result", "other"];
 
 export interface BlobsPageProps {
   /**
-   * UI-D2 — when set, locks the listing + the upload type-picker to a
+   * When set, locks the listing + the upload type-picker to a
    * single type (so {@code <DocumentsPage>} can drive each Documents
    * tab through this page). Hides the Type column + the Type dropdown
    * in the toolbar; defaults the next upload's type to the same value.
@@ -352,7 +352,7 @@ export function BlobsPage({ pinnedType, pinnedApplication, hideHeader }: BlobsPa
 
       <div className="runsToolbar">
         {!pinnedType && (
-          // The Type dropdown is redundant on the Documents tabs (UI-D2);
+          // The Type dropdown is redundant on the Documents tabs;
           // keep it as a fallback when BlobsPage is consumed without
           // pinnedType (e.g. from a future surface).
           <label className="filterToggle">

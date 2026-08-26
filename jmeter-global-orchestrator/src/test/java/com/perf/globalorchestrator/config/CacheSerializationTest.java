@@ -22,7 +22,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * CACHE C-0 — pins that the JSON serializer used by the Redis cache
+ * Pins that the JSON serializer used by the Redis cache
  * ({@link CacheConfig#jsonSerializer()}) round-trips the exact value shapes the
  * terminal-run metrics cache stores. This is the highest-risk part of the
  * "Redis everywhere" decision: the cached DTOs are Java <b>records</b> (final

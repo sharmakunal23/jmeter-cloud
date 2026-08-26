@@ -8,31 +8,22 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Phase 2 of the capacity rework: allocates the next available
- * {@code {appName}-{region}-worker-{n}} pod name for a given
- * (applicationId, region). {@code n} restarts at 1 per (app, region) and
- * fills the lowest gap — so deleting {@code worker-2} out of [1,2,3]
- * means the next allocation is {@code worker-2}, not {@code worker-4}.
+ * Allocates the next {@code {appName}-{region}-worker-{n}} name for an
+ * (applicationId, region), restarting {@code n} at 1 per pair and <b>filling the
+ * lowest gap</b> — deleting {@code worker-2} from [1,2,3] means the next
+ * allocation is {@code worker-2}, not {@code worker-4}.
  *
- * <p>The allocator is intentionally a tiny seam — the pure
- * {@link #nextSlotIndex(String, String, java.util.Collection)} method is
- * unit-testable without a database; the bean wraps it in a single repo
- * call ({@link PodRepository#findByApplicationAndRegion}).
+ * <p>Gap-filling rather than {@code MAX(n) + 1} because drains delete pod rows,
+ * so MAX+1 would grow the suffix unboundedly across drain/spin cycles instead of
+ * keeping names stable and operator-readable.
  *
- * <h2>Length budget</h2>
- * Container names follow Docker's pattern {@code [a-zA-Z0-9_.-]} and
- * map to network hostnames (DNS-1123, ≤ 63 chars total). Worst-case at
- * the documented limits: {@code appName(32) + region(20) + "-worker-NN"(10) +
- * 2 separators = 64 chars} — one over. The allocator caps {@code appName}
- * + {@code region} effective length at 50 chars combined and rejects
- * with {@link IllegalArgumentException} if either input would push the
- * resulting name past 63 chars.
+ * <p>Names become network hostnames, so they must fit DNS-1123's 63 characters.
+ * At the documented input limits the worst case is 64 — one over — so the
+ * allocator caps {@code appName} plus {@code region} at 50 combined and rejects
+ * anything that would overflow.
  *
- * <h2>Why not just MAX(n) + 1?</h2>
- * Drains delete pod rows (per the Phase 3 design — capacity is
- * derived from row count). MAX+1 would grow the integer suffix
- * unboundedly across drain/spin-up cycles; gap-filling keeps names
- * stable and operator-readable.
+ * <p>{@link #nextSlotIndex(String, String, java.util.Collection)} is pure and
+ * unit-testable without a database; the bean only wraps it in one repo call.
  */
 @Component
 public class PodNameAllocator {

@@ -27,8 +27,7 @@ import java.util.Optional;
  * REST surface for the singleton data-file zip:
  * {@code POST/GET/GET-file/DELETE /api/v1/dataFiles}.
  *
- * <p><b>Migrated to Spring MVC in Step 4.4d.</b> Same shape as
- * {@link TestPlanController} but with the larger {@code MAX_DATA_ZIP_SIZE_MB}
+ * <p>Same shape as {@link TestPlanController} but with the larger {@code MAX_DATA_ZIP_SIZE_MB}
  * cap (default 512&nbsp;MB) and the manifest endpoint reporting the
  * extracted file list. {@code POST} streams from
  * {@link HttpServletRequest#getInputStream()}; the multipart {@code form-data}

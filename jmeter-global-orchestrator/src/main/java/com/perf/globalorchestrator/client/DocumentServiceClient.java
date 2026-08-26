@@ -19,7 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * AUTOMATION — thin HTTP client for document-service's blob API, used by the
+ * Thin HTTP client for document-service's blob API, used by the
  * scheduler to fetch a saved Template body at fire time. Uses the JDK
  * {@link HttpClient} (no extra deps), mirroring {@link LocalOrchestratorClient}.
  *
@@ -107,7 +107,7 @@ public class DocumentServiceClient {
     }
 
     /**
-     * AUTOMATION Phase E — readiness probe for the infra-readiness email.
+     * Readiness probe for the infra-readiness email.
      * Returns true when document-service's {@code /actuator/health} reports 2xx;
      * false on any non-2xx or unreachable. Never throws.
      */

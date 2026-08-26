@@ -43,6 +43,59 @@ export function isCanonicalRegion(id: string): boolean {
   return BY_ID.has(id);
 }
 
+/** One selectable placement option, map pin optional. */
+export interface RegionOption {
+  id: string;
+  label: string;
+  /** Map coordinates — present only for canonical AWS USA regions. */
+  x?: number;
+  y?: number;
+}
+
+export interface ResolvedRegionOptions {
+  options: RegionOption[];
+  /**
+   * Whether to render the US map. False as soon as any option has no
+   * geographic home on it — a pin in the wrong place is worse than no map,
+   * and `na-east` is not a point in Virginia.
+   */
+  showMap: boolean;
+}
+
+/**
+ * Resolves which placement options this deployment
+ * offers.
+ *
+ * <p>The list used to be the hardcoded four AWS USA regions. A private
+ * cloud names its data centers whatever it names them (`na-east`,
+ * `na-west`, …), so the server supplies the list via
+ * `GET /api/v1/platform/capabilities` and this turns it into options.
+ *
+ * @param configured deployment-supplied ids; empty means "no override",
+ *                   which keeps the historical AWS-four behaviour
+ * @param extra      ids the application already uses that may not be in the
+ *                   configured list (legacy or hand-seeded rows) — surfaced
+ *                   so they remain removable
+ */
+export function resolveRegionOptions(
+  configured: string[],
+  extra: string[] = [],
+): ResolvedRegionOptions {
+  const ids = configured.length > 0
+    ? [...configured]
+    : USA_REGIONS.map((r) => r.id);
+  for (const id of extra) {
+    if (!ids.includes(id)) ids.push(id);
+  }
+  const options: RegionOption[] = ids.map((id) => {
+    const known = BY_ID.get(id);
+    return known
+      ? { id, label: known.label, x: known.x, y: known.y }
+      : { id, label: id };
+  });
+  return { options, showMap: options.every((o) => o.x !== undefined) };
+}
+
 /**
  * Simplified continental-US silhouette for the picker map (viewBox
  * `0 0 960 600`). Not survey-grade — a recognizable outline (west coast,

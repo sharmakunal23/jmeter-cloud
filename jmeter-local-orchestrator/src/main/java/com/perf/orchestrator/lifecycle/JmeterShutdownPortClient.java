@@ -10,7 +10,7 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 
 /**
- * MID-TEST-SCALING Phase B — TCP client for JMeter's non-GUI shutdown port.
+ * TCP client for JMeter's non-GUI shutdown port.
  *
  * <p>When JMeter is launched in non-GUI mode with
  * {@code -Jjmeterengine.nongui.port=N} (see {@code TestRunManager.buildLaunchSpec}),

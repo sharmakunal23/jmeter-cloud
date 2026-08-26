@@ -1,5 +1,5 @@
 /**
- * AUDIT-TRAIL — the operator's self-attested identity, cached in
+ * The operator's self-attested identity, cached in
  * localStorage and sent as the `X-Actor` header on every state-changing
  * request (see `runsApi` in `api/runs.ts`). The global-orchestrator records
  * it on the run's audit timeline.

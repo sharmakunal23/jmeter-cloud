@@ -1,0 +1,128 @@
+# KUBE-7 — grafana: the Application Performance dashboard
+# (perTestLiveMetrics) on the Postgres datasource. Everything is
+# provisioned on boot from ConfigMaps (datasource + dashboard loader +
+# dashboard JSON), so /var/lib/grafana is an emptyDir by default — a
+# restart re-provisions to an identical state. An operator who wants
+# UI-saved tweaks to survive restarts can swap the emptyDir for a PVC
+# (see the privateCloud overlay's commented patch).
+#
+# SLIMDOWN SL-D discipline carries over: Grafana is the ONLY
+# observability workload — no Prometheus, no exporters, no Jaeger. If a
+# future dashboard needs a non-Postgres datasource, that's an infra
+# conversation first.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  labels:
+    app: grafana
+spec:
+  # Fresh emptyDir per pod + sqlite state → keep 1 replica. (Nothing
+  # writes durable state; scaling would only duplicate provisioning.)
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      # Convention 5 (infra/deploy/k8s/README.md).
+      enableServiceLinks: false
+      # The grafana image runs as uid/gid 472 (non-root); fsGroup makes
+      # the emptyDir (sqlite db, plugin cache) writable for it.
+      securityContext:
+        runAsUser: 472
+        runAsGroup: 472
+        fsGroup: 472
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.4.0
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            # Anonymous viewer-level access for local dev — no login wall
+            # on dashboards. Operators wanting to edit log in as admin.
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: Viewer
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-credentials
+                  key: adminUser
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-credentials
+                  key: adminPassword
+            # Consumed by $__env{...} in the provisioned datasource yaml —
+            # keeps the DB password out of the ConfigMap.
+            - name: METRICS_READER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-credentials
+                  key: metricsReaderPassword
+            # Allow the run-detail page (jmeter-cloud-ui /runs/...) to
+            # embed Grafana panels in an iframe — same three knobs as
+            # compose. S-15 (KUBE-11) may tighten CSP per-origin at the
+            # Ingress once the platform hostname exists.
+            - name: GF_SECURITY_ALLOW_EMBEDDING
+              value: "true"
+            - name: GF_SECURITY_COOKIE_SAMESITE
+              value: "none"
+            - name: GF_SECURITY_CONTENT_SECURITY_POLICY
+              value: "false"
+            # Disable update / report telemetry pings.
+            - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+              value: "false"
+          # /api/health is auth-free and DB-independent — right for both
+          # probes: a broken Postgres must surface as a broken panel, not
+          # as an unservable Grafana.
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            # Go binary + one dashboard + 5-conn Postgres pool — modest.
+            requests:
+              memory: 256Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: provisioning-datasources
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
+            - name: provisioning-dashboards
+              mountPath: /etc/grafana/provisioning/dashboards
+              readOnly: true
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+              readOnly: true
+            - name: grafana-data
+              mountPath: /var/lib/grafana
+      volumes:
+        - name: provisioning-datasources
+          configMap:
+            name: grafana-provisioning-datasources
+        - name: provisioning-dashboards
+          configMap:
+            name: grafana-provisioning-dashboards
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+        - name: grafana-data
+          emptyDir: {}

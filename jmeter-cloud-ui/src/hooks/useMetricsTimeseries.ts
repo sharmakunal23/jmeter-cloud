@@ -4,7 +4,7 @@ import { runsApi, type MetricsTimeseries, type MetricsWindow, type RunState } fr
 import { useVisiblePolling, type PauseReason } from "./useVisiblePolling";
 
 /**
- * HM-3 — fetches the per-second timeseries for a run and re-polls
+ * Fetches the per-second timeseries for a run and re-polls
  * every {@link POLL_INTERVAL_MS} while the run is non-terminal. The
  * 5-second cadence matches the run-status poll on the page; we don't
  * gain much by polling faster (metrics-consumer writes within ~1 s of
@@ -81,6 +81,6 @@ export function useMetricsTimeseries(
   return { status, data, lastUpdated, isPaused, pauseReason };
 }
 
-function isTerminalRunState(state: RunState): boolean {
+export function isTerminalRunState(state: RunState): boolean {
   return state === "COMPLETED" || state === "FAILED" || state === "ABORTED";
 }

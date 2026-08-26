@@ -1,0 +1,70 @@
+# KUBE-1 — Flyway migration Job: the K8s equivalent of the compose
+# `flyway-migrate` one-shot service. Same two invocations (metrics +
+# globalrun; k8srun belongs to the standalone jmeter-orchestrator-k8s
+# deployment), same idempotency (re-runs no-op via flyway_schema_history).
+#
+# There is no `depends_on` here — `-connectRetries=60` (~1 min of 1 s
+# retries per invocation) rides out postgres still coming up, and
+# backoffLimit covers a slow first PVC provision. Dependent services
+# (consumer, global) may crash-loop until this Job completes; that's the
+# documented convergence model (infra/deploy/k8s/README.md).
+#
+# Idempotent re-apply: ttlSecondsAfterFinished garbage-collects the Job
+# 10 min after success, so a later `kubectl apply -k` recreates and
+# re-runs it cleanly (new migrations get applied). Within the TTL window
+# a re-apply with a CHANGED spec hits Job immutability — fallback:
+#   kubectl -n jmeter-cloud delete job flyway-migrate && kubectl apply -k …
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: flyway-migrate
+  labels:
+    app: flyway-migrate
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        app: flyway-migrate
+    spec:
+      enableServiceLinks: false
+      restartPolicy: OnFailure
+      containers:
+        - name: flyway
+          # Built from postgres/Dockerfile — migrations baked in (K8s has
+          # no repo checkout to bind-mount). Overlays retag/redirect.
+          image: jmeter-cloud-flyway:dev
+          env:
+            # Cluster-owner user — has CREATE SCHEMA/TABLE/GRANT; per-app
+            # users only get the runtime grants the migrations confer
+            # (same posture as compose).
+            - name: FLYWAY_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: postgresUser
+            - name: FLYWAY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: postgresPassword
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              flyway
+              -url=jdbc:postgresql://postgres:5432/jmetercloud_metrics
+              -locations=filesystem:/flyway/sql/metrics
+              -connectRetries=60
+              migrate &&
+              flyway
+              -url=jdbc:postgresql://postgres:5432/jmetercloud_globalrun
+              -locations=filesystem:/flyway/sql/globalrun
+              -connectRetries=60
+              migrate
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi

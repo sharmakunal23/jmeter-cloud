@@ -24,7 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * OBSERVABILITY Phase E — exercises the AccessLogFilter contract using
+ * Exercises the AccessLogFilter contract using
  * a Logback {@link ListAppender} attached to the {@code "access"} logger.
  * The filter is exercised through {@link OncePerRequestFilter#doFilter}
  * so the {@code shouldNotFilter} contract is verified end-to-end.

@@ -11,53 +11,51 @@ package com.perf.globalorchestrator.provision;
  *   globalOrchestrator.podProvisioner.image                = jmeter-local-orchestrator:dev
  *   globalOrchestrator.podProvisioner.localOrchestratorPort = 8080
  *   globalOrchestrator.podProvisioner.globalOrchestratorUrl = http://global-orchestrator:8082
- *   globalOrchestrator.podProvisioner.kafkaBrokers         = kafka:29092
- *   globalOrchestrator.podProvisioner.schemaRegistryUrl    = http://schema-registry:8081
+ *   globalOrchestrator.podProvisioner.metricsIngestUrl     = http://metrics-consumer:8083/api/v1/ingest
  *   globalOrchestrator.podProvisioner.documentServiceUrl   = http://document-service:8084
- *   globalOrchestrator.podProvisioner.kafkaTopic                  = jmeter.metrics.perSecond
- *   globalOrchestrator.podProvisioner.tracingSamplingProbability  = 0.01
- *   globalOrchestrator.podProvisioner.otlpTracingEndpoint         = http://jaeger:4318/v1/traces
- *   globalOrchestrator.podProvisioner.workerMemoryMb              = 4096
+ *   globalOrchestrator.podProvisioner.workerMemoryMb       = 6144
  * </pre>
  *
- * <p><b>Worker memory limit (reliability, 2026-05-27):</b>
- * {@code workerMemoryMb} is the hard Docker memory limit applied
- * to every spawned worker container. Each worker runs <em>two</em> JVMs — the
- * orchestrator ({@code -Xmx1g}) and the JMeter child ({@code -Xmx1g} by
- * default) — plus native overhead and page cache for the multi-GB JTL the
- * orchestrator tails. Sized for the real workload (a 12 h run at 200-250 rps
- * per worker): 4 GiB fits both 1 GiB heaps + ~1 GiB native + ~1 GiB
- * page-cache headroom so the long JTL write/tail stays smooth. Without an
- * explicit limit the host's OOM-killer can reap a worker (or a noisy
- * neighbour like Kafka/Postgres) non-deterministically under load.
- * Memory-swap is pinned equal to the limit so a worker hits a clean in-JVM
- * {@code ExitOnOutOfMemoryError} rather than thrashing swap.
- *
+ * <p><b>{@code workerMemoryMb} is the hard memory limit on every spawned
+ * worker, and it must fit two JVMs.</b> A worker runs the orchestrator
+ * ({@code -Xmx1g}) plus its JMeter child ({@code -Xmx2g} by default), and then
+ * needs native overhead and page cache for the multi-GB JTL it tails. The
+ * default 6 GiB is sized for a 12-hour run at 200-250 rps per worker: 3 GiB of
+ * heap, ~1 GiB native, ~2 GiB page-cache headroom so the long JTL write-and-tail
+ * stays smooth. Without an explicit limit the host OOM-killer reaps a worker —
+ * or a noisy neighbour — non-deterministically under load. Memory-swap is pinned
+ * equal to the limit so a worker dies on a clean in-JVM
+ * {@code ExitOnOutOfMemoryError} instead of thrashing swap.
  * <p>These mirror the env vars hardcoded into the orchestrator-1 / -2
  * compose service definitions today. When Phase 6 deletes those static
  * services, these defaults become the single source of truth for what
  * a per-app local-orchestrator container looks like.
- *
- * <p>The two tracing fields (added in OBSERVABILITY Phase B) are
- * propagated to every spawned local-orch container so its OTLP exporter
- * reaches the same Jaeger as the global-orch. Sampling defaults to
- * 1% to match production; the local docker-compose env overrides to
- * 100% so single-pod dev shows every span.
  */
 public record ProvisionerProperties(
+        // Docker substrate only (compose stack) — ignored when substrate=k8s.
         String dockerHost,
         String network,
+        // K8s substrate only (KUBE-5 Option A) — Pod namespace + the headless
+        // Service that gives workers their {podName}.{service} DNS names.
+        // Both are K8s resource names → DNS-1123 lowercase (camelCase
+        // exemption). Ignored when substrate=docker.
+        String namespace,
+        String headlessService,
         String image,
         int    localOrchestratorPort,
         String globalOrchestratorUrl,
-        String kafkaBrokers,
-        String schemaRegistryUrl,
+        // DIRECT-METRICS (2026-07-20): the metrics-consumer ingest endpoint
+        // stamped as METRICS_INGEST_URL on every spawned worker.
+        String metricsIngestUrl,
         String documentServiceUrl,
-        String kafkaTopic,
-        String tracingSamplingProbability,
-        String otlpTracingEndpoint,
         long   workerMemoryMb,
-        // RELIABILITY Round 8 — aggregator late-arrival grace (seconds) stamped
+        // K8s substrate only — CPU REQUEST per worker Pod (e.g. "500m").
+        // Request-only, deliberately NO cpu limit: cfs throttling on a load
+        // generator skews the latencies it measures. The request just keeps
+        // the scheduler from stacking more workers on a node than it can
+        // run. (The docker substrate sets no CPU constraint at all.)
+        String workerCpuRequest,
+        // Aggregator late-arrival grace (seconds) stamped
         // as GRACE_PERIOD_SECONDS on every spawned worker. JMeter timestamps a
         // sample at its start but writes it at completion, so a slow sample
         // lands in the JTL out of order; a larger grace keeps its 1-second

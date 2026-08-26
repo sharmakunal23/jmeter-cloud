@@ -4,12 +4,12 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 /**
- * HTTP gateway that abstracts blob storage for the jmeter-cloud platform.
+ * Spring Boot entry point for the document-service — the platform's blob-storage
+ * gateway on port 8084.
  *
- * <p>Step 7 skeleton — endpoints return 501 NOT_IMPLEMENTED. The
- * {@code LocalFsBlobStore} backend (default) and the cloud-only
- * {@code S3BlobStore} (under {@code -Pcloud}) materialize alongside the
- * orchestrator's open follow-up #3 (storage backend implementations).
+ * <p>{@code documentService.backend} picks the active store:
+ * {@link com.perf.documentservice.store.LocalFsBlobStore} (default) or
+ * {@code S3BlobStore}, which is only on the classpath under {@code -Pcloud}.
  */
 @SpringBootApplication
 public class DocumentServiceApplication {

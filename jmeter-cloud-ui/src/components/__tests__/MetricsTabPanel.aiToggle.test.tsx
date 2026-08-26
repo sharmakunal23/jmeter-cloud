@@ -14,7 +14,12 @@ const mocks = vi.hoisted(() => ({
   useAiStatus: vi.fn(),
   useRunInsights: vi.fn(),
 }));
-vi.mock("../../hooks/useMetricsTimeseries", () => ({ useMetricsTimeseries: mocks.useMetricsTimeseries }));
+vi.mock("../../hooks/useMetricsTimeseries", async (importOriginal) => {
+  // Spread keeps the real isTerminalRunState the panel needs for the
+  // initial time-window pick.
+  const actual = await importOriginal<typeof import("../../hooks/useMetricsTimeseries")>();
+  return { ...actual, useMetricsTimeseries: mocks.useMetricsTimeseries };
+});
 vi.mock("../../hooks/useAiStatus", () => ({ useAiStatus: mocks.useAiStatus }));
 vi.mock("../../hooks/useRunInsights", () => ({ useRunInsights: mocks.useRunInsights }));
 

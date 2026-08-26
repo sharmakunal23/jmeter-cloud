@@ -1,5 +1,5 @@
 /**
- * UX25 — Run-start progress modal. Surfaces what's happening behind the
+ * Run-start progress modal. Surfaces what's happening behind the
  * scenes between the operator clicking "Start run" and the run being
  * live on its detail page.
  *
@@ -46,14 +46,14 @@ export interface RunStartProgressProps {
   /** Shown only when at least one stage has failed. */
   onRetry?: () => void;
   /**
-   * UX28 — when the POST returns 503 INSUFFICIENT_CAPACITY, the modal
+   * When the POST returns 503 INSUFFICIENT_CAPACITY, the modal
    * intercepts the stage list with this shortfall-recovery prompt
    * instead of the generic "Run start failed" UI. The two buttons map
    * to the same backend actions the in-page error pane used to offer:
    * `spinShortfall: true` (provision the missing pods then launch) and
    * `bestEffort: true` (proceed with whatever IDLE pods are available).
    *
-   * <p>UX29 — `rows` carries the per-region breakdown so the modal can
+   * <p>`rows` carries the per-region breakdown so the modal can
    * render a compact table (Region · Need · Ready · Not ready) instead
    * of squashing it into one prose sentence. Falls back to
    * {@code fallbackMessage} when the server didn't structure the body.
@@ -92,7 +92,7 @@ export function RunStartProgress({
   if (!open) return null;
   const hasFailed = stages.some((s) => s.status === "failed");
 
-  // UX28 — when the POST returned INSUFFICIENT_CAPACITY, intercept the
+  // When the POST returned INSUFFICIENT_CAPACITY, intercept the
   // stage list with a focused shortfall prompt. The operator picks an
   // action and the parent re-fires send(), which resets the stages.
   if (shortfallPrompt) {

@@ -9,6 +9,7 @@ import com.github.dockerjava.api.model.HostConfig;
 import com.github.dockerjava.api.model.LogConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -19,35 +20,32 @@ import java.util.stream.Collectors;
 
 /**
  * {@link PodProvisioner} backed by a mounted host docker daemon
- * ({@code /var/run/docker.sock}). Only suitable for the local docker-compose
- * stack — the cloud counterpart will be a {@code K8sApiPodProvisioner}
- * implementation.
+ * ({@code /var/run/docker.sock}) — the compose default, selected by
+ * {@code podProvisioner.substrate=docker}. {@link K8sPodProvisioner} takes over
+ * at {@code substrate=k8s} for private-cloud deployments.
  *
- * <p>Containers are created with:
- * <ul>
- *   <li>name + hostname == {@code podName} so the global can reach the pod
- *       at {@code http://{podName}:8080} via the shared docker network.</li>
- *   <li>network == {@link ProvisionerProperties#network()} (default
- *       {@code jmeter-cloud_default}) so they're on the same subnet as
- *       kafka, schema-registry, document-service.</li>
- *   <li>labels under the {@code com.perf.jmeterCloud.*} namespace so the
- *       reconciler can list/adopt them by app + region without going
- *       through the registry table.</li>
- *   <li>no host port mapping — pod-to-global traffic uses the internal
- *       docker network. Operators debugging directly use {@code docker exec}
- *       or {@code docker port} after the fact.</li>
- *   <li>no host volume mount in Phase 1 — containers use anonymous
- *       volumes for the orchestrator's BASE_DIR. Phase 6 may reintroduce
- *       a per-pod host mount once we settle on a layout.</li>
- * </ul>
+ * <p>Containers take their name and hostname from {@code podName}, so the
+ * control plane reaches a worker at {@code http://{podName}:8080} over the
+ * shared network, and carry {@code com.perf.jmeterCloud.*} labels so the
+ * reconciler can list and adopt them by app and region without consulting the
+ * registry. There is no host port mapping and no host volume mount: traffic
+ * stays on the internal network, and the worker's BASE_DIR lives in an
+ * anonymous volume.
  *
- * <p>{@link DockerClient} connections are lazy (the underlying http client
- * doesn't open the socket until the first command is executed), so this
- * bean constructs cleanly even when {@code /var/run/docker.sock} isn't
- * mounted — useful for unit tests that import the application context
- * without exercising the provisioner.
+ * <p>{@link DockerClient} connections are lazy — the socket is not opened until
+ * the first command — so this bean constructs cleanly even where the socket is
+ * not mounted, which is what lets unit tests import the context without
+ * exercising it.
+ *
+ * <p>Also gated on {@code PROVISIONING_MODE=DYNAMIC}. Substrate answers *how*
+ * workers are created; mode answers *whether*. In static mode
+ * {@link StaticPodProvisioner} is the only provisioner bean and the substrate
+ * key is ignored entirely.
  */
 @Component
+@ConditionalOnProvisioningMode(ProvisioningMode.DYNAMIC)
+@ConditionalOnProperty(name = "globalOrchestrator.podProvisioner.substrate",
+                       havingValue = "docker", matchIfMissing = true)
 public class DockerSocketPodProvisioner implements PodProvisioner {
 
     private static final Logger LOG = LoggerFactory.getLogger(DockerSocketPodProvisioner.class);
@@ -76,7 +74,7 @@ public class DockerSocketPodProvisioner implements PodProvisioner {
             LOG.debug("Container {} was already running; treating createAndStart as no-op", spec.podName());
         }
 
-        // WORKER-HYGIENE Phase B — capture the metadata the registry will
+        // Capture the metadata the registry will
         // anchor the recycle lifecycle on. Image digest comes from
         // inspecting the container (which records the image ID at create
         // time, immune to subsequent re-tags of the same name). createdAt
@@ -223,7 +221,7 @@ public class DockerSocketPodProvisioner implements PodProvisioner {
         // hard memory limit so a busy worker (orchestrator JVM + JMeter child)
         // OOMs cleanly inside the cgroup (→ ExitOnOutOfMemoryError, reaped by
         // PodSweeper) instead of letting the host OOM-killer reap an arbitrary
-        // process — including a noisy-neighbour Kafka/Postgres on the same
+        // process — including a noisy-neighbour Postgres on the same
         // host. Sized (default 6 GiB, RELIABILITY Round 6) for the real workload —
         // a 12 h run at 200-250 rps across ~100 endpoints per worker — to fit the
         // orchestrator JVM (-Xmx1g + native ≈ 1.5 GiB) + the JMeter child
@@ -279,10 +277,9 @@ public class DockerSocketPodProvisioner implements PodProvisioner {
         // Control-plane wiring.
         e.put("GLOBAL_ORCHESTRATOR_URL", props.globalOrchestratorUrl());
         // Streaming pipeline.
-        e.put("KAFKA_BROKERS",           props.kafkaBrokers());
-        e.put("SCHEMA_REGISTRY_URL",     props.schemaRegistryUrl());
-        e.put("KAFKA_TOPIC",             props.kafkaTopic());
-        // RELIABILITY Round 8 — aggregator late-arrival grace (seconds). Set
+        // Workers POST straight to the metrics-consumer.
+        e.put("METRICS_INGEST_URL",      props.metricsIngestUrl());
+        // Aggregator late-arrival grace (seconds). Set
         // here so the local-orch boots with it AND forwards it to every per-run
         // config (TestRunManager.buildPerRunConfig); a per-run POST /test
         // gracePeriodSeconds still overrides.
@@ -305,18 +302,14 @@ public class DockerSocketPodProvisioner implements PodProvisioner {
         // Tomcat.
         e.put("HTTP_BIND_ADDRESS",       "0.0.0.0");
         e.put("HTTP_PORT",               String.valueOf(props.localOrchestratorPort()));
-        // OBSERVABILITY Phase B — tracing. Local-orch has no application.yml
-        // by design (env-driven config); Spring Boot maps these SCREAMING_SNAKE
-        // names onto `management.tracing.sampling.probability` and
-        // `management.otlp.tracing.endpoint` via relaxed binding. SERVICE name
-        // is set so the OTel SDK reports `service.name` on every span.
-        e.put("MANAGEMENT_TRACING_SAMPLING_PROBABILITY", props.tracingSamplingProbability());
-        e.put("MANAGEMENT_OTLP_TRACING_ENDPOINT",        props.otlpTracingEndpoint());
-        e.put("OTEL_RESOURCE_ATTRIBUTES",                "service.name=jmeter-local-orchestrator");
+        // SLIMDOWN SL-E (2026-07-22): the tracing stamps
+        // (MANAGEMENT_TRACING_* / MANAGEMENT_OTLP_* / OTEL_RESOURCE_ATTRIBUTES)
+        // are gone — workers were slimmed in SL-C and ignore them (D-5).
         return e;
     }
 
-    private String baseUrlFor(String podName) {
+    @Override
+    public String baseUrlFor(String podName) {
         return "http://" + podName + ":" + props.localOrchestratorPort();
     }
 

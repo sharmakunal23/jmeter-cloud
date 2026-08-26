@@ -1,46 +1,38 @@
 package com.perf.orchestrator.buffer;
 
-import com.perf.orchestrator.WorkerMetricBatch;
-import com.perf.orchestrator.WorkerMetricEntry;
-import com.perf.orchestrator.kafka.KafkaMetricPublisher;
-import io.confluent.kafka.schemaregistry.client.MockSchemaRegistryClient;
-import io.confluent.kafka.serializers.KafkaAvroSerializer;
-import io.confluent.kafka.serializers.KafkaAvroSerializerConfig;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import org.apache.kafka.clients.producer.MockProducer;
-import org.apache.kafka.clients.producer.Producer;
-import org.apache.kafka.common.serialization.Serializer;
-import org.apache.kafka.common.serialization.StringSerializer;
+import com.perf.orchestrator.model.WorkerMetricBatch;
+import com.perf.orchestrator.model.WorkerMetricEntry;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.core.ProducerFactory;
 
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * Unit tests for {@link AsyncMetricsDispatcher} — the HTTP-ingest publish
+ * path .
+ */
 @DisplayName("MetricsDispatcher")
 class MetricsDispatcherTest {
 
-    private static final String TOPIC = "jmeter.metrics.perSecond";
-
-    private SimpleMeterRegistry meterRegistry;
     private InMemoryMetricsBuffer buffer;
-    private MockProducer<String, WorkerMetricBatch> mockProducer;
-    private KafkaMetricPublisher publisher;
+    private RecordingIngestClient ingest;
     private AsyncMetricsDispatcher dispatcher;
 
     @BeforeEach
     void setUp() {
-        meterRegistry = new SimpleMeterRegistry();
         buffer = new InMemoryMetricsBuffer();
     }
 
@@ -51,21 +43,14 @@ class MetricsDispatcherTest {
         }
     }
 
-    private void wireDispatcher(boolean autoCompleteSends) {
-        wireDispatcher(autoCompleteSends, AsyncMetricsDispatcher.DEFAULT_QUEUE_CAPACITY);
+    private void wireDispatcher(RecordingIngestClient client) {
+        wireDispatcher(client, AsyncMetricsDispatcher.DEFAULT_QUEUE_CAPACITY);
     }
 
-    private void wireDispatcher(boolean autoCompleteSends, int queueCapacity) {
-        wireDispatcher(autoCompleteSends, queueCapacity, /* httpFallback */ null);
-    }
-
-    private void wireDispatcher(boolean autoCompleteSends,
-                                 int queueCapacity,
-                                 HttpFallbackClient httpFallback) {
-        mockProducer = newMockProducer(autoCompleteSends);
-        publisher = KafkaMetricPublisher.forTesting(templateFor(mockProducer));
+    private void wireDispatcher(RecordingIngestClient client, int queueCapacity) {
+        ingest = client;
         dispatcher = new AsyncMetricsDispatcher(
-                buffer, publisher, httpFallback, meterRegistry,
+                buffer, ingest,
                 java.time.Clock.systemUTC(),
                 queueCapacity,
                 Duration.ofMillis(50),     // tight retryInterval for fast tests
@@ -73,7 +58,7 @@ class MetricsDispatcherTest {
     }
 
     // -----------------------------------------------------------------------
-    // Happy path — offer → buffer → publish → delete
+    // Happy path — offer → buffer → POST → delete
     // -----------------------------------------------------------------------
 
     @Nested
@@ -83,42 +68,44 @@ class MetricsDispatcherTest {
         @Test
         @DisplayName("offer accepts envelope and returns true")
         void offer_accepts_and_returns_true() {
-            wireDispatcher(true);
+            wireDispatcher(RecordingIngestClient.alwaysAccepted());
 
-            boolean accepted = dispatcher.offer(envelope(1L, "w-1", "GET /a"), "test.topic");
+            boolean accepted = dispatcher.offer(envelope(1L, "w-1", "GET /a"));
 
             assertThat(accepted).isTrue();
-            assertThat(meterRegistry.counter("metricsDispatch.offered").count()).isEqualTo(1.0);
         }
 
         @Test
-        @DisplayName("envelope flows through buffer and is published to Kafka")
-        void envelope_flows_through_buffer_to_kafka() {
-            wireDispatcher(true);
+        @DisplayName("envelope flows through buffer, POSTs to ingest, buffer drains")
+        void envelope_flows_through_buffer_to_ingest() {
+            wireDispatcher(RecordingIngestClient.alwaysAccepted());
 
-            dispatcher.offer(envelope(1L, "w-1", "GET /a"), "test.topic");
+            dispatcher.offer(envelope(1L, "w-1", "GET /a"));
 
-            // Mock producer auto-completes; buffer should drain to zero once publish settles.
             Awaitility.await().atMost(Duration.ofSeconds(2))
                     .untilAsserted(() -> {
-                        assertThat(mockProducer.history()).hasSize(1);
+                        assertThat(ingest.callCount.get()).isGreaterThanOrEqualTo(1);
                         assertThat(buffer.depthEnvelopes()).isZero();
                     });
+            assertThat(dispatcher.publishedCount()).isGreaterThanOrEqualTo(1L);
+            assertThat(dispatcher.failedCount()).isZero();
         }
 
         @Test
         @DisplayName("offerAll accepts all envelopes when queue has room")
         void offerAll_accepts_all_when_room() {
-            wireDispatcher(true);
+            wireDispatcher(RecordingIngestClient.alwaysAccepted());
 
             int accepted = dispatcher.offerAll(List.of(
                     envelope(1L, "w-1", "GET /a"),
                     envelope(2L, "w-1", "GET /b"),
-                    envelope(3L, "w-1", "GET /c")), "test.topic");
+                    envelope(3L, "w-1", "GET /c")));
 
             assertThat(accepted).isEqualTo(3);
             Awaitility.await().atMost(Duration.ofSeconds(2))
-                    .untilAsserted(() -> assertThat(mockProducer.history()).hasSize(3));
+                    .untilAsserted(() -> assertThat(buffer.depthEnvelopes()).isZero());
+            Awaitility.await().atMost(Duration.ofSeconds(2))
+                    .untilAsserted(() -> assertThat(dispatcher.publishedCount()).isEqualTo(3L));
         }
     }
 
@@ -131,187 +118,76 @@ class MetricsDispatcherTest {
     class Backpressure {
 
         @Test
-        @DisplayName("offer returns false + bumps counter when in-memory queue is full")
+        @DisplayName("offer returns false when in-memory queue is full")
         void offer_returns_false_when_queue_full() {
-            // Use autoComplete=false so the dispatch thread can't drain the queue.
-            wireDispatcher(false, /* queueCapacity */ 2);
+            // An ingest client that never completes its futures — every publish
+            // hangs, so the dispatch thread's buffer keeps growing but the
+            // in-memory queue also backs up once handleNew slows down.
+            RecordingIngestClient hanging = RecordingIngestClient.neverCompleting();
+            wireDispatcher(hanging, /* queueCapacity */ 2);
 
-            // Two envelopes fit; the dispatch thread might pick one up between
-            // offers, so do a tight loop and accept that some succeed before
-            // the queue fills. The third onwards should reliably fail.
             for (int i = 0; i < 2; i++) {
-                dispatcher.offer(envelope(i, "w-1", "GET /a"), "test.topic");
+                dispatcher.offer(envelope(i, "w-1", "GET /a"));
             }
-            // Spam more offers; with autoCompleteSends=false the dispatch thread
-            // is stuck waiting for callbacks and the queue stays full eventually.
             int rejections = 0;
-            for (int i = 0; i < 20; i++) {
-                if (!dispatcher.offer(envelope(100 + i, "w-1", "GET /a"), "test.topic")) {
+            for (int i = 0; i < 50; i++) {
+                if (!dispatcher.offer(envelope(100 + i, "w-1", "GET /a"))) {
                     rejections++;
                 }
             }
 
             assertThat(rejections).as("at least some offers must be rejected when queue is saturated")
                     .isGreaterThan(0);
-            assertThat(meterRegistry.counter("metricsDispatch.dropsForBackpressure").count())
-                    .isGreaterThan(0);
         }
     }
 
     // -----------------------------------------------------------------------
-    // Retry on publish failure
+    // Outcome mapping — RETRY / TERMINAL_REJECT
     // -----------------------------------------------------------------------
 
     @Nested
-    @DisplayName("retry on publish failure")
-    class RetryOnFailure {
+    @DisplayName("ingest outcome mapping")
+    class OutcomeMapping {
 
         @Test
-        @DisplayName("envelope stays in buffer when publish fails; retry sweeper republishes after retryAfter")
-        void retries_failed_envelope_after_stale_window() {
-            // autoComplete=false so we manually fail the first send, then succeed the retry.
-            wireDispatcher(false);
+        @DisplayName("RETRY (503) → envelope stays in buffer; sweeper republishes; later ACCEPTED drains it")
+        void retry_then_accept_drains() {
+            // First response 503, subsequent responses 202.
+            AtomicInteger calls = new AtomicInteger();
+            RecordingIngestClient flappy = RecordingIngestClient.fromSupplier(() ->
+                    calls.incrementAndGet() == 1
+                            ? HttpIngestResult.retry(503, "consumer down")
+                            : HttpIngestResult.accepted());
+            wireDispatcher(flappy);
 
-            dispatcher.offer(envelope(1L, "w-1", "GET /a"), "test.topic");
+            dispatcher.offer(envelope(1L, "w-1", "GET /a"));
 
-            // Wait for the first send to be queued
+            // First attempt fails with RETRY — envelope stays buffered.
             Awaitility.await().atMost(Duration.ofSeconds(2))
-                    .untilAsserted(() -> assertThat(mockProducer.history()).hasSize(1));
+                    .untilAsserted(() -> assertThat(flappy.callCount.get()).isGreaterThanOrEqualTo(1));
 
-            // Fail the first send — envelope stays on disk in the buffer.
-            mockProducer.errorNext(new RuntimeException("broker unavailable"));
-            assertThat(buffer.depthEnvelopes()).isEqualTo(1L);
-
-            // Wait for the retry sweeper to fire (retryAfter=200ms; retryInterval=50ms).
+            // The retry sweeper (retryAfter=200ms) republishes → 202 → drains.
             Awaitility.await().atMost(Duration.ofSeconds(3))
-                    .untilAsserted(() -> assertThat(mockProducer.history()).hasSizeGreaterThanOrEqualTo(2));
-
-            // Complete the retry's send → buffer drains.
-            mockProducer.completeNext();
-            Awaitility.await().atMost(Duration.ofSeconds(2))
                     .untilAsserted(() -> assertThat(buffer.depthEnvelopes()).isZero());
 
-            assertThat(meterRegistry.counter("metricsDispatch.retried").count()).isGreaterThan(0);
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // K-5 — HTTP fallback when Kafka send fails
-    // -----------------------------------------------------------------------
-
-    @Nested
-    @DisplayName("HTTP fallback (K-5)")
-    class HttpFallback {
-
-        @Test
-        @DisplayName("Kafka fails → HTTP succeeds → buffer drains, fallback counter bumps")
-        void kafka_fails_http_succeeds_buffer_drains() {
-            RecordingHttpFallback fallback = RecordingHttpFallback.alwaysAccepted();
-            wireDispatcher(/* autoComplete */ false, MetricsDispatcher.class.getDeclaredFields().length > 0
-                    ? AsyncMetricsDispatcher.DEFAULT_QUEUE_CAPACITY : 256, fallback);
-
-            dispatcher.offer(envelope(1L, "w-1", "GET /a"), "test.topic");
-
-            Awaitility.await().atMost(Duration.ofSeconds(2))
-                    .untilAsserted(() -> assertThat(mockProducer.history()).hasSize(1));
-
-            // Fail the Kafka send → dispatcher should call HTTP fallback.
-            mockProducer.errorNext(new RuntimeException("broker unavailable"));
-
-            Awaitility.await().atMost(Duration.ofSeconds(2))
-                    .untilAsserted(() -> {
-                        assertThat(fallback.callCount.get())
-                                .as("fallback should fire after Kafka failure")
-                                .isGreaterThanOrEqualTo(1);
-                        assertThat(buffer.depthEnvelopes())
-                                .as("buffer should drain after HTTP succeeds")
-                                .isZero();
-                    });
-            assertThat(meterRegistry.counter("httpFallback.accepted").count()).isGreaterThanOrEqualTo(1);
+            // The sweeper republished (call 2+) after the 503 — the fake's
+            // call count is the retry evidence now that the counters are gone.
+            assertThat(flappy.callCount.get()).isGreaterThanOrEqualTo(2);
+            assertThat(dispatcher.publishedCount()).isGreaterThanOrEqualTo(1L);
         }
 
         @Test
-        @DisplayName("Kafka fails → HTTP returns 503 RETRY → envelope stays in buffer for sweeper")
-        void kafka_fails_http_retry_envelope_stays() {
-            RecordingHttpFallback fallback = RecordingHttpFallback.alwaysReturning(
-                    HttpFallbackResult.retry(503, "consumer down"));
-            wireDispatcher(/* autoComplete */ false, AsyncMetricsDispatcher.DEFAULT_QUEUE_CAPACITY, fallback);
+        @DisplayName("TERMINAL_REJECT (400) → envelope deleted; failedCount bump")
+        void terminal_reject_deletes_envelope() {
+            wireDispatcher(RecordingIngestClient.alwaysReturning(
+                    HttpIngestResult.terminalReject(400, "malformed")));
 
-            dispatcher.offer(envelope(1L, "w-1", "GET /a"), "test.topic");
-
-            Awaitility.await().atMost(Duration.ofSeconds(2))
-                    .untilAsserted(() -> assertThat(mockProducer.history()).hasSize(1));
-
-            mockProducer.errorNext(new RuntimeException("broker unavailable"));
-
-            Awaitility.await().atMost(Duration.ofSeconds(2))
-                    .untilAsserted(() -> assertThat(fallback.callCount.get()).isGreaterThanOrEqualTo(1));
-
-            // After RETRY, envelope must remain on disk for the K-3 sweeper.
-            assertThat(buffer.depthEnvelopes()).isEqualTo(1L);
-            assertThat(meterRegistry.counter("httpFallback.retry").count()).isGreaterThanOrEqualTo(1);
-            assertThat(meterRegistry.counter("httpFallback.accepted").count()).isZero();
-        }
-
-        @Test
-        @DisplayName("Kafka fails → HTTP returns 400 TERMINAL_REJECT → envelope deleted (data loss counter bumps)")
-        void kafka_fails_http_terminal_reject_envelope_deleted() {
-            RecordingHttpFallback fallback = RecordingHttpFallback.alwaysReturning(
-                    HttpFallbackResult.terminalReject(400, "malformed"));
-            wireDispatcher(/* autoComplete */ false, AsyncMetricsDispatcher.DEFAULT_QUEUE_CAPACITY, fallback);
-
-            dispatcher.offer(envelope(1L, "w-1", "GET /a"), "test.topic");
-
-            Awaitility.await().atMost(Duration.ofSeconds(2))
-                    .untilAsserted(() -> assertThat(mockProducer.history()).hasSize(1));
-
-            mockProducer.errorNext(new RuntimeException("broker unavailable"));
-
-            // Buffer drains AND the rejection counter increments — operator
-            // can see the loss without it being silent.
-            Awaitility.await().atMost(Duration.ofSeconds(2))
-                    .untilAsserted(() -> assertThat(buffer.depthEnvelopes()).isZero());
-            assertThat(meterRegistry.counter("httpFallback.terminalRejects").count())
-                    .isGreaterThanOrEqualTo(1);
-            assertThat(meterRegistry.counter("httpFallback.accepted").count()).isZero();
-        }
-
-        @Test
-        @DisplayName("Kafka succeeds → HTTP fallback is never called")
-        void kafka_succeeds_no_fallback() {
-            RecordingHttpFallback fallback = RecordingHttpFallback.alwaysAccepted();
-            wireDispatcher(/* autoComplete */ true, AsyncMetricsDispatcher.DEFAULT_QUEUE_CAPACITY, fallback);
-
-            dispatcher.offer(envelope(1L, "w-1", "GET /a"), "test.topic");
+            dispatcher.offer(envelope(1L, "w-1", "GET /a"));
 
             Awaitility.await().atMost(Duration.ofSeconds(2))
                     .untilAsserted(() -> assertThat(buffer.depthEnvelopes()).isZero());
-
-            // Give a tiny moment to be sure no spurious fallback call lands
-            try { Thread.sleep(100); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
-
-            assertThat(fallback.callCount.get())
-                    .as("fallback must not fire when Kafka send succeeds")
-                    .isZero();
-        }
-    }
-
-    /** Test fake recording fallback invocations and returning a configurable outcome. */
-    private static final class RecordingHttpFallback implements HttpFallbackClient {
-        final java.util.concurrent.atomic.AtomicInteger callCount = new java.util.concurrent.atomic.AtomicInteger();
-        private final HttpFallbackResult outcome;
-
-        private RecordingHttpFallback(HttpFallbackResult outcome) { this.outcome = outcome; }
-        static RecordingHttpFallback alwaysAccepted() {
-            return new RecordingHttpFallback(HttpFallbackResult.accepted());
-        }
-        static RecordingHttpFallback alwaysReturning(HttpFallbackResult outcome) {
-            return new RecordingHttpFallback(outcome);
-        }
-        @Override
-        public java.util.concurrent.CompletableFuture<HttpFallbackResult> send(WorkerMetricBatch envelope) {
-            callCount.incrementAndGet();
-            return java.util.concurrent.CompletableFuture.completedFuture(outcome);
+            assertThat(dispatcher.failedCount()).isGreaterThanOrEqualTo(1L);
+            assertThat(dispatcher.publishedCount()).isZero();
         }
     }
 
@@ -325,13 +201,12 @@ class MetricsDispatcherTest {
 
         @Test
         @DisplayName("close stops the dispatch thread within timeout")
-        void close_stops_thread() throws InterruptedException {
-            wireDispatcher(true);
+        void close_stops_thread() {
+            wireDispatcher(RecordingIngestClient.alwaysAccepted());
 
-            // Sanity — dispatcher is up and processing
-            dispatcher.offer(envelope(1L, "w-1", "GET /a"), "test.topic");
+            dispatcher.offer(envelope(1L, "w-1", "GET /a"));
             Awaitility.await().atMost(Duration.ofSeconds(2))
-                    .untilAsserted(() -> assertThat(mockProducer.history()).hasSize(1));
+                    .untilAsserted(() -> assertThat(ingest.callCount.get()).isGreaterThanOrEqualTo(1));
 
             long start = System.nanoTime();
             dispatcher.close();
@@ -346,53 +221,66 @@ class MetricsDispatcherTest {
     // Test infrastructure
     // -----------------------------------------------------------------------
 
-    private static MockProducer<String, WorkerMetricBatch> newMockProducer(boolean autoComplete) {
-        MockSchemaRegistryClient schemaRegistry = new MockSchemaRegistryClient();
-        KafkaAvroSerializer avroSerializer = new KafkaAvroSerializer(schemaRegistry);
-        avroSerializer.configure(
-                Map.of(KafkaAvroSerializerConfig.SCHEMA_REGISTRY_URL_CONFIG, "mock://test"),
-                false);
-        Serializer<WorkerMetricBatch> valueSerializer = new Serializer<>() {
-            @Override public byte[] serialize(String topic, WorkerMetricBatch data) {
-                return avroSerializer.serialize(topic, data);
-            }
-        };
-        return new MockProducer<>(autoComplete, new StringSerializer(), valueSerializer);
-    }
+    /** Test fake recording ingest invocations and returning configurable outcomes. */
+    private static final class RecordingIngestClient implements HttpIngestClient {
+        final AtomicInteger callCount = new AtomicInteger();
+        final ConcurrentLinkedQueue<WorkerMetricBatch> received = new ConcurrentLinkedQueue<>();
+        private final Supplier<HttpIngestResult> outcome; // null = never complete
 
-    private static KafkaTemplate<String, WorkerMetricBatch> templateFor(
-            MockProducer<String, WorkerMetricBatch> mockProducer) {
-        Producer<String, WorkerMetricBatch> closeSafeProducer = org.mockito.Mockito.spy(mockProducer);
-        org.mockito.Mockito.doNothing().when(closeSafeProducer).close();
-        org.mockito.Mockito.doNothing().when(closeSafeProducer).close(org.mockito.ArgumentMatchers.any());
-        ProducerFactory<String, WorkerMetricBatch> factory = new ProducerFactory<>() {
-            @Override public Producer<String, WorkerMetricBatch> createProducer() {
-                return closeSafeProducer;
+        private RecordingIngestClient(Supplier<HttpIngestResult> outcome) { this.outcome = outcome; }
+
+        static RecordingIngestClient alwaysAccepted() {
+            return new RecordingIngestClient(HttpIngestResult::accepted);
+        }
+        static RecordingIngestClient alwaysReturning(HttpIngestResult fixed) {
+            return new RecordingIngestClient(() -> fixed);
+        }
+        static RecordingIngestClient fromSupplier(Supplier<HttpIngestResult> supplier) {
+            return new RecordingIngestClient(supplier);
+        }
+        static RecordingIngestClient neverCompleting() {
+            return new RecordingIngestClient(null);
+        }
+
+        @Override
+        public CompletableFuture<HttpIngestResult> send(WorkerMetricBatch envelope) {
+            callCount.incrementAndGet();
+            received.add(envelope);
+            if (outcome == null) {
+                return new CompletableFuture<>(); // never completes
             }
-        };
-        return new KafkaTemplate<>(factory);
+            return CompletableFuture.completedFuture(outcome.get());
+        }
     }
 
     private static WorkerMetricBatch envelope(long sec, String workerId, String label) {
         Map<String, Long> statusCodes = new HashMap<>();
         statusCodes.put("200", 1L);
-        WorkerMetricEntry entry = WorkerMetricEntry.newBuilder()
-                .setLabel(label)
-                .setThroughput(1L).setErrorCount(0L).setErrorRate(0.0)
-                .setAvgRespTimeMs(10.0)
-                .setP50Ms(10.0).setP90Ms(10.0).setP95Ms(10.0).setP99Ms(10.0)
-                .setMinMs(10.0).setMaxMs(10.0).setRawMaxMs(10L)
-                .setBytesReceived(100L).setBytesSent(50L)
-                .setStatusCodes(statusCodes)
-                .setActiveThreads(1L)
-                .build();
-        return WorkerMetricBatch.newBuilder()
-                .setWindowSecond(sec)
-                .setWindowTimestamp("2026/05/11 12:00:00")
-                .setRegion("us-east-1")
-                .setWorkerId(workerId)
-                .setRunId("test-run")
-                .setEntries(List.of(entry))
-                .build();
+        WorkerMetricEntry entry = new WorkerMetricEntry(
+                label,
+                1L,
+                0L,
+                0.0,
+                10.0,
+                10L,   // sumElapsedMs — 1 sample × 10 ms
+                10.0,
+                10.0,
+                10.0,
+                10.0,
+                10.0,
+                10.0,
+                10L,
+                100L,
+                50L,
+                statusCodes,
+                1L);
+        return new WorkerMetricBatch(
+                sec,
+                "2026/05/11 12:00:00",
+                "us-east-1",
+                workerId,
+                "test-run",
+                0L,
+                List.of(entry));
     }
 }

@@ -3,7 +3,7 @@ package com.perf.globalorchestrator.domain;
 import java.util.List;
 
 /**
- * AUDIT-TRAIL — the per-event-type {@code payload} contracts (decision #4:
+ * The per-event-type {@code payload} contracts (decision #4:
  * type-safe records, not freeform maps). The service builds one of these,
  * Jackson serialises it to the JSONB {@code runEvent.payload} column. Shapes
  * are mirrored in the UI's TypeScript types.

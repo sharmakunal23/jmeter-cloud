@@ -15,27 +15,17 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Bounded in-memory ring buffer for recent log lines, with a fall-back
+ * Bounded in-memory ring buffer of recent log lines, falling back to a
  * tail-of-file read for anything older than the buffer holds.
  *
- * <h2>Thread safety</h2>
- * {@link #append(String)} and {@link #tail(int)} are both fully synchronised
- * on the instance. The append rate is bounded by JMeter's stdout +
- * stderr (single-digit lines per second under load), so contention is
- * negligible compared to the pipeline thread.
+ * <p>Retains at most {@code maxLines} references — at the default 1000 and
+ * ~200-byte lines, well under 1 MB. Reads that reach past the buffer scan
+ * {@code logFile} backwards in 8 KB chunks, so a multi-GB JMeter log is never
+ * loaded into RAM.
  *
- * <h2>Memory contract</h2>
- * At most {@code maxLines} String references are retained at any time,
- * with each line bounded by JMeter's own log line size. With the default
- * {@code LOG_BUFFER_LINES=1000} and ~200-byte lines that's well under
- * 1 MB — fits comfortably under the orchestrator's RSS budget.
- *
- * <h2>File fall-back</h2>
- * When the caller asks for more lines than the ring buffer holds, the
- * extras are read tail-first from {@code logFile} (if supplied at
- * construction). The file is opened with {@link RandomAccessFile} and
- * scanned backwards in 8 KB chunks so we don't load multi-GB JMeter logs
- * into RAM.
+ * <p>{@link #append(String)} and {@link #tail(int)} are both synchronised on the
+ * instance; JMeter's stdout and stderr produce single-digit lines per second, so
+ * the contention is negligible.
  */
 public final class LogTail implements LogSink {
 

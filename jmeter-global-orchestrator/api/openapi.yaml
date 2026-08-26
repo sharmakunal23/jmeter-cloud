@@ -5,18 +5,13 @@ info:
   version: 0.1.0
   summary: Fan-out layer driving many jmeter-local-orchestrators across regions.
   description: |
-    The control plane for the jmeter-cloud platform. Clients (UI, CI jobs,
-    API consumers) hit this service; it fans out `POST /api/v1/test` calls
-    to many regional `jmeter-local-orchestrator` pods and reads aggregated
-    metrics from the Postgres metrics replica.
+    The control plane: clients hit this service, and it fans `POST /api/v1/test`
+    out to many `jmeter-local-orchestrator` workers, tracking run state in
+    Postgres and serving aggregated metrics back from the rollup tables.
 
-    Full run-management chain is live: ULID-issued `runId`, persisted
-    `globalOrchestrator.run` + `runFleetMember` rows, bounded
-    thread-pool fan-out to local orchestrators, lazy-refresh of member
-    state on `GET .../status`, per-label rollups against the metrics
-    DB, and a per-pod log proxy. Pod selection is registry-driven —
-    local orchestrators self-register on boot and heartbeat every
-    30 s; a sweeper marks stale pods LOST after 90 s.
+    Pod selection is registry-driven. Workers self-register on boot and
+    heartbeat every 30 s; a sweeper marks a pod LOST after 90 s of silence, and
+    runs claim only IDLE pods belonging to their own application.
   contact:
     name: Performance Engineering
   license:
@@ -42,10 +37,14 @@ tags:
       `PUT /api/v1/applications/{id}/capacity/{region}` sets `maxAvailable`;
       the `/pods` sub-endpoints spin / restart / drain individual containers.
   - name: platform
-    description: Spring Boot Actuator endpoints (health, info, prometheus).
+    description: |
+      Deployment-wide facts: `GET /api/v1/platform/capabilities` (what this
+      deployment can do — provisioning posture + region vocabulary, read once
+      at UI boot) plus the Spring Boot Actuator endpoints (health, info — the
+      only exposed set since SLIMDOWN SL-E).
   - name: cronJobs
     description: |
-      AUTOMATION — CRON schedules that launch a run from a saved Template on a
+      CRON schedules that launch a run from a saved Template on a
       cron expression. A DB-claim scheduler (FOR UPDATE SKIP LOCKED) fires due
       schedules HA-safely across replicas; `nextFireAt` is materialised so a
       missed fire is caught (catch-up-once) after a restart.
@@ -304,9 +303,9 @@ paths:
       - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
     get:
       tags: [runs]
-      summary: Audit timeline for a run (AUDIT-TRAIL)
+      summary: Audit timeline for a run
       description: |
-        AUDIT-TRAIL — the reverse-chronological list of state-changing
+        The reverse-chronological list of state-changing
         operator actions against this run: who started it, who scaled it
         up/down, who drained a worker, when, and with what result. One row
         per action (append-only).
@@ -348,7 +347,7 @@ paths:
       tags: [runs]
       summary: Add workers to a RUNNING run (mid-test scale-up)
       description: |
-        MID-TEST-SCALING Phase A. Claims additional IDLE pods from the
+        Claims additional IDLE pods from the
         run's per-(application, region) pod pool and fans out
         `POST /api/v1/test` to each. The original run's `testPlanBlobId` +
         `dataFilesBlobId` are sourced from the persisted run row, so the
@@ -465,7 +464,7 @@ paths:
       tags: [runs]
       summary: Drain workers from a RUNNING run (mid-test scale-down)
       description: |
-        MID-TEST-SCALING Phase B. Gracefully drains the targeted workers
+        Gracefully drains the targeted workers
         — each pod's local-orchestrator sends `Shutdown` to JMeter's
         TCP port (default `4445`); in-flight samplers complete; the
         worker lands in `DRAINED` on clean exit. If the drain budget
@@ -976,24 +975,15 @@ paths:
       tags: [applications]
       summary: Register a new application
       description: |
-        KAFKA-PER-APP Phase B (2026-05-15) — registration also provisions
-        the per-app Kafka topic + DLT (`jmeter.metrics.<name>` and
-        `jmeter.metrics.<name>.DLT`) via `AdminClient` BEFORE the 201
-        response returns. If the broker is unreachable or topic creation
-        fails for any reason, the application row is rolled back and the
-        response is a 500 `TOPIC_CREATE_FAILED`. Topic create is
-        idempotent (pre-existing topics with the same name are accepted).
-
-        Server config keys (all `globalOrchestrator.kafka.*`):
-
-        | Key                        | Local default        | Cloud default        |
-        |----------------------------|----------------------|----------------------|
-        | `brokers`                  | `kafka:29092`        | env-driven           |
-        | `topicPartitions`          | 3                    | 3                    |
-        | `topicReplicationFactor`   | 1                    | 3                    |
-        | `topicRetentionMs`         | 7 d (`604800000`)    | 14 d (`1209600000`)  |
-        | `deleteTopicsOnAppDelete`  | true                 | false                |
-        | `adminTimeoutMs`           | 15000                | 15000                |
+        Registration is a pure DB operation: the application row is
+        inserted and its per-(app, region) capacity rows are auto-seeded
+        at 0 for this deployment's regions — the ones named by
+        `PROVISIONING_REGIONS` (see `GET /api/v1/platform/capabilities`),
+        or the single starter region `us-east-1` when it declares none. Pod counts are never set
+        here — capacity changes go through the capacity endpoints.
+        (DIRECT-METRICS, 2026-07-20: the KAFKA-PER-APP topic provisioning
+        that used to happen on registration left with the broker — workers
+        POST metrics straight to the metrics-consumer.)
       requestBody:
         required: true
         content:
@@ -1001,7 +991,7 @@ paths:
             schema: { $ref: "#/components/schemas/CreateApplicationRequest" }
       responses:
         "201":
-          description: Application created + per-app topic + DLT created.
+          description: Application created; capacity rows seeded at 0 for this deployment's regions.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Application" }
@@ -1015,15 +1005,6 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "500":
-          description: |
-            TOPIC_CREATE_FAILED — Kafka broker unreachable, auth failure,
-            or topic-create error. Application row was rolled back; safe
-            to retry once the cluster is healthy.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-
   /api/v1/applications/{applicationId}:
     parameters:
       - { name: applicationId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
@@ -1086,12 +1067,6 @@ paths:
         a fresh application with the original name, and that new app does NOT
         inherit this one's run history.
 
-        The per-app Kafka topic + DLT ARE deleted (nothing consumes/produces
-        them after retirement), gated by
-        `globalOrchestrator.kafka.deleteTopicsOnAppDelete`. Topic-delete
-        failures are logged but do not fail the response; orphaned topics
-        can be cleaned with `kafka-topics.sh --delete --topic jmeter.metrics.<name>`.
-
         Idempotent — hiding an unknown OR already-hidden app returns 204.
 
         Blocked while the application has any active (non-terminal) run:
@@ -1128,9 +1103,7 @@ paths:
         - its health-transition log;
         - the `application` row itself (`applicationCapacity` cascades).
 
-        A single `purgeAudit` tombstone records the sweep. The per-app Kafka
-        topics were already deleted at hide time, so the purge doesn't touch
-        them.
+        A single `purgeAudit` tombstone records the sweep.
 
         Precondition: the app must already be HIDDEN (via `DELETE
         /applications/{id}`). `X-Actor` attributes the action; an optional
@@ -1267,8 +1240,17 @@ paths:
           description: applicationId or capacity row missing.
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "409":
-          description: Would exceed maxAvailable.
-          content: { application/json: { schema: { $ref: "#/components/schemas/CapacityExceededResponse" } } }
+          description: |
+            Either the spin would exceed `maxAvailable`
+            (`APPLICATION_CAPACITY_EXCEEDED`), or this deployment does not
+            provision (`PROVISIONING_DISABLED` — see
+            `GET /api/v1/platform/capabilities`).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/CapacityExceededResponse"
+                  - $ref: "#/components/schemas/ProvisioningDisabledResponse"
 
   /api/v1/applications/{applicationId}/capacity/{region}/pods/{podName}/restart:
     parameters:
@@ -1291,16 +1273,96 @@ paths:
         "404":
           description: Pod not bound to (applicationId, region).
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "409":
+          description: |
+            `PROVISIONING_DISABLED` — workers are operator-managed in this
+            deployment (`PROVISIONING_MODE=STATIC`), so the control plane
+            does not restart them.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ProvisioningDisabledResponse" } } }
 
   /api/v1/applications/{applicationId}/capacity/{region}/pods/{podName}:
     parameters:
       - { name: applicationId, in: path, required: true, schema: { type: string } }
       - { name: region,        in: path, required: true, schema: { type: string } }
       - { name: podName,       in: path, required: true, schema: { type: string } }
+    put:
+      tags: [capacity]
+      summary: Declare an operator-deployed worker (STATIC provisioning only)
+      description: |
+        Binds a worker the operator deployed themselves to this
+        (application, region). **Static mode only** — `409
+        PROVISIONING_REQUIRES_STATIC` when the deployment provisions its own
+        workers, where names are allocator-owned and `POST .../pods` (spin)
+        is the right call.
+
+        PUT rather than a parallel `/staticPods` collection: the operator
+        names the resource (they deployed it and know its name), the call is
+        idempotent, and one worker resource keeps the verbs carrying the
+        meaning — POST allocates-and-spins, PUT declares an existing one,
+        DELETE releases either.
+
+        `podName` MUST equal the `workerId` the worker stamps on its metrics
+        or the `metrics."workerMetric"` join breaks.
+
+        The address is probed (`GET {baseUrl}/actuator/health`) before the
+        declaration is accepted, so a typo fails here rather than at the next
+        run launch. `?force=true` skips that check for a worker that is
+        deployed but not up yet.
+
+        `maxAvailable` for the (application, region) is **derived** — it is
+        set to the declared worker count on every declare and release. There
+        is no separate capacity to approve in this mode, and
+        `PUT .../capacity/{region}` is refused accordingly.
+      parameters:
+        - name: force
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: Declare even if the worker does not currently answer.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeclarePodRequest" }
+      responses:
+        "201":
+          description: Worker newly declared.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeclaredPodResponse" }
+        "200":
+          description: An existing declaration was updated (idempotent re-declare).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeclaredPodResponse" }
+        "400":
+          description: |
+            `INVALID_REQUEST` (malformed podName / baseUrl — non-HTTP scheme,
+            embedded credentials, query or fragment) or `WORKER_UNREACHABLE`
+            (address did not answer and `force` was not set).
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "404":
+          description: applicationId not registered.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "409":
+          description: |
+            `PROVISIONING_REQUIRES_STATIC` (this deployment provisions its own
+            workers), `POD_BOUND_ELSEWHERE` (already declared to another
+            application), or `POD_IN_USE` (re-addressing a worker held by an
+            active run would break that run's follow-up calls to it).
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
     delete:
       tags: [capacity]
-      summary: Drain a pod (stop + remove + delete registry row)
+      summary: Release a pod — drain (dynamic) or undeclare (static)
       description: |
+        Under `PROVISIONING_MODE=DYNAMIC` this is a full **drain**: the
+        container is stopped and removed, then the registry row is deleted.
+        Under `STATIC` it is an **undeclare** — the registry row is deleted
+        and the operator's worker keeps running, because the control plane
+        does not own it. The in-use guard, the stale-binding release and the
+        response shape are identical in both modes; only `containerStopped`
+        differs.
+
         Refuses 409 `POD_IN_USE` when the pod is held by an active run whose
         worker **container is still running** — a genuinely busy pod. To drain
         it, abort the run first (`POST /api/v1/runs/{runId}/abort`).
@@ -1322,6 +1384,13 @@ paths:
                 properties:
                   podName: { type: string }
                   drained: { type: boolean }
+                  containerStopped:
+                    type: boolean
+                    description: |
+                      True when the control plane stopped and removed the
+                      worker container (dynamic mode). False in static mode —
+                      the registry row was removed and the operator's worker
+                      was left running.
                   staleBindingReleased:
                     type: boolean
                     description: |
@@ -1333,6 +1402,30 @@ paths:
         "409":
           description: Pod is held by an active run whose container is still running.
           content: { application/json: { schema: { $ref: "#/components/schemas/PodInUseResponse" } } }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Platform capabilities
+  # ────────────────────────────────────────────────────────────────────────
+  /api/v1/platform/capabilities:
+    get:
+      tags: [platform]
+      summary: What this deployment can do — read once at UI boot
+      description: |
+        Deployment posture the UI gates its surfaces on. Values are resolved
+        at boot from `PROVISIONING_MODE` / `PROVISIONING_REGIONS` and never
+        change for the life of the process.
+
+        This is deliberately server-side rather than a build-time UI flag:
+        a browser flag cannot enforce anything (hiding the Capacity tab
+        would leave the spin endpoints live) and would force a UI image
+        rebuild per environment, breaking the one-image-serves-docker-and-
+        Kubernetes property. The server decides; the browser reflects.
+      responses:
+        "200":
+          description: Deployment capabilities.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlatformCapabilities" }
 
   # ────────────────────────────────────────────────────────────────────────
   # Spring Boot Actuator
@@ -1361,23 +1454,12 @@ paths:
             application/json:
               schema: { type: object, additionalProperties: true }
 
-  /actuator/prometheus:
-    get:
-      tags: [platform]
-      summary: Prometheus exposition (text format)
-      responses:
-        "200":
-          description: Prometheus metrics.
-          content:
-            text/plain; version=0.0.4:
-              schema: { type: string }
-
   /api/v1/cronJobs:
     get:
       tags: [cronJobs]
       summary: List CRON schedules
       description: |
-        AUTOMATION — all schedules, optionally filtered by `application`,
+        All schedules, optionally filtered by `application`,
         sorted by `nextFireAt` ascending (disabled — null `nextFireAt` — last).
       parameters:
         - { name: application, in: query, required: false, schema: { type: string }, description: "Filter to one application's schedules." }
@@ -1589,7 +1671,7 @@ paths:
   /api/v1/automation/reports/infraReadiness:
     get:
       tags: [cronJobs]
-      summary: Preview the infra-readiness report (AUTOMATION Phase E)
+      summary: Preview the infra-readiness report
       description: |
         On-demand render of the same content the INFRA_READINESS scheduled fire
         would email — so the report is never email-only. Returns the structured
@@ -1634,7 +1716,7 @@ paths:
   /api/v1/automation/reports/daily:
     get:
       tags: [cronJobs]
-      summary: Preview the daily perf-test report (AUTOMATION Phase D)
+      summary: Preview the daily perf-test report
       description: |
         On-demand render of the same content the DAILY_REPORT scheduled fire
         would email — so the report is never email-only. Returns the structured
@@ -2011,7 +2093,7 @@ components:
           nullable: true
           default: false
           description: |
-            WORKER-HYGIENE Phase E — when true, a shortfall during the
+            When true, a shortfall during the
             claim phase triggers an on-the-fly spin to fill the gap
             rather than a 503 INSUFFICIENT_CAPACITY. Subject to the
             per-region `applicationCapacity.maxAvailable` ceiling: if
@@ -2105,7 +2187,7 @@ components:
           format: int64
           nullable: true
           description: |
-            MID-TEST-SCALING Phase A — NULL for original-fleet members
+            NULL for original-fleet members
             (joined at run start). For mid-test scale-up joiners, the
             number of seconds since `run.startedAt` at which this
             worker joined. UI renders as a "joined +Xm" chip.
@@ -2114,7 +2196,7 @@ components:
           format: int64
           nullable: true
           description: |
-            WORKER-HYGIENE Phase F2 — joined from `pod.runsServed` at
+            Joined from `pod.runsServed` at
             read time. Null when the pod row is gone (drained pod
             whose member row outlived it). UI uses this to flag a
             worker whose pod is near its recycle threshold.
@@ -2485,6 +2567,16 @@ components:
             Phase 1 capacity rework: the application this pod is bound to.
             Nullable during the Phase 1 → Phase 6 migration window for
             legacy static pods that registered without `APPLICATION_ID`.
+        source:
+          type: string
+          enum: [DYNAMIC, STATIC]
+          description: |
+            Who owns this worker's lifecycle. `DYNAMIC`: the
+            control plane created it and may restart / recycle / destroy it;
+            liveness comes from the worker's own heartbeat. `STATIC`: the
+            operator deployed and declared it; the control plane only uses
+            it, and `StaticPodProbe` maintains its liveness. Defaults to
+            `DYNAMIC` for every row that predates the column.
 
     RegionCapacity:
       type: object
@@ -2541,6 +2633,83 @@ components:
         baseUrl:       { type: string, example: "http://payments-us-east-worker-1:8080" }
         provisioned:   { type: integer, description: "Provisioned count after this spin." }
         maxAvailable:  { type: integer }
+    PlatformCapabilities:
+      type: object
+      required: [provisioningMode, dynamicScalingEnabled, podRecyclingEnabled, regions, regionLabel]
+      properties:
+        provisioningMode:
+          type: string
+          enum: [DYNAMIC, STATIC]
+          description: |
+            `DYNAMIC` — the control plane owns worker lifecycle.
+            `STATIC` — workers are deployed and owned by the operator.
+        dynamicScalingEnabled:
+          type: boolean
+          description: |
+            Whether the control plane may create / destroy workers. Gates the
+            Capacity tab, the spin buttons and the run-launch shortfall prompt.
+        podRecyclingEnabled:
+          type: boolean
+          description: Whether the recycler runs. Gates the per-application recycle-policy editor.
+        regions:
+          type: array
+          items: { type: string }
+          description: |
+            Region ids this deployment uses; empty means "no override, use the
+            UI default". In static mode these are the operator's data centers.
+        regionLabel:
+          type: string
+          enum: [region, dataCenter]
+          description: |
+            What the UI should call the placement axis. The API and schema keep
+            saying `region` everywhere — it already IS the placement axis in the
+            pod registry, the capacity matrix, the claim SQL and the run request,
+            so renaming it would churn two orchestrators and two databases for no
+            behavior change. This field makes the vocabulary seam machine-readable
+            instead of hardcoded in the browser.
+    DeclarePodRequest:
+      type: object
+      required: [baseUrl]
+      properties:
+        baseUrl:
+          type: string
+          maxLength: 512
+          description: |
+            Absolute http(s) address the control plane can reach this worker
+            at, e.g. `http://payments-na-east-worker-1.workers:8080`. No
+            embedded credentials, query string or fragment. A trailing slash
+            is normalised away.
+          example: http://payments-na-east-worker-1.workers:8080
+    DeclaredPodResponse:
+      type: object
+      required: [podName, applicationId, region, baseUrl, source, reachable, declared, maxAvailable]
+      properties:
+        podName:       { type: string }
+        applicationId: { type: string }
+        region:        { type: string }
+        baseUrl:       { type: string }
+        source:        { type: string, enum: [STATIC] }
+        reachable:
+          type: boolean
+          description: |
+            Whether the worker answered its health endpoint at declare time.
+            False only when `?force=true` was used.
+        declared:
+          type: integer
+          description: Declared workers for this (application, region) after the call.
+        maxAvailable:
+          type: integer
+          description: |
+            The derived capacity written for this (application, region) —
+            always equal to `declared` in static mode.
+    ProvisioningDisabledResponse:
+      type: object
+      required: [code, message, action, provisioningMode]
+      properties:
+        code:             { type: string, enum: [PROVISIONING_DISABLED] }
+        message:          { type: string }
+        action:           { type: string, description: The refused operation, e.g. "spin a worker". }
+        provisioningMode: { type: string, enum: [STATIC] }
     CapacityExceededResponse:
       type: object
       required: [code, message, provisioned, maxAvailable]

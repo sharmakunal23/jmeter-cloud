@@ -1,17 +1,9 @@
 package com.perf.orchestrator.buffer;
 
-import com.perf.orchestrator.WorkerMetricBatch;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.Gauge;
-import io.micrometer.core.instrument.MeterRegistry;
-import org.apache.avro.io.BinaryDecoder;
-import org.apache.avro.io.BinaryEncoder;
-import org.apache.avro.io.DecoderFactory;
-import org.apache.avro.io.EncoderFactory;
-import org.apache.avro.specific.SpecificDatumReader;
-import org.apache.avro.specific.SpecificDatumWriter;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.perf.orchestrator.model.WorkerMetricBatch;
+import com.perf.orchestrator.observability.WarningThrottle;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -36,45 +28,25 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Disk-backed {@link MetricsBuffer} — one gzipped Avro file per envelope under
- * {@code <bufferDir>/<id>.envelope.gz}, with an in-memory {@link ConcurrentSkipListMap}
- * index for O(log n) {@link #peekOldest} and O(1) {@link #delete}.
+ * Disk-backed {@link MetricsBuffer}: one gzipped JSON file per envelope under
+ * {@code <bufferDir>/<id>.envelope.gz}, holding the exact payload the wire
+ * carries, with an in-memory {@link ConcurrentSkipListMap} index giving
+ * O(log n) {@link #peekOldest} and O(1) {@link #delete}.
  *
- * <h2>Durability boundary</h2>
- * Every write follows: serialize envelope to Avro binary → gzip → write to
- * {@code <id>.envelope.gz.tmp} → {@code Files.move(ATOMIC_MOVE)} to
- * {@code <id>.envelope.gz}. The atomic rename is the durability boundary —
- * {@link #peekOldest} and the boot scrubber only ever see the final filename,
- * so a crash mid-write leaves an orphaned {@code .tmp} the scrubber removes.
+ * <p><b>The atomic rename is the durability boundary.</b> Every write is
+ * serialize → gzip → {@code .tmp} → {@code Files.move(ATOMIC_MOVE)}, so
+ * {@link #peekOldest} and the boot scrubber only ever see a complete file and a
+ * crash mid-write leaves an orphaned {@code .tmp} for the scrubber.
  *
- * <h2>JMeter-considerate sizing knobs</h2>
- * All knobs come from {@link DiskBackedMetricsBufferConfig}. The
- * load-bearing one is {@code minFreeDiskBytes} — when free disk drops below
- * the threshold, new writes are refused regardless of buffer-cap state, so
- * JMeter always wins the disk-pressure battle.
+ * <p><b>{@code minFreeDiskBytes} is the load-bearing knob:</b> below it, writes
+ * are refused whatever the buffer cap says, so JMeter always wins the
+ * disk-pressure contest. Enqueue then applies, in order — refuse on low disk,
+ * refuse if gzipped size exceeds {@code maxFileBytes}, sweep envelopes past
+ * {@code maxAge}, drop oldest until the new one fits, persist.
  *
- * <h2>Eviction order</h2>
- * On every enqueue:
- * <ol>
- *   <li>If free disk &lt; {@code minFreeDiskBytes}: refuse, increment
- *       {@code dropsForLowDisk}, return empty.</li>
- *   <li>If gzipped size &gt; {@code maxFileBytes}: refuse, increment
- *       {@code dropsForOversize}, return empty.</li>
- *   <li>TTL sweep: drop envelopes older than {@code maxAge} (counter
- *       {@code dropsForAge}). Cheap O(buffered count) walk of the index.</li>
- *   <li>Drop-oldest until headroom exists for the new envelope (counter
- *       {@code dropsForCap}).</li>
- *   <li>Persist.</li>
- * </ol>
- *
- * <p>Step (1) is checked first because it's the only step that doesn't free
- * any space — if the disk is full, dropping older envelopes from the buffer
- * frees buffer cap but might not free disk inode/space if other tenants own it.
- *
- * <h2>Boot scrubber</h2>
- * On construction: scan {@code <bufferDir>}, delete {@code .tmp} files (orphaned
- * partial writes from a prior crash), index every {@code .envelope.gz} found.
- * Lets the dispatcher pick up where the previous process left off.
+ * <p>Every one of those paths discards data, and its throttled WARN is the only
+ * signal it happened. A single shared {@link WarningThrottle} bounds the volume;
+ * all drop paths run on the one dispatch thread, matching its contract.
  */
 public final class DiskBackedMetricsBuffer implements MetricsBuffer {
 
@@ -82,14 +54,13 @@ public final class DiskBackedMetricsBuffer implements MetricsBuffer {
 
     private static final String ENVELOPE_SUFFIX = ".envelope.gz";
     private static final String TMP_SUFFIX      = ".envelope.gz.tmp";
+    /** Sidecars from an older buffer format. No longer written; the boot scrub
+     *  and delete paths still remove any leftovers. */
     private static final String META_SUFFIX     = ".meta";
     private static final String META_TMP_SUFFIX = ".meta.tmp";
 
-    /** Avro reader/writer are thread-safe — share singletons. */
-    private static final SpecificDatumWriter<WorkerMetricBatch> WRITER =
-            new SpecificDatumWriter<>(WorkerMetricBatch.class);
-    private static final SpecificDatumReader<WorkerMetricBatch> READER =
-            new SpecificDatumReader<>(WorkerMetricBatch.class);
+    /** Jackson mapper is thread-safe — share a singleton. */
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final Path bufferDir;
     private final DiskBackedMetricsBufferConfig cfg;
@@ -98,60 +69,24 @@ public final class DiskBackedMetricsBuffer implements MetricsBuffer {
 
     /**
      * Index of currently-buffered envelopes. ULID-style keys give chronological
-     * order via lexicographic comparison; concurrent skip-list lets the
-     * Micrometer gauge thread read {@link #depthBytes} / {@link #depthEnvelopes}
-     * concurrently with dispatch-thread enqueue/delete.
+     * order via lexicographic comparison; the concurrent skip-list lets
+     * {@link #depthBytes} / {@link #depthEnvelopes} readers run concurrently
+     * with dispatch-thread enqueue/delete.
      */
     private final ConcurrentSkipListMap<String, BufferedEnvelope> index = new ConcurrentSkipListMap<>();
 
-    /** Cached running sum of file sizes — gauge reads avoid walking the index. */
+    /** Cached running sum of file sizes — depth reads avoid walking the index. */
     private final AtomicLong totalBytes = new AtomicLong();
 
-    // -----------------------------------------------------------------------
-    // Counters (Micrometer)
-    // -----------------------------------------------------------------------
-
-    private final Counter cEnqueued;
-    private final Counter cDeleted;
-    private final Counter cDropsForCap;
-    private final Counter cDropsForAge;
-    private final Counter cDropsForLowDisk;
-    private final Counter cDropsForOversize;
-    private final Counter cBootRecovered;
-    private final Counter cBootOrphansRemoved;
+    /** SLIMDOWN D-4 — sole signal for every drop class; see class javadoc. */
+    private final WarningThrottle dropWarnings = new WarningThrottle();
 
     public DiskBackedMetricsBuffer(Path bufferDir,
                                    DiskBackedMetricsBufferConfig cfg,
-                                   MeterRegistry meterRegistry,
                                    Clock clock) {
         this.bufferDir = Objects.requireNonNull(bufferDir, "bufferDir cannot be null");
         this.cfg = Objects.requireNonNull(cfg, "cfg cannot be null");
         this.clock = Objects.requireNonNull(clock, "clock cannot be null");
-        Objects.requireNonNull(meterRegistry, "meterRegistry cannot be null");
-
-        this.cEnqueued          = counter(meterRegistry, "enqueued",
-                "Envelopes successfully persisted to disk.");
-        this.cDeleted           = counter(meterRegistry, "deleted",
-                "Envelopes removed after successful publish.");
-        this.cDropsForCap       = counter(meterRegistry, "dropsForCap",
-                "Envelopes evicted because buffer reached its byte cap.");
-        this.cDropsForAge       = counter(meterRegistry, "dropsForAge",
-                "Envelopes evicted because they exceeded the age TTL.");
-        this.cDropsForLowDisk   = counter(meterRegistry, "dropsForLowDisk",
-                "Envelopes refused at enqueue because free disk was below threshold (JMeter wins).");
-        this.cDropsForOversize  = counter(meterRegistry, "dropsForOversize",
-                "Envelopes refused because their gzipped size exceeded maxFileBytes.");
-        this.cBootRecovered     = counter(meterRegistry, "bootRecovered",
-                "Envelopes recovered from disk on boot (carryover from previous process).");
-        this.cBootOrphansRemoved = counter(meterRegistry, "bootOrphansRemoved",
-                "Orphaned .tmp files removed on boot (partial writes from a prior crash).");
-
-        Gauge.builder("metricsBuffer.depth.bytes", this, DiskBackedMetricsBuffer::depthBytes)
-                .description("Total bytes currently buffered (sum of .envelope.gz file sizes).")
-                .register(meterRegistry);
-        Gauge.builder("metricsBuffer.depth.envelopes", this, DiskBackedMetricsBuffer::depthEnvelopes)
-                .description("Envelope count currently buffered.")
-                .register(meterRegistry);
 
         try {
             Files.createDirectories(bufferDir);
@@ -161,10 +96,14 @@ public final class DiskBackedMetricsBuffer implements MetricsBuffer {
         bootScrub();
     }
 
-    private static Counter counter(MeterRegistry registry, String name, String description) {
-        return Counter.builder("metricsBuffer." + name)
-                .description(description)
-                .register(registry);
+    /** Throttled drop WARN — one line per dropped envelope up to the burst,
+     *  then a suppressed-count summary per window. */
+    private void warnDrop(String reason, String detail) {
+        dropWarnings.record(
+                () -> LOG.warning(() -> String.format(
+                        "Metrics buffer DROP (%s): %s — envelope lost", reason, detail)),
+                suppressed -> LOG.warning(() -> String.format(
+                        "Metrics buffer: %d further drops suppressed in the last minute", suppressed)));
     }
 
     // -----------------------------------------------------------------------
@@ -177,7 +116,10 @@ public final class DiskBackedMetricsBuffer implements MetricsBuffer {
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(bufferDir)) {
             for (Path entry : stream) {
                 String name = entry.getFileName().toString();
-                if (name.endsWith(TMP_SUFFIX) || name.endsWith(META_TMP_SUFFIX)) {
+                if (name.endsWith(TMP_SUFFIX) || name.endsWith(META_TMP_SUFFIX)
+                        || name.endsWith(META_SUFFIX)) {
+                    // .tmp = partial write from a prior crash; .meta[.tmp] =
+                    // an older buffer format. Both are dead weight — remove.
                     try {
                         Files.deleteIfExists(entry);
                         orphans++;
@@ -190,38 +132,29 @@ public final class DiskBackedMetricsBuffer implements MetricsBuffer {
                         long size = Files.size(entry);
                         Instant when = Files.getLastModifiedTime(entry).toInstant();
                         WorkerMetricBatch env = readEnvelope(entry);
-                        String topic = readTopicSidecar(id);
-                        BufferedEnvelope handle = new BufferedEnvelope(id, entry, size, when, env, topic);
+                        BufferedEnvelope handle = new BufferedEnvelope(id, entry, size, when, env);
                         index.put(id, handle);
                         totalBytes.addAndGet(size);
                         recovered++;
                     } catch (Exception e) {
-                        // Avro can throw AvroRuntimeException (not IOException) on
-                        // malformed payloads. Broad catch keeps boot resilient.
+                        // Corrupt, or written by an older encoding. Either way
+                        // it is dead weight — drop it and keep boot resilient.
                         LOG.log(Level.WARNING, "bootScrub: could not load " + entry + " — deleting", e);
                         try {
                             Files.deleteIfExists(entry);
-                            Files.deleteIfExists(bufferDir.resolve(
-                                    name.substring(0, name.length() - ENVELOPE_SUFFIX.length()) + META_SUFFIX));
                         } catch (IOException ignored) { /* nothing to do */ }
                     }
                 }
-                // Note: orphan .meta files (envelope.gz missing) are left alone
-                // — the next enqueue cycle's tmp cleanup will not collect them,
-                // but they are tiny and harmless. Operator can clear bufferDir
-                // manually if it ever becomes an issue.
             }
         } catch (IOException e) {
             LOG.log(Level.WARNING, "bootScrub: directory walk failed for " + bufferDir, e);
         }
         if (recovered > 0) {
-            cBootRecovered.increment(recovered);
             LOG.info(() -> String.format(
                     "bootScrub: recovered %d envelopes (%d bytes) from %s",
                     index.size(), totalBytes.get(), bufferDir));
         }
         if (orphans > 0) {
-            cBootOrphansRemoved.increment(orphans);
             final long orphanCount = orphans;
             LOG.warning(() -> String.format(
                     "bootScrub: removed %d orphan .tmp files from %s — likely a prior crash mid-write",
@@ -234,16 +167,14 @@ public final class DiskBackedMetricsBuffer implements MetricsBuffer {
     // -----------------------------------------------------------------------
 
     @Override
-    public synchronized Optional<BufferedEnvelope> enqueue(WorkerMetricBatch envelope, String topic) {
+    public synchronized Optional<BufferedEnvelope> enqueue(WorkerMetricBatch envelope) {
         Objects.requireNonNull(envelope, "envelope must be non-null");
-        if (topic == null || topic.isBlank()) {
-            throw new IllegalArgumentException("topic must be non-blank");
-        }
 
         // Step 1 — Free-disk reservation (JMeter wins)
         long freeDisk = freeDiskBytesSafe();
         if (freeDisk < cfg.minFreeDiskBytes()) {
-            cDropsForLowDisk.increment();
+            warnDrop("lowDisk", "free disk " + freeDisk + " B below reserve "
+                    + cfg.minFreeDiskBytes() + " B (JMeter wins)");
             return Optional.empty();
         }
 
@@ -257,7 +188,8 @@ public final class DiskBackedMetricsBuffer implements MetricsBuffer {
 
         // Step 2 — Per-file size cap
         if (payload.length > cfg.maxFileBytes()) {
-            cDropsForOversize.increment();
+            warnDrop("oversize", "gzipped envelope " + payload.length
+                    + " B exceeds maxFileBytes " + cfg.maxFileBytes() + " B");
             return Optional.empty();
         }
 
@@ -267,34 +199,23 @@ public final class DiskBackedMetricsBuffer implements MetricsBuffer {
         // Step 4 — Drop-oldest until there is room for the new envelope
         evictOldestUntilHeadroom(payload.length);
 
-        // Step 5 — Persist. Order: write sidecar first (so peek never finds an
-        // envelope without its meta), then envelope.gz. The envelope's atomic
-        // rename remains the durability boundary; if we crash after the meta
-        // rename but before the envelope rename, the boot scrubber tolerates
-        // an orphan .meta. The reverse — envelope without meta — would be a
-        // routing bug, so we order writes to avoid it.
+        // Step 5 — Persist. The atomic rename is the durability boundary —
+        // peekOldest and the boot scrubber only ever see the final filename.
         String id = nextId();
-        Path metaTmp    = bufferDir.resolve(id + META_TMP_SUFFIX);
-        Path metaTarget = bufferDir.resolve(id + META_SUFFIX);
         Path tmp        = bufferDir.resolve(id + TMP_SUFFIX);
         Path target     = bufferDir.resolve(id + ENVELOPE_SUFFIX);
         try {
-            Files.writeString(metaTmp, topic, java.nio.charset.StandardCharsets.UTF_8);
-            Files.move(metaTmp, metaTarget, StandardCopyOption.ATOMIC_MOVE);
             Files.write(tmp, payload);
             Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException e) {
-            try { Files.deleteIfExists(metaTmp); } catch (IOException ignored) { /* nothing more */ }
-            try { Files.deleteIfExists(metaTarget); } catch (IOException ignored) { /* nothing more */ }
             try { Files.deleteIfExists(tmp); } catch (IOException ignored) { /* nothing more */ }
             throw new UncheckedIOException("Failed to persist envelope to " + target, e);
         }
 
         BufferedEnvelope handle = new BufferedEnvelope(
-                id, target, payload.length, clock.instant(), envelope, topic);
+                id, target, payload.length, clock.instant(), envelope);
         index.put(id, handle);
         totalBytes.addAndGet(payload.length);
-        cEnqueued.increment();
         return Optional.of(handle);
     }
 
@@ -309,7 +230,7 @@ public final class DiskBackedMetricsBuffer implements MetricsBuffer {
                 deleteFileQuietly(env.file());
                 deleteFileQuietly(bufferDir.resolve(env.id() + META_SUFFIX));
                 totalBytes.addAndGet(-env.sizeBytes());
-                cDropsForAge.increment();
+                warnDrop("age", "envelope " + env.id() + " exceeded TTL " + cfg.maxAge());
             } else {
                 // Index is in chronological order (ULID prefix is millis); first
                 // non-stale entry means everything after is fresher → stop.
@@ -327,27 +248,8 @@ public final class DiskBackedMetricsBuffer implements MetricsBuffer {
             deleteFileQuietly(env.file());
             deleteFileQuietly(bufferDir.resolve(env.id() + META_SUFFIX));
             totalBytes.addAndGet(-env.sizeBytes());
-            cDropsForCap.increment();
-        }
-    }
-
-    /**
-     * Reads the {@code <id>.meta} sidecar for {@code id}. Returns {@code null}
-     * when missing — only happens for envelopes persisted by a pre-Phase-G
-     * build before sidecars existed; the dispatcher drops such envelopes
-     * rather than guess a topic.
-     */
-    private String readTopicSidecar(String id) {
-        Path meta = bufferDir.resolve(id + META_SUFFIX);
-        if (!Files.exists(meta)) {
-            return null;
-        }
-        try {
-            String topic = Files.readString(meta, java.nio.charset.StandardCharsets.UTF_8).trim();
-            return topic.isBlank() ? null : topic;
-        } catch (IOException e) {
-            LOG.log(Level.WARNING, "Could not read topic sidecar " + meta, e);
-            return null;
+            warnDrop("cap", "evicted oldest envelope " + env.id()
+                    + " — buffer at byte cap " + cap + " B");
         }
     }
 
@@ -371,7 +273,6 @@ public final class DiskBackedMetricsBuffer implements MetricsBuffer {
         deleteFileQuietly(removed.file());
         deleteFileQuietly(bufferDir.resolve(removed.id() + META_SUFFIX));
         totalBytes.addAndGet(-removed.sizeBytes());
-        cDeleted.increment();
     }
 
     // -----------------------------------------------------------------------
@@ -425,18 +326,14 @@ public final class DiskBackedMetricsBuffer implements MetricsBuffer {
     private static byte[] serialize(WorkerMetricBatch envelope) throws IOException {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         try (OutputStream gz = new GZIPOutputStream(baos)) {
-            BinaryEncoder enc = EncoderFactory.get().binaryEncoder(gz, null);
-            WRITER.write(envelope, enc);
-            enc.flush();
+            MAPPER.writeValue(gz, envelope);
         }
         return baos.toByteArray();
     }
 
     private static WorkerMetricBatch readEnvelope(Path file) throws IOException {
         try (InputStream gz = new GZIPInputStream(Files.newInputStream(file))) {
-            byte[] all = gz.readAllBytes();
-            BinaryDecoder dec = DecoderFactory.get().binaryDecoder(new ByteArrayInputStream(all), null);
-            return READER.read(null, dec);
+            return MAPPER.readValue(gz, WorkerMetricBatch.class);
         }
     }
 

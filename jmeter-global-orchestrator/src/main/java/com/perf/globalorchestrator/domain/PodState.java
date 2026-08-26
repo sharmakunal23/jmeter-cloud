@@ -12,7 +12,7 @@ public enum PodState {
     /** Heartbeat older than the sweeper's threshold; treat as gone. */
     LOST,
     /**
-     * WORKER-HYGIENE Phase D — pod has tripped a recycle threshold
+     * Pod has tripped a recycle threshold
      * (or image-mismatch) and is being drain-and-replaced. The
      * claim path filters this out the same way it filters LOST;
      * heartbeat does NOT flip this back to IDLE.

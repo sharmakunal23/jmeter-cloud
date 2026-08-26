@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 560" font-family="-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 z" fill="#475569"/></marker>
+  </defs>
+  <rect width="1120" height="560" fill="#ffffff"/>
+  <text x="30" y="34" font-size="19" font-weight="700" fill="#0f172a">jmeter-orchestrator-k8s — Kubernetes-substrate fan-out &amp; run management</text>
+  <text x="30" y="56" font-size="12.5" fill="#64748b">Claims IDLE pods with SELECT … FOR UPDATE SKIP LOCKED, provisions bare worker Pods via fabric8, fans out the start envelope over headless-Service DNS.</text>
+
+  <g font-size="12.5">
+    <!-- client -->
+    <rect x="30" y="100" width="150" height="64" rx="8" fill="#f1f5f9" stroke="#475569" stroke-width="1.5"/>
+    <text x="105" y="128" text-anchor="middle" font-weight="600" fill="#1e293b">UI / client</text>
+    <text x="105" y="147" text-anchor="middle" font-size="10.5" fill="#64748b" font-family="monospace">POST /api/v1/runs :8088</text>
+
+    <!-- RunService -->
+    <rect x="240" y="92" width="200" height="80" rx="8" fill="#dbeafe" stroke="#1e40af" stroke-width="1.5"/>
+    <text x="340" y="120" text-anchor="middle" font-weight="600" fill="#1e3a8a">RunService</text>
+    <text x="340" y="139" text-anchor="middle" font-size="10.5" fill="#2563eb">validate · create runId</text>
+    <text x="340" y="156" text-anchor="middle" font-size="10.5" fill="#2563eb">@Transactional claim (app, region)</text>
+
+    <!-- registry + lifecycle -->
+    <rect x="240" y="240" width="200" height="100" rx="8" fill="#dbeafe" stroke="#1e40af" stroke-width="1.5"/>
+    <text x="340" y="264" text-anchor="middle" font-weight="600" fill="#1e3a8a">Pod registry + lifecycle</text>
+    <text x="340" y="283" text-anchor="middle" font-size="10.5" fill="#2563eb">register · heartbeat (30s)</text>
+    <text x="340" y="299" text-anchor="middle" font-size="10.5" fill="#2563eb">sweep LOST (&gt;90s)</text>
+    <text x="340" y="315" text-anchor="middle" font-size="10.5" fill="#2563eb">recycler (IMAGE_MISMATCH,</text>
+    <text x="340" y="331" text-anchor="middle" font-size="10.5" fill="#2563eb">policy) · reconciler</text>
+
+    <!-- provisioner -->
+    <rect x="240" y="392" width="200" height="80" rx="8" fill="#ede9fe" stroke="#6d28d9" stroke-width="1.5"/>
+    <text x="340" y="418" text-anchor="middle" font-weight="600" fill="#5b21b6">K8sPodProvisioner</text>
+    <text x="340" y="437" text-anchor="middle" font-size="10.5" fill="#7c3aed">fabric8 · bare Pods · labels</text>
+    <text x="340" y="454" text-anchor="middle" font-size="10.5" fill="#7c3aed">create / delete / list</text>
+
+    <!-- k8srun DB -->
+    <rect x="520" y="240" width="220" height="100" rx="8" fill="#d1fae5" stroke="#059669" stroke-width="1.5"/>
+    <text x="630" y="264" text-anchor="middle" font-weight="600" fill="#065f46">jmetercloud_k8srun</text>
+    <text x="630" y="283" text-anchor="middle" font-size="10.5" fill="#047857">run · runFleetMember · pod</text>
+    <text x="630" y="299" text-anchor="middle" font-size="10.5" fill="#047857">application · capacity · cron</text>
+    <text x="630" y="317" text-anchor="middle" font-size="10.5" fill="#047857" font-family="monospace">Postgres :5432</text>
+
+    <!-- metrics DB -->
+    <rect x="520" y="100" width="220" height="64" rx="8" fill="#d1fae5" stroke="#059669" stroke-width="1.5"/>
+    <text x="630" y="128" text-anchor="middle" font-weight="600" fill="#065f46">jmetercloud_metrics</text>
+    <text x="630" y="147" text-anchor="middle" font-size="10.5" fill="#047857">read-only rollup + timeseries</text>
+
+    <!-- K8s API -->
+    <rect x="520" y="400" width="220" height="64" rx="8" fill="#ede9fe" stroke="#6d28d9" stroke-width="1.5"/>
+    <text x="630" y="426" text-anchor="middle" font-weight="600" fill="#5b21b6">Kubernetes API</text>
+    <text x="630" y="445" text-anchor="middle" font-size="10.5" fill="#7c3aed">ServiceAccount · pods-only Role</text>
+
+    <!-- worker namespace -->
+    <rect x="800" y="92" width="290" height="228" rx="8" fill="#f0fdfa" stroke="#5eead4" stroke-dasharray="6 4"/>
+    <text x="945" y="112" text-anchor="middle" font-size="11" font-weight="700" fill="#0f766e">namespace jmeter-cloud — bare worker Pods</text>
+    <text x="945" y="128" text-anchor="middle" font-size="10" fill="#0f766e" font-family="monospace">{app}-{region}-worker-{n}.workers:8080</text>
+    <rect x="818" y="140" width="120" height="34" rx="6" fill="#ccfbf1" stroke="#0d9488"/>
+    <text x="878" y="162" text-anchor="middle" font-size="10.5" fill="#115e59">local-orch Pod</text>
+    <rect x="952" y="140" width="120" height="34" rx="6" fill="#ccfbf1" stroke="#0d9488"/>
+    <text x="1012" y="162" text-anchor="middle" font-size="10.5" fill="#115e59">local-orch Pod</text>
+    <rect x="818" y="182" width="120" height="34" rx="6" fill="#ccfbf1" stroke="#0d9488"/>
+    <text x="878" y="204" text-anchor="middle" font-size="10.5" fill="#115e59">local-orch Pod</text>
+    <rect x="952" y="182" width="120" height="34" rx="6" fill="#ccfbf1" stroke="#0d9488"/>
+    <text x="1012" y="204" text-anchor="middle" font-size="10.5" fill="#115e59">… ×N</text>
+    <text x="945" y="240" text-anchor="middle" font-size="10" fill="#0f766e">restartPolicy: Never · enableServiceLinks: false</text>
+    <text x="945" y="256" text-anchor="middle" font-size="10" fill="#0f766e">mem requests==limits · cpu request-only</text>
+    <text x="945" y="272" text-anchor="middle" font-size="10" fill="#0f766e">headless Service "workers" → stable DNS</text>
+    <text x="945" y="288" text-anchor="middle" font-size="10" fill="#0f766e">registerPod + heartbeat back to :8088</text>
+    <text x="945" y="304" text-anchor="middle" font-size="10" fill="#0f766e">tracing silenced (sampling 0.0)</text>
+
+    <!-- metrics-consumer (DIRECT-METRICS 2026-07-20: replaced the Kafka shared topic) -->
+    <rect x="800" y="392" width="290" height="80" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+    <text x="945" y="418" text-anchor="middle" font-weight="600" fill="#92400e">jmeter-metrics-consumer</text>
+    <text x="945" y="437" text-anchor="middle" font-size="10.5" fill="#b45309" font-family="monospace">POST /api/v1/ingest (JSON) :8083</text>
+    <text x="945" y="455" text-anchor="middle" font-size="10.5" fill="#b45309">202 ack · 400/413 drop · 503 → edge buffer retry</text>
+  </g>
+
+  <g stroke="#475569" stroke-width="1.6" fill="none" marker-end="url(#a)">
+    <!-- client -> runservice -->
+    <line x1="180" y1="132" x2="238" y2="132"/>
+    <!-- runservice -> claim registry -->
+    <path d="M330,172 V238"/>
+    <!-- registry <-> k8srun -->
+    <line x1="440" y1="288" x2="518" y2="288"/>
+    <!-- runservice -> metrics read -->
+    <path d="M440,120 H518"/>
+    <!-- runservice -> fan out workers -->
+    <path d="M440,108 Q620,58 800,110"/>
+    <!-- registry -> provisioner (spin / drain / recycle) -->
+    <path d="M340,340 V390"/>
+    <!-- provisioner -> k8s api -->
+    <line x1="440" y1="432" x2="518" y2="432"/>
+    <!-- k8s api -> worker namespace -->
+    <path d="M740,424 Q790,380 830,322"/>
+    <!-- workers -> metrics-consumer ingest -->
+    <path d="M945,320 V390"/>
+  </g>
+
+  <g font-size="10.5" fill="#64748b">
+    <text x="335" y="208" text-anchor="middle">claim IDLE pods</text>
+    <text x="479" y="280" text-anchor="middle">SKIP LOCKED</text>
+    <text x="479" y="136" text-anchor="middle">read</text>
+    <text x="620" y="76" text-anchor="middle" fill="#1e293b">fan-out POST /api/v1/test via {pod}.workers:8080 · poll status</text>
+    <text x="384" y="372" text-anchor="middle">spin · drain · recycle</text>
+    <text x="479" y="448" text-anchor="middle">create/delete</text>
+    <text x="800" y="366" text-anchor="middle">schedules Pods</text>
+    <text x="1005" y="360" text-anchor="middle">JSON WorkerMetricBatch, 1/s per worker</text>
+    <text x="560" y="524" text-anchor="middle" fill="#92400e">direct HTTP ingest (DIRECT-METRICS 2026-07-20 — Kafka removed) → metrics."workerMetric" → read back by this service's /metrics + /timeseries</text>
+    <text x="560" y="544" text-anchor="middle" fill="#64748b">Observability (K8S-SLIMDOWN): JSON logs + /actuator/health,info only — no Prometheus endpoint, no tracing; the deployment platform provides both.</text>
+  </g>
+</svg>
