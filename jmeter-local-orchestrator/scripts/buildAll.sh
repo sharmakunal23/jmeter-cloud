@@ -6,13 +6,10 @@
 #
 # Budgets (must agree with the service's documented "Hard constraints"):
 #
-#   default                                ≤ 25 MB
-#   -Pstorage-docservice                   ≤ 25 MB  (JDK HttpClient — no growth)
-#   -Pstorage-s3                           ≤ 37 MB  (AWS SDK delta)
-#   -Pstorage-s3,storage-docservice        ≤ 37 MB  (transitives overlap)
-#
-# NOTE: Step 4 (Spring Boot migration) will raise these budgets to
-# 60 MB / 60 MB / 75 MB / 75 MB. Update before running post-Step-4.
+#   default                                ≤ 60 MB
+#   -Pstorage-docservice                   ≤ 60 MB  (JDK HttpClient — no growth)
+#   -Pstorage-s3                           ≤ 75 MB  (AWS SDK delta)
+#   -Pstorage-s3,storage-docservice        ≤ 75 MB  (transitives overlap)
 #
 # Usage:
 #   scripts/buildAll.sh [-q]
@@ -33,10 +30,10 @@ JAR_GLOB="target/jmeter-local-orchestrator-*.jar"
 
 # Each row: <label>|<profile-args>|<budget-mb>
 COMBOS=(
-  "default                       |                                       |25"
-  "storage-docservice            |-Pstorage-docservice                   |25"
-  "storage-s3                    |-Pstorage-s3                           |37"
-  "storage-s3+docservice         |-Pstorage-s3,storage-docservice        |37"
+  "default                       |                                       |60"
+  "storage-docservice            |-Pstorage-docservice                   |60"
+  "storage-s3                    |-Pstorage-s3                           |75"
+  "storage-s3+docservice         |-Pstorage-s3,storage-docservice        |75"
 )
 
 failed=0

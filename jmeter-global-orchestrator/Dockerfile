@@ -2,7 +2,7 @@
 # kept for readability). Reproducible builds + no surprise base-layer swap on
 # rebuild. Refresh a digest deliberately with:
 #   docker buildx imagetools inspect <tag>   # copy the "Digest:" value
-FROM maven:3.9-eclipse-temurin-17@sha256:32ce79e40d744b18c6ce9fe65d6b58189cbabc938cfeff657a534a359a5d3f92 AS build
+FROM maven:3.9-eclipse-temurin-21@sha256:1bb51c5ed28b95aef2bc7b46bff6940da43747cdaf838ce4afc2081ce9403750 AS build
 
 WORKDIR /build
 
@@ -16,7 +16,7 @@ COPY src ./src
 COPY api ./api
 RUN mvn package -DskipTests -q
 
-FROM eclipse-temurin:17-jre@sha256:0d79988c68791ce864fe39d149ab1dc84f680539dca77ee7f6f3b041ad7f2f43
+FROM eclipse-temurin:21-jre@sha256:010e0a06bd4e0184dec58626afb3ba727b42c56c91b977e2f0a9e0837e0fa3fb
 
 LABEL org.opencontainers.image.title="jmeter-global-orchestrator" \
       org.opencontainers.image.description="Fan-out layer driving many jmeter-local-orchestrators across regions"

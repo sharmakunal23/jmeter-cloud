@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.5.14</version>
+        <version>3.5.16</version>
         <relativePath/>
     </parent>
 
@@ -24,8 +24,8 @@
     </description>
 
     <properties>
-        <maven.compiler.source>17</maven.compiler.source>
-        <maven.compiler.target>17</maven.compiler.target>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
@@ -85,7 +85,7 @@
         <dependency>
             <groupId>net.logstash.logback</groupId>
             <artifactId>logstash-logback-encoder</artifactId>
-            <version>7.4</version>
+            <version>8.1</version>
         </dependency>
         <dependency>
             <groupId>org.codehaus.janino</groupId>
@@ -97,24 +97,24 @@
         <dependency>
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
-            <version>2.7.0</version>
+            <version>2.9.0</version>
         </dependency>
         <!-- Phase 1 of the capacity rework: PodProvisioner drives the Docker
              daemon over the mounted /var/run/docker.sock. docker-java's
              zerodep transport is the simplest path that *just works* with
              unix sockets across all platforms — no JNI, no external Apache
-             HttpClient version conflict (Spring Boot 3.5.14's BOM pins
+             HttpClient version conflict (Spring Boot 3.5.16's BOM pins
              httpclient5 to a version that breaks docker-java's unix-socket
              routing; switching transports sidesteps the whole issue). -->
         <dependency>
             <groupId>com.github.docker-java</groupId>
             <artifactId>docker-java-core</artifactId>
-            <version>3.4.0</version>
+            <version>3.7.1</version>
         </dependency>
         <dependency>
             <groupId>com.github.docker-java</groupId>
             <artifactId>docker-java-transport-zerodep</artifactId>
-            <version>3.4.0</version>
+            <version>3.7.1</version>
         </dependency>
         <!-- KUBE-5 Option A (2026-07-22) — K8sPodProvisioner drives worker
              Pods via the cluster API when
@@ -125,7 +125,7 @@
         <dependency>
             <groupId>io.fabric8</groupId>
             <artifactId>kubernetes-client</artifactId>
-            <version>7.3.1</version>
+            <version>7.8.0</version>
         </dependency>
         <!-- AUTOMATION Phase E — JavaMailSender for the daily report emails.
              SMTP is the single backend: a MailHog container in dev compose,
@@ -155,7 +155,7 @@
         <dependency>
             <groupId>io.fabric8</groupId>
             <artifactId>kubernetes-server-mock</artifactId>
-            <version>7.3.1</version>
+            <version>7.8.0</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -209,7 +209,7 @@
                     <plugin>
                         <groupId>org.owasp</groupId>
                         <artifactId>dependency-check-maven</artifactId>
-                        <version>9.2.0</version>
+                        <version>12.2.2</version>
                         <configuration>
                             <failBuildOnCVSS>7</failBuildOnCVSS>
                         </configuration>

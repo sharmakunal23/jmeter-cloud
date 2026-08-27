@@ -41,23 +41,25 @@
              serialization dependency: the ingest body is JSON, handled by the
              Jackson that spring-boot-starter-web already brings. -->
         <hdrhistogram.version>2.2.2</hdrhistogram.version>
-        <!-- slf4j + logback aligned with Spring Boot 3.5.14's BOM-managed
+        <!-- slf4j + logback aligned with Spring Boot 3.5.16's BOM-managed
              versions. Bumping past 1.5.3 is mandatory: Spring Boot's
              LoggingApplicationListener calls LoggerContext.initCollisionMaps()
              which only exists in Logback 1.5.7+, so the older version trips
              NoSuchMethodError as soon as a SpringApplication boots. The bump
              also clears CVE-2024-12798 (Logback JaninoEventEvaluator). -->
-        <slf4j.version>2.0.17</slf4j.version>
-        <logback.version>1.5.32</logback.version>
-        <logstash.encoder.version>7.4</logstash.encoder.version>
+        <slf4j.version>2.0.18</slf4j.version>
+        <logback.version>1.5.34</logback.version>
+        <logstash.encoder.version>8.1</logstash.encoder.version>
         <!-- janino: powers the <if> conditional in logback-spring.xml that
              flips between JSON and Spring Boot's pretty pattern when
              DEV_MODE_LOG=true. ~770 KB; within the < 60 MB JAR budget. -->
         <janino.version>3.1.12</janino.version>
-        <aws.sdk.version>2.25.50</aws.sdk.version>
+        <aws.sdk.version>2.54.5</aws.sdk.version>
 
-        <!-- Spring Boot 3.5.x — current maintained 3.x line (3.4.x is EOL,
-             4.0 still RC at audit time).
+        <!-- Spring Boot 3.5.x — current maintained 3.x line (3.4.x is EOL).
+             Boot 4.x is GA but is a coupled major migration (Spring
+             Framework 7 + Jackson 3 + springdoc 3 + Logback 1.6); staying
+             on 3.5.x is a deliberate choice, not drift.
              Imported as a BOM (NOT as a parent) so its versions of JUnit,
              Mockito, AssertJ, Jackson, Logback, SLF4J, Tomcat, etc. are
              managed centrally without forcing the orchestrator to inherit
@@ -65,7 +67,7 @@
              (The jetty-bom 11.0.24 import that previously sat above this
              one was removed in Step 4.5 along with Javalin — Spring Boot
              Tomcat owns the embedded server now.) -->
-        <spring.boot.version>3.5.14</spring.boot.version>
+        <spring.boot.version>3.5.16</spring.boot.version>
 
         <junit.version>5.12.2</junit.version>
         <assertj.version>3.27.7</assertj.version>
@@ -73,12 +75,12 @@
         <awaitility.version>4.2.2</awaitility.version>
 
         <!-- Plugin versions -->
-        <compiler.plugin.version>3.12.1</compiler.plugin.version>
-        <surefire.plugin.version>3.2.5</surefire.plugin.version>
-        <shade.plugin.version>3.5.2</shade.plugin.version>
-        <enforcer.plugin.version>3.4.1</enforcer.plugin.version>
-        <jacoco.plugin.version>0.8.11</jacoco.plugin.version>
-        <build.helper.version>3.5.0</build.helper.version>
+        <compiler.plugin.version>3.15.0</compiler.plugin.version>
+        <surefire.plugin.version>3.5.6</surefire.plugin.version>
+        <shade.plugin.version>3.6.2</shade.plugin.version>
+        <enforcer.plugin.version>3.6.3</enforcer.plugin.version>
+        <jacoco.plugin.version>0.8.15</jacoco.plugin.version>
+        <build.helper.version>3.6.1</build.helper.version>
     </properties>
 
     <!-- Centralized version management. -->
@@ -129,7 +131,7 @@
             <dependency>
                 <groupId>commons-codec</groupId>
                 <artifactId>commons-codec</artifactId>
-                <version>1.16.1</version>
+                <version>1.22.1</version>
             </dependency>
 
         </dependencies>
@@ -157,7 +159,7 @@
         <dependency>
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
-            <version>2.7.0</version>
+            <version>2.9.0</version>
         </dependency>
 
         <!-- =========================================================
@@ -487,7 +489,7 @@
                                         <exclude>META-INF/*.SF</exclude>
                                         <exclude>META-INF/*.DSA</exclude>
                                         <exclude>META-INF/*.RSA</exclude>
-                                        <!-- module-info duplication breaks on Java 17 when
+                                        <!-- module-info duplication breaks the shaded JAR when
                                              multiple dependencies ship Jigsaw descriptors. -->
                                         <exclude>module-info.class</exclude>
                                         <exclude>META-INF/versions/*/module-info.class</exclude>
@@ -635,7 +637,7 @@
                     <plugin>
                         <groupId>org.owasp</groupId>
                         <artifactId>dependency-check-maven</artifactId>
-                        <version>9.2.0</version>
+                        <version>12.2.2</version>
                         <configuration>
                             <failBuildOnCVSS>7</failBuildOnCVSS>
                         </configuration>
