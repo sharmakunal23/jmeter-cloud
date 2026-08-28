@@ -1,0 +1,7 @@
+# KUBE-0 — tiny base holding the shared Namespace, so both umbrella
+# overlays (kind/, privateCloud/) can reference it as a kustomize base
+# (kustomize forbids plain-file references outside a kustomization root).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml

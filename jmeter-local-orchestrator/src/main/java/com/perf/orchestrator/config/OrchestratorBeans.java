@@ -323,8 +323,8 @@ public class OrchestratorBeans {
      * <p>A plain {@link java.util.concurrent.ScheduledExecutorService} rather
      * than {@code @Scheduled}: the cadence comes from
      * {@code OrchestratorConfig}, which is this service's single config
-     * entrypoint (see its CLAUDE.md — {@code @Value} / {@code application.yml}
-     * are deliberately not used for runtime knobs here), and
+     * entrypoint ({@code @Value} / {@code application.yml} are deliberately
+     * not used for runtime knobs here), and
      * {@code @Scheduled} would have forced the interval back into a property
      * placeholder.
      *

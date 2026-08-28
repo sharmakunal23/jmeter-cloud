@@ -1,0 +1,47 @@
+# KUBE-0 — umbrella kustomization, kind flavor: the `kubectl apply -k`
+# analog of the top-level docker-compose.yml `include:` list. Composes the
+# per-service kind overlays (local :dev images, imagePullPolicy:
+# IfNotPresent, MailHog, NodePort where a host port is wanted).
+#
+# Usage (against the kind cluster):
+#   kubectl apply -k infra/deploy/k8s/kind
+#
+# Service entries are commented in as their KUBE-* phase lands
+# (the KUBE track) — kustomize fails on paths that don't
+# exist yet, so this file always builds clean.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: jmeter-cloud
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: jmeter-cloud
+    includeSelectors: false
+resources:
+  - ../namespace
+  - ../../../../postgres/kube/overlays/kind
+  - ../../../../jmeter-metrics-consumer/kube/overlays/kind
+  - ../../../../document-service/kube/overlays/kind
+  - ../../../../jmeter-global-orchestrator/kube/overlays/kind
+  - ../../../../jmeter-regional-orchestrator/kube/base
+  - ../../../../jmeter-cloud-ui/kube/overlays/kind
+  - ../../../../grafana/kube/overlays/kind
+patches:
+  # The in-cluster regional serves the one region the global's REGIONS
+  # names (`local`); worker memory is sized for a validation cluster.
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: jmeter-regional-orchestrator
+      spec:
+        template:
+          spec:
+            containers:
+              - name: regional-orchestrator
+                env:
+                  - name: REGION
+                    value: local
+                  - name: PODPROVISIONER_WORKER_MEMORY_MB
+                    value: "1536"
+                  - name: PODPROVISIONER_JMETER_JVM_ARGS
+                    value: "-Xms256m -Xmx512m"

@@ -1,0 +1,247 @@
+# KUBE-11 — default-deny NetworkPolicies for the jmeter-cloud namespace,
+# plus one allow per known seam (the full seam map + rationale lives in
+# infra/deploy/k8s/privateCloudHardening.md).
+#
+# SHIPPED COMMENTED-OUT in the privateCloud umbrella — enable only after:
+#   1. Your CNI actually enforces NetworkPolicy (kind's default kindnet
+#      does NOT — these are silently inert there).
+#   2. You've verified kubelet liveness/readiness probes still pass under
+#      default-deny on YOUR CNI (Calico/Cilium exempt kubelet probe
+#      traffic; some CNIs need an explicit node-CIDR ingress allow).
+#   3. You've filled the two environment-specific placeholders below
+#      (ingress-controller namespace label, corporate SMTP egress).
+#
+# Notes:
+# - `kubectl port-forward` traffic enters via the kubelet, bypassing CNI
+#   policy on common CNIs — operator port-forwards keep working.
+# - Worker pods get OPEN egress: the system-under-test address is
+#   per-run operator input, unknowable in advance. Tightening that is
+#   SECURITY S-5/S-11 territory (target-host allowlist), deferred.
+# - The global-orchestrator needs egress to the kube-apiserver
+#   (K8sPodProvisioner) and to api.anthropic.com:443 (AI proxy) — both
+#   land in the generic 443/6443 egress rule; tighten to your
+#   apiserver's endpoint IP if your CNI supports it.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# Everyone may resolve DNS (CoreDNS lives in kube-system).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# Ingress controller → UI nginx. Set your controller's namespace label
+# (ingress-nginx ships kubernetes.io/metadata.name: ingress-nginx).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ui-ingress
+spec:
+  podSelector:
+    matchLabels: { app: jmeter-cloud-ui }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx   # ← your controller ns
+      ports:
+        - { protocol: TCP, port: 80 }
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: { app: global-orchestrator }
+      ports: [{ protocol: TCP, port: 8082 }]
+    - to:
+        - podSelector:
+            matchLabels: { app: document-service }
+      ports: [{ protocol: TCP, port: 8084 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: global-orchestrator
+spec:
+  podSelector:
+    matchLabels: { app: global-orchestrator }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # UI proxy (API + actuator passthrough).
+    - from:
+        - podSelector:
+            matchLabels: { app: jmeter-cloud-ui }
+      ports: [{ protocol: TCP, port: 8082 }]
+    # Operator-declared workers only: registerPod + heartbeat. Workers a
+    # regional creates never call the hub — the kubelet is their liveness.
+    - from:
+        - podSelector:
+            matchLabels:
+              com.perf.jmeterCloud.role: local-orchestrator
+      ports: [{ protocol: TCP, port: 8082 }]
+  egress:
+    # Fan-out + status polls + drains to workers.
+    - to:
+        - podSelector:
+            matchLabels:
+              com.perf.jmeterCloud.role: local-orchestrator
+      ports: [{ protocol: TCP, port: 8080 }]
+    - to:
+        - podSelector:
+            matchLabels: { app: postgres }
+      ports: [{ protocol: TCP, port: 5432 }]
+    - to:
+        - podSelector:
+            matchLabels: { app: redis }
+      ports: [{ protocol: TCP, port: 6379 }]
+    # kube-apiserver (K8sPodProvisioner) + api.anthropic.com (AI proxy).
+    # Generic HTTPS/apiserver egress — tighten to specific endpoints if
+    # your CNI supports FQDN/ipBlock rules.
+    - ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 6443 }
+    # Corporate SMTP — set your relay's port (25/465/587) and, ideally,
+    # an ipBlock for the relay itself:
+    # - ports: [{ protocol: TCP, port: 587 }]
+---
+# Workers: fan-out in from the global; OPEN egress (SUT unknown — see
+# header note; S-5/S-11 will tighten this).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: workers
+spec:
+  podSelector:
+    matchLabels:
+      com.perf.jmeterCloud.role: local-orchestrator
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: global-orchestrator }
+      ports: [{ protocol: TCP, port: 8080 }]
+  egress:
+    - {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: metrics-consumer
+spec:
+  podSelector:
+    matchLabels: { app: metrics-consumer }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              com.perf.jmeterCloud.role: local-orchestrator
+      ports: [{ protocol: TCP, port: 8083 }]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: { app: postgres }
+      ports: [{ protocol: TCP, port: 5432 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: document-service
+spec:
+  podSelector:
+    matchLabels: { app: document-service }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: jmeter-cloud-ui }
+        - podSelector:
+            matchLabels:
+              com.perf.jmeterCloud.role: local-orchestrator
+      ports: [{ protocol: TCP, port: 8084 }]
+  egress: []
+  # -Pcloud S3BlobStore variant needs HTTPS out instead:
+  # egress:
+  #   - ports: [{ protocol: TCP, port: 443 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres
+spec:
+  podSelector:
+    matchLabels: { app: postgres }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: global-orchestrator }
+        - podSelector:
+            matchLabels: { app: metrics-consumer }
+        - podSelector:
+            matchLabels: { app: grafana }
+        - podSelector:
+            matchLabels: { app: flyway-migrate }
+      ports: [{ protocol: TCP, port: 5432 }]
+---
+# Flyway migration Job needs egress to postgres.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: flyway-migrate
+spec:
+  podSelector:
+    matchLabels: { app: flyway-migrate }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: { app: postgres }
+      ports: [{ protocol: TCP, port: 5432 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis
+spec:
+  podSelector:
+    matchLabels: { app: redis }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: global-orchestrator }
+      ports: [{ protocol: TCP, port: 6379 }]
+---
+# Grafana: operator access is port-forward (bypasses policy) or an
+# optional second Ingress host — add an ingress-controller rule like the
+# UI's if you expose it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grafana
+spec:
+  podSelector:
+    matchLabels: { app: grafana }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: { app: postgres }
+      ports: [{ protocol: TCP, port: 5432 }]

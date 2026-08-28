@@ -1,0 +1,7 @@
+# The one namespace for the whole platform (services + dynamically
+# provisioned worker Pods). Resource names are DNS-1123 (camelCase
+# exemption from the camelCase rule).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jmeter-cloud
