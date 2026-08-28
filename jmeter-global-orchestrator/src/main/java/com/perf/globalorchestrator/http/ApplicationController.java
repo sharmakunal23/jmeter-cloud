@@ -98,7 +98,7 @@ public class ApplicationController {
      * {@code PUT /capacity/{region}} — seeding at 0 means "region exists, no
      * workers yet."
      *
-     * <p>Superseded per-deployment by {@code PROVISIONING_REGIONS} — see
+     * <p>Superseded per-deployment by {@code REGIONS} — see
      * {@link #seedRegions()}.
      */
     private static final List<String> DEFAULT_SEEDED_REGIONS = List.of("us-east-1");
@@ -127,7 +127,7 @@ public class ApplicationController {
      * The regions a newly-registered application starts with, seeded at 0.
      *
      * <p>A deployment that declares its own region vocabulary
-     * ({@code PROVISIONING_REGIONS} — the operator's data centers in static
+     * ({@code REGIONS} — the operator's data centers in static
      * mode) seeds exactly those, so the app opens showing the places workers
      * can actually be declared into. Otherwise the historical single primary
      * region stands.

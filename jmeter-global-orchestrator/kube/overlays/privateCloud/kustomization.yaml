@@ -18,9 +18,8 @@ resources:
   - ../../base
 
 # Private-registry rewrite — set the real registry, then uncomment. The
-# PODPROVISIONER_IMAGE env (worker image) must be updated to the registry
-# reference too — pin repo:tag@sha256 for exact IMAGE_MISMATCH recycle
-# semantics on rollouts.
+# worker image is configured on each jmeter-regional-orchestrator
+# (PODPROVISIONER_IMAGE), not here.
 # images:
 #   - name: jmeter-global-orchestrator
 #     newName: registry.internal.example.com/jmeter-cloud/jmeter-global-orchestrator
@@ -42,5 +41,5 @@ resources:
 #                     value: smtp.internal.example.com
 #                   - name: MAIL_PORT
 #                     value: "25"
-#                   - name: PODPROVISIONER_IMAGE
-#                     value: registry.internal.example.com/jmeter-cloud/jmeter-local-orchestrator@sha256:<digest>
+#                   - name: REGIONS
+#                     value: na-east=https://jmeter-regional.na-east.internal.example.com,na-west=https://jmeter-regional.na-west.internal.example.com

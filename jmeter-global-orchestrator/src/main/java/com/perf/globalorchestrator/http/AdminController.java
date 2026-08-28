@@ -2,6 +2,7 @@ package com.perf.globalorchestrator.http;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
+import com.perf.globalorchestrator.repo.PodRepository;
 import com.perf.globalorchestrator.domain.Application;
 import com.perf.globalorchestrator.provision.PodNameAllocator;
 import com.perf.globalorchestrator.provision.PodProvisioner;
@@ -55,6 +56,7 @@ public class AdminController {
     private final PodNameAllocator nameAllocator;
     private final ApplicationRepository applications;
     private final ProvisioningProperties provisioning;
+    private final PodRepository pods;
 
     public AdminController(
             ObjectProvider<PodReconciler> reconciler,
@@ -62,13 +64,15 @@ public class AdminController {
             PodProvisioner provisioner,
             PodNameAllocator nameAllocator,
             ApplicationRepository applications,
-            ProvisioningProperties provisioning) {
+            ProvisioningProperties provisioning,
+            PodRepository pods) {
         this.reconciler    = reconciler;
         this.recycler      = recycler;
         this.provisioner   = provisioner;
         this.nameAllocator = nameAllocator;
         this.applications  = applications;
         this.provisioning  = provisioning;
+        this.pods = pods;
     }
 
     @PostMapping("/reconcilePods")
@@ -127,7 +131,13 @@ public class AdminController {
     @DeleteMapping("/pods/{podName}")
     public ResponseEntity<Map<String, Object>> tearDownPod(@PathVariable String podName) {
         provisioning.requireDynamic("tear down worker " + podName);
-        provisioner.stopAndRemove(podName);
+        Optional<com.perf.globalorchestrator.domain.Pod> row = pods.findByPodId(podName);
+        if (row.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                    "code", "POD_NOT_REGISTERED",
+                    "message", "worker " + podName + " is not in the registry, so its region is unknown"));
+        }
+        provisioner.stopAndRemove(row.get().region(), podName);
         // Registry row will be GC'd by the next reconciler sweep — caller
         // can also POST /admin/reconcilePods immediately to force it.
         return ResponseEntity.ok(Map.of("podName", podName, "stopped", true));

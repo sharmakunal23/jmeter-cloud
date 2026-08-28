@@ -39,14 +39,14 @@ if [[ -n "${JMETER_DIST_PATH:-}" ]]; then
   echo "Building $IMAGE_TAG (mode=local, dist=$JMETER_DIST_PATH)"
   docker build \
     --build-arg JMETER_VERSION="$JMETER_VERSION" \
-    --build-arg JMETER_INSTALL_MODE=Local \
+    --build-arg JMETER_INSTALL_MODE=local \
     -t "$IMAGE_TAG" \
     .
 else
   echo "Building $IMAGE_TAG (mode=download, source=Apache mirror)"
   docker build \
     --build-arg JMETER_VERSION="$JMETER_VERSION" \
-    --build-arg JMETER_INSTALL_MODE=Download \
+    --build-arg JMETER_INSTALL_MODE=download \
     -t "$IMAGE_TAG" \
     .
 fi

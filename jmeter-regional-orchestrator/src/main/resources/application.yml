@@ -1,0 +1,89 @@
+spring:
+  application:
+    name: jmeter-regional-orchestrator
+  profiles:
+    default: local
+  # Every request here is I/O-bound (a cluster API call or a relayed worker
+  # call), so virtual threads let 100+ concurrent relays cost nothing.
+  threads:
+    virtual:
+      enabled: true
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+server:
+  port: ${HTTP_PORT:8088}
+  address: ${HTTP_BIND_ADDRESS:0.0.0.0}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # health,info ONLY — hosting infra provides observability. NEVER drop
+        # health: the kube probes and the global's region probe depend on it.
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+  defaults:
+    metrics:
+      export:
+        enabled: false
+
+springdoc:
+  swagger-ui:
+    url: /openapi.yaml
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+
+regionalOrchestrator:
+  # The one region this deployment serves. REQUIRED — a wrong default would
+  # silently mislabel every worker it creates.
+  region: ${REGION:}
+  version: ${REGIONAL_ORCHESTRATOR_VERSION:dev}
+
+  # ── PodProvisioner ────────────────────────────────────────────────
+  # Everything about a worker that is specific to THIS cluster. The env-var
+  # names are the same ones the global orchestrator used before the split,
+  # so manifests move rather than change.
+  podProvisioner:
+    # Worker Pods live in this namespace; the headless Service gives each one
+    # the stable DNS name {podName}.{headlessService}. Both are K8s resource
+    # names → DNS-1123 lowercase (camelCase exemption). The fabric8 client
+    # auto-detects in-cluster ServiceAccount vs local kubeconfig.
+    namespace:             ${PODPROVISIONER_NAMESPACE:jmeter-cloud}
+    headlessService:       ${PODPROVISIONER_HEADLESS_SERVICE:workers}
+    image:                 ${PODPROVISIONER_IMAGE:jmeter-local-orchestrator:dev}
+    localOrchestratorPort: ${PODPROVISIONER_LOCAL_ORCHESTRATOR_PORT:8080}
+    # The hub's DATA-plane services as reachable FROM INSIDE this cluster —
+    # bridge Services on kind, ingress hostnames in a real cloud. Workers
+    # never call the hub's control plane: no GLOBAL_ORCHESTRATOR_URL is
+    # stamped, so they neither register nor heartbeat; the Pod list
+    # (GET /api/v1/workers) is the hub's liveness truth.
+    metricsIngestUrl:      ${PODPROVISIONER_METRICS_INGEST_URL:http://metrics-consumer:8083/api/v1/ingest}
+    documentServiceUrl:    ${DOCUMENT_SERVICE_URL:http://document-service:8084}
+    # Hard memory limit (MiB) per worker — requests == limits so the
+    # scheduler reserves what the worker really uses and a runaway worker
+    # OOMs inside its own cgroup. 6144 fits the orchestrator JVM (-Xmx1g +
+    # native) + the JMeter child (-Xmx2g + native) + page-cache headroom for
+    # the multi-GB JTL of a 12 h run.
+    workerMemoryMb:        ${PODPROVISIONER_WORKER_MEMORY_MB:6144}
+    # CPU REQUEST only, no limit — cfs throttling on a load generator skews
+    # the latencies it measures. 500m locally; size up in cloud.
+    workerCpuRequest:      ${PODPROVISIONER_WORKER_CPU_REQUEST:500m}
+    # Aggregator late-arrival grace (seconds) stamped as GRACE_PERIOD_SECONDS;
+    # the per-run POST /test override still wins.
+    gracePeriodSeconds:    ${PODPROVISIONER_GRACE_PERIOD_SECONDS:10}
+    # JMeter child heap, stamped as JMETER_JVM_ARGS when set. Blank keeps the
+    # worker's production default (-Xms2g -Xmx2g); a validation cluster sets
+    # "-Xms256m -Xmx512m" with a matching workerMemoryMb.
+    jmeterJvmArgs:         ${PODPROVISIONER_JMETER_JVM_ARGS:}
+
+  # ── Worker relay ──────────────────────────────────────────────────
+  # readTimeoutMs bounds how long the hub's calling thread is held by one
+  # worker; a healthy worker answers POST /test in well under a second.
+  relay:
+    connectTimeoutMs: ${RELAY_CONNECT_TIMEOUT_MS:2000}
+    readTimeoutMs:    ${RELAY_READ_TIMEOUT_MS:15000}

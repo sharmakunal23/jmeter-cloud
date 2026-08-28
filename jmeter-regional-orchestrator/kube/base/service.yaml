@@ -1,0 +1,16 @@
+# The regional API the global orchestrator calls. ClusterIP here; the kind
+# overlay turns it into a NodePort so a hub outside the cluster can reach
+# it, and a real cloud exposes it through an ingress restricted to the hub.
+apiVersion: v1
+kind: Service
+metadata:
+  name: jmeter-regional-orchestrator
+  labels:
+    app: jmeter-regional-orchestrator
+spec:
+  selector:
+    app: jmeter-regional-orchestrator
+  ports:
+    - name: http
+      port: 8088
+      targetPort: http

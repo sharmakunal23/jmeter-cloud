@@ -12,10 +12,9 @@ import java.lang.annotation.Target;
  * Wires a bean only under a given
  * {@link ProvisioningMode}.
  *
- * <p>Composes with {@code @ConditionalOnProperty}: the daemon-backed
- * provisioners carry both (mode {@code DYNAMIC} <em>and</em> their
- * substrate), so exactly one {@link PodProvisioner} bean exists in every
- * valid configuration.
+ * <p>{@link RegionalPodProvisioner} carries {@code DYNAMIC} and
+ * {@code StaticPodProvisioner} carries {@code STATIC}, so exactly one
+ * {@link PodProvisioner} bean exists in every valid configuration.
  *
  * <p>A dedicated annotation rather than {@code @ConditionalOnExpression}
  * with a SpEL string: this is evaluated on five classes and read by

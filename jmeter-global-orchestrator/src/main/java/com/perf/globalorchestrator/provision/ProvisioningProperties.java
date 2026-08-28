@@ -3,12 +3,10 @@ package com.perf.globalorchestrator.provision;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import com.perf.globalorchestrator.region.RegionProperties;
 import org.springframework.stereotype.Component;
 
-import java.util.Arrays;
 import java.util.List;
-import java.util.LinkedHashSet;
-import java.util.Set;
 
 /**
  * The deployment's provisioning posture, resolved
@@ -28,18 +26,13 @@ public class ProvisioningProperties {
 
     public ProvisioningProperties(
             @Value("${globalOrchestrator.provisioning.mode:DYNAMIC}") String mode,
-            // Region identifiers this deployment uses. In STATIC mode these are
-            // the operator's data centers (na-east, na-west, …) — the platform
-            // keeps calling the axis "region" everywhere (it is already the
-            // placement axis in the pod registry, the capacity matrix, the
-            // claim SQL and the run request;
-            // a parallel dataCenter column would double every key and express
-            // nothing new). Only the UI label changes — see regionLabel().
-            // Empty means "no deployment override" and the UI keeps its own
-            // defaults.
-            @Value("${globalOrchestrator.provisioning.regions:}") String regions) {
+            // Region identifiers come from REGIONS (RegionProperties) — the
+            // platform keeps calling the axis "region" everywhere; only the UI
+            // label changes (regionLabel()). Empty means "no deployment
+            // override" and the UI keeps its own defaults.
+            RegionProperties regionProperties) {
         this.mode = ProvisioningMode.parse(mode);
-        this.regions = parseRegions(regions);
+        this.regions = regionProperties.ids();
         LOG.info("Provisioning mode = {} ({}); regions = {}",
                 this.mode,
                 this.mode.isStatic()
@@ -108,15 +101,4 @@ public class ProvisioningProperties {
     }
 
     /** Comma-separated, trimmed, blanks dropped, order preserved, deduplicated. */
-    private static List<String> parseRegions(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return List.of();
-        }
-        Set<String> ordered = new LinkedHashSet<>();
-        Arrays.stream(raw.split(","))
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .forEach(ordered::add);
-        return List.copyOf(ordered);
-    }
 }

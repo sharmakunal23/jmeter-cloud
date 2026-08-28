@@ -1,0 +1,403 @@
+openapi: 3.0.3
+
+info:
+  title: jmeter-regional-orchestrator
+  version: 0.1.0
+  summary: Per-cluster arm of the global orchestrator — creates worker Pods, relays worker calls.
+  description: |
+    Stateless service deployed once per data-center cluster. The global
+    orchestrator is its only client: it creates and deletes worker Pods here
+    through the cluster's own ServiceAccount, and reaches workers (whose DNS is
+    cluster-private) through the `/api/v1/workers/{podName}/…` relay.
+
+    Every operation is idempotent on the pod name. Errors are the platform's
+    `{code, message}` body.
+  contact:
+    name: Performance Engineering
+  license:
+    name: Apache-2.0
+
+servers:
+  - url: http://localhost:8088
+    description: Local dev (default HTTP_PORT=8088; NodePort 30088 on kind)
+
+tags:
+  - name: capabilities
+    description: What this region is. Also the liveness signal the global's region probe polls.
+  - name: pods
+    description: The PodProvisioner over HTTP — one route per verb.
+  - name: workers
+    description: Reverse proxy to a worker inside this cluster, allow-listed by path.
+
+paths:
+  /api/v1/capabilities:
+    get:
+      tags: [capabilities]
+      summary: Region identity and worker shape
+      operationId: capabilities
+      description: A `200` here is what marks the region REACHABLE in the global orchestrator.
+      responses:
+        "200":
+          description: This region.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Capabilities" }
+
+  /api/v1/pods:
+    post:
+      tags: [pods]
+      summary: Create and start a worker Pod
+      operationId: createPod
+      description: |
+        Idempotent on `podName`: a live pod is reused, a terminal one is
+        recreated. The spec's `region` must be this deployment's region
+        (`400 REGION_MISMATCH` otherwise). Returns synchronously once the API
+        server has accepted the Pod; readiness is observed through
+        `GET /api/v1/pods/{podName}` or the relayed `actuator/health`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PodSpec" }
+      responses:
+        "200":
+          description: Created or reused.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProvisionResult" }
+        "400":
+          description: "`INVALID_REQUEST` (bad spec) or `REGION_MISMATCH`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "502":
+          description: "`CLUSTER_API_ERROR` — the Kubernetes API refused or failed."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+    get:
+      tags: [pods]
+      summary: List managed pods for an application
+      operationId: listPods
+      parameters:
+        - name: applicationId
+          in: query
+          required: true
+          schema: { type: string }
+        - name: region
+          in: query
+          required: false
+          schema: { type: string }
+          description: Narrows by the region label; omitted means all.
+      responses:
+        "200":
+          description: Pods currently in the cluster, from their labels.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ProvisionedPod" }
+        "400":
+          description: Missing `applicationId`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/pods/{podName}:
+    parameters:
+      - $ref: "#/components/parameters/podName"
+    get:
+      tags: [pods]
+      summary: Whether a pod exists and is running
+      operationId: getPod
+      description: Always `200`; a missing pod is `exists=false`.
+      responses:
+        "200":
+          description: Pod state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PodState" }
+        "400":
+          description: "`INVALID_POD_NAME`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+    delete:
+      tags: [pods]
+      summary: Delete a pod
+      operationId: deletePod
+      description: No-op when the pod is already gone.
+      responses:
+        "204": { description: Deleted or absent. }
+        "400":
+          description: "`INVALID_POD_NAME`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/pods/{podName}/stop:
+    parameters:
+      - $ref: "#/components/parameters/podName"
+    post:
+      tags: [pods]
+      summary: Stop a pod (deletes it — bare Pods have no stopped state)
+      operationId: stopPod
+      responses:
+        "204": { description: Deleted or absent. }
+
+  /api/v1/pods/{podName}/start:
+    parameters:
+      - $ref: "#/components/parameters/podName"
+    post:
+      tags: [pods]
+      summary: Start a pod
+      operationId: startPod
+      description: No-op on a live pod; recreates a terminal one from its labels.
+      responses:
+        "204": { description: Live or recreated. }
+        "404":
+          description: "`POD_NOT_FOUND`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/pods/{podName}/restart:
+    parameters:
+      - $ref: "#/components/parameters/podName"
+    post:
+      tags: [pods]
+      summary: Restart a pod (delete and recreate from its labels)
+      operationId: restartPod
+      description: The recreated pod uses the currently configured image and env.
+      responses:
+        "204": { description: Recreated. }
+        "404":
+          description: "`POD_NOT_FOUND`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/workers:
+    get:
+      tags: [pods]
+      summary: Every managed worker's liveness, from the Pod list
+      operationId: listWorkers
+      description: |
+        The hub's LOST source — replaces worker heartbeats. `dead` is the one
+        flag to act on: a terminated or failed container, a Pod the scheduler
+        gave up on, or an image the kubelet stopped retrying; `reason` is the
+        kubelet's word (`OOMKilled`, `Error`, `Unschedulable`, `ImagePullBackOff`)
+        with `exitCode` when there is one. `ready` is the readiness probe —
+        the worker's HTTP is answering.
+      responses:
+        "200":
+          description: One entry per managed Pod.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/WorkerState" }
+
+  /api/v1/workers/status:
+    post:
+      tags: [workers]
+      summary: One run-status poll for many workers
+      operationId: workersStatus
+      description: |
+        Fetches every named worker's `GET /api/v1/test` in parallel inside the
+        cluster and returns them in one answer — the hub makes one call per
+        region per poll instead of one per member. A worker that did not
+        answer is reported with its relay status (502/504) and a null body,
+        never dropped.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [podNames]
+              properties:
+                podNames:
+                  type: array
+                  items: { type: string }
+      responses:
+        "200":
+          description: One entry per requested name, in request order.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [podName, status]
+                  properties:
+                    podName: { type: string }
+                    status: { type: integer, description: "The worker's HTTP status, or 502/504 from the relay." }
+                    body: { nullable: true, description: "The worker's JSON when it sent JSON, else its text." }
+
+  /api/v1/image:
+    get:
+      tags: [pods]
+      summary: The configured worker image reference
+      operationId: currentImage
+      description: The identity the global's recycler diffs pod rows against for IMAGE_MISMATCH.
+      responses:
+        "200":
+          description: Image reference.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [imageDigest]
+                properties:
+                  imageDigest: { type: string, example: "jmeter-local-orchestrator:dev" }
+
+  /api/v1/workers/{podName}/{path}:
+    parameters:
+      - $ref: "#/components/parameters/podName"
+      - name: path
+        in: path
+        required: true
+        schema: { type: string }
+        description: |
+          The worker path — several segments, though OpenAPI notation shows
+          one placeholder — one of the allow-list: `actuator/health`,
+          `api/v1/test`, `api/v1/test/drain`, `api/v1/test/abort`, `api/v1/logs`.
+          `X-Actor` and `X-Run-Id` are forwarded so the worker's logs carry them.
+          `api/v1/logs` has one extra behaviour: when the worker cannot answer
+          (`502`/`504`), the kubelet's container log is returned instead as
+          `text/plain` with `X-Log-Source: kubernetes` — a dead worker's last
+          lines are exactly what an operator needs.
+    get:
+      tags: [workers]
+      summary: Relay a GET to the worker
+      operationId: relayGet
+      description: &relayDescription |
+        Forwards method, query string, body, `Content-Type` and `X-Actor` to
+        `http://{podName}.workers:8080/{path}` and returns the worker's status,
+        body and content type verbatim. Only allow-listed paths and DNS-1123 pod
+        names are forwarded — `403 PATH_NOT_ALLOWED` / `400 INVALID_POD_NAME`
+        otherwise. A worker that cannot be reached is `502 WORKER_UNREACHABLE`;
+        one that does not answer within the read timeout is `504 WORKER_TIMEOUT`.
+      responses:
+        "200": { description: The worker's response (any status the worker returns is passed through). }
+        "400": { description: "`INVALID_POD_NAME`." }
+        "403": { description: "`PATH_NOT_ALLOWED`." }
+        "502": { description: "`WORKER_UNREACHABLE`." }
+        "504": { description: "`WORKER_TIMEOUT`." }
+    post:
+      tags: [workers]
+      summary: Relay a POST to the worker
+      operationId: relayPost
+      description: *relayDescription
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200": { description: The worker's response (any status the worker returns is passed through). }
+        "400": { description: "`INVALID_POD_NAME`." }
+        "403": { description: "`PATH_NOT_ALLOWED`." }
+        "502": { description: "`WORKER_UNREACHABLE`." }
+        "504": { description: "`WORKER_TIMEOUT`." }
+
+components:
+  parameters:
+    podName:
+      name: podName
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" }
+      description: A DNS-1123 label — the Pod name, its hostname and the registry key.
+
+  schemas:
+    Capabilities:
+      type: object
+      required: [region, namespace, headlessService, image, localOrchestratorPort, version]
+      properties:
+        region: { type: string, example: na-east }
+        namespace: { type: string, example: jmeter-cloud }
+        headlessService: { type: string, example: workers }
+        image: { type: string, example: "jmeter-local-orchestrator:dev" }
+        localOrchestratorPort: { type: integer, example: 8080 }
+        version: { type: string, example: dev }
+
+    PodSpec:
+      type: object
+      required: [podName, applicationId, applicationName, region]
+      properties:
+        podName: { type: string, example: payments-na-east-worker-1 }
+        applicationId: { type: string, example: 01ARZ3NDEKTSV4RRFFQ69G5FAV }
+        applicationName: { type: string, example: payments }
+        region: { type: string, example: na-east }
+
+    ProvisionResult:
+      type: object
+      required: [baseUrl, createdAt]
+      properties:
+        baseUrl:
+          type: string
+          description: The worker's in-cluster URL; only reachable through the relay from outside.
+          example: "http://payments-na-east-worker-1.workers:8080"
+        imageDigest: { type: string, nullable: true, example: "jmeter-local-orchestrator:dev" }
+        createdAt: { type: string, format: date-time }
+
+    ProvisionedPod:
+      type: object
+      required: [podName, applicationId, region, status, startedAt]
+      properties:
+        podName: { type: string }
+        applicationId: { type: string }
+        region: { type: string }
+        status:
+          type: string
+          enum: [running, created, exited, unknown]
+          description: The Pod phase mapped onto the status words the global's registry displays.
+        startedAt: { type: string, format: date-time }
+        imageDigest: { type: string, nullable: true }
+
+    PodState:
+      type: object
+      required: [podName, exists, running, ready, dead]
+      properties:
+        podName: { type: string }
+        exists: { type: boolean }
+        running: { type: boolean, description: "Phase is Running and the container is not terminated — process up, not application health." }
+        ready: { type: boolean, description: "Readiness probe passing — the worker's HTTP is answering." }
+        dead: { type: boolean, description: "The kubelet has given up on this Pod; see reason." }
+        phase: { type: string, nullable: true }
+        reason: { type: string, nullable: true, example: OOMKilled }
+        exitCode: { type: integer, nullable: true, example: 137 }
+
+    WorkerState:
+      type: object
+      required: [podName, ready, dead, restarts]
+      properties:
+        podName: { type: string }
+        applicationId: { type: string, nullable: true }
+        region: { type: string, nullable: true }
+        phase: { type: string, nullable: true, example: Running }
+        ready: { type: boolean }
+        dead: { type: boolean }
+        reason: { type: string, nullable: true, example: OOMKilled }
+        exitCode: { type: integer, nullable: true, example: 137 }
+        restarts: { type: integer }
+        message: { type: string, nullable: true, description: "The kubelet's message, e.g. why a Pod is Unschedulable." }
+
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - INVALID_REQUEST
+            - INVALID_POD_NAME
+            - REGION_MISMATCH
+            - POD_NOT_FOUND
+            - CLUSTER_API_ERROR
+            - PATH_NOT_ALLOWED
+            - WORKER_UNREACHABLE
+            - WORKER_TIMEOUT
+        message: { type: string }

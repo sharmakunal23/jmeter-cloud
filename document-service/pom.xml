@@ -26,6 +26,9 @@
     </description>
 
     <properties>
+        <!-- Boot's parent compiles with the release flag set to ${java.version} (17 by default),
+             which silently overrides source/target. This is what makes it 21. -->
+        <java.version>21</java.version>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>

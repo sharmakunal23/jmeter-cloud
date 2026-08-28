@@ -1,6 +1,7 @@
 package com.perf.globalorchestrator.provision;
 
 import com.perf.globalorchestrator.client.LocalOrchestratorClient;
+import com.perf.globalorchestrator.client.WorkerRef;
 import com.perf.globalorchestrator.domain.Actor;
 import com.perf.globalorchestrator.domain.Application;
 import com.perf.globalorchestrator.domain.Pod;
@@ -100,7 +101,6 @@ public class PodRecycler {
     public RecycleSummary doSweep() {
         RecycleSummary summary = new RecycleSummary();
 
-        String currentImage = provisioner.currentImageDigest();
         // Cache application lookups by id — typical fleet has a small handful
         // of apps with many pods each.
         Map<String, Application> appCache = new HashMap<>();
@@ -132,7 +132,7 @@ public class PodRecycler {
             if (app == null) {
                 continue;
             }
-            RecycleReason reason = evaluator.decide(pod, app, currentImage);
+            RecycleReason reason = evaluator.decide(pod, app, provisioner.currentImageDigest(pod.region()));
             if (reason == RecycleReason.NONE) {
                 continue;
             }
@@ -222,7 +222,7 @@ public class PodRecycler {
             // PodRecycler operates outside a specific run — pass null so
             // the X-Run-Id header is omitted (the local-orch's MdcEnrichmentFilter
             // is null-safe and skips the header when missing).
-            localClient.drainTest(null, pod.baseUrl());
+            localClient.drainTest(null, WorkerRef.of(pod));
         } catch (RuntimeException e) {
             LOG.warn("Drain call to {} failed; proceeding to stopAndRemove: {}",
                     pod.baseUrl(), e.toString());
@@ -237,7 +237,7 @@ public class PodRecycler {
 
         // (3) Stop + remove the container.
         try {
-            provisioner.stopAndRemove(pod.podId());
+            provisioner.stopAndRemove(pod.region(), pod.podId());
         } catch (RuntimeException e) {
             // Continue — even a partially-removed container should let us
             // delete the registry row and spin a replacement with a
@@ -275,7 +275,7 @@ public class PodRecycler {
     private void captureDrainedLogs(Pod pod) {
         try {
             LocalOrchestratorClient.LogsResult logs =
-                    localClient.getLogs(pod.baseUrl(), 200, "jmeter");
+                    localClient.getLogs(WorkerRef.of(pod), 200, "jmeter");
             if (logs.statusCode() == 200 && logs.body() != null && !logs.body().isBlank()) {
                 LOG.info("[DRAINED-FORENSICS] pod={} app={} region={} runsServed={} — JMeter log tail (≤200 lines):\n{}",
                         pod.podId(), pod.applicationId(), pod.region(), pod.runsServed(), logs.body());

@@ -1,7 +1,6 @@
 # KUBE-1 — Flyway migration Job: the K8s equivalent of the compose
 # `flyway-migrate` one-shot service. Same two invocations (metrics +
-# globalrun; k8srun belongs to the standalone jmeter-orchestrator-k8s
-# deployment), same idempotency (re-runs no-op via flyway_schema_history).
+# globalrun), same idempotency (re-runs no-op via flyway_schema_history).
 #
 # There is no `depends_on` here — `-connectRetries=60` (~1 min of 1 s
 # retries per invocation) rides out postgres still coming up, and

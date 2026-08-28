@@ -7,7 +7,7 @@ import {
   type HealthStatus,
 } from "../api/applications";
 import { runsApi, type Run } from "../api/runs";
-import { regionsApi, type RegionCapacity } from "../api/regions";
+import { regionsApi, type RegionCapacity, type RegionStatus } from "../api/regions";
 import { cronJobsApi, isReportKind, type CronJobKind } from "../api/automation";
 import { useVisiblePolling } from "../hooks/useVisiblePolling";
 import { describeCron, formatInZone } from "../lib/cron";
@@ -86,13 +86,17 @@ export function HomePage() {
 
   async function refresh(signal?: AbortSignal) {
     try {
-      const [apps, backends, activeListing, regions] = await Promise.all([
+      const [apps, hubChecks, activeListing, regions, regionStatuses] = await Promise.all([
         applicationsApi.list(signal),
         Promise.all(BACKEND_CHECKS.map((c) => probeBackend(c, signal))),
         runsApi.listPage({ activeOnly: true, limit: 200 }, signal),
         regionsApi.list().catch(() => [] as RegionCapacity[]),
+        regionsApi.status(signal).catch(() => [] as RegionStatus[]),
       ]);
       const capacityByRegion = aggregateCapacityByRegion(apps, activeListing.runs, regions);
+      // Routed regions are checklist rows of their own: the regional
+      // orchestrator in that data center is a backend the hub depends on.
+      const backends = [...hubChecks, ...regionStatuses.filter((r) => r.routed).map(regionCheck)];
       setState({
         status: "ok",
         summary: {
@@ -468,6 +472,18 @@ function ChecklistRow({
 }
 
 // ── Backend probe ─────────────────────────────────────────────────
+
+/** A routed region's regional orchestrator, as the hub's probe last saw it. */
+function regionCheck(r: RegionStatus): PlatformCheck {
+  const status: HealthStatus =
+    r.reachable === true ? "HEALTHY" : r.reachable === false ? "UNHEALTHY" : "UNKNOWN";
+  return {
+    id: `region-${r.region}`,
+    label: `region ${r.region} (regional-orchestrator)`,
+    status,
+    detail: r.reachable === false ? (r.lastError ?? "unreachable") : r.url ?? undefined,
+  };
+}
 
 async function probeBackend(c: BackendCheck, signal?: AbortSignal): Promise<PlatformCheck> {
   const started = performance.now();

@@ -1,6 +1,7 @@
 package com.perf.globalorchestrator.service;
 
 import com.perf.globalorchestrator.client.LocalOrchestratorClient;
+import com.perf.globalorchestrator.client.WorkerRef;
 import com.perf.globalorchestrator.client.LocalOrchestratorClient.LogsResult;
 import com.perf.globalorchestrator.config.CacheConfig;
 import org.junit.jupiter.api.BeforeEach;
@@ -15,6 +16,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.times;
@@ -54,34 +56,34 @@ class CachingLogTailServiceTest {
     void reset() {
         Mockito.reset(localClient);
         cacheManager.getCache(CacheConfig.CACHE_MEMBER_LOGS).clear();
-        when(localClient.getLogs(anyString(), anyInt(), anyString()))
+        when(localClient.getLogs(any(WorkerRef.class), anyInt(), anyString()))
                 .thenReturn(new LogsResult(200, "frozen log body"));
     }
 
     @Test
     @DisplayName("terminal member: local orchestrator contacted once across two reads")
     void terminalMember_cached() {
-        service.getLogs("runT", "wkr-1", "http://wkr-1:8080", "console", 200, true);
-        service.getLogs("runT", "wkr-1", "http://wkr-1:8080", "console", 200, true);
-        verify(localClient, times(1)).getLogs("http://wkr-1:8080", 200, "console");
+        service.getLogs("runT", "wkr-1", new WorkerRef("local", "wkr-1", "http://wkr-1:8080"), "console", 200, true);
+        service.getLogs("runT", "wkr-1", new WorkerRef("local", "wkr-1", "http://wkr-1:8080"), "console", 200, true);
+        verify(localClient, times(1)).getLogs(new WorkerRef("local", "wkr-1", "http://wkr-1:8080"), 200, "console");
     }
 
     @Test
     @DisplayName("active member: every read hits the local orchestrator (never cached)")
     void activeMember_bypassed() {
-        service.getLogs("runA", "wkr-1", "http://wkr-1:8080", "console", 200, false);
-        service.getLogs("runA", "wkr-1", "http://wkr-1:8080", "console", 200, false);
-        verify(localClient, times(2)).getLogs("http://wkr-1:8080", 200, "console");
+        service.getLogs("runA", "wkr-1", new WorkerRef("local", "wkr-1", "http://wkr-1:8080"), "console", 200, false);
+        service.getLogs("runA", "wkr-1", new WorkerRef("local", "wkr-1", "http://wkr-1:8080"), "console", 200, false);
+        verify(localClient, times(2)).getLogs(new WorkerRef("local", "wkr-1", "http://wkr-1:8080"), 200, "console");
     }
 
     @Test
     @DisplayName("non-200 result (pod unreachable) is NOT cached, even for a terminal member")
     void nonOk_notCached() {
-        when(localClient.getLogs(anyString(), anyInt(), anyString()))
+        when(localClient.getLogs(any(WorkerRef.class), anyInt(), anyString()))
                 .thenReturn(new LogsResult(0, ""));
-        service.getLogs("runT", "gone", "http://gone:8080", "console", 200, true);
-        service.getLogs("runT", "gone", "http://gone:8080", "console", 200, true);
-        verify(localClient, times(2)).getLogs("http://gone:8080", 200, "console");
+        service.getLogs("runT", "gone", new WorkerRef("local", "gone", "http://gone:8080"), "console", 200, true);
+        service.getLogs("runT", "gone", new WorkerRef("local", "gone", "http://gone:8080"), "console", 200, true);
+        verify(localClient, times(2)).getLogs(new WorkerRef("local", "gone", "http://gone:8080"), 200, "console");
     }
 
     @Test
@@ -89,15 +91,15 @@ class CachingLogTailServiceTest {
     void keyIsolation() {
         // Same workerId + podBaseUrl, different runId (pod reused for run B):
         // must NOT serve run A's cached tail to run B.
-        service.getLogs("runA", "wkr-1", "http://wkr-1:8080", "console", 200, true);
-        service.getLogs("runB", "wkr-1", "http://wkr-1:8080", "console", 200, true);
+        service.getLogs("runA", "wkr-1", new WorkerRef("local", "wkr-1", "http://wkr-1:8080"), "console", 200, true);
+        service.getLogs("runB", "wkr-1", new WorkerRef("local", "wkr-1", "http://wkr-1:8080"), "console", 200, true);
         // Different stream + different tail are independent entries too.
-        service.getLogs("runA", "wkr-1", "http://wkr-1:8080", "jmeter", 200, true);
-        service.getLogs("runA", "wkr-1", "http://wkr-1:8080", "console", 1000, true);
-        verify(localClient, times(4)).getLogs(anyString(), anyInt(), anyString());
+        service.getLogs("runA", "wkr-1", new WorkerRef("local", "wkr-1", "http://wkr-1:8080"), "jmeter", 200, true);
+        service.getLogs("runA", "wkr-1", new WorkerRef("local", "wkr-1", "http://wkr-1:8080"), "console", 1000, true);
+        verify(localClient, times(4)).getLogs(any(WorkerRef.class), anyInt(), anyString());
 
         // Re-reading the first (runA/console/200) is now a hit — still 4.
-        service.getLogs("runA", "wkr-1", "http://wkr-1:8080", "console", 200, true);
-        verify(localClient, times(4)).getLogs(anyString(), anyInt(), anyString());
+        service.getLogs("runA", "wkr-1", new WorkerRef("local", "wkr-1", "http://wkr-1:8080"), "console", 200, true);
+        verify(localClient, times(4)).getLogs(any(WorkerRef.class), anyInt(), anyString());
     }
 }

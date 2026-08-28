@@ -127,6 +127,31 @@ public class PodRepository {
      * flipped back to IDLE — the sweeper window only matters for
      * "everyone forgot about you" cases.
      */
+    /**
+     * Registers a pod the control plane has just asked a region to create.
+     * It starts LOST — unclaimable — and becomes IDLE through {@link #heartbeat}
+     * once the kubelet reports it ready, so a run can never be fanned out to a
+     * worker whose HTTP is not up yet.
+     */
+    public void registerStarting(String podId, String region, String baseUrl, String applicationId) {
+        // A plain INSERT on purpose: the primary key is what makes concurrent
+        // spins (parallel provisioning, two operators) get distinct names —
+        // a loser sees DuplicateKeyException and allocates again.
+        jdbc.update(
+                "INSERT INTO \"globalOrchestrator\".\"pod\" "
+                + "(\"podId\",\"region\",\"baseUrl\",\"state\",\"lastHeartbeat\",\"applicationId\") "
+                + "VALUES (?,?,?,'LOST', now(), ?)",
+                podId, region, baseUrl, applicationId);
+    }
+
+    /** Marks one pod LOST; returns 1 only on the transition, so callers act on it exactly once. */
+    public int markLost(String podId) {
+        return jdbc.update(
+                "UPDATE \"globalOrchestrator\".\"pod\" SET \"state\"='LOST' "
+                + "WHERE \"podId\"=? AND \"state\" NOT IN ('LOST', 'DRAINING_FOR_RECYCLE')",
+                podId);
+    }
+
     public int heartbeat(String podId) {
         // DRAINING_FOR_RECYCLE is preserved
         // through the heartbeat (pod is mid-recycle; flipping back to
@@ -145,15 +170,33 @@ public class PodRepository {
      * Returns the number of pods flipped — useful as a metric.
      */
     public int markLostBefore(Instant cutoff) {
+        return markLostBefore(cutoff, List.of());
+    }
+
+    /**
+     * Heartbeat-age LOST, skipping {@code excludedRegions}: a routed region's
+     * dynamic workers are judged by the kubelet ({@code WorkerLivenessProbe}),
+     * never by silence — a regional that is down does not mean its workers are.
+     */
+    public int markLostBefore(Instant cutoff, List<String> excludedRegions) {
         // DRAINING_FOR_RECYCLE pods may go silent
         // while their container is being stopped. Don't relabel them LOST;
         // the recycle path is the authoritative driver for these rows.
+        if (excludedRegions == null || excludedRegions.isEmpty()) {
+            return jdbc.update(
+                    "UPDATE \"globalOrchestrator\".\"pod\" "
+                    + "SET \"state\"='LOST' "
+                    + "WHERE \"state\" NOT IN ('LOST', 'DRAINING_FOR_RECYCLE') "
+                    + "  AND \"lastHeartbeat\" < ?",
+                    Timestamp.from(cutoff));
+        }
         return jdbc.update(
                 "UPDATE \"globalOrchestrator\".\"pod\" "
                 + "SET \"state\"='LOST' "
                 + "WHERE \"state\" NOT IN ('LOST', 'DRAINING_FOR_RECYCLE') "
-                + "  AND \"lastHeartbeat\" < ?",
-                Timestamp.from(cutoff));
+                + "  AND \"lastHeartbeat\" < ? "
+                + "  AND NOT (\"source\"='DYNAMIC' AND \"region\" = ANY (?))",
+                Timestamp.from(cutoff), excludedRegions.toArray(new String[0]));
     }
 
     /**

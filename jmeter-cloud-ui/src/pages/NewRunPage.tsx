@@ -430,7 +430,7 @@ export function NewRunPage() {
         // When spinShortfall is on, this stage actually spins pods —
         // worth a "spinning…" subtext so the operator knows where the
         // 10–30 s wait is going.
-        detail: req.spinShortfall ? "Spinning fresh pods to fill the shortfall" : undefined,
+        detail: req.spinShortfall ? "Provisioning workers to fill the shortfall" : undefined,
         status: req.spinShortfall ? "active" : "skipped",
       },
       { id: "workersReady",   label: "Workers ready",          status: "active" },
@@ -463,10 +463,31 @@ export function NewRunPage() {
    */
   async function pollUntilLive(runId: string, navigateOnDone: () => void) {
     let attempts = 0;
-    while (attempts < 120 /* ~3 minutes */) {
-      attempts++;
+    let preparingTicks = 0;
+    while (attempts < 120 /* ~3 minutes once workers exist */ && preparingTicks < 400 /* ~10 min provisioning */) {
       try {
         const snap = await runsApi.status(runId);
+        // Async launch: the hub provisions the shortfall in the background and
+        // reports progress in stateReason. Stay on the provisioning stage —
+        // never show the operator an empty run page.
+        if (snap.state === "PREPARING") {
+          preparingTicks++;
+          patchStage("provisioning", { status: "active", detail: snap.stateReason ?? "Provisioning workers…" });
+          await sleep(1500);
+          continue;
+        }
+        if (snap.state === "FAILED" && snap.members.length === 0) {
+          patchStage("provisioning", { status: "failed" });
+          setProgressError(snap.stateReason ?? "Provisioning failed — see the run's events.");
+          return;
+        }
+        attempts++;
+        setProgressStages((prev) => prev?.map((s) => {
+          if (s.id === "provisioning" && s.status === "active") return { ...s, status: "done" as const, detail: undefined };
+          if (s.id === "workersReady" && s.status !== "done") return { ...s, status: "done" as const };
+          if (s.id === "distributing" && s.status === "pending") return { ...s, status: "active" as const };
+          return s;
+        }) ?? prev);
         const states = snap.members.map((m) => m.state);
         const anyRunning = states.includes("RUNNING");
         const allRunning = states.length > 0 && states.every((s) => s === "RUNNING");
@@ -528,12 +549,17 @@ export function NewRunPage() {
     setProgressStages(initialStages(req));
     try {
       const run = await runsApi.start(req, opts);
-      // POST returned. Provisioning + workersReady are done. Stage 3 active.
+      // POST returned. A PREPARING run is being provisioned in the background —
+      // keep the provisioning stage live and let pollUntilLive advance it.
+      // Otherwise provisioning + workersReady are done and stage 3 is active.
+      const preparing = run.state === "PREPARING";
       setProgressStages((prev) => prev?.map((s) => {
-        if (s.id === "provisioning")  return { ...s, status: s.status === "skipped" ? "skipped" : "done" };
-        if (s.id === "workersReady")  return { ...s, status: "done" };
-        if (s.id === "distributing")  return { ...s, status: "active" };
-        if (s.id === "startingJmeter") return { ...s, status: "active" };
+        if (s.id === "provisioning")  return preparing
+          ? { ...s, status: "active", detail: run.stateReason ?? "Provisioning workers…" }
+          : { ...s, status: s.status === "skipped" ? "skipped" : "done" };
+        if (s.id === "workersReady")  return { ...s, status: preparing ? "pending" : "done" };
+        if (s.id === "distributing")  return { ...s, status: preparing ? "pending" : "active" };
+        if (s.id === "startingJmeter") return { ...s, status: preparing ? "pending" : "active" };
         return s;
       }) ?? prev);
       const appSeg = encodeURIComponent(application.trim() || "_");

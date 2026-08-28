@@ -1,0 +1,34 @@
+# Least-privilege identity for the regional orchestrator's K8sPodProvisioner:
+# namespace-scoped Role, pods only, no secrets/exec/portforward verbs. This
+# ServiceAccount is the only cluster credential the platform holds — the
+# global orchestrator never has one.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jmeter-regional-orchestrator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: worker-pod-manager
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "delete", "get", "list", "watch"]
+  # pods/log is a separate subresource: the relay's fallback for a dead
+  # worker's logs (api/v1/logs → kubelet container log) needs it.
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jmeter-regional-orchestrator-worker-pod-manager
+subjects:
+  - kind: ServiceAccount
+    name: jmeter-regional-orchestrator
+roleRef:
+  kind: Role
+  name: worker-pod-manager
+  apiGroup: rbac.authorization.k8s.io

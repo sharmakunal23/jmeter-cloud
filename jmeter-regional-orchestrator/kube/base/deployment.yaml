@@ -1,0 +1,76 @@
+# jmeter-regional-orchestrator: stateless, one per cluster. Creates worker
+# Pods under the ServiceAccount in rbac.yaml and relays the global's worker
+# calls. Nothing here needs a database, Redis or mail.
+#
+# REGION is intentionally absent from the base — every overlay MUST set it,
+# and the app refuses to boot without it (a wrong default would mislabel
+# every worker it creates).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jmeter-regional-orchestrator
+  labels:
+    app: jmeter-regional-orchestrator
+spec:
+  # Stateless → any replica count is safe; 1 is plenty (a relay call costs
+  # a virtual thread, and pod creation is a single API call).
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jmeter-regional-orchestrator
+  template:
+    metadata:
+      labels:
+        app: jmeter-regional-orchestrator
+    spec:
+      serviceAccountName: jmeter-regional-orchestrator
+      # Service-link env injection (…_PORT=tcp://…) collides with the
+      # ${HTTP_PORT} style bindings; DNS is the discovery mechanism.
+      enableServiceLinks: false
+      containers:
+        - name: regional-orchestrator
+          image: jmeter-regional-orchestrator:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8088
+          env:
+            - name: HTTP_PORT
+              value: "8088"
+            - name: PODPROVISIONER_NAMESPACE
+              value: jmeter-cloud
+            - name: PODPROVISIONER_HEADLESS_SERVICE
+              value: workers
+            - name: PODPROVISIONER_IMAGE
+              value: jmeter-local-orchestrator:dev
+            # The hub's data-plane services as reachable FROM INSIDE this
+            # cluster — stamped onto workers for ingest and artifacts. Compose
+            # names by default (bridge Services on kind); overlays patch in
+            # ingress hostnames for a real cloud. Workers never call the hub's
+            # control plane (no GLOBAL_ORCHESTRATOR_URL).
+            - name: PODPROVISIONER_METRICS_INGEST_URL
+              value: http://metrics-consumer:8083/api/v1/ingest
+            - name: DOCUMENT_SERVICE_URL
+              value: http://document-service:8084
+          # 768Mi, not "256m heap + a bit": fabric8's Kubernetes model puts
+          # ~250 MB of classes in metaspace + code cache on top of the heap.
+          # At 384Mi both regionals were OOMKilled two minutes after boot in
+          # the first two-cluster smoke (2026-08-28) — quietly, because the
+          # kubelet restarted them.
+          resources:
+            requests:
+              memory: 512Mi
+            limits:
+              memory: 768Mi
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8088
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8088
+            initialDelaySeconds: 30
+            periodSeconds: 10

@@ -46,22 +46,22 @@ public class StaticPodProvisioner implements PodProvisioner {
     }
 
     @Override
-    public void stopAndRemove(String podName) {
+    public void stopAndRemove(String region, String podName) {
         throw new ProvisioningDisabledException("stop and remove worker " + podName);
     }
 
     @Override
-    public void stop(String podName) {
+    public void stop(String region, String podName) {
         throw new ProvisioningDisabledException("stop worker " + podName);
     }
 
     @Override
-    public void start(String podName) {
+    public void start(String region, String podName) {
         throw new ProvisioningDisabledException("start worker " + podName);
     }
 
     @Override
-    public void restart(String podName) {
+    public void restart(String region, String podName) {
         throw new ProvisioningDisabledException("restart worker " + podName);
     }
 
@@ -69,7 +69,7 @@ public class StaticPodProvisioner implements PodProvisioner {
 
     /** True when the control plane has a registry row for this pod. */
     @Override
-    public boolean exists(String podName) {
+    public boolean exists(String region, String podName) {
         return find(podName).isPresent();
     }
 
@@ -80,7 +80,7 @@ public class StaticPodProvisioner implements PodProvisioner {
      * that the worker is still being seen.
      */
     @Override
-    public boolean isRunning(String podName) {
+    public boolean isRunning(String region, String podName) {
         return find(podName)
                 .map(p -> p.state() != PodState.LOST)
                 .orElse(false);
@@ -88,8 +88,8 @@ public class StaticPodProvisioner implements PodProvisioner {
 
     /**
      * Registry-derived view of the declared fleet. {@code status} is
-     * {@code "running"} / {@code "unreachable"} rather than a docker
-     * container state — there is no daemon to report one.
+     * {@code "running"} / {@code "unreachable"} rather than a Pod phase —
+     * there is no cluster to report one.
      *
      * @param region nullable — when null, every region for the application
      */
@@ -121,7 +121,7 @@ public class StaticPodProvisioner implements PodProvisioner {
      * exactly right: an operator-managed rollout is not ours to police.
      */
     @Override
-    public String currentImageDigest() {
+    public String currentImageDigest(String region) {
         return null;
     }
 
@@ -133,7 +133,7 @@ public class StaticPodProvisioner implements PodProvisioner {
      * computable default.
      */
     @Override
-    public String baseUrlFor(String podName) {
+    public String baseUrlFor(String region, String podName) {
         return find(podName)
                 .map(Pod::baseUrl)
                 .orElseThrow(() -> new IllegalStateException(

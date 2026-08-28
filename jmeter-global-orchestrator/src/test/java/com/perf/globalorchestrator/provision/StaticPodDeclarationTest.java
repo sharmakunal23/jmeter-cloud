@@ -43,7 +43,7 @@ class StaticPodDeclarationTest {
             "a",
             "01worker"
     })
-    @DisplayName("accepts real Kubernetes Pod / Docker container names")
+    @DisplayName("accepts real Kubernetes Pod and host names")
     void acceptsRealisticNames(String name) {
         assertThat(StaticPodDeclaration.of(name, URL).podName()).isEqualTo(name);
     }

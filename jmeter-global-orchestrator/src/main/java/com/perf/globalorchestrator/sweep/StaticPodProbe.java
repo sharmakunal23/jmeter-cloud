@@ -1,6 +1,7 @@
 package com.perf.globalorchestrator.sweep;
 
 import com.perf.globalorchestrator.client.LocalOrchestratorClient;
+import com.perf.globalorchestrator.client.WorkerRef;
 import com.perf.globalorchestrator.domain.Pod;
 import com.perf.globalorchestrator.domain.PodSource;
 import com.perf.globalorchestrator.provision.ConditionalOnProvisioningMode;
@@ -156,7 +157,7 @@ public class StaticPodProbe {
                     + "valid address.", pod.podId());
             return false;
         }
-        boolean healthy = localOrchestrators.isHealthy(pod.baseUrl());
+        boolean healthy = localOrchestrators.isHealthy(WorkerRef.of(pod));
         if (!healthy) {
             return false;
         }

@@ -3,6 +3,7 @@ package com.perf.globalorchestrator.http;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.perf.globalorchestrator.client.LocalOrchestratorClient;
+import com.perf.globalorchestrator.client.WorkerRef;
 import com.perf.globalorchestrator.domain.Application;
 import com.perf.globalorchestrator.domain.ApplicationCapacity;
 import com.perf.globalorchestrator.domain.Pod;
@@ -140,6 +141,18 @@ public class CapacityController {
                 .map(ApplicationCapacity::maxAvailable)
                 .orElse(0);
         List<Pod> rows = pods.findByApplicationAndRegion(applicationId, region);
+        // One substrate call for the whole list — per-pod isRunning would be
+        // one HTTP round-trip to the region per row.
+        java.util.Map<String, String> liveStatus = new java.util.HashMap<>();
+        boolean substrateReachable = true;
+        try {
+            for (com.perf.globalorchestrator.provision.ProvisionedPod c : provisioner.listFor(applicationId, region)) {
+                liveStatus.put(c.podName(), c.status());
+            }
+        } catch (Exception e) {
+            // Region unreachable — report every container as not running rather than 500'ing the list.
+            substrateReachable = false;
+        }
         List<PodView> views = new ArrayList<>(rows.size());
         int inUse = 0;
         for (Pod p : rows) {
@@ -160,17 +173,15 @@ public class CapacityController {
                 podState = "UNKNOWN";
             } else switch (p.state()) {
                 case IDLE -> podState = "READY";
-                case LOST -> podState = "LOST";
+                // A freshly spun pod is LOST (unclaimable) until the kubelet
+                // reports it ready — show that as STARTING, not a failure.
+                case LOST -> podState = (p.runsServed() == 0 && p.provisionedAt() != null
+                        && p.provisionedAt().isAfter(java.time.Instant.now().minusSeconds(180)))
+                        ? "STARTING" : "LOST";
                 default   -> podState = p.state().name();
             }
             if (binding.isPresent()) inUse++;
-            boolean containerRunning;
-            try {
-                containerRunning = provisioner.isRunning(p.podId());
-            } catch (Exception e) {
-                // Daemon unreachable — return false rather than 500'ing the whole list.
-                containerRunning = false;
-            }
+            boolean containerRunning = substrateReachable && "running".equals(liveStatus.get(p.podId()));
             views.add(new PodView(
                     p.podId(),
                     podState,
@@ -212,6 +223,7 @@ public class CapacityController {
         body.put("applicationId", applicationId);
         body.put("region",        region);
         body.put("baseUrl",       result.baseUrl());
+        body.put("ready",         result.ready());
         body.put("provisioned",   provisioned + 1);
         body.put("maxAvailable",  max);
         return ResponseEntity.status(HttpStatus.CREATED).body(body);
@@ -279,7 +291,8 @@ public class CapacityController {
             }
         }
 
-        boolean reachable = localOrchestrators.isHealthy(declaration.baseUrl());
+        boolean reachable = localOrchestrators.isHealthy(
+                new WorkerRef(region, declaration.podName(), declaration.baseUrl()));
         if (!reachable && !force) {
             throw new WorkerUnreachableException(declaration.podName(), declaration.baseUrl());
         }
@@ -331,7 +344,7 @@ public class CapacityController {
         provisioning.requireDynamic("restart worker " + podName);
         requireApp(applicationId);
         requirePodBoundToAppRegion(applicationId, region, podName);
-        provisioner.restart(podName);
+        provisioner.restart(region, podName);
         return ResponseEntity.ok(Map.of("podName", podName, "restarted", true));
     }
 
@@ -375,7 +388,7 @@ public class CapacityController {
             // zombie run itself is POST /runs/{runId}/abort.
             boolean containerRunning;
             try {
-                containerRunning = provisioner.isRunning(podName);
+                containerRunning = provisioner.isRunning(region, podName);
             } catch (Exception e) {
                 // Daemon unreachable → can't be running → treat as stale.
                 containerRunning = false;
@@ -394,7 +407,7 @@ public class CapacityController {
         }
         boolean containerStopped = provisioning.isDynamic();
         if (containerStopped) {
-            provisioner.stopAndRemove(podName);
+            provisioner.stopAndRemove(region, podName);
         } else {
             LOG.info("Undeclared operator-managed worker {} from applicationId={} region={} — "
                     + "registry row removed; the worker itself is left running.",

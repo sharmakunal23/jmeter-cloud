@@ -1,6 +1,7 @@
 package com.perf.globalorchestrator.provision;
 
 import org.junit.jupiter.api.DisplayName;
+import com.perf.globalorchestrator.region.RegionProperties;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -13,7 +14,7 @@ class ProvisioningPropertiesTest {
     @Test
     @DisplayName("defaults: DYNAMIC, no region override, 'region' vocabulary")
     void defaults() {
-        ProvisioningProperties props = new ProvisioningProperties("DYNAMIC", "");
+        ProvisioningProperties props = new ProvisioningProperties("DYNAMIC", new RegionProperties(""));
         assertThat(props.mode()).isEqualTo(ProvisioningMode.DYNAMIC);
         assertThat(props.isDynamic()).isTrue();
         assertThat(props.isStatic()).isFalse();
@@ -24,7 +25,7 @@ class ProvisioningPropertiesTest {
     @Test
     @DisplayName("static mode flips the UI vocabulary to dataCenter (API/schema keep saying region)")
     void staticModeUsesDataCenterVocabulary() {
-        ProvisioningProperties props = new ProvisioningProperties("STATIC", "na-east,na-west");
+        ProvisioningProperties props = new ProvisioningProperties("STATIC", new RegionProperties("na-east,na-west"));
         assertThat(props.isStatic()).isTrue();
         assertThat(props.regionLabel()).isEqualTo("dataCenter");
         assertThat(props.regions()).containsExactly("na-east", "na-west");
@@ -34,13 +35,13 @@ class ProvisioningPropertiesTest {
     @DisplayName("region list is trimmed, blank-free, deduplicated, and order-preserving")
     void parsesRegionList() {
         ProvisioningProperties props =
-                new ProvisioningProperties("STATIC", " na-east , ,na-west,na-east ,");
+                new ProvisioningProperties("STATIC", new RegionProperties(" na-east , ,na-west,na-east ,"));
         assertThat(props.regions()).containsExactly("na-east", "na-west");
     }
 
     @Test
     void regionsAreImmutable() {
-        ProvisioningProperties props = new ProvisioningProperties("STATIC", "na-east");
+        ProvisioningProperties props = new ProvisioningProperties("STATIC", new RegionProperties("na-east"));
         assertThatThrownBy(() -> props.regions().add("sneaky"))
                 .isInstanceOf(UnsupportedOperationException.class);
     }
@@ -48,11 +49,11 @@ class ProvisioningPropertiesTest {
     @Test
     @DisplayName("requireDynamic is a no-op in dynamic mode and 409-shaped in static mode")
     void requireDynamicGuard() {
-        assertThatCode(() -> new ProvisioningProperties("DYNAMIC", "").requireDynamic("spin a worker"))
+        assertThatCode(() -> new ProvisioningProperties("DYNAMIC", new RegionProperties("")).requireDynamic("spin a worker"))
                 .doesNotThrowAnyException();
 
         assertThatThrownBy(() ->
-                new ProvisioningProperties("STATIC", "").requireDynamic("spin a worker"))
+                new ProvisioningProperties("STATIC", new RegionProperties("")).requireDynamic("spin a worker"))
                 .isInstanceOf(ProvisioningDisabledException.class)
                 .hasMessageContaining("cannot spin a worker")
                 .hasMessageContaining("operator-managed");
@@ -61,7 +62,7 @@ class ProvisioningPropertiesTest {
     @Test
     @DisplayName("an unparseable mode fails construction — the boot must not come up half-armed")
     void unparseableModeFailsFast() {
-        assertThatThrownBy(() -> new ProvisioningProperties("statics", ""))
+        assertThatThrownBy(() -> new ProvisioningProperties("statics", new RegionProperties("")))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

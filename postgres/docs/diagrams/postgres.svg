@@ -1,24 +1,24 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 420" font-family="-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 420" width="1000" height="420" font-family="-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
   <defs>
     <marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 z" fill="#475569"/></marker>
   </defs>
-  <rect width="1000" height="420" fill="#ffffff"/>
+  <rect width="1000" height="420" fill="#fafaf9"/>
   <text x="30" y="34" font-size="19" font-weight="700" fill="#0f172a">postgres — two databases, role-scoped access</text>
   <text x="30" y="56" font-size="12.5" fill="#64748b">Flyway-migrated. Metrics store is partitioned weekly; least-privilege writer / reader roles.</text>
 
   <!-- writers/readers column -->
   <g font-size="11.5">
-    <rect x="30" y="96" width="180" height="48" rx="8" fill="#dbeafe" stroke="#1e40af" stroke-width="1.4"/>
-    <text x="120" y="116" text-anchor="middle" font-weight="600" font-size="12" fill="#1e3a8a">metrics-consumer</text>
-    <text x="120" y="133" text-anchor="middle" font-size="10" fill="#2563eb">metricsWriter</text>
+    <rect x="30" y="96" width="236" height="48" rx="8" fill="#dbeafe" stroke="#1e40af" stroke-width="1.4"/>
+    <text x="148" y="116" text-anchor="middle" font-weight="600" font-size="12" fill="#1e3a8a">metrics-consumer</text>
+    <text x="148" y="133" text-anchor="middle" font-size="10" fill="#2563eb">metricsWriter</text>
 
-    <rect x="30" y="186" width="180" height="48" rx="8" fill="#dbeafe" stroke="#1e40af" stroke-width="1.4"/>
-    <text x="120" y="206" text-anchor="middle" font-weight="600" font-size="12" fill="#1e3a8a">global-orchestrator</text>
-    <text x="120" y="223" text-anchor="middle" font-size="10" fill="#2563eb">metricsReader · globalOrchestratorWriter</text>
+    <rect x="30" y="186" width="236" height="48" rx="8" fill="#dbeafe" stroke="#1e40af" stroke-width="1.4"/>
+    <text x="148" y="206" text-anchor="middle" font-weight="600" font-size="12" fill="#1e3a8a">global-orchestrator</text>
+    <text x="148" y="223" text-anchor="middle" font-size="10" fill="#2563eb">metricsReader · globalOrchestratorWriter</text>
 
-    <rect x="30" y="276" width="180" height="48" rx="8" fill="#e0e7ff" stroke="#4f46e5" stroke-width="1.4"/>
-    <text x="120" y="296" text-anchor="middle" font-weight="600" font-size="12" fill="#3730a3">Grafana</text>
-    <text x="120" y="313" text-anchor="middle" font-size="10" fill="#4f46e5">metricsReader (read-only)</text>
+    <rect x="30" y="276" width="236" height="48" rx="8" fill="#e0e7ff" stroke="#4f46e5" stroke-width="1.4"/>
+    <text x="148" y="296" text-anchor="middle" font-weight="600" font-size="12" fill="#3730a3">Grafana</text>
+    <text x="148" y="313" text-anchor="middle" font-size="10" fill="#4f46e5">metricsReader (read-only)</text>
   </g>
 
   <!-- databases -->
@@ -46,12 +46,12 @@
   </g>
 
   <g stroke="#475569" stroke-width="1.6" fill="none" marker-end="url(#a)">
-    <path d="M210,120 H300 Q330,120 360,135 L428,150"/>
-    <path d="M210,210 Q330,200 428,170"/>
-    <path d="M210,210 Q330,250 428,290"/>
+    <path d="M266,120 H300 Q330,120 360,135 L428,150"/>
+    <path d="M266,210 Q330,200 428,170"/>
+    <path d="M266,210 Q330,250 428,290"/>
   </g>
   <g stroke="#4f46e5" stroke-width="1.5" fill="none" stroke-dasharray="2 4" marker-end="url(#a)">
-    <path d="M210,300 Q330,260 428,200"/>
+    <path d="M266,300 Q330,260 428,200"/>
   </g>
   <g stroke="#059669" stroke-width="1.5" fill="none" stroke-dasharray="4 2" marker-end="url(#a)">
     <path d="M780,180 Q740,150 712,150"/>
@@ -59,8 +59,8 @@
   </g>
 
   <g font-size="10.5" fill="#64748b">
-    <text x="320" y="118" text-anchor="middle">INSERT</text>
-    <text x="320" y="166" text-anchor="middle">read · R/W</text>
+    <text x="320" y="110" text-anchor="middle">INSERT</text>
+    <text x="330" y="172" text-anchor="middle">read · R/W</text>
     <text x="320" y="320" text-anchor="middle" fill="#4f46e5">SELECT</text>
     <text x="760" y="140" text-anchor="middle" fill="#047857">DDL</text>
   </g>

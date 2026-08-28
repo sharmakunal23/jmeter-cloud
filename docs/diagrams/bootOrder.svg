@@ -5,7 +5,7 @@
       <path d="M0,0 L0,6 L7,3 z" fill="#64748b"/>
     </marker>
   </defs>
-  <rect width="900" height="392" fill="#ffffff"/>
+  <rect width="900" height="392" fill="#fafaf9"/>
 
   <text x="16" y="26" font-size="15" font-weight="700" fill="#0f172a">Boot order — docker compose up</text>
   <text x="16" y="44" font-size="10" fill="#64748b">Every arrow is a `depends_on` edge — waits for healthy, or for a one-shot to complete. Cold build ≈ 5 min, warm ≈ 30 s.</text>
@@ -68,7 +68,7 @@
     <path d="M225,100 L232,136"/>
     <path d="M244,182 L232,218"/>
     <path d="M262,100 C300,116 380,120 404,218"/>
-    <path d="M300,161 L326,161 C360,161 396,180 410,218"/>
+    <path d="M338,161 C372,161 398,180 410,218"/>
     <path d="M415,100 L415,136 L415,218" stroke-dasharray="0"/>
     <path d="M288,100 C430,132 700,140 736,218"/>
     <path d="M412,264 L412,308"/>

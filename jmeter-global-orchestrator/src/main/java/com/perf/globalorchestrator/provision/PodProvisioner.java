@@ -3,87 +3,65 @@ package com.perf.globalorchestrator.provision;
 import java.util.List;
 
 /**
- * Phase 1 of the capacity rework. The global-orchestrator owns the lifecycle
- * of local-orchestrator containers — instead of being statically declared
- * in docker-compose, pods are spun up on demand bound to a specific
- * application. The local-only implementation drives the host docker daemon
- * via a mounted unix socket; a future K8s implementation will sit behind
- * the same interface.
+ * Lifecycle of the worker pods the control plane owns under
+ * {@code PROVISIONING_MODE=DYNAMIC} — spun up on demand, bound to one
+ * application, addressed by {@code (region, podName)} because each region's
+ * pods live in a different cluster. {@link RegionalPodProvisioner} forwards
+ * every call to that region's {@code jmeter-regional-orchestrator};
+ * {@link StaticPodProvisioner} answers reads from the registry and refuses
+ * writes.
  *
- * <h2>Identity</h2>
- * Container name == network hostname == pod registry key. The convention is
- * {@code {applicationName}-{region}-worker-{n}}. Operations are addressed by
- * that name; the provisioner doesn't track its own state.
- *
- * <h2>Idempotency</h2>
- * {@link #createAndStart(PodSpec)} is idempotent on {@code podName}:
- * if a container with that name already exists, it's started (no-op if
- * already running) rather than rejected. Callers that want strict
- * "must not exist" semantics check {@link #exists(String)} first.
+ * <p>Pod name == network hostname == registry key, allocated as
+ * {@code {applicationName}-{region}-worker-{n}}. {@link #createAndStart} is
+ * idempotent on the name: a live pod is reused, a terminal one recreated.
  */
 public interface PodProvisioner {
 
-    /**
-     * Creates the container if missing, then starts it. Returns a
-     * {@link ProvisionResult} carrying the URL the global-orchestrator can
-     * reach the pod at (e.g. {@code http://payments-east-worker-1:8080})
-     * plus the image digest + creation timestamp WORKER-HYGIENE Phase B
-     * records on the pod row.
-     */
+    /** Creates the pod if missing, then starts it; returns what the registry records. */
     ProvisionResult createAndStart(PodSpec spec);
 
+    /** Deletes the pod. No-op if missing. */
+    void stopAndRemove(String region, String podName);
+
+    /** Bare Pods have no stopped state — same as {@link #stopAndRemove}. */
+    void stop(String region, String podName);
+
+    /** No-op on a live pod, recreates a terminal one; throws {@link IllegalStateException} if missing. */
+    void start(String region, String podName);
+
+    /** Delete-and-recreate. Throws {@link IllegalStateException} if missing. */
+    void restart(String region, String podName);
+
+    boolean exists(String region, String podName);
+
+    /** Process up (Pod phase Running) — not application health. */
+    boolean isRunning(String region, String podName);
+
+    /** Answering its readiness probe — the worker's HTTP is up. Defaults to {@link #isRunning}. */
+    default boolean isReady(String region, String podName) {
+        return isRunning(region, podName);
+    }
+
     /**
-     * Stops the container and removes it from the daemon. No-op if missing.
-     * Drain calls this once the registry row + run-claim accounting is
-     * cleared (Phase 3).
-     */
-    void stopAndRemove(String podName);
-
-    /** Stops a running container without removing it. No-op if missing. */
-    void stop(String podName);
-
-    /** Starts a previously-stopped container. Throws if the container is missing. */
-    void start(String podName);
-
-    /** Stop + start in sequence. Throws if the container is missing. */
-    void restart(String podName);
-
-    /** True if a container with this name exists in any state (running, exited, created). */
-    boolean exists(String podName);
-
-    /** True if a container with this name exists AND is currently running. */
-    boolean isRunning(String podName);
-
-    /**
-     * Lists all containers managed by this provisioner (label-tagged) for
-     * the given application + region. Used by the Phase 2 reconciler at
-     * boot and by {@code GET /capacity/.../pods} in Phase 3 to cross-check
-     * registry rows against the daemon.
-     *
-     * @param applicationId required
-     * @param region        nullable — when null, returns all regions for the app
+     * Pods managed for an application, narrowed to a region or across all
+     * regions when {@code region} is null. {@code applicationId} is required.
      */
     List<ProvisionedPod> listFor(String applicationId, String region);
 
     /**
-     * Returns the sha256 ID of the configured
-     * pod image (e.g. {@code jmeter-local-orchestrator:dev}) as the
-     * daemon currently sees it. The recycler diffs this against
-     * {@code pod.imageDigest} to detect "image was rebuilt; recycle
-     * stale pods." Returns {@code null} when the daemon can't be
-     * reached or the image isn't present — caller treats null as
-     * "skip the image-mismatch check this tick."
+     * Every pod the substrate manages in a region, whatever the application —
+     * the reconciler's view after a registry wipe. Default: nothing.
      */
-    String currentImageDigest();
+    default List<ProvisionedPod> listAll(String region) {
+        return List.of();
+    }
 
     /**
-     * KUBE-5 Option A — the URL the orchestrator (and the fan-out path)
-     * reaches this pod at: the same value {@code createAndStart} returns in
-     * its {@link ProvisionResult}, computable without the pod existing. The
-     * shape is substrate-specific ({@code http://{podName}:8080} on the
-     * docker network vs {@code http://{podName}.{headlessService}:8080} on
-     * K8s), so the reconciler delegates here when adopting an orphan whose
-     * registry row is gone instead of hardcoding the docker shape.
+     * The image identity the recycler diffs {@code pod.imageDigest} against;
+     * {@code null} means "unknown — skip the image-mismatch check this tick".
      */
-    String baseUrlFor(String podName);
+    String currentImageDigest(String region);
+
+    /** The URL the pod is reachable at inside its region, valid before the pod exists. */
+    String baseUrlFor(String region, String podName);
 }

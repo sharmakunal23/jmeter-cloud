@@ -15,16 +15,18 @@ and folds their metrics back into one view. It runs on a laptop with
 ![Service topology and data flow](docs/diagrams/architecture.svg)
 
 The **control plane** is the UI talking to the global-orchestrator, which owns
-run state, per-application capacity and the worker registry. The **data plane**
-is N worker pods, each running JMeter and shipping metrics of its own accord —
-workers never wait on the orchestrator to collect anything. **Storage** is a single
-database holding both run state and metrics, with a dashboard alongside for
-drill-down.
+run state, per-application capacity and the worker registry — and holds no
+cluster credential. Each data center runs one stateless
+**regional-orchestrator**: it creates that region's worker Pods, reports their
+liveness straight from the Pod list, and relays the global's calls to them. The
+**data plane** is N worker pods, each running JMeter and shipping metrics of its
+own accord. **Storage** is a single database holding both run state and metrics,
+with a dashboard alongside for drill-down.
 
-Two things worth knowing: workers **self-register and heartbeat**, so the
-orchestrator discovers its fleet rather than being told about it; and metrics go
-**straight from worker to metrics-consumer**, never through the orchestrator, so
-the control plane is never in the metrics hot path.
+Two things worth knowing: a worker's liveness is **the kubelet's word**, not a
+heartbeat — a dead worker's reason (`OOMKilled`, `Unschedulable`) reaches the
+run that lost it; and metrics go **straight from worker to metrics-consumer**,
+never through an orchestrator, so no control plane is in the metrics hot path.
 
 ## How one sample becomes a chart
 

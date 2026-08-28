@@ -1,6 +1,9 @@
 package com.perf.globalorchestrator.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.perf.globalorchestrator.region.RegionProperties;
+import com.perf.globalorchestrator.region.RegionRegistry;
+import com.perf.globalorchestrator.region.RegionRouter;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,6 +31,7 @@ class LocalOrchestratorClientHeaderTest {
     private String baseUrl;
     private final AtomicReference<String> capturedRunIdHeader = new AtomicReference<>();
     private LocalOrchestratorClient client;
+    private WorkerRef worker;
 
     @BeforeEach
     void startServer() throws Exception {
@@ -39,7 +43,9 @@ class LocalOrchestratorClientHeaderTest {
         });
         server.start();
         baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
-        client = new LocalOrchestratorClient(new ObjectMapper());
+        client = new LocalOrchestratorClient(new ObjectMapper(),
+                new RegionRouter(new RegionRegistry(new RegionProperties(""))));
+        worker = new WorkerRef("local", "w-1", baseUrl);
     }
 
     @AfterEach
@@ -49,31 +55,31 @@ class LocalOrchestratorClientHeaderTest {
 
     @Test
     void startTestSetsXRunIdHeaderWhenRunIdProvided() {
-        client.startTest("run-abc-123", baseUrl, Map.of("foo", "bar"));
+        client.startTest("run-abc-123", worker, Map.of("foo", "bar"));
         assertThat(capturedRunIdHeader.get()).isEqualTo("run-abc-123");
     }
 
     @Test
     void startTestOmitsXRunIdHeaderWhenRunIdNull() {
-        client.startTest(null, baseUrl, Map.of("foo", "bar"));
+        client.startTest(null, worker, Map.of("foo", "bar"));
         assertThat(capturedRunIdHeader.get()).isNull();
     }
 
     @Test
     void startTestOmitsXRunIdHeaderWhenRunIdBlank() {
-        client.startTest("   ", baseUrl, Map.of("foo", "bar"));
+        client.startTest("   ", worker, Map.of("foo", "bar"));
         assertThat(capturedRunIdHeader.get()).isNull();
     }
 
     @Test
     void drainTestSetsXRunIdHeaderWhenRunIdProvided() {
-        client.drainTest("run-xyz-789", baseUrl);
+        client.drainTest("run-xyz-789", worker);
         assertThat(capturedRunIdHeader.get()).isEqualTo("run-xyz-789");
     }
 
     @Test
     void drainTestOmitsXRunIdHeaderWhenRunIdNull() {
-        client.drainTest(null, baseUrl);
+        client.drainTest(null, worker);
         assertThat(capturedRunIdHeader.get()).isNull();
     }
 }

@@ -74,10 +74,9 @@ preserved as the argument that justified it.)*
 |---|---|---|
 | `jmetercloud_metrics` | `metricsWriter` (INSERT+SELECT), `metricsReader` (SELECT), `metricsPurger` (SELECT+DELETE) | one table: `metrics."workerMetric"` |
 | `jmetercloud_globalrun` | `globalOrchestratorWriter` | run/fleet/pod/application/capacity/cron/trend/audit — 12 tables |
-| `jmetercloud_k8srun` | same | byte-identical twin of `globalrun` |
 
-The metrics DB is where the volume is. The run DBs hold O(runs) and O(pods) rows
-and are addressed briefly in §7.
+The metrics DB is where the volume is. The run DB holds O(runs) and O(pods) rows
+and is addressed briefly in §7.
 
 ### 1.2 `metrics."workerMetric"` as it stands
 
@@ -94,7 +93,7 @@ idempotency contract); one secondary index `("runId","label","windowSecond")`.
 
 ### 1.3 Who actually reads each column
 
-Established by grepping every reader in the repo — both orchestrators'
+Established by grepping every reader in the repo — the orchestrator's
 repositories, the Grafana dashboard, the AI insights service. **As written on
 2026-07-29** — the "read by nothing" rows in bold were dropped by V15, and every
 non-Grafana reader below now goes through a rollup table instead.
@@ -369,7 +368,7 @@ stops being a coordinated multi-service change.
 ### 5.0 What landed (2026-07-30)
 
 Phases 0 and 1 shipped together, in that order, as `V15__dropUnreadColumns.sql`
-and `V16__rollupTables.sql` plus the consumer write path and both orchestrators'
+and `V16__rollupTables.sql` plus the consumer write path and the orchestrator's
 read paths. Sections 5.1 and 5.2 below are the *plan*; this section is the
 *as-built*, and where they differ, this section wins.
 
@@ -445,7 +444,7 @@ insight prompt) had been forwarding the histogram bucket edge.
    habit in a dashboard panel would break on the reshape, so audit the panels
    before then.
 
-**Verification.** `./tools/parityCheck.sh` clean (main 112/0/0, test 45/0/0,
+**Verification.** The (since-retired) parity check was clean (main 112/0/0, test 45/0/0,
 literals 4 ok, 27 migrations). Consumer 8 unit + 18 IT; global-orchestrator 208
 unit + 166 IT; k8s-orchestrator 208 unit + 167 IT — all `mvn clean verify` green.
 Three new consumer ITs pin the delta path: rollups maintained on ingest, deltas
@@ -617,7 +616,7 @@ the consumer's delta CTE, and Grafana):
 **Why the rollup `sumElapsedMs` column stayed DOUBLE PRECISION** even though it
 now holds a pure integer sum: making it BIGINT would have converted every
 reader's `sum("sumElapsedMs") / sum("samples")` into integer division across
-four repositories in two orchestrators. A double is exact well past 2^53; the
+the orchestrator's repositories. A double is exact well past 2^53; the
 truncation risk was not worth zero bytes on a 36 MB table.
 
 `metrics."runSecond"."sumRtWeighted"` and `runLabel."sumRtWeighted"` were
@@ -767,8 +766,7 @@ have indexes matching their hot paths (`FOR UPDATE SKIP LOCKED` pod claiming,
 2. `runFleetMember_state_idx` is `(runId, state)`; `run_active_idx` is a partial
    on `createdAt DESC`. Both fine. No changes proposed.
 
-Any change here lands in **both** `postgres/migrations/globalrun/` and
-`postgres/migrations/k8srun/` at the same `V` number — see §8.
+Any change here lands in `postgres/migrations/globalrun/` — see §8.
 
 ---
 
@@ -779,13 +777,10 @@ Any change here lands in **both** `postgres/migrations/globalrun/` and
   V15.~~ **The metrics tree is at V17** (V15 dropped the columns, V16 built the
   rollups, V17 reshaped the fact table); Phase 3 starts at V18. Note the metrics
   tree deliberately skips V3–V11 to stay numerically in step with `globalrun`.
-- **`metrics/` has no twin**, but `globalrun/` and `k8srun/` must stay identical
-  at the same version.
-- **Every read path exists twice.** `MetricsTimeseriesRepository`,
-  `MetricsRollupRepository`, `MetricsPurgeRepository`, `CachingMetricsService` and
-  `DataSourceConfig` all live in both `jmeter-global-orchestrator` and
-  `jmeter-orchestrator-k8s`. Port with `./tools/portToTwin.sh <file> --write`;
-  **`./tools/parityCheck.sh` must exit 0 before any of this is called done.**
+- **One reader.** `MetricsTimeseriesRepository`, `MetricsRollupRepository`,
+  `MetricsPurgeRepository`, `CachingMetricsService` and `DataSourceConfig` live
+  in `jmeter-global-orchestrator` only (the `jmeter-orchestrator-k8s` twin was
+  decommissioned on 2026-08-28).
 - **Grants do not propagate to partitions.** Any new table needs `metricsWriter`
   (INSERT+SELECT — `ON CONFLICT` probes the index), `metricsReader` (SELECT),
   `metricsPurger` (SELECT+DELETE), and if partitioned, the same grants re-issued

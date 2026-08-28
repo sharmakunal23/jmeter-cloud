@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 400" font-family="-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 400" width="980" height="400" font-family="-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
   <defs>
     <marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 z" fill="#475569"/></marker>
   </defs>
-  <rect width="980" height="400" fill="#ffffff"/>
+  <rect width="980" height="400" fill="#fafaf9"/>
   <text x="30" y="34" font-size="19" font-weight="700" fill="#0f172a">jmeter-cloud-ui — single-origin via nginx</text>
   <text x="30" y="56" font-size="12.5" fill="#64748b">The browser only ever talks to nginx; it serves the SPA and reverse-proxies the API by path prefix.</text>
 
@@ -40,8 +40,8 @@
 
   <g font-size="10.5" fill="#64748b">
     <text x="229" y="186" text-anchor="middle">HTTPS</text>
-    <text x="540" y="138" text-anchor="middle" fill="#2563eb">/api/* · /actuator/*</text>
+    <text x="530" y="112" text-anchor="end" fill="#2563eb">/api/* · /actuator/*</text>
     <text x="540" y="188" text-anchor="middle" fill="#2563eb">/api/v1/blob*</text>
-    <text x="540" y="280" text-anchor="middle">everything else</text>
+    <text x="520" y="300" text-anchor="middle">everything else</text>
   </g>
 </svg>

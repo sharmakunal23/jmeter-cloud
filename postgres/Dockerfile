@@ -7,11 +7,8 @@
 #
 #   docker build -t jmeter-cloud-flyway:dev postgres/
 #
-# All three migration sets are baked in so one image serves any consumer;
-# which sets actually run is the Job's choice (postgres/kube/base/
-# flywayJob.yaml runs metrics + globalrun — k8srun belongs to the
-# standalone jmeter-orchestrator-k8s deployment, not this stack).
+# Both migration sets are baked in; the Job (postgres/kube/base/
+# flywayJob.yaml) runs metrics + globalrun.
 FROM flyway/flyway:10
 COPY migrations/metrics    /flyway/sql/metrics
 COPY migrations/globalrun  /flyway/sql/globalrun
-COPY migrations/k8srun     /flyway/sql/k8srun

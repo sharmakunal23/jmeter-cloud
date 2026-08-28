@@ -9,9 +9,12 @@ info:
     out to many `jmeter-local-orchestrator` workers, tracking run state in
     Postgres and serving aggregated metrics back from the rollup tables.
 
-    Pod selection is registry-driven. Workers self-register on boot and
-    heartbeat every 30 s; a sweeper marks a pod LOST after 90 s of silence, and
-    runs claim only IDLE pods belonging to their own application.
+    Pod selection is registry-driven and runs claim only IDLE pods belonging
+    to their own application. Liveness has two sources: dynamic workers in a
+    routed region (`REGIONS=id=url`) are judged by the kubelet through the
+    region's `GET /api/v1/workers` (ready → IDLE, dead/absent → LOST with the
+    kubelet's reason); operator-declared workers self-register and heartbeat
+    every 30 s, and a sweeper marks them LOST after 90 s of silence.
   contact:
     name: Performance Engineering
   license:
@@ -68,6 +71,16 @@ paths:
       tags: [runs]
       summary: Start a fleet-wide test run
       description: |
+
+        **Async launch.** With `spinShortfall: true` and a shortfall the hub
+        must provision, the response is `201` at once with the run in
+        `PREPARING` and `stateReason` like `provisioning 6 worker(s)
+        (na-east 3, na-west 3) — 2/6 ready`; a background task spins the
+        workers in parallel, claims them and fans out, and the run moves to
+        `RUNNING` (or `FAILED` with the reason). Poll `GET /runs/{runId}/status`;
+        it has no members until the claim. `POST /runs/{runId}/abort` during
+        PREPARING cancels the launch. A PREPARING run older than
+        `RUN_LAUNCH_TIMEOUT_MS` (10 min) is failed by the sweeper.
         Creates a run, claims pods from the registry per the request's
         `fleetAllocation` (or the legacy `fleetSize` + single-element
         `regions` shortcut), inserts one `runFleetMember` per pod, and
@@ -889,8 +902,10 @@ paths:
       summary: Register (or refresh) a local-orchestrator pod
       description: |
         Idempotent: a re-registering pod resets its `state` to IDLE and
-        bumps `lastHeartbeat` to now. The local-orchestrator calls this
-        on boot via the `PodRegistrar` bean.
+        bumps `lastHeartbeat` to now. Operator-declared workers call this on
+        boot via the `PodRegistrar` bean (only wired when
+        `GLOBAL_ORCHESTRATOR_URL` is set); workers a regional orchestrator
+        creates never do — their liveness is the region's Pod list.
       requestBody:
         required: true
         content:
@@ -978,7 +993,7 @@ paths:
         Registration is a pure DB operation: the application row is
         inserted and its per-(app, region) capacity rows are auto-seeded
         at 0 for this deployment's regions — the ones named by
-        `PROVISIONING_REGIONS` (see `GET /api/v1/platform/capabilities`),
+        `REGIONS` (see `GET /api/v1/platform/capabilities`),
         or the single starter region `us-east-1` when it declares none. Pod counts are never set
         here — capacity changes go through the capacity endpoints.
         (DIRECT-METRICS, 2026-07-20: the KAFKA-PER-APP topic provisioning
@@ -1152,6 +1167,26 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/RegionCapacity" }
+
+  /api/v1/regions/status:
+    get:
+      tags: [pods]
+      summary: Every configured region and its regional orchestrator's reachability
+      description: |
+        One entry per id in `REGIONS`, in declaration order. A routed region
+        (one configured as `id=url`) carries the last probe's verdict:
+        `reachable` is `null` until the first probe, then `true`/`false`
+        with `lastSeenAt` / `lastError`, plus the regional's `capabilities`
+        (worker image, DNS shape). A direct region has `routed: false` and
+        nothing to probe. The UI's Home checklist reads this.
+      responses:
+        "200":
+          description: Region statuses.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RegionStatus" }
 
   # ────────────────────────────────────────────────────────────────────────
   # Capacity (Phase 3 of the capacity rework)
@@ -1412,8 +1447,10 @@ paths:
       summary: What this deployment can do — read once at UI boot
       description: |
         Deployment posture the UI gates its surfaces on. Values are resolved
-        at boot from `PROVISIONING_MODE` / `PROVISIONING_REGIONS` and never
-        change for the life of the process.
+        at boot from `PROVISIONING_MODE` / `REGIONS` and never change for
+        the life of the process. `regions` are the ids from `REGIONS`; which
+        of them are routed through a regional orchestrator, and whether it
+        answers, is `GET /api/v1/regions/status`.
 
         This is deliberately server-side rather than a build-time UI flag:
         a browser flag cannot enforce anything (hiding the Capacity tab
@@ -2607,7 +2644,7 @@ components:
       required: [podName, state, containerRunning, runsServed]
       properties:
         podName:          { type: string, example: "payments-us-east-worker-1" }
-        state:            { type: string, enum: [READY, IN_USE, LOST, UNKNOWN, RECYCLING],
+        state:            { type: string, enum: [READY, IN_USE, LOST, STARTING, UNKNOWN, RECYCLING],
                             description: "RECYCLING is reported when the pod row is in DRAINING_FOR_RECYCLE state (WORKER-HYGIENE Phase D)." }
         containerRunning: { type: boolean, description: "Live readback from `docker inspect` (provisioner.isRunning). False on daemon outages." }
         lastHeartbeat:    { type: string, format: date-time, nullable: true }
@@ -2633,6 +2670,9 @@ components:
         baseUrl:       { type: string, example: "http://payments-us-east-worker-1:8080" }
         provisioned:   { type: integer, description: "Provisioned count after this spin." }
         maxAvailable:  { type: integer }
+        ready:
+          type: boolean
+          description: "True when the kubelet reported the pod ready within the wait; false means it is still STARTING and becomes READY through the liveness probe."
     PlatformCapabilities:
       type: object
       required: [provisioningMode, dynamicScalingEnabled, podRecyclingEnabled, regions, regionLabel]
@@ -2664,7 +2704,7 @@ components:
             What the UI should call the placement axis. The API and schema keep
             saying `region` everywhere — it already IS the placement axis in the
             pod registry, the capacity matrix, the claim SQL and the run request,
-            so renaming it would churn two orchestrators and two databases for no
+            so renaming it would churn every query and the database for no
             behavior change. This field makes the vocabulary seam machine-readable
             instead of hardcoded in the browser.
     DeclarePodRequest:
@@ -2735,6 +2775,27 @@ components:
         podName:   { type: string }
         blockedBy: { $ref: "#/components/schemas/PodBlockedBy" }
 
+    RegionStatus:
+      type: object
+      required: [region, routed]
+      properties:
+        region: { type: string, example: na-east }
+        url: { type: string, nullable: true, example: "http://na-east-control-plane:30088" }
+        routed: { type: boolean, description: "True when REGIONS gave this region a regional orchestrator URL." }
+        reachable: { type: boolean, nullable: true, description: "Last probe verdict; null before the first probe or for a direct region." }
+        lastSeenAt: { type: string, format: date-time, nullable: true }
+        lastError: { type: string, nullable: true }
+        capabilities:
+          type: object
+          nullable: true
+          properties:
+            region: { type: string }
+            namespace: { type: string }
+            headlessService: { type: string }
+            image: { type: string }
+            localOrchestratorPort: { type: integer }
+            version: { type: string }
+
     ErrorResponse:
       type: object
       required: [code, message]
@@ -2742,6 +2803,8 @@ components:
         code:
           type: string
           enum:
+            - REGION_UNREACHABLE
+            - REGIONAL_CALL_FAILED
             - RUN_NOT_FOUND
             - INVALID_REQUEST
             - INTERNAL_ERROR

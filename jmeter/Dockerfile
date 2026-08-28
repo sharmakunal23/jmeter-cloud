@@ -30,19 +30,19 @@
 ARG JMETER_VERSION=5.6.3
 ARG PLUGINS_MANAGER_VERSION=1.10
 ARG CMDRUNNER_VERSION=2.3
-ARG JMETER_INSTALL_MODE=Download
+ARG JMETER_INSTALL_MODE=download
 
 # ── Stage 1: Download mode — pulls JMeter from the Apache mirror ────────────
 # SECURITY S-14 — base images pinned to @sha256 digests (tag kept for
 # readability). Refresh with: docker buildx imagetools inspect <tag>.
-FROM eclipse-temurin:21-jdk-alpine@sha256:4fb80de7aeb277ad949cfbe89b4f504e50bb34c57fd908c5825236473d71e986 AS jmeterDownload
+FROM eclipse-temurin:21-jdk-alpine@sha256:4fb80de7aeb277ad949cfbe89b4f504e50bb34c57fd908c5825236473d71e986 AS jmeterdownload
 ARG JMETER_VERSION
 RUN apk add --no-cache curl && \
     curl -sSL "https://downloads.apache.org/jmeter/binaries/apache-jmeter-${JMETER_VERSION}.tgz" \
         | tar -xz -C /opt/
 
 # ── Stage 1: Local mode — copies a pre-extracted dist from the build context
-FROM eclipse-temurin:21-jdk-alpine@sha256:4fb80de7aeb277ad949cfbe89b4f504e50bb34c57fd908c5825236473d71e986 AS jmeterLocal
+FROM eclipse-temurin:21-jdk-alpine@sha256:4fb80de7aeb277ad949cfbe89b4f504e50bb34c57fd908c5825236473d71e986 AS jmeterlocal
 ARG JMETER_VERSION
 COPY apache-jmeter-${JMETER_VERSION}/ /opt/apache-jmeter-${JMETER_VERSION}/
 

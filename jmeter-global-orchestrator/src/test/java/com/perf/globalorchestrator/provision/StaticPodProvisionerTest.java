@@ -49,13 +49,13 @@ class StaticPodProvisionerTest {
     @DisplayName("every lifecycle mutator is refused — a missed controller guard still 409s, "
             + "and nothing can silently no-op its way into looking like a healthy provisioner")
     void allMutatorsRefused() {
-        assertThatThrownBy(() -> provisioner.stopAndRemove(POD))
+        assertThatThrownBy(() -> provisioner.stopAndRemove("na-east", POD))
                 .isInstanceOf(ProvisioningDisabledException.class);
-        assertThatThrownBy(() -> provisioner.stop(POD))
+        assertThatThrownBy(() -> provisioner.stop("na-east", POD))
                 .isInstanceOf(ProvisioningDisabledException.class);
-        assertThatThrownBy(() -> provisioner.start(POD))
+        assertThatThrownBy(() -> provisioner.start("na-east", POD))
                 .isInstanceOf(ProvisioningDisabledException.class);
-        assertThatThrownBy(() -> provisioner.restart(POD))
+        assertThatThrownBy(() -> provisioner.restart("na-east", POD))
                 .isInstanceOf(ProvisioningDisabledException.class);
         verifyNoMoreInteractions(pods);
     }
@@ -67,8 +67,8 @@ class StaticPodProvisionerTest {
         when(pods.findByPodId(POD)).thenReturn(Optional.of(pod(PodState.IDLE)));
         when(pods.findByPodId("ghost")).thenReturn(Optional.empty());
 
-        assertThat(provisioner.exists(POD)).isTrue();
-        assertThat(provisioner.exists("ghost")).isFalse();
+        assertThat(provisioner.exists("na-east", POD)).isTrue();
+        assertThat(provisioner.exists("na-east", "ghost")).isFalse();
     }
 
     @Test
@@ -76,10 +76,10 @@ class StaticPodProvisionerTest {
             + "PodSweeper stays the single owner of the staleness rule")
     void isRunningDerivesFromSweptState() {
         when(pods.findByPodId(POD)).thenReturn(Optional.of(pod(PodState.IDLE)));
-        assertThat(provisioner.isRunning(POD)).isTrue();
+        assertThat(provisioner.isRunning("na-east", POD)).isTrue();
 
         when(pods.findByPodId(POD)).thenReturn(Optional.of(pod(PodState.LOST)));
-        assertThat(provisioner.isRunning(POD)).isFalse();
+        assertThat(provisioner.isRunning("na-east", POD)).isFalse();
     }
 
     @Test
@@ -87,15 +87,15 @@ class StaticPodProvisionerTest {
             + "binding instead of blocking the undeclare forever")
     void isRunningFalseForUnknownPod() {
         when(pods.findByPodId("ghost")).thenReturn(Optional.empty());
-        assertThat(provisioner.isRunning("ghost")).isFalse();
+        assertThat(provisioner.isRunning("na-east", "ghost")).isFalse();
     }
 
     @Test
     void nullAndBlankPodNamesAreNotRunning() {
         when(pods.findByPodId(null)).thenReturn(Optional.empty());
         when(pods.findByPodId("")).thenReturn(Optional.empty());
-        assertThat(provisioner.isRunning(null)).isFalse();
-        assertThat(provisioner.isRunning("")).isFalse();
+        assertThat(provisioner.isRunning("na-east", null)).isFalse();
+        assertThat(provisioner.isRunning("na-east", "")).isFalse();
     }
 
     @Test
@@ -135,13 +135,13 @@ class StaticPodProvisionerTest {
     @DisplayName("currentImageDigest is null — the interface's documented 'skip the image check', "
             + "which is right when an operator owns the rollout")
     void currentImageDigestIsNull() {
-        assertThat(provisioner.currentImageDigest()).isNull();
+        assertThat(provisioner.currentImageDigest("na-east")).isNull();
     }
 
     @Test
     void baseUrlForReturnsTheDeclaredAddress() {
         when(pods.findByPodId(POD)).thenReturn(Optional.of(pod(PodState.IDLE)));
-        assertThat(provisioner.baseUrlFor(POD)).isEqualTo("http://payments-na-east-worker-1:8080");
+        assertThat(provisioner.baseUrlFor("na-east", POD)).isEqualTo("http://payments-na-east-worker-1:8080");
     }
 
     @Test
@@ -149,7 +149,7 @@ class StaticPodProvisionerTest {
             + "synthesize an externally deployed worker's address from")
     void baseUrlForUnknownPodThrows() {
         when(pods.findByPodId("ghost")).thenReturn(Optional.empty());
-        assertThatThrownBy(() -> provisioner.baseUrlFor("ghost"))
+        assertThatThrownBy(() -> provisioner.baseUrlFor("na-east", "ghost"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("ghost");
     }

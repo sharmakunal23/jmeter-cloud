@@ -75,11 +75,10 @@ same host port. Ports are configurable in `.env`.
 | `8083` | metrics-consumer | http://localhost:8083 | `GET /actuator/health` |
 | `8084` | document-service | http://localhost:8084 | `GET /actuator/health` |
 | `8086` | **UI** | http://localhost:8086 | `GET /healthz` |
-| `8088` | jmeter-orchestrator-k8s (via port-forward / NodePort) | — | `GET /actuator/health` |
+| `8088` | jmeter-regional-orchestrator (in each kind cluster; NodePort `30088` on the node) | — | `GET /actuator/health` |
 | `9999` | JMX, worker → its JMeter child | `localhost` only, never off-host | — |
 
-`8087` is reserved for the future ec2-orchestrator. Overrides: `HTTP_PORT` on
-each service, `JMX_PORT` for the JMX bridge.
+Overrides: `HTTP_PORT` on each service, `JMX_PORT` for the JMX bridge.
 
 ## 5. Run your first test
 
@@ -168,10 +167,12 @@ kind delete cluster --name jmeter-cloud # whole cluster
 concurrently and converge via readiness gates. A restart or two on the
 Java services while postgres starts and the Flyway Job applies
 migrations is **normal** (a from-scratch boot converges in well under a
-minute); don't "fix" it with ordering hacks. In-cluster, worker pods are
-provisioned by the global-orchestrator's `K8sPodProvisioner`
-(`PODPROVISIONER_SUBSTRATE=k8s` — set in its kube manifests; the compose
-stack keeps the docker substrate).
+minute); don't "fix" it with ordering hacks. Worker pods are created by the
+in-cluster `jmeter-regional-orchestrator` (`REGION=local`), which the
+global reaches at `REGIONS=local=http://jmeter-regional-orchestrator:8088`
+under `PROVISIONING_MODE=DYNAMIC` — the kind overlay sets both; the compose
+stack alone has no cluster and stays STATIC (see §8b for the two-cluster
+setup).
 
 For a real private cloud use `kubectl apply -k infra/deploy/k8s/privateCloud`
 after creating the credential Secrets out-of-band (each service's
@@ -181,9 +182,28 @@ and setting the registry/Ingress placeholders — then work through
 password rotation, NetworkPolicies, Ingress TLS, storage/backup, the
 log-based alerting obligation, and the auth exposure gate).
 
-The sibling `jmeter-orchestrator-k8s` track deploys separately into its
-own isolated namespace via `jmeter-orchestrator-k8s/kube/local/bootstrap.sh`
-— the two coexist on one cluster.
+## 8b. Two data centers locally (kind `na-east` + `na-west`)
+
+The private-cloud shape: the hub stays on compose, and each kind cluster runs
+only a `jmeter-regional-orchestrator` that creates that region's worker Pods
+and relays the hub's worker calls. The global never holds a cluster credential.
+
+```bash
+docker compose up -d                                   # the hub
+infra/deploy/k8s/local/bootstrapRegions.sh up          # clusters na-east + na-west
+# then, in .env:  PROVISIONING_MODE=DYNAMIC
+#                 REGIONS=na-east=http://na-east-control-plane:30088,na-west=http://na-west-control-plane:30088
+docker compose up -d global-orchestrator
+curl -s localhost:8082/api/v1/regions/status | jq      # both reachable: true
+
+infra/deploy/k8s/local/bootstrapRegions.sh bridge      # after any compose restart
+infra/deploy/k8s/local/bootstrapRegions.sh down        # delete both clusters
+```
+
+Each cluster's node joins `jmeter-cloud_default`, so pods reach the hub
+through bridge Services named like the compose services and the hub reaches
+the regional at `http://<cluster>-control-plane:30088` (NodePort). The
+`kind`-node DNS name is the discriminator — both clusters use NodePort 30088.
 
 ## 9. Troubleshooting
 
@@ -195,7 +215,7 @@ own isolated namespace via `jmeter-orchestrator-k8s/kube/local/bootstrap.sh`
 | Port already in use on `up` | Edit the offending `*_PORT` in `.env` and re-run `docker compose up -d`. |
 | AI tabs missing in the UI | `ANTHROPIC_API_KEY` is blank in `.env` (expected default). Paste a key and restart `global-orchestrator`. |
 | Want a clean slate | `docker compose down -v` then `docker compose up -d --build`. |
-| (kind) Run FAILED with "worker lost: no heartbeat within 90000 ms" but the worker pod is alive and the test completed | Docker Desktop can pause its Linux VM when the host is idle (Resource Saver) — the ENTIRE kind cluster freezes, heartbeats stop, and on wake the PodSweeper sees >90 s staleness and fails the run's members. Not a platform bug: keep the session active during runs (e.g. poll `GET /api/v1/runs/{runId}/status`), or disable Resource Saver in Docker Desktop settings. The pod re-heartbeats back to READY on its own. Also note: `GET /runs/{runId}` returns the STORED row; only `/runs/{runId}/status` triggers the lazy refresh that detects completion. |
+| (kind) A member FAILS with `region … unreachable` or `worker lost: no heartbeat` while the worker pod is alive and the test completed | Docker Desktop can pause its Linux VM when the host is idle (Resource Saver) — the ENTIRE kind cluster freezes, heartbeats stop, and on wake the PodSweeper sees >90 s staleness and fails the run's members. Not a platform bug: keep the session active during runs (e.g. poll `GET /api/v1/runs/{runId}/status`), or disable Resource Saver in Docker Desktop settings. The pod re-heartbeats back to READY on its own. Also note: `GET /runs/{runId}` returns the STORED row; only `/runs/{runId}/status` triggers the lazy refresh that detects completion. |
 
 ## 10. Where to go next
 

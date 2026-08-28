@@ -228,14 +228,21 @@ export function RunDetailPage() {
         tabIndex={0}
         className="runDetail__tabPanel"
       >
-        {pageTab === "insights" && (
+        {run.state === "PREPARING" && (
+          <div className="emptyState" data-testid="provisioningPanel" aria-live="polite">
+            <p><strong>Provisioning workers…</strong></p>
+            <p className="ink-soft">{run.stateReason ?? "Waiting for the data centers to report the workers ready."}</p>
+            <p className="ink-soft">Metrics appear once the test is running.</p>
+          </div>
+        )}
+        {run.state !== "PREPARING" && pageTab === "insights" && (
           <RunStreamsPanel
             runId={run.runId}
             fleetMembers={run.fleetMembers}
             runState={run.state}
           />
         )}
-        {pageTab === "fleet" && (
+        {run.state !== "PREPARING" && pageTab === "fleet" && (
           <FleetTab
             run={run}
             isTerminal={isTerminal}
@@ -248,8 +255,8 @@ export function RunDetailPage() {
               setDrainTarget({ workerIds, mode: "stopTest" })}
           />
         )}
-        {pageTab === "metadata" && <MetadataTab run={run} />}
-        {pageTab === "events" && (
+        {run.state !== "PREPARING" && pageTab === "metadata" && <MetadataTab run={run} />}
+        {run.state !== "PREPARING" && pageTab === "events" && (
           <RunEventsTimeline runId={runId} isTerminal={isTerminal} />
         )}
       </div>

@@ -1,6 +1,7 @@
 package com.perf.globalorchestrator.http;
 
 import com.perf.globalorchestrator.client.LocalOrchestratorClient.LogsResult;
+import com.perf.globalorchestrator.client.WorkerRef;
 import com.perf.globalorchestrator.domain.Actor;
 import com.perf.globalorchestrator.domain.MetricsTimeseries;
 import com.perf.globalorchestrator.domain.MetricsTimeseriesBatch;
@@ -294,7 +295,7 @@ public class RunController {
         // frozen), otherwise re-fetched live. Keyed on (runId, workerId,
         // stream, tail) so a reused pod's later run can't collide.
         boolean memberTerminal = member.state() != null && member.state().isTerminal();
-        LogsResult result = logTail.getLogs(runId, workerId, member.podBaseUrl(), stream, safeTail, memberTerminal);
+        LogsResult result = logTail.getLogs(runId, workerId, WorkerRef.of(member), stream, safeTail, memberTerminal);
         if (result.statusCode() == 0) {
             return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
                     .contentType(MediaType.TEXT_PLAIN)
@@ -555,6 +556,18 @@ public class RunController {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
                 "code",    "INVALID_REQUEST",
                 "message", e.getMessage()));
+    }
+
+    // This controller's catch-all would otherwise swallow these before the
+    // RegionExceptionHandler advice sees them — same bodies, one source.
+    @ExceptionHandler(com.perf.globalorchestrator.region.RegionUnavailableException.class)
+    ResponseEntity<Map<String, String>> handleRegionUnavailable(com.perf.globalorchestrator.region.RegionUnavailableException e) {
+        return RegionExceptionHandler.responseFor(e);
+    }
+
+    @ExceptionHandler(com.perf.globalorchestrator.region.RegionalCallException.class)
+    ResponseEntity<Map<String, String>> handleRegionalCall(com.perf.globalorchestrator.region.RegionalCallException e) {
+        return RegionExceptionHandler.responseFor(e);
     }
 
     @ExceptionHandler(Exception.class)

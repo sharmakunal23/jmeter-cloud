@@ -1,9 +1,9 @@
-# KUBE-5 — kind overlay: dev credentials (compose defaults; empty AI key
-# ⇒ AI disabled), MailHog, and a worker-memory patch sized for a
-# validation cluster. Side-load images first (BuildKit attestations break
+# kind overlay: dev credentials (compose defaults; empty AI key ⇒ AI
+# disabled), MailHog, DYNAMIC provisioning through the in-cluster
+# regional. Side-load images first (BuildKit attestations break
 # `kind load` with "ctr: content digest not found"):
 #   docker build --provenance=false -t jmeter-global-orchestrator:dev jmeter-global-orchestrator/
-#   kind load docker-image jmeter-global-orchestrator:dev jmeter-local-orchestrator:dev --name jmeter-cloud
+#   kind load docker-image jmeter-global-orchestrator:dev --name jmeter-cloud
 # (redis:7-alpine + mailhog are public multi-arch images — let the
 # kubelet pull them.)
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -39,20 +39,7 @@ patches:
                 env:
                   - name: PROVISIONING_MODE
                     value: DYNAMIC
-  # Validation-cluster worker sizing: the kind node can't reserve
-  # 6 GiB/worker, and kind smokes don't run 12 h load. NOT a template for
-  # privateCloud — real runs need the RELIABILITY Round 6 sizing.
-  # (Strategic merge — env entries merge by name.)
-  - patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: global-orchestrator
-      spec:
-        template:
-          spec:
-            containers:
-              - name: global-orchestrator
-                env:
-                  - name: PODPROVISIONER_WORKER_MEMORY_MB
-                    value: "2048"
+                  # One routed region — the regional orchestrator in this
+                  # same cluster (umbrella kind overlay).
+                  - name: REGIONS
+                    value: local=http://jmeter-regional-orchestrator:8088

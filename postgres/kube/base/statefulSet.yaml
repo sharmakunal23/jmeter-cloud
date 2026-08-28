@@ -39,8 +39,7 @@ spec:
                   name: postgres-credentials
                   key: postgresPassword
             # Same as compose: the entrypoint creates jmetercloud_metrics;
-            # initdb SQL adds jmetercloud_globalrun + jmetercloud_k8srun +
-            # the per-app users.
+            # initdb SQL adds jmetercloud_globalrun + the per-app users.
             - name: POSTGRES_DB
               value: jmetercloud_metrics
             # Subdirectory of the PVC mount: block-storage provisioners

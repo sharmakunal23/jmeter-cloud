@@ -1,6 +1,8 @@
 package com.perf.globalorchestrator.service;
 
 import com.perf.globalorchestrator.client.LocalOrchestratorClient;
+import com.perf.globalorchestrator.client.WorkerRef;
+import com.perf.globalorchestrator.client.WorkerStatusFetcher;
 import com.perf.globalorchestrator.client.LocalOrchestratorClient.StartTestResult;
 import com.perf.globalorchestrator.domain.Actor;
 import com.perf.globalorchestrator.domain.MemberState;
@@ -47,6 +49,8 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.stream.Collectors;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -93,6 +97,11 @@ public class RunService {
     private final ApplicationRepository applications;
     private final ApplicationCapacityRepository applicationCapacity;
     private final LocalOrchestratorClient localClient;
+    private final WorkerStatusFetcher statusFetcher;
+    /** Async launches: one virtual thread per provisioning launch, nothing pooled. */
+    private final java.util.concurrent.ExecutorService launchPool =
+            java.util.concurrent.Executors.newThreadPerTaskExecutor(
+                    Thread.ofVirtual().name("globalOrch-launch-", 0).factory());
     // RunTrend snapshot on the run-terminal transition.
     private final MetricsRollupRepository metricsRollup;
     private final RunTrendRepository runTrends;
@@ -125,6 +134,7 @@ public class RunService {
             ApplicationRepository applications,
             ApplicationCapacityRepository applicationCapacity,
             LocalOrchestratorClient localClient,
+            WorkerStatusFetcher statusFetcher,
             MetricsRollupRepository metricsRollup,
             RunTrendRepository runTrends,
             @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -141,6 +151,7 @@ public class RunService {
         this.applications = applications;
         this.applicationCapacity = applicationCapacity;
         this.localClient = localClient;
+        this.statusFetcher = statusFetcher;
         this.metricsRollup = metricsRollup;
         this.runTrends = runTrends;
         this.spinService = spinService;
@@ -160,24 +171,11 @@ public class RunService {
         validate(request);
         StartTransactionResult started;
         try {
-            started = self.openRunAndClaimPods(request, bestEffort, actor);
+            started = self.openRunAndClaimPods(request, bestEffort, actor, null);
         } catch (InsufficientCapacityException shortfallEx) {
-            // Spin-to-fill on shortfall. The
-            // transactional claim attempt rolled back (no run row inserted
-            // yet, no pod claims committed), so we can spin pods to fill
-            // and retry without worrying about cleanup. The cap-check
-            // inside openRunAndClaimPods has ALREADY passed (the in-flight
-            // check); we still re-check at provisioning time
-            // (pod count vs ceiling) since LOST pods can push provisioning
-            // past the ceiling while leaving the in-flight check happy.
             if (!request.isSpinShortfall() || spinService == null) {
                 throw shortfallEx; // strict mode (or no provisioner wired) — propagate
             }
-            // Workers are operator-managed; there is
-            // nothing to spin. Surface the original shortfall (which names
-            // the short regions and counts) rather than inventing a second
-            // error shape; the UI turns this into "declare more workers"
-            // using GET /api/v1/platform/capabilities.
             if (provisioning.isStatic()) {
                 LOG.info("spinShortfall ignored for application={} — {}=STATIC; "
                         + "operator must declare more workers for {}",
@@ -186,12 +184,17 @@ public class RunService {
                         shortfallEx.shortfall().keySet());
                 throw shortfallEx;
             }
-            spinToFillShortfall(request.application(), shortfallEx.shortfall());
-            started = self.openRunAndClaimPods(request, bestEffort, actor); // retry after spin
+            return launchAsync(request, bestEffort, actor, shortfallEx.shortfall());
         }
-        // Fan-out happens OUTSIDE the transaction — the HTTP calls are
-        // long-haul and we don't want to hold pod-row locks for the
-        // entire fan-out window.
+        return completeLaunch(started, request);
+    }
+
+    /**
+     * Fans the claimed members out and settles the run state: RUNNING when every
+     * member accepted, FAILED when none did, RUNNING with a partial reason
+     * otherwise.
+     */
+    private Run completeLaunch(StartTransactionResult started, StartRunRequest request) {
         Map<String, FanoutOutcome> outcomes = fanOut(
                 started.runId(), started.members(),
                 request.testPlanBlobId(), request.dataFilesBlobId(),
@@ -201,18 +204,9 @@ public class RunService {
         if (accepted == started.members().size()) {
             runs.updateRunState(started.runId(), RunState.RUNNING, started.stateReason());
         } else if (accepted == 0) {
-            // MULTI-INSTANCE (2026-07-24): claim the terminal transition so a
-            // sibling replica's sweeper racing this launch failure can't
-            // double-emit the RUN_FAILED bookend.
             int claimed = runs.updateRunStateClaimingTerminal(
                     started.runId(), RunState.FAILED, "all fan-outs rejected");
-            // Save Results — a run that failed at launch never produced a clean
-            // upload, so clear the flag (same reasoning as commitAbort): the UI
-            // won't offer a Download-that-404s and refreshAndGet's terminal
-            // fast-path won't chase the dead workers. Only a clean COMPLETED keeps it.
             runs.clearSaveResults(started.runId());
-            // The run went terminal at launch (every fan-out
-            // rejected). Bookend its timeline with a RUN_FAILED event.
             if (claimed == 1) {
                 recordRunTerminal(started.runId(), RunState.FAILED, "all fan-outs rejected");
             }
@@ -224,6 +218,90 @@ public class RunService {
             runs.updateRunState(started.runId(), RunState.RUNNING, reason);
         }
         return runs.findByRunId(started.runId()).orElseThrow();
+    }
+
+    /**
+     * A launch that must provision workers first returns at once with the run
+     * in PREPARING — provisioning is long (pod schedule + JVM boot; minutes
+     * with an image pull) and must never hold an HTTP request open. A
+     * background task spins the shortfall in parallel, updating
+     * {@code stateReason} as workers become ready, then claims and fans out
+     * exactly as a synchronous launch would; any failure lands as FAILED with
+     * the reason. Abort during PREPARING wins: the task re-reads the run before
+     * claiming and stands down if it is no longer PREPARING.
+     */
+    private Run launchAsync(StartRunRequest request, boolean bestEffort, Actor actor,
+                            Map<String, RegionShortfall> shortfall) {
+        String runId = Ulid.generate();
+        Instant now = Instant.now();
+        int total = shortfall.values().stream().mapToInt(g -> g.requested() - g.claimed()).sum();
+        String reason = provisioningReason(total, 0, shortfall);
+        Run preparing = new Run(
+                runId, region,
+                request.testPlanBlobId(), request.dataFilesBlobId(),
+                (request.application() == null || request.application().isBlank()) ? null : request.application(),
+                (request.initiatedBy() != null && !request.initiatedBy().isBlank()) ? request.initiatedBy() : actor.name(),
+                RunState.PREPARING, reason, now, null, null,
+                request.isSaveResults(), List.of());
+        runs.insertRun(preparing);
+        runs.updateRunState(runId, RunState.PREPARING, reason);
+        LOG.info("run {} PREPARING — {}", runId, reason);
+        launchPool.submit(() -> provisionThenLaunch(runId, request, bestEffort, actor, shortfall, total));
+        return runs.findByRunId(runId).orElseThrow();
+    }
+
+    private void provisionThenLaunch(String runId, StartRunRequest request, boolean bestEffort, Actor actor,
+                                     Map<String, RegionShortfall> shortfall, int total) {
+        try {
+            spinToFillShortfall(request.application(), shortfall,
+                    ready -> runs.updateRunState(runId, RunState.PREPARING, provisioningReason(total, ready, shortfall)));
+            Run current = runs.findByRunId(runId).orElseThrow(() -> new RunNotFoundException(runId));
+            if (current.state() != RunState.PREPARING) {
+                LOG.info("run {} left PREPARING ({}) while provisioning — not launching", runId, current.state());
+                return;
+            }
+            StartTransactionResult started = self.openRunAndClaimPods(request, bestEffort, actor, runId);
+            completeLaunch(started, request);
+        } catch (RunNotPreparingException gone) {
+            LOG.info("run {} was aborted while its workers were provisioned — claim rolled back", runId);
+        } catch (RuntimeException e) {
+            String why = "provisioning failed: " + e.getMessage();
+            int claimed = runs.updateRunStateClaimingTerminal(runId, RunState.FAILED, why);
+            runs.clearSaveResults(runId);
+            if (claimed == 1) {
+                recordRunTerminal(runId, RunState.FAILED, why);
+            }
+            ErrorContext.logWarn(LOG, "launch runId=" + runId, "async launch failed", e);
+        }
+    }
+
+    /** The run left PREPARING (an abort) before its async claim could land; the claim transaction rolls back. */
+    public static final class RunNotPreparingException extends RuntimeException {
+        RunNotPreparingException(String runId) {
+            super("run " + runId + " is no longer PREPARING");
+        }
+    }
+
+    static String provisioningReason(int total, int ready, Map<String, RegionShortfall> shortfall) {
+        String gaps = shortfall.entrySet().stream()
+                .map(e -> e.getKey() + " " + (e.getValue().requested() - e.getValue().claimed()))
+                .collect(Collectors.joining(", "));
+        return "provisioning " + total + " worker(s) (" + gaps + ") — " + ready + "/" + total + " ready";
+    }
+
+    /**
+     * PREPARING runs older than {@code olderThan} are launches whose provisioning
+     * task is gone — an orchestrator restart, or a spin that never came back.
+     * Fails them with a reason so they stop looking alive.
+     */
+    public int failStalePreparingRuns(Duration olderThan) {
+        List<String> stale = runs.failStalePreparing(Instant.now().minus(olderThan),
+                "provisioning did not complete within " + olderThan.toMinutes() + " min (orchestrator restarted?)");
+        for (String runId : stale) {
+            runs.clearSaveResults(runId);
+            recordRunTerminal(runId, RunState.FAILED, "provisioning did not complete");
+        }
+        return stale.size();
     }
 
     /**
@@ -239,6 +317,12 @@ public class RunService {
      */
     private void spinToFillShortfall(String applicationName,
                                      Map<String, RegionShortfall> shortfall) {
+        spinToFillShortfall(applicationName, shortfall, ready -> { });
+    }
+
+    private void spinToFillShortfall(String applicationName,
+                                     Map<String, RegionShortfall> shortfall,
+                                     java.util.function.IntConsumer progress) {
         if (applicationName == null || applicationName.isBlank()) {
             // Spin-to-fill is only meaningful for registered apps — the
             // legacy (any) bucket has no application context to spin into.
@@ -270,51 +354,57 @@ public class RunService {
 
         // (2) Spin per region. Collect the new pods' baseUrls so we can
         // gate the retry on their readiness.
-        List<String> newBaseUrls = new ArrayList<>();
+        // All pods at once — a spin waits for its pod's readiness probe, so
+        // serial spins would cost N × (schedule + JVM boot).
+        List<WorkerRef> newWorkers = java.util.Collections.synchronizedList(new ArrayList<>());
+        java.util.concurrent.atomic.AtomicInteger ready = new java.util.concurrent.atomic.AtomicInteger();
+        // Names first, serially — the allocator reads the registry, so
+        // reservations must land one at a time; the slow part is parallel.
+        List<Map.Entry<String, String>> reserved = new ArrayList<>();
         for (Map.Entry<String, RegionShortfall> e : shortfall.entrySet()) {
-            String regionName = e.getKey();
             int gap = e.getValue().requested() - e.getValue().claimed();
             for (int i = 0; i < gap; i++) {
-                com.perf.globalorchestrator.provision.PodSpinService.SpinResult r =
-                        spinService.spin(boundApp.applicationId(), boundApp.name(), regionName);
-                newBaseUrls.add(r.baseUrl());
-                LOG.info("spinShortfall: spun {} for app={} region={}",
-                        r.podName(), boundApp.name(), regionName);
+                reserved.add(Map.entry(e.getKey(),
+                        spinService.reserve(boundApp.applicationId(), boundApp.name(), e.getKey())));
             }
         }
-
-        // (3) Wait for every new pod to report /actuator/health 2xx so the
-        // subsequent fanout doesn't race container startup. Bounded by
-        // spinHealthTimeoutMs (default 60 s) — that's enough for a fresh
-        // jmeter-local-orchestrator container to bind 8080 even on a busy
-        // host. Past the timeout, return anyway; the retry's
-        // claimIdleByRegionAndApp will still pick up the rows (which are
-        // already IDLE in the registry), and the fanout will reject any
-        // unreachable pod into REJECTED — same as today's behavior for
-        // any unlucky pod that crashed between heartbeat and fanout.
-        waitForHealth(newBaseUrls);
-    }
-
-    private void waitForHealth(List<String> baseUrls) {
-        if (baseUrls.isEmpty()) return;
-        long deadline = System.currentTimeMillis() + spinHealthTimeoutMs;
-        java.util.Set<String> pending = new java.util.LinkedHashSet<>(baseUrls);
-        while (!pending.isEmpty() && System.currentTimeMillis() < deadline) {
-            pending.removeIf(localClient::isHealthy);
-            if (pending.isEmpty()) break;
-            try {
-                Thread.sleep(500);
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-                LOG.warn("spinShortfall health-wait interrupted; proceeding with retry");
-                return;
+        List<java.util.concurrent.Future<?>> spins = new ArrayList<>();
+        try (java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            for (Map.Entry<String, String> entry : reserved) {
+                String regionName = entry.getKey();
+                String podName = entry.getValue();
+                {
+                    spins.add(pool.submit(() -> {
+                        com.perf.globalorchestrator.provision.PodSpinService.SpinResult r =
+                                spinService.start(boundApp.applicationId(), boundApp.name(), regionName, podName);
+                        newWorkers.add(new WorkerRef(regionName, r.podName(), r.baseUrl()));
+                        LOG.info("spinShortfall: spun {} for app={} region={} ready={}",
+                                r.podName(), boundApp.name(), regionName, r.ready());
+                        if (r.ready()) progress.accept(ready.incrementAndGet());
+                    }));
+                }
             }
+            RuntimeException first = null;
+            for (java.util.concurrent.Future<?> f : spins) {
+                try {
+                    f.get();
+                } catch (java.util.concurrent.ExecutionException ex) {
+                    RuntimeException cause = ex.getCause() instanceof RuntimeException re
+                            ? re : new IllegalStateException(ex.getCause());
+                    if (first == null) first = cause;
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("interrupted while provisioning", ie);
+                }
+            }
+            if (first != null) throw first;
         }
-        if (!pending.isEmpty()) {
-            LOG.warn("spinShortfall: {} pod(s) still unhealthy after {} ms — proceeding anyway",
-                    pending.size(), spinHealthTimeoutMs);
-        }
+
+        // A pod that reported ready is IDLE and claimable; one that did not is
+        // still LOST and will not be claimed, so the retry's shortfall fails the
+        // launch with the reason. No second health wait — readiness was the wait.
     }
+
 
     /**
      * Adds workers to a RUNNING run.
@@ -455,6 +545,16 @@ public class RunService {
      */
     @Transactional("transactionManager")
     protected StartTransactionResult openRunAndClaimPods(StartRunRequest request, boolean bestEffort, Actor actor) {
+        return openRunAndClaimPods(request, bestEffort, actor, null);
+    }
+
+    /**
+     * {@code existingRunId} non-null: the run row already exists in PREPARING
+     * (an async launch) — claim into it instead of inserting a new one.
+     */
+    @Transactional("transactionManager")
+    protected StartTransactionResult openRunAndClaimPods(StartRunRequest request, boolean bestEffort, Actor actor,
+                                                         String existingRunId) {
         List<FleetAllocationEntry> allocation = resolveAllocation(request);
         boolean ignoredFleetSize = !request.fleetAllocation().isEmpty() && request.fleetSize() > 0;
 
@@ -576,7 +676,7 @@ public class RunService {
             stateReason = stateReason == null ? note : stateReason + "; " + note;
         }
 
-        String runId = Ulid.generate();
+        String runId = existingRunId != null ? existingRunId : Ulid.generate();
         Instant now = Instant.now();
         Run run = new Run(
                 runId, region,
@@ -598,7 +698,9 @@ public class RunService {
                 now, null, null,
                 request.isSaveResults(),
                 List.of());
-        runs.insertRun(run);
+        if (existingRunId == null) {
+            runs.insertRun(run);
+        }
 
         List<RunFleetMember> initialMembers = new ArrayList<>(claimed.size());
         for (Pod p : claimed) {
@@ -614,7 +716,16 @@ public class RunService {
             // to decide "this pod has done N runs; recycle it on idle."
             pods.incrementRunsServed(p.podId());
         }
-        runs.updateRunState(runId, RunState.STARTING, stateReason);
+        if (existingRunId != null) {
+            // The launch is async: an abort may have landed while the workers were
+            // provisioned. Only a run still PREPARING may become STARTING; anything
+            // else rolls this claim back.
+            if (runs.updateRunStateFrom(runId, RunState.PREPARING, RunState.STARTING, stateReason) == 0) {
+                throw new RunNotPreparingException(runId);
+            }
+        } else {
+            runs.updateRunState(runId, RunState.STARTING, stateReason);
+        }
 
         // One RUN_START event, written inside this
         // transaction so it commits atomically with the run + member rows. A
@@ -799,8 +910,8 @@ public class RunService {
         Map<String, java.util.concurrent.Future<LocalOrchestratorClient.DrainTestResult>> futures =
                 new LinkedHashMap<>();
         for (RunFleetMember m : targets) {
-            final String baseUrl = m.podBaseUrl();
-            futures.put(m.workerId(), fanoutPool.submit(() -> localClient.drainTest(runId, baseUrl)));
+            final WorkerRef worker = WorkerRef.of(m);
+            futures.put(m.workerId(), fanoutPool.submit(() -> localClient.drainTest(runId, worker)));
         }
         futures.forEach((workerId, f) -> {
             try {
@@ -870,6 +981,8 @@ public class RunService {
         List<RunFleetMember> targets = run.fleetMembers().stream()
                 .filter(m -> m.state() == null || !m.state().isTerminal())
                 .toList();
+        // A PREPARING launch has no members yet: mark it ABORTED and the
+        // provisioning task stands down when it re-reads the state.
         List<String> aborted = new ArrayList<>();
         List<RunEventPayloads.Skipped> skipped = new ArrayList<>();
         Map<String, Future<LocalOrchestratorClient.AbortTestResult>> futures = new LinkedHashMap<>();
@@ -878,8 +991,8 @@ public class RunService {
                 skipped.add(new RunEventPayloads.Skipped(m.workerId(), "no podBaseUrl recorded"));
                 continue;
             }
-            final String baseUrl = m.podBaseUrl();
-            futures.put(m.workerId(), fanoutPool.submit(() -> localClient.abortTest(runId, baseUrl)));
+            final WorkerRef worker = WorkerRef.of(m);
+            futures.put(m.workerId(), fanoutPool.submit(() -> localClient.abortTest(runId, worker)));
         }
         futures.forEach((workerId, f) -> {
             try {
@@ -996,6 +1109,24 @@ public class RunService {
      * so a transient failure self-heals on the next tick; in steady state it
      * matches zero rows and does no further work.
      */
+    /** Fails one LOST worker's active members with the kubelet's reason, then rolls its runs up. */
+    public void failMembersOnLostWorker(String podId, String reason) {
+        List<String> affected;
+        try {
+            affected = runs.failActiveMembersForWorker(podId, reason);
+        } catch (RuntimeException e) {
+            LOG.warn("failMembersOnLostWorker({}): {}", podId, e.toString());
+            return;
+        }
+        for (String runId : affected.stream().distinct().toList()) {
+            try {
+                refreshAndGet(runId);
+            } catch (RuntimeException e) {
+                LOG.warn("failMembersOnLostWorker: rollUp of run {} failed: {}", runId, e.toString());
+            }
+        }
+    }
+
     public void reapLostWorkerMembers(String reason) {
         List<String> affected;
         try {
@@ -1213,13 +1344,23 @@ public class RunService {
                         .allMatch(m -> resultsSaved.contains(m.workerId()))) {
             return run;
         }
+        // One status call per routed region for every member still worth
+        // polling, direct calls elsewhere — never one WAN round-trip per member.
+        List<WorkerRef> toPoll = new ArrayList<>();
+        for (RunFleetMember m : run.fleetMembers()) {
+            if (m.podBaseUrl() == null) continue;
+            boolean pollState = !terminal && !m.state().isTerminal();
+            if (!pollState && !run.saveResults()) continue;
+            toPoll.add(WorkerRef.of(m));
+        }
+        Map<String, Map<String, Object>> snapshots = toPoll.isEmpty() ? Map.of() : statusFetcher.fetch(toPoll);
         for (RunFleetMember m : run.fleetMembers()) {
             if (m.podBaseUrl() == null) continue;
             // State mapping only matters while the run is live; a terminal
             // member's state never changes, but its uploadState still might.
             boolean pollState = !terminal && !m.state().isTerminal();
             if (!pollState && !run.saveResults()) continue;
-            localClient.getTestStatus(m.podBaseUrl()).ifPresent(snap -> {
+            Optional.ofNullable(snapshots.get(m.workerId())).ifPresent(snap -> {
                 if (pollState) {
                     MemberState mapped = mapLocalState(snap.get("state"));
                     if (mapped != null && mapped != m.state()
@@ -1421,7 +1562,7 @@ public class RunService {
                 }
             }
             futures.put(m.workerId(), fanoutPool.submit(() -> {
-                StartTestResult r = localClient.startTest(runId, m.podBaseUrl(), body);
+                StartTestResult r = localClient.startTest(runId, WorkerRef.of(m), body);
                 if (r.accepted() || r.ok()) {
                     return new FanoutOutcome(MemberState.ACCEPTED, r.statusCode(), null);
                 }
@@ -1430,7 +1571,7 @@ public class RunService {
                 // already busy. Ask WHOSE run holds it and say so, instead of
                 // handing the operator a raw 409 body.
                 if (r.statusCode() == CONFLICT_STATUS) {
-                    String busy = foreignRunReason(runId, m.podBaseUrl());
+                    String busy = foreignRunReason(runId, WorkerRef.of(m));
                     if (busy != null) reason = busy;
                 }
                 return new FanoutOutcome(MemberState.FAILED, r.statusCode(), reason);
@@ -1472,8 +1613,8 @@ public class RunService {
      * @return null when the snapshot shows nothing useful, in which case the
      *         caller keeps the raw response body
      */
-    private String foreignRunReason(String runId, String podBaseUrl) {
-        java.util.Optional<Map<String, Object>> snapshot = localClient.getTestStatus(podBaseUrl);
+    private String foreignRunReason(String runId, WorkerRef worker) {
+        java.util.Optional<Map<String, Object>> snapshot = localClient.getTestStatus(worker);
         if (snapshot.isEmpty()) return null;
         Object stateObj = snapshot.get().get("state");
         if (stateObj == null) return null;

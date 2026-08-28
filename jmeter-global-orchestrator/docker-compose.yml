@@ -20,24 +20,11 @@ services:
         condition: service_healthy
     ports:
       - "${GLOBAL_ORCHESTRATOR_HTTP_PORT:-8082}:8082"
-    # Phase 1 of the capacity rework: PodProvisioner drives the host docker
-    # daemon to spin up per-app local-orchestrator containers
-    # ({appName}-{region}-worker-{n}) on demand. The mount is a privilege
-    # concession scoped to the local stack only — the K8s counterpart
-    # shipped in KUBE-5 (2026-07-22): K8sPodProvisioner (fabric8) behind
-    # the same interface, selected by PODPROVISIONER_SUBSTRATE=k8s with a
-    # ServiceAccount + pods-only Role instead of a socket mount (see
-    # kube/). This compose stack keeps substrate=docker (the default).
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    # docker.sock on the host is typically root:docker (660). The image's
-    # default USER `app` cannot read it — and there's no portable docker
-    # group GID we can pre-add to the image (Mac Docker Desktop, Linux
-    # native, and CI runners each pick a different one). Running as root
-    # inside the container is the simplest local-only fix; the cloud
-    # K8sApiPodProvisioner uses a ServiceAccount + RBAC instead, so this
-    # override doesn't carry over.
-    user: root
+    # Worker provisioning happens inside each region's cluster through its
+    # jmeter-regional-orchestrator, so this container holds no cluster
+    # credential, mounts no docker socket and runs as the image's
+    # unprivileged user. On compose alone the platform is STATIC (declare
+    # workers); point REGIONS at the kind regions for DYNAMIC.
     environment:
       HTTP_PORT:                "8082"
       HTTP_BIND_ADDRESS:        0.0.0.0
@@ -54,48 +41,21 @@ services:
       # via the runtime pod registry (Step 15) and PodProvisioner
       # creates per-app workers on demand; the static URL list is dead.
       GLOBAL_ORCHESTRATOR_REGION:             ${GLOBAL_ORCHESTRATOR_REGION:-us-east-1}
-      GLOBAL_ORCHESTRATOR_FANOUT_THREADS:     ${GLOBAL_ORCHESTRATOR_FANOUT_THREADS:-8}
+      GLOBAL_ORCHESTRATOR_FANOUT_THREADS:     ${GLOBAL_ORCHESTRATOR_FANOUT_THREADS:-32}
       # STATIC-FLEET — whether this deployment may create workers at all.
       # STATIC is the platform default (2026-07-27): workers are deployed and
       # owned by the operator, spin / restart / teardown answer 409, and the
       # reconciler + recycler are not wired.
-      # NOTE FOR LOCAL DEV: that means the Capacity tab's Spin button does
-      # nothing on a stock `docker compose up`. To get the old spin-a-worker
-      # loop back, put PROVISIONING_MODE=DYNAMIC in your .env.
-      # PROVISIONING_REGIONS is the deployment's region (= data center) list;
-      # empty leaves the UI on its own defaults.
+      # NOTE FOR LOCAL DEV: compose alone has no cluster, so spin answers
+      # 409 (STATIC) or 503 REGION_UNREACHABLE (DYNAMIC with no routed
+      # region). For the spin-a-worker loop bring up the kind regions
+      # (infra/deploy/k8s/local/bootstrapRegions.sh) and set
+      # PROVISIONING_MODE=DYNAMIC + REGIONS=id=url,… in .env.
+      # REGIONS lists the deployment's regions (= data centers), each
+      # optionally with its regional orchestrator URL — `id` is direct,
+      # `id=url` is routed through that cluster's jmeter-regional-orchestrator.
       PROVISIONING_MODE:                      ${PROVISIONING_MODE:-STATIC}
-      PROVISIONING_REGIONS:                   ${PROVISIONING_REGIONS:-}
-      # Phase 1 PodProvisioner config. Each key is consumed by
-      # application.yml's globalOrchestrator.podProvisioner.* placeholders.
-      # Defaults are the local docker-compose values — operators override
-      # for non-default networks (e.g. running the global-orchestrator from
-      # the IDE against a stack with a different COMPOSE_PROJECT_NAME).
-      PODPROVISIONER_DOCKER_HOST:             ${PODPROVISIONER_DOCKER_HOST:-unix:///var/run/docker.sock}
-      # docker-java's DefaultDockerClientConfig reads the standard DOCKER_HOST
-      # env var natively. Setting it here too (in addition to our typed
-      # PODPROVISIONER_DOCKER_HOST) bypasses any precedence quirk in the
-      # builder's withProperties() call.
-      DOCKER_HOST:                            ${PODPROVISIONER_DOCKER_HOST:-unix:///var/run/docker.sock}
-      PODPROVISIONER_NETWORK:                 ${PODPROVISIONER_NETWORK:-jmeter-cloud_default}
-      PODPROVISIONER_IMAGE:                   ${PODPROVISIONER_IMAGE:-jmeter-local-orchestrator:dev}
-      PODPROVISIONER_LOCAL_ORCHESTRATOR_PORT: ${PODPROVISIONER_LOCAL_ORCHESTRATOR_PORT:-8080}
-      # Reliability: hard memory limit
-      # (MiB) for each spawned worker container — fits the orchestrator JVM
-      # (-Xmx1g + native ≈ 1.5 GiB) + JMeter child (-Xmx2g + native ≈ 2.5 GiB)
-      # + ~2 GiB page-cache headroom for the multi-GB JTL of a 12 h /
-      # 200-250 rps / ~100-endpoint run. Raised 4096 → 6144 alongside the
-      # JMeter child heap bump (1g → 2g); 4096 left no headroom once the
-      # child grew and workers OOM'd near the 1-hour mark.
-      PODPROVISIONER_WORKER_MEMORY_MB:        ${PODPROVISIONER_WORKER_MEMORY_MB:-6144}
-      # RELIABILITY Round 8 — aggregator late-arrival grace (s) stamped onto each
-      # spawned worker as GRACE_PERIOD_SECONDS. 10s captures slow samples written
-      # late to the JTL instead of dropping them as late; per-run override wins.
-      PODPROVISIONER_GRACE_PERIOD_SECONDS:    ${PODPROVISIONER_GRACE_PERIOD_SECONDS:-10}
-      GLOBAL_ORCHESTRATOR_URL:                ${GLOBAL_ORCHESTRATOR_URL:-http://global-orchestrator:8082}
-      # The PodProvisioner stamps this onto every spawned worker as
-      # METRICS_INGEST_URL.
-      PODPROVISIONER_METRICS_INGEST_URL:      ${PODPROVISIONER_METRICS_INGEST_URL:-http://metrics-consumer:8083/api/v1/ingest}
+      REGIONS:                                ${REGIONS:-}
       DOCUMENT_SERVICE_URL:                   ${DOCUMENT_SERVICE_URL:-http://document-service:8084}
       # CACHE C-0 (2026-05-26) — shared Redis cache. Consumed by
       # application.yml's spring.data.redis.* placeholders.
@@ -104,9 +64,6 @@ services:
       # AUTOMATION Phase E — SMTP target for report emails (MailHog in dev).
       MAIL_HOST:                              ${MAIL_HOST:-mailhog}
       MAIL_PORT:                              ${MAIL_PORT:-1025}
-      # SLIMDOWN SL-E (2026-07-22): the MANAGEMENT_TRACING_* / MANAGEMENT_OTLP_*
-      # / PODPROVISIONER_TRACING_* env left with the tracing machinery — the
-      # service emits JSON logs only (hosting infra provides observability).
       # AI analysis — server-side Claude proxy. The key lives in
       # the repo-root .env (a local secret — do NOT commit it) and is forwarded
       # here. Empty default → AI disabled (503 AI_DISABLED; the UI hides its

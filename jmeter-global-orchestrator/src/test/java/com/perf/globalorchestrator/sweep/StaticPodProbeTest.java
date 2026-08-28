@@ -14,6 +14,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -40,7 +41,7 @@ class StaticPodProbeTest {
             + "own heartbeat would carry, so nothing downstream needs to change")
     void reachableWorkerIsRefreshed() {
         when(pods.findBySource(PodSource.STATIC)).thenReturn(List.of(pod("w-1", PodState.IDLE)));
-        when(client.isHealthy("http://w-1:8080")).thenReturn(true);
+        when(client.isHealthy(argThat(w -> w != null && "http://w-1:8080".equals(w.baseUrl())))).thenReturn(true);
         when(pods.heartbeat("w-1")).thenReturn(1);
 
         StaticPodProbe.ProbeSummary summary = probe.doProbe();
@@ -56,7 +57,7 @@ class StaticPodProbeTest {
             + "LOST transition, so there is one staleness rule rather than two that can disagree")
     void unreachableWorkerIsNotTouched() {
         when(pods.findBySource(PodSource.STATIC)).thenReturn(List.of(pod("w-1", PodState.IDLE)));
-        when(client.isHealthy("http://w-1:8080")).thenReturn(false);
+        when(client.isHealthy(argThat(w -> w != null && "http://w-1:8080".equals(w.baseUrl())))).thenReturn(false);
 
         StaticPodProbe.ProbeSummary summary = probe.doProbe();
 
@@ -69,7 +70,7 @@ class StaticPodProbeTest {
             + "existing LOST->IDLE flip is what makes it claimable again, with no operator action")
     void lostWorkerRecoversOnItsOwn() {
         when(pods.findBySource(PodSource.STATIC)).thenReturn(List.of(pod("w-1", PodState.LOST)));
-        when(client.isHealthy("http://w-1:8080")).thenReturn(true);
+        when(client.isHealthy(argThat(w -> w != null && "http://w-1:8080".equals(w.baseUrl())))).thenReturn(true);
         when(pods.heartbeat("w-1")).thenReturn(1);
 
         assertThat(probe.doProbe().reachable()).isEqualTo(1);
@@ -81,9 +82,9 @@ class StaticPodProbeTest {
     void oneFailureDoesNotAbortTheTick() {
         when(pods.findBySource(PodSource.STATIC)).thenReturn(List.of(
                 pod("w-1", PodState.IDLE), pod("w-2", PodState.IDLE), pod("w-3", PodState.IDLE)));
-        when(client.isHealthy("http://w-1:8080")).thenReturn(true);
-        when(client.isHealthy("http://w-2:8080")).thenThrow(new RuntimeException("connect reset"));
-        when(client.isHealthy("http://w-3:8080")).thenReturn(true);
+        when(client.isHealthy(argThat(w -> w != null && "http://w-1:8080".equals(w.baseUrl())))).thenReturn(true);
+        when(client.isHealthy(argThat(w -> w != null && "http://w-2:8080".equals(w.baseUrl())))).thenThrow(new RuntimeException("connect reset"));
+        when(client.isHealthy(argThat(w -> w != null && "http://w-3:8080".equals(w.baseUrl())))).thenReturn(true);
         when(pods.heartbeat(anyString())).thenReturn(1);
 
         StaticPodProbe.ProbeSummary summary = probe.doProbe();
@@ -111,7 +112,7 @@ class StaticPodProbeTest {
     @DisplayName("a worker released mid-probe (rowcount 0) is not counted as alive")
     void releasedMidProbeIsNotCountedReachable() {
         when(pods.findBySource(PodSource.STATIC)).thenReturn(List.of(pod("w-1", PodState.IDLE)));
-        when(client.isHealthy("http://w-1:8080")).thenReturn(true);
+        when(client.isHealthy(argThat(w -> w != null && "http://w-1:8080".equals(w.baseUrl())))).thenReturn(true);
         when(pods.heartbeat("w-1")).thenReturn(0);
 
         assertThat(probe.doProbe().reachable()).isZero();

@@ -15,13 +15,6 @@
 -- ── Databases ───────────────────────────────────────────────────────
 -- POSTGRES_DB env var creates jmetercloud_metrics; we add the others.
 CREATE DATABASE jmetercloud_globalrun;
--- K8S-ORCHESTRATOR D-3 — jmeter-orchestrator-k8s owns its own run-state
--- DB (two full orchestrators sharing one would double-fire schedulers and
--- mix pod registries). Migrations: postgres/migrations/k8srun/.
--- NOTE: this file only runs on a FRESH volume — on an existing local
--- instance create it by hand (the jmeter-orchestrator-k8s/k8s/local
--- bootstrap does this idempotently).
-CREATE DATABASE jmetercloud_k8srun;
 
 -- ── Per-app users (cluster-level) ───────────────────────────────────
 -- Local-only passwords. Cloud uses IAM-DB authentication; the password
@@ -52,15 +45,9 @@ GRANT CONNECT ON DATABASE jmetercloud_metrics TO "metricsWriter";
 GRANT CONNECT ON DATABASE jmetercloud_metrics TO "metricsReader";
 GRANT CONNECT ON DATABASE jmetercloud_metrics TO "metricsPurger";
 
--- globalOrchestratorWriter connects to the globalrun DB — and to the
--- k8srun DB: the k8srun migrations are a clone of globalrun's, whose
--- grants target this role, so jmeter-orchestrator-k8s reuses it rather
--- than forking every grant in the cloned migration set (same local trust
--- domain; cloud gets per-service IAM roles at the AWS step).
+-- globalOrchestratorWriter connects to the globalrun DB only.
 GRANT CONNECT ON DATABASE jmetercloud_globalrun TO "globalOrchestratorWriter";
-GRANT CONNECT ON DATABASE jmetercloud_k8srun TO "globalOrchestratorWriter";
 
 -- The default jmetercloud user (POSTGRES_USER) keeps superuser-equivalent
 -- privileges for ad-hoc DDL and as the Flyway migration user.
 GRANT ALL PRIVILEGES ON DATABASE jmetercloud_globalrun TO jmetercloud;
-GRANT ALL PRIVILEGES ON DATABASE jmetercloud_k8srun TO jmetercloud;

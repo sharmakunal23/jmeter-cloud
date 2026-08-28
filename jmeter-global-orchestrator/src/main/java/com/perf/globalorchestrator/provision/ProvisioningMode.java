@@ -7,17 +7,9 @@ import java.util.Locale;
  * on demand.
  *
  * <p>Selected by the {@code PROVISIONING_MODE} env var (bound to
- * {@link #PROPERTY}); defaults to {@link #DYNAMIC} so an existing
- * deployment behaves exactly as it did before this flag existed.
- *
- * <h2>Why this is separate from {@code podProvisioner.substrate}</h2>
- * "Substrate" answers <em>how</em> we create pods (docker socket vs the
- * Kubernetes API). This answers <em>whether</em> we create them at all.
- * Overloading the substrate key with a third value would silently
- * invalidate a dozen sibling {@code podProvisioner.*} keys and read as
- * "static is a kind of daemon", which it isn't. When the mode is
- * {@link #STATIC} the substrate key is ignored entirely — neither
- * daemon-backed provisioner bean is wired.
+ * {@link #PROPERTY}); the platform default is {@link #STATIC}. Under STATIC
+ * every {@code podProvisioner.*} key is ignored and no provisioner bean is
+ * wired.
  *
  * @see ConditionalOnProvisioningMode
  * @see ProvisioningProperties

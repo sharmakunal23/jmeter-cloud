@@ -3,6 +3,7 @@ package com.perf.globalorchestrator.client;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.perf.globalorchestrator.observability.ErrorContext;
+import com.perf.globalorchestrator.region.RegionRouter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -19,10 +20,10 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Thin HTTP client for the per-pod local-orchestrator's REST API. Uses
- * the JDK's {@link HttpClient} (no extra deps; same library the
- * orchestrator's own ResultUploader uses). All calls go through a single
- * shared client — the JDK pools connections per-target-host internally.
+ * Thin HTTP client for a worker's REST API. Every call takes a
+ * {@link WorkerRef} and dials wherever {@link RegionRouter} says — through
+ * the region's relay when the region is routed, else the worker's own
+ * {@code baseUrl}; the paths are the same either way.
  */
 @Component
 public class LocalOrchestratorClient {
@@ -31,9 +32,11 @@ public class LocalOrchestratorClient {
 
     private final HttpClient http;
     private final ObjectMapper mapper;
+    private final RegionRouter router;
 
-    public LocalOrchestratorClient(ObjectMapper mapper) {
+    public LocalOrchestratorClient(ObjectMapper mapper, RegionRouter router) {
         this.mapper = mapper;
+        this.router = router;
         this.http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
                 .version(HttpClient.Version.HTTP_1_1)
@@ -45,8 +48,8 @@ public class LocalOrchestratorClient {
         public boolean ok() { return statusCode >= 200 && statusCode < 300; }
     }
 
-    public StartTestResult startTest(String runId, String podBaseUrl, Map<String, Object> body) {
-        URI target = URI.create(stripTrailingSlash(podBaseUrl) + "/api/v1/test");
+    public StartTestResult startTest(String runId, WorkerRef worker, Map<String, Object> body) {
+        URI target = URI.create(base(worker) + "/api/v1/test");
         try {
             String payload = mapper.writeValueAsString(body);
             HttpRequest.Builder builder = HttpRequest.newBuilder()
@@ -59,7 +62,7 @@ public class LocalOrchestratorClient {
             return new StartTestResult(resp.statusCode(), resp.body(), resp.statusCode() == 202);
         } catch (Exception e) {
             ErrorContext.logWarn(LOG,
-                    "startTest runId=" + runId + " podBaseUrl=" + podBaseUrl,
+                    "startTest runId=" + runId + " worker=" + worker.podName(),
                     "startTest fan-out to " + target + " failed",
                     e);
             return new StartTestResult(0, e.toString(), false);
@@ -74,8 +77,8 @@ public class LocalOrchestratorClient {
      * this client does NOT wait for convergence — caller polls
      * {@link #getTestStatus} for the eventual terminal state.
      */
-    public DrainTestResult drainTest(String runId, String podBaseUrl) {
-        URI target = URI.create(stripTrailingSlash(podBaseUrl) + "/api/v1/test/drain");
+    public DrainTestResult drainTest(String runId, WorkerRef worker) {
+        URI target = URI.create(base(worker) + "/api/v1/test/drain");
         try {
             HttpRequest.Builder builder = HttpRequest.newBuilder()
                     .uri(target)
@@ -86,7 +89,7 @@ public class LocalOrchestratorClient {
             return new DrainTestResult(resp.statusCode(), resp.body(), resp.statusCode() == 202);
         } catch (Exception e) {
             ErrorContext.logWarn(LOG,
-                    "drainTest runId=" + runId + " podBaseUrl=" + podBaseUrl,
+                    "drainTest runId=" + runId + " worker=" + worker.podName(),
                     "drainTest call to " + target + " failed",
                     e);
             return new DrainTestResult(0, e.toString(), false);
@@ -108,8 +111,8 @@ public class LocalOrchestratorClient {
      * force-marks the run/member ABORTED regardless of this result; the RPC is
      * only a courtesy so a healthy worker stops its JMeter child promptly.
      */
-    public AbortTestResult abortTest(String runId, String podBaseUrl) {
-        URI target = URI.create(stripTrailingSlash(podBaseUrl) + "/api/v1/test/abort");
+    public AbortTestResult abortTest(String runId, WorkerRef worker) {
+        URI target = URI.create(base(worker) + "/api/v1/test/abort");
         try {
             HttpRequest.Builder builder = HttpRequest.newBuilder()
                     .uri(target)
@@ -120,7 +123,7 @@ public class LocalOrchestratorClient {
             return new AbortTestResult(resp.statusCode(), resp.body(), resp.statusCode() == 202);
         } catch (Exception e) {
             ErrorContext.logWarn(LOG,
-                    "abortTest runId=" + runId + " podBaseUrl=" + podBaseUrl,
+                    "abortTest runId=" + runId + " worker=" + worker.podName(),
                     "abortTest call to " + target + " failed",
                     e);
             return new AbortTestResult(0, e.toString(), false);
@@ -150,8 +153,8 @@ public class LocalOrchestratorClient {
      *         A 400 is forwarded so a bad {@code stream} value reaches
      *         the operator with the local-orch's diagnostic message.
      */
-    public LogsResult getLogs(String podBaseUrl, int tail, String stream) {
-        StringBuilder url = new StringBuilder(stripTrailingSlash(podBaseUrl))
+    public LogsResult getLogs(WorkerRef worker, int tail, String stream) {
+        StringBuilder url = new StringBuilder(base(worker))
                 .append("/api/v1/logs?tail=").append(tail);
         if (stream != null && !stream.isBlank()) {
             url.append("&stream=").append(URLEncoder.encode(stream, StandardCharsets.UTF_8));
@@ -176,8 +179,8 @@ public class LocalOrchestratorClient {
     }
 
     /** Fetches the local-orchestrator's current test snapshot (or empty on 404 / unreachable). */
-    public Optional<Map<String, Object>> getTestStatus(String podBaseUrl) {
-        URI target = URI.create(stripTrailingSlash(podBaseUrl) + "/api/v1/test");
+    public Optional<Map<String, Object>> getTestStatus(WorkerRef worker) {
+        URI target = URI.create(base(worker) + "/api/v1/test");
         try {
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(target)
@@ -209,8 +212,8 @@ public class LocalOrchestratorClient {
      * {@code POST /api/v1/test} to it — otherwise the fanout races
      * the startup and the member lands in REJECTED.
      */
-    public boolean isHealthy(String podBaseUrl) {
-        URI target = URI.create(stripTrailingSlash(podBaseUrl) + "/actuator/health");
+    public boolean isHealthy(WorkerRef worker) {
+        URI target = URI.create(base(worker) + "/actuator/health");
         try {
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(target)
@@ -224,7 +227,9 @@ public class LocalOrchestratorClient {
         }
     }
 
-    private static String stripTrailingSlash(String s) {
+    /** The URL to dial for this worker, trailing slash trimmed. */
+    private String base(WorkerRef worker) {
+        String s = router.dial(worker);
         return s.endsWith("/") ? s.substring(0, s.length() - 1) : s;
     }
 

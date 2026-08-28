@@ -1,11 +1,11 @@
 package com.perf.globalorchestrator.provision;
 
 /**
- * Inputs needed to create one local-orchestrator container.
+ * Inputs needed to create one worker Pod.
  *
- * <p>{@link #podName()} doubles as both the Docker container name and the
- * pod's network hostname, so the global-orchestrator can reach the pod at
- * {@code http://{podName}:8080} once it's running. The naming convention
+ * <p>{@link #podName()} doubles as the Pod name and its network hostname, so
+ * the global-orchestrator can reach it at
+ * {@code http://{podName}.{headlessService}:8080} once it's running. The naming convention
  * is {@code {applicationName}-{region}-worker-{n}} (see
  * {@code PodNameAllocator} in Phase 2).
  *

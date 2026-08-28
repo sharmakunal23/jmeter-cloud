@@ -1,6 +1,7 @@
 package com.perf.globalorchestrator.provision;
 
 import com.perf.globalorchestrator.client.LocalOrchestratorClient;
+import com.perf.globalorchestrator.client.WorkerRef;
 import com.perf.globalorchestrator.client.LocalOrchestratorClient.LogsResult;
 import com.perf.globalorchestrator.domain.Application;
 import com.perf.globalorchestrator.domain.Pod;
@@ -59,7 +60,7 @@ class PodRecyclerTest {
         recycler = new PodRecycler(pods, apps, provisioner, spinService, localClient,
                 evaluator, runs, audit);
 
-        when(provisioner.currentImageDigest()).thenReturn("img-current");
+        when(provisioner.currentImageDigest(any())).thenReturn("img-current");
         when(apps.findById("appId")).thenReturn(Optional.of(app(RecyclePolicy.DRAIN_AFTER_RUN)));
     }
 
@@ -72,10 +73,10 @@ class PodRecyclerTest {
         PodRecycler.RecycleSummary summary = recycler.doSweep();
 
         assertThat(summary.recycled).isEmpty();
-        verify(provisioner, never()).stopAndRemove(anyString());
+        verify(provisioner, never()).stopAndRemove(anyString(), anyString());
         // Short-circuits before the policy decision and before any log capture.
         verify(evaluator, never()).decide(any(), any(), any());
-        verify(localClient, never()).getLogs(anyString(), anyInt(), anyString());
+        verify(localClient, never()).getLogs(any(WorkerRef.class), anyInt(), anyString());
     }
 
     @Test
@@ -86,7 +87,7 @@ class PodRecyclerTest {
         when(pods.isWorkerBoundToNonTerminalRun(POD)).thenReturn(false); // run is terminal
         when(pods.markDrainingForRecycle(POD)).thenReturn(1);
         when(evaluator.decide(any(), any(), eq("img-current"))).thenReturn(RecycleReason.DRAIN_AFTER_RUN);
-        when(localClient.getLogs(eq(pod.baseUrl()), eq(200), eq("jmeter")))
+        when(localClient.getLogs(eq(WorkerRef.of(pod)), eq(200), eq("jmeter")))
                 .thenReturn(new LogsResult(200, "…JMeter exit forensics tail…"));
         when(runs.findMostRecentRunIdForWorker(POD)).thenReturn(Optional.of("01RUN"));
 
@@ -95,8 +96,8 @@ class PodRecyclerTest {
         assertThat(summary.recycled).containsEntry(POD, RecycleReason.DRAIN_AFTER_RUN);
         // Forensics captured BEFORE the container is torn down.
         var ordered = inOrder(localClient, provisioner);
-        ordered.verify(localClient).getLogs(pod.baseUrl(), 200, "jmeter");
-        ordered.verify(provisioner).stopAndRemove(POD);
+        ordered.verify(localClient).getLogs(WorkerRef.of(pod), 200, "jmeter");
+        ordered.verify(provisioner).stopAndRemove(anyString(), eq(POD));
         // DRAIN_AFTER_RUN drains without a replacement.
         verify(spinService, never()).spin(anyString(), anyString(), anyString());
     }

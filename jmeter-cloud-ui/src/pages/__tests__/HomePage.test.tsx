@@ -23,7 +23,7 @@ vi.mock("../../api/regions", async () => {
   const actual = await vi.importActual<typeof import("../../api/regions")>("../../api/regions");
   return {
     ...actual,
-    regionsApi: { list: vi.fn() },
+    regionsApi: { list: vi.fn(), status: vi.fn() },
   };
 });
 vi.mock("../../api/automation", async () => {
@@ -37,7 +37,7 @@ import { regionsApi } from "../../api/regions";
 import { cronJobsApi } from "../../api/automation";
 const apps = applicationsApi as unknown as { list: ReturnType<typeof vi.fn> };
 const runs = runsApi as unknown as { listPage: ReturnType<typeof vi.fn> };
-const regions = regionsApi as unknown as { list: ReturnType<typeof vi.fn> };
+const regions = regionsApi as unknown as { list: ReturnType<typeof vi.fn>; status: ReturnType<typeof vi.fn> };
 const cronJobs = cronJobsApi as unknown as { list: ReturnType<typeof vi.fn> };
 
 // Mock global fetch for the per-backend probes (HomePage hits /actuator/health,
@@ -47,6 +47,8 @@ beforeEach(() => {
   apps.list.mockReset();
   runs.listPage.mockReset();
   regions.list.mockReset();
+  regions.status.mockReset();
+  regions.status.mockResolvedValue([]);
   cronJobs.list.mockReset();
   cronJobs.list.mockResolvedValue([]);
   // Defaults — empty active runs + empty regions roll up to no capacity
@@ -97,6 +99,24 @@ describe("HomePage — health checklist", () => {
       expect(platform).toHaveTextContent("document-service");
       expect(platform).toHaveTextContent("postgres");
     });
+  });
+
+
+  it("a routed region is a checklist row — HEALTHY when its regional orchestrator answered, UNHEALTHY with the probe error when it did not; direct regions are not rows", async () => {
+    apps.list.mockResolvedValue([]);
+    regions.status.mockResolvedValue([
+      { region: "na-east", url: "http://na-east-control-plane:30088", routed: true, reachable: true },
+      { region: "na-west", url: "http://na-west-control-plane:30088", routed: true, reachable: false, lastError: "connection refused" },
+      { region: "lab", routed: false },
+    ]);
+    render(<MemoryRouter><HomePage /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText(/region na-east/)).toBeInTheDocument());
+    const east = screen.getByText(/region na-east/).closest("li") ?? screen.getByText(/region na-east/).parentElement!;
+    expect(east).toHaveTextContent(/HEALTHY/);
+    const west = screen.getByText(/region na-west/).closest("li") ?? screen.getByText(/region na-west/).parentElement!;
+    expect(west).toHaveTextContent(/UNHEALTHY/);
+    expect(west).toHaveTextContent(/connection refused/);
+    expect(screen.queryByText(/region lab/)).not.toBeInTheDocument();
   });
 
   it("apps with HEALTHY status render a HEALTHY badge", async () => {

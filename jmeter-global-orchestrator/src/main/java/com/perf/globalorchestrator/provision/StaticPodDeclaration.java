@@ -28,11 +28,10 @@ import java.util.regex.Pattern;
 public record StaticPodDeclaration(String podName, String baseUrl) {
 
     /**
-     * DNS-1123-ish: what a real Kubernetes Pod or Docker container is
-     * actually named. Permissive enough for both substrates (underscores
-     * and dots are legal container-name characters), strict enough that
-     * whitespace, control characters and path separators can never reach
-     * the registry key.
+     * DNS-1123-ish: what a real Kubernetes Pod (or any operator-deployed
+     * worker host) is named. Permissive on underscores and dots, strict
+     * enough that whitespace, control characters and path separators can
+     * never reach the registry key.
      */
     private static final Pattern POD_NAME =
             Pattern.compile("[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?");
@@ -56,8 +55,8 @@ public record StaticPodDeclaration(String podName, String baseUrl) {
         }
         if (!POD_NAME.matcher(name).matches()) {
             throw new IllegalArgumentException(
-                    "podName must be alphanumeric with '.', '-' or '_' inside (a Kubernetes Pod / "
-                    + "Docker container name); got '" + name + "'");
+                    "podName must be alphanumeric with '.', '-' or '_' inside (a Kubernetes Pod "
+                    + "or worker host name); got '" + name + "'");
         }
 
         String url = baseUrl == null ? "" : baseUrl.trim();

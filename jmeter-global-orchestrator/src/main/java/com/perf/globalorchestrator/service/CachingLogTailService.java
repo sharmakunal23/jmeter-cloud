@@ -2,6 +2,7 @@ package com.perf.globalorchestrator.service;
 
 import com.perf.globalorchestrator.client.LocalOrchestratorClient;
 import com.perf.globalorchestrator.client.LocalOrchestratorClient.LogsResult;
+import com.perf.globalorchestrator.client.WorkerRef;
 import com.perf.globalorchestrator.config.CacheConfig;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
@@ -40,8 +41,8 @@ public class CachingLogTailService {
                key = "#runId + '|' + #workerId + '|' + #stream + '|' + #tail",
                condition = "#terminal",
                unless = "#result == null || #result.statusCode() != 200")
-    public LogsResult getLogs(String runId, String workerId, String podBaseUrl,
+    public LogsResult getLogs(String runId, String workerId, WorkerRef worker,
                               String stream, int tail, boolean terminal) {
-        return localClient.getLogs(podBaseUrl, tail, stream);
+        return localClient.getLogs(worker, tail, stream);
     }
 }

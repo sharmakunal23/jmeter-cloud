@@ -25,6 +25,7 @@ sequenceDiagram
     participant NX as nginx (jmeter-cloud-ui)
     participant GO as global-orchestrator
     participant PG as Postgres<br/>(jmetercloud_globalrun)
+    participant RO as regional-orchestrator<br/>(in the region's cluster)
     participant LO as local-orchestrator-N<br/>(JMeter baked in)
     participant JM as JMeter (child process)
 
@@ -41,25 +42,74 @@ sequenceDiagram
         GO->>PG: UPDATE "run" SET state=STARTING
     end
 
-    par bounded-thread-pool fan-out (default 8)
-        GO->>LO: POST /api/v1/test<br/>{ runId, region, testPlanBlobId, … }
+    alt shortfall and spinShortfall (async launch)
+        GO->>PG: INSERT "run" (state=PREPARING,<br/>stateReason='provisioning 6 worker(s) … 0/6 ready')
+        GO-->>NX: 201 Created + Run JSON (PREPARING)
+        NX-->>U: launch modal stays on "Provisioning workers"
+        Note over GO,RO: a virtual thread reserves names serially (PK-guarded),<br/>then creates every pod in parallel and waits for readiness
+        GO->>RO: POST /api/v1/pods { podName, applicationId, region } × N
+        loop until ready (readiness probe = Tomcat answering)
+            GO->>RO: GET /api/v1/pods/{podName}
+            GO->>PG: UPDATE "run" SET stateReason='… k/N ready'
+        end
+        GO->>PG: UPDATE pod SET state='IDLE' (LOST-until-ready → claimable)
+        Note over GO,PG: then the same claim transaction as above,<br/>into the existing run
+    end
+
+    par bounded-thread-pool fan-out (default 32)
+        GO->>RO: POST /api/v1/workers/{podName}/api/v1/test<br/>{ runId, region, testPlanBlobId, … }
+        Note over GO,RO: RegionRouter — a region with a URL in REGIONS<br/>is dialled through its relay. A direct region<br/>is dialled at the worker's own baseUrl.
+        RO->>LO: POST /api/v1/test (relayed verbatim)
         LO->>JM: spawn /opt/jmeter/bin/jmeter -n -t plan.jmx -l results.jtl
-        LO-->>GO: 202 ACCEPTED
+        LO-->>RO: 202 ACCEPTED
+        RO-->>GO: 202 ACCEPTED
         GO->>PG: UPDATE "runFleetMember" state=ACCEPTED, fanoutStatusCode=202
     and
         Note over GO,LO: Strict mode rolls the whole claim back on any<br/>per-region shortfall → 503 INSUFFICIENT_CAPACITY.<br/>?bestEffort=true accepts the partial claim.
     end
 
     GO->>PG: UPDATE "run" state=RUNNING (if any member ACCEPTED)
-    GO-->>NX: 201 Created + Run JSON
-    NX-->>U: navigate to /runs/{runId}
+    GO-->>NX: 201 Created + Run JSON (sync launch) — the async one is already RUNNING by now
+    NX-->>U: navigate to /applications/{app}/runs/{runId} once RUNNING
 
-    Note over U,GO: Run detail polls GET /runs/{runId}/status every 5 s.<br/>The global re-polls each pod inline and rolls<br/>member states up into the run state.
+    Note over U,GO: Run detail polls GET /runs/{runId}/status every 5 s.<br/>The global re-polls each pod inline (through the<br/>region's relay) and rolls member states up into the run state.
 ```
 
 ---
 
-## 2. Pod registry — register, heartbeat, sweep, claim
+## 2. Pod registry — liveness, sweep, claim
+
+Dynamic workers in a routed region never call the hub. The kubelet is the
+liveness truth, read once per region per tick:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant GO as global-orchestrator<br/>(WorkerLivenessProbe, every 15 s)
+    participant RO as regional-orchestrator
+    participant K8 as Kubernetes API
+    participant PG as Postgres<br/>(globalOrchestrator.pod)
+
+    Note over GO,PG: POST …/capacity/{region}/pods registers the pod LOST<br/>(unclaimable), asks the regional to create it, and waits up to 20 s<br/>for readiness. Slower pods answer ready=false and this loop flips them IDLE.
+
+    loop every 15 s, once per routed region
+        GO->>RO: GET /api/v1/workers
+        RO->>K8: list Pods (managedBy=regional-orchestrator)
+        RO-->>GO: [{ podName, ready, dead, reason, exitCode }]
+        alt ready
+            GO->>PG: UPDATE pod SET lastHeartbeat=now(), state='IDLE'
+        else never ready (LOST, runsServed=0) and dead, absent or Pending for 10 min
+            GO->>RO: DELETE /api/v1/pods/{podName}
+            GO->>PG: DELETE FROM pod WHERE podId=…
+        else dead or absent (OOMKilled, Unschedulable, deleted)
+            GO->>PG: UPDATE pod SET state='LOST'
+            GO->>PG: UPDATE runFleetMember SET state='FAILED',<br/>stateReason='worker Pod OOMKilled (exit 137)'
+        end
+    end
+    Note over GO: A region unreachable for more than 5 min<br/>loses every dynamic worker in it. Shorter outages change nothing.<br/>A pod that served a run keeps its LOST row for forensics.
+```
+
+Operator-declared (static or direct-region) workers keep the heartbeat model:
 
 ```mermaid
 sequenceDiagram
@@ -69,7 +119,7 @@ sequenceDiagram
     participant PG as Postgres<br/>(globalOrchestrator.pod)
     participant SW as PodSweeper @Scheduled<br/>(every 30 s)
 
-    Note over LO: @PostConstruct fires a daemon thread<br/>so Spring init never blocks on the global
+    Note over LO: @PostConstruct fires a daemon thread<br/>so Spring init never blocks on the global.
 
     LO->>GO: POST /api/v1/registerPod<br/>{ podId, region, baseUrl }
     GO->>PG: INSERT INTO pod … ON CONFLICT (podId) DO UPDATE<br/>SET state='IDLE', region=…, baseUrl=…, lastHeartbeat=now()
@@ -85,7 +135,7 @@ sequenceDiagram
     end
 
     loop every 30 s (sweepIntervalMs)
-        SW->>PG: UPDATE pod SET state='LOST'<br/>WHERE state != 'LOST' AND lastHeartbeat < now() - INTERVAL '90 s'
+        SW->>PG: UPDATE pod SET state='LOST'<br/>WHERE state != 'LOST' AND lastHeartbeat < now() - INTERVAL '90 s'<br/>AND NOT (dynamic pod in a routed region)
     end
 
     Note over GO,PG: Run-launch claim:<br/>SELECT … WHERE state='IDLE' AND NOT EXISTS<br/>(active runFleetMember) ORDER BY lastHeartbeat DESC<br/>LIMIT N FOR UPDATE OF p SKIP LOCKED.<br/>SKIP LOCKED makes concurrent launches pick<br/>different pods rather than waiting on each other.

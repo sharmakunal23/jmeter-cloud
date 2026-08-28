@@ -14,6 +14,13 @@ spring:
     username: ${POSTGRES_USER:metricsReader}
     password: ${POSTGRES_PASSWORD:localdev}
   # Surface ISO-8601 Instants on the wire (default Spring Boot config).
+  # Nine @Scheduled beans share this scheduler (probes, sweepers, cron). One
+  # thread would let a slow tick — a region probe waiting on connect
+  # timeouts — delay every other sweep.
+  task:
+    scheduling:
+      pool:
+        size: 4
   jackson:
     serialization:
       write-dates-as-timestamps: false
@@ -108,7 +115,7 @@ globalOrchestrator:
   region: ${GLOBAL_ORCHESTRATOR_REGION:us-east-1}
   # Bounded thread pool sized to the local-orchestrator's HTTP_MAX_THREADS;
   # production fleets > 100 pods should switch to a reactive WebClient.
-  fanoutThreads: ${GLOBAL_ORCHESTRATOR_FANOUT_THREADS:8}
+  fanoutThreads: ${GLOBAL_ORCHESTRATOR_FANOUT_THREADS:32}
   # Run-state DB is separate from metrics — owns writes via the
   # globalOrchestratorWriter least-privilege role.
   runStateUrl:      ${POSTGRES_GLOBALRUN_URL:jdbc:postgresql://postgres:5432/jmetercloud_globalrun}
@@ -134,26 +141,16 @@ globalOrchestrator:
   #     container teardown answer 409 PROVISIONING_DISABLED; PodReconciler
   #     and PodRecycler are not wired AT ALL. That last part is
   #     load-bearing: the reconciler's row-first pass deletes any registry
-  #     row whose container it cannot see, which with no substrate access
+  #     row whose Pod it cannot see, which with no cluster access
   #     would wipe the operator's whole declared fleet at boot.
   #   DYNAMIC — the control plane owns worker lifecycle: it spins,
   #     restarts, drains and recycles through a PodProvisioner. Set this
-  #     explicitly when the control plane HAS rights to create workers —
-  #     including local compose dev, where it is what makes the Capacity
-  #     tab's Spin button work.
-  # Distinct from podProvisioner.substrate below: substrate answers HOW we
-  # create workers, this answers WHETHER. In STATIC mode the substrate key
-  # is ignored entirely.
+  #     explicitly when at least one region in REGIONS has a regional
+  #     orchestrator URL — that regional holds the cluster credential; this
+  #     service never does.
   provisioning:
     mode:    ${PROVISIONING_MODE:STATIC}
-    # Comma-separated region ids this deployment uses; empty means "no
-    # override" and the UI keeps its own defaults. In STATIC mode these are
-    # the operator's data centers (e.g. na-east,na-west) — the platform
-    # keeps calling the axis "region" in the API and schema because it
-    # already IS the placement axis (pod registry, capacity matrix, claim
-    # SQL, run request); only the UI label changes. Do not rename the
-    # column — the API and schema keep saying "region".
-    regions: ${PROVISIONING_REGIONS:}
+    # The region list lives in globalOrchestrator.regions (REGIONS) above.
 
   # ── STATIC-FLEET: declared-worker liveness probe (STATIC mode only) ─
   # Operator-deployed workers need not know this control plane exists, so
@@ -179,64 +176,51 @@ globalOrchestrator:
     probeConcurrency:    ${STATICPOD_PROBE_CONCURRENCY:8}
     probeTickBudgetMs:   ${STATICPOD_PROBE_TICK_BUDGET_MS:20000}
 
-  # ── PodProvisioner config ─────────────────────────────────────────
-  # Spins per-app local-orchestrator workers ({appName}-{region}-worker-{n})
-  # on demand. Only consulted when provisioning.mode = DYNAMIC.
+  # ── Regions (REGIONAL-SPLIT) ─────────────────────────────────────
+  # Comma-separated `id` or `id=url`. An entry WITH a url is routed: its
+  # workers are created and reached through the jmeter-regional-orchestrator
+  # at that url (one per data-center cluster; NodePort 30088 on kind). A
+  # bare id is direct: operator-declared workers reached at their own
+  # baseUrl — the compose-only STATIC loop. The ids are what the UI offers
+  # as regions; empty keeps the UI on its own defaults.
+  #   REGIONS=na-east=http://na-east-control-plane:30088,na-west=http://na-west-control-plane:30088
+  regions: ${REGIONS:}
+  # How often each routed region's /api/v1/capabilities is polled — the
+  # only source of "reachable" and of the worker image the recycler diffs.
+  regionProbe:
+    intervalMs:               ${REGION_PROBE_INTERVAL_MS:15000}
+    initialDelayMs:           ${REGION_PROBE_INITIAL_DELAY_MS:2000}
+    # Consecutive misses before a region is UNREACHABLE (one is a WAN blip).
+    missesBeforeUnreachable:  ${REGION_PROBE_MISSES_BEFORE_UNREACHABLE:3}
+  # Dynamic workers in routed regions never heartbeat; the kubelet is the
+  # liveness truth. One GET /api/v1/workers per region per tick: ready
+  # refreshes the row, dead/absent marks it LOST with the kubelet's reason
+  # and fails its run members. A region unreachable longer than
+  # regionLostAfterMs has all its dynamic workers marked LOST — shorter
+  # outages change nothing, the workers are still running JMeter.
+  workerLiveness:
+    intervalMs:        ${WORKER_LIVENESS_INTERVAL_MS:15000}
+    initialDelayMs:    ${WORKER_LIVENESS_INITIAL_DELAY_MS:5000}
+    regionLostAfterMs: ${WORKER_LIVENESS_REGION_LOST_AFTER_MS:300000}
+    # A spun pod that never becomes ready (Unschedulable, ImagePullBackOff,
+    # a boot that hangs) is torn down — Pod and registry row — after this
+    # long, so it stops holding capacity. Pods that served a run are kept
+    # LOST for forensics.
+    startingTimeoutMs: ${WORKER_LIVENESS_STARTING_TIMEOUT_MS:600000}
+  # A spun pod is LOST (unclaimable) until the kubelet reports it ready;
+  # POST …/pods waits up to this long before answering with ready=false.
   podProvisioner:
-    # parity:ignore-start — substrate SELECTION is specific to this service:
-    # it is the one orchestrator that can drive a docker daemon, so it needs
-    # a switch and the docker-only knobs. The twin always uses fabric8.
-    # KUBE-5 Option A (2026-07-22) — `docker` (default, the compose stack;
-    # DockerSocketPodProvisioner over the mounted socket) or `k8s`
-    # (K8sPodProvisioner via fabric8 + in-cluster ServiceAccount). Exactly
-    # one provisioner bean activates.
-    substrate:             ${PODPROVISIONER_SUBSTRATE:docker}
-    dockerHost:            ${PODPROVISIONER_DOCKER_HOST:unix:///var/run/docker.sock}
-    network:               ${PODPROVISIONER_NETWORK:jmeter-cloud_default}
-    # parity:ignore-end
-    # K8s substrate — worker Pods live in this namespace, and the headless
-    # Service gives each one the stable DNS name {podName}.{headlessService}.
-    # Both are K8s resource names → DNS-1123 lowercase (camelCase exemption).
-    # The fabric8 client auto-detects in-cluster ServiceAccount vs local
-    # kubeconfig, so there is deliberately no master-URL key here.
-    namespace:             ${PODPROVISIONER_NAMESPACE:jmeter-cloud}
-    headlessService:       ${PODPROVISIONER_HEADLESS_SERVICE:workers}
-    image:                 ${PODPROVISIONER_IMAGE:jmeter-local-orchestrator:dev}
-    localOrchestratorPort: ${PODPROVISIONER_LOCAL_ORCHESTRATOR_PORT:8080}
-    globalOrchestratorUrl: ${GLOBAL_ORCHESTRATOR_URL:http://global-orchestrator:8082}
-    # The PodProvisioner stamps this onto every spawned worker.
-    metricsIngestUrl:      ${PODPROVISIONER_METRICS_INGEST_URL:http://metrics-consumer:8083/api/v1/ingest}
-    documentServiceUrl:    ${DOCUMENT_SERVICE_URL:http://document-service:8084}
-    # SLIMDOWN (2026-07-22): no tracing keys or stamps at all — the worker
-    # image was slimmed too, so even the old silencer
-    # (MANAGEMENT_TRACING_SAMPLING_PROBABILITY=0.0) is gone.
-    # Reliability — the memory limit (MiB) applied to every spawned worker:
-    # a hard docker memory limit on the docker substrate, the Pod's
-    # resources.limits.memory (and matching request, so the scheduler
-    # reserves what the worker really uses) on K8s. Round 6 (2026-05-31)
-    # raised 4096 → 6144 alongside the JMeter child heap bump (1g → 2g,
-    # OrchestratorConfig.JMETER_JVM_ARGS). 6144 fits the orchestrator JVM
-    # (-Xmx1g + ~0.5 GiB native ≈ 1.5 GiB) + the JMeter child (-Xmx2g +
-    # ~0.5 GiB native ≈ 2.5 GiB) + ~2 GiB page-cache headroom for the
-    # multi-GB JTL of a 12 h / 200-250 rps / ~100-endpoint run. 4096 was the
-    # Round-5 figure for a 1g JMeter child and left no headroom once the
-    # child grew — workers OOM'd near the 1-hour mark. A hard limit means a
-    # runaway worker OOMs inside its own cgroup (ExitOnOutOfMemoryError,
-    # reaped by PodSweeper) instead of triggering the host/node OOM-killer.
-    workerMemoryMb:             ${PODPROVISIONER_WORKER_MEMORY_MB:6144}
-    # CPU REQUEST per worker on the K8s substrate (no cpu limit on purpose —
-    # cfs throttling on a load generator skews the latencies it measures;
-    # the request only keeps the scheduler honest). 500m locally; size up in
-    # cloud. The docker substrate sets no CPU constraint at all.
-    workerCpuRequest:           ${PODPROVISIONER_WORKER_CPU_REQUEST:500m}
-    # RELIABILITY Round 8 — aggregator late-arrival grace (seconds) stamped onto
-    # each spawned worker as GRACE_PERIOD_SECONDS. 10s lets slow samples (JMeter
-    # writes a sample at completion but timestamps it at start, so a slow row
-    # lands in the JTL out of order) record into their correct 1-second window
-    # instead of being dropped as "late" (which biases p95/p99 low). Trades a
-    # ~grace-second reporting lag for completeness; per-run POST /test
-    # gracePeriodSeconds still overrides.
-    gracePeriodSeconds:         ${PODPROVISIONER_GRACE_PERIOD_SECONDS:10}
+    spinReadyTimeoutMs: ${PODPROVISIONER_SPIN_READY_TIMEOUT_MS:90000}
+    # The Capacity tab's synchronous POST …/pods waits at most this long —
+    # under nginx's 30 s — then answers ready=false; the snapshot shows
+    # STARTING until the liveness probe flips the pod to READY.
+    spinCapacityWaitMs: ${PODPROVISIONER_SPIN_CAPACITY_WAIT_MS:20000}
+  # Timeouts for one call to a regional orchestrator. Delete and restart
+  # wait up to 30 s for the old Pod to disappear before answering, so the
+  # read timeout must exceed that or a completed delete reads as a 503.
+  regionalClient:
+    connectTimeoutMs: ${REGIONAL_CLIENT_CONNECT_TIMEOUT_MS:2000}
+    readTimeoutMs:    ${REGIONAL_CLIENT_READ_TIMEOUT_MS:45000}
 
   # ── Save Results reconciliation (ResultsSavedSweeper) ──────────────
   # A worker's JTL upload finishes AFTER the run goes terminal, and the
@@ -246,6 +230,10 @@ globalOrchestrator:
   # on COMPLETED + saveResults runs still missing an event, so the upload is
   # observed regardless of whether a UI is open. Idempotent + durably deduped.
   run:
+    # An async launch (POST /runs with spinShortfall) is PREPARING while its
+    # workers are provisioned in the background; one still PREPARING after
+    # this long is failed by the sweeper (its task died with a restart).
+    launchTimeoutMs:                 ${RUN_LAUNCH_TIMEOUT_MS:600000}
     # 15 s: the upload lands within seconds of completion; poll soon, before
     # the pod is reused for the next run (which resets its uploadState).
     resultsSavedSweepIntervalMs:     ${RESULTS_SAVED_SWEEP_INTERVAL_MS:15000}

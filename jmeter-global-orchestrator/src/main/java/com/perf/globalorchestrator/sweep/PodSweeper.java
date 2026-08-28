@@ -1,5 +1,6 @@
 package com.perf.globalorchestrator.sweep;
 
+import com.perf.globalorchestrator.region.RegionRegistry;
 import com.perf.globalorchestrator.repo.PodRepository;
 import com.perf.globalorchestrator.service.RunService;
 import org.slf4j.Logger;
@@ -30,15 +31,21 @@ public class PodSweeper {
 
     private final PodRepository pods;
     private final RunService runService;
+    private final RegionRegistry regions;
     private final long lostAfterMs;
+    private final long launchTimeoutMs;
 
     public PodSweeper(
             PodRepository pods,
             RunService runService,
-            @Value("${globalOrchestrator.pod.lostAfterMs:90000}") long lostAfterMs) {
+            RegionRegistry regions,
+            @Value("${globalOrchestrator.pod.lostAfterMs:90000}") long lostAfterMs,
+            @Value("${globalOrchestrator.run.launchTimeoutMs:600000}") long launchTimeoutMs) {
         this.pods = pods;
         this.runService = runService;
+        this.regions = regions;
         this.lostAfterMs = lostAfterMs;
+        this.launchTimeoutMs = launchTimeoutMs;
     }
 
     @Scheduled(fixedDelayString = "${globalOrchestrator.pod.sweepIntervalMs:30000}",
@@ -46,7 +53,9 @@ public class PodSweeper {
     public void sweep() {
         try {
             Instant cutoff = Instant.now().minus(Duration.ofMillis(lostAfterMs));
-            int n = pods.markLostBefore(cutoff);
+            // Dynamic workers in routed regions never heartbeat — the
+            // WorkerLivenessProbe judges them from the Pod list.
+            int n = pods.markLostBefore(cutoff, regions.routedIds());
             if (n > 0) {
                 LOG.info("PodSweeper marked {} pod(s) LOST (heartbeat older than {} ms)", n, lostAfterMs);
             }
@@ -57,6 +66,12 @@ public class PodSweeper {
             // a prior tick missed self-heals; in steady state it matches no rows.
             runService.reapLostWorkerMembers(
                     "worker lost: no heartbeat within " + lostAfterMs + " ms");
+            // An async launch whose provisioning task died with a restart
+            // would otherwise sit in PREPARING forever.
+            int stale = runService.failStalePreparingRuns(Duration.ofMillis(launchTimeoutMs));
+            if (stale > 0) {
+                LOG.warn("PodSweeper failed {} PREPARING run(s) older than {} ms", stale, launchTimeoutMs);
+            }
         } catch (Exception e) {
             // Don't kill the scheduler — log and try again next tick.
             LOG.warn("PodSweeper sweep failed: {}", e.toString());

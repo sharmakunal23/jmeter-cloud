@@ -1,9 +1,7 @@
-# KUBE-5 — global-orchestrator: the control plane (run fan-out, pod
-# registry, capacity, automation scheduler, AI proxy, UI backend). K8s
-# equivalent of the compose service with two deliberate deltas:
-#   * NO docker socket, NO root user — worker provisioning goes through
-#     the K8sPodProvisioner (PODPROVISIONER_SUBSTRATE=k8s) under the
-#     ServiceAccount + pods-only Role in rbac.yaml.
+# global-orchestrator: the control plane (run fan-out, pod registry,
+# capacity, automation scheduler, AI proxy, UI backend). It holds no
+# cluster credential — worker Pods are created by each region's
+# jmeter-regional-orchestrator (REGIONS). One deliberate delta from compose:
 #   * liveness probes the liveness GROUP, not the aggregate: the aggregate
 #     includes mail/redis/db contributors, and a dependency outage must
 #     mark this pod NotReady (readiness), never restart-loop it.
@@ -82,7 +80,7 @@ spec:
             - name: GLOBAL_ORCHESTRATOR_REGION
               value: us-east-1
             - name: GLOBAL_ORCHESTRATOR_FANOUT_THREADS
-              value: "8"
+              value: "32"
             # STATIC-FLEET — whether this deployment may create workers at
             # all. STATIC is the platform default (2026-07-27) and the right
             # posture for a private cloud: spin / restart / container teardown
@@ -90,34 +88,16 @@ spec:
             # reconciler would read the operator's declared fleet as orphaned
             # and delete it), and operators DECLARE their workers via
             #   PUT /api/v1/applications/{id}/capacity/{region}/pods/{name}
-            # Set DYNAMIC where this service HAS pods-create rights and you
-            # want the K8sPodProvisioner below to own worker lifecycle — the
-            # kind overlay does exactly that, to validate provisioning.
-            # PROVISIONING_REGIONS names the data centers the UI offers.
+            # Set DYNAMIC where REGIONS names at least one routed region —
+            # the kind overlay does exactly that, to validate provisioning.
             # See infra/deploy/k8s/staticFleet.md.
             - name: PROVISIONING_MODE
               value: STATIC
-            - name: PROVISIONING_REGIONS
+            # REGIONS — `id` (direct, declared workers) or `id=url` (routed
+            # through that cluster's jmeter-regional-orchestrator). The
+            # umbrella overlays set it; a hub with no regional gets none.
+            - name: REGIONS
               value: ""
-            # KUBE-5 Option A — the K8s substrate. Everything else about
-            # the provisioner (image, worker env stamps, headless-Service
-            # DNS) comes from application.yml defaults, which already
-            # match this cluster by Service-name parity.
-            - name: PODPROVISIONER_SUBSTRATE
-              value: k8s
-            - name: PODPROVISIONER_NAMESPACE
-              value: jmeter-cloud
-            - name: PODPROVISIONER_HEADLESS_SERVICE
-              value: workers
-            - name: PODPROVISIONER_IMAGE
-              value: jmeter-local-orchestrator:dev
-            # RELIABILITY Round 6 sizing (6 GiB/worker: two JVMs + JTL page
-            # cache for 12 h runs). The kind overlay patches this down —
-            # validation clusters don't run 12 h load.
-            - name: PODPROVISIONER_WORKER_MEMORY_MB
-              value: "6144"
-            - name: GLOBAL_ORCHESTRATOR_URL
-              value: http://global-orchestrator:8082
             # AI proxy — key from the Secret; empty ⇒ AI disabled (503
             # AI_DISABLED, UI hides its buttons), boot stays green.
             - name: ANTHROPIC_API_KEY

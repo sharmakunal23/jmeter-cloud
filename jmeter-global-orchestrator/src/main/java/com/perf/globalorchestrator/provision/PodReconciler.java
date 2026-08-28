@@ -47,7 +47,11 @@ public class PodReconciler {
     private final PodRepository pods;
     private final PodProvisioner provisioner;
 
-    public PodReconciler(PodRepository pods, PodProvisioner provisioner) {
+    private final com.perf.globalorchestrator.region.RegionRegistry regions;
+
+    public PodReconciler(PodRepository pods, PodProvisioner provisioner,
+                         com.perf.globalorchestrator.region.RegionRegistry regions) {
+        this.regions = regions;
         this.pods = pods;
         this.provisioner = provisioner;
     }
@@ -60,7 +64,7 @@ public class PodReconciler {
                     summary.adopted.size(), summary.started.size(),
                     summary.orphansDeleted.size(), summary.errors.size());
         } catch (Exception e) {
-            // Swallow — a docker.sock outage at boot shouldn't keep the global
+            // Swallow — a cluster-API outage at boot shouldn't keep the global
             // from accepting traffic. The capacity REST endpoints (Phase 3)
             // will surface "container missing" lazily.
             LOG.warn("PodReconciler boot sweep failed (will retry on next admin trigger): {}", e.toString());
@@ -111,7 +115,8 @@ public class PodReconciler {
                 if (existing == null) {
                     // Adopt — insert the row using the pod's container as authority.
                     // baseUrl is reconstructed from podName + the configured local-orch port.
-                    pods.register(c.podName(), c.region(), defaultBaseUrlFor(c.podName()), c.applicationId());
+                    // LOST-until-ready, like a spun pod: the liveness probe admits it.
+                    pods.registerStarting(c.podName(), c.region(), defaultBaseUrlFor(c.region(), c.podName()), c.applicationId());
                     summary.adopted.add(c.podName());
                     LOG.info("PodReconciler adopted orphan container {} (app={}, region={})",
                             c.podName(), c.applicationId(), c.region());
@@ -126,8 +131,8 @@ public class PodReconciler {
                         || existing.provisionedAt() == null) {
                     pods.recordProvisionMetadata(c.podName(), c.imageDigest(), c.startedAt());
                 }
-                if (!provisioner.isRunning(c.podName())) {
-                    provisioner.start(c.podName());
+                if (!provisioner.isRunning(c.region(), c.podName())) {
+                    provisioner.start(c.region(), c.podName());
                     summary.started.add(c.podName());
                     LOG.info("PodReconciler started stopped container {}", c.podName());
                 }
@@ -160,28 +165,15 @@ public class PodReconciler {
     }
 
     /**
-     * Lists every container the provisioner manages, regardless of app or
-     * region. Calls the provisioner once per (app, region) pair we know
-     * about from the registry — plus a wildcard pass for the boot-time
-     * case where rows may have been wiped but containers remain.
-     *
-     * <p>The wildcard pass uses {@code listFor(applicationId=null, region=null)}
-     * which the {@link DockerSocketPodProvisioner} interprets as "all
-     * containers labelled managedBy=global-orchestrator" — see its
-     * implementation. {@link PodProvisioner#listFor(String, String)}
-     * requires a non-null applicationId per its javadoc, so the wildcard
-     * pass is implemented inline here using the same label filter.
+     * Every pod the provisioner manages: once per (app, region) pair the
+     * registry knows, plus each routed region's whole Pod list — which is what
+     * lets a wiped registry adopt its fleet back.
      */
     private List<ProvisionedPod> listAllManaged() {
-        // Aggregate by walking the registry's distinct (applicationId, region)
-        // pairs. This handles the common case (registry in sync) cheaply.
-        // Then merge in the wildcard sweep so a fully-wiped registry still
-        // sees containers.
         Map<String, ProvisionedPod> merged = new LinkedHashMap<>();
-
-        // Per-(app, region) pass — covers existing rows.
+        java.util.Set<String> pairs = new java.util.HashSet<>();
         for (Pod row : pods.findAll()) {
-            if (row.applicationId() == null) continue;
+            if (row.applicationId() == null || !pairs.add(row.applicationId() + "|" + row.region())) continue;
             try {
                 for (ProvisionedPod c : provisioner.listFor(row.applicationId(), row.region())) {
                     if (c.podName() != null) merged.put(c.podName(), c);
@@ -189,6 +181,15 @@ public class PodReconciler {
             } catch (Exception e) {
                 LOG.warn("PodReconciler: listFor({},{}) failed: {}",
                         row.applicationId(), row.region(), e.toString());
+            }
+        }
+        for (String region : regions.routedIds()) {
+            try {
+                for (ProvisionedPod c : provisioner.listAll(region)) {
+                    if (c.podName() != null) merged.putIfAbsent(c.podName(), c);
+                }
+            } catch (Exception e) {
+                LOG.warn("PodReconciler: listAll({}) failed: {}", region, e.toString());
             }
         }
         return new ArrayList<>(merged.values());
@@ -200,12 +201,8 @@ public class PodReconciler {
      * carrying the authoritative URL, but until then this lets the global
      * route fan-out to the pod.
      */
-    private String defaultBaseUrlFor(String podName) {
-        // KUBE-5 Option A — delegate: the URL shape is substrate-specific
-        // ({podName}:8080 on docker, {podName}.{headlessService}:8080 on
-        // K8s), so hardcoding the docker shape here would mis-address
-        // adopted orphans in-cluster.
-        return provisioner.baseUrlFor(podName);
+    private String defaultBaseUrlFor(String region, String podName) {
+        return provisioner.baseUrlFor(region, podName);
     }
 
     /** Summary returned by {@link #reconcile()} — surfaced via the admin endpoint. */

@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Structured JSON logging — the debug/RCA surface (KEPT by SLIMDOWN SL-E;
+  metrics + tracing left the service 2026-07-22, hosting infra provides
+  observability).
+
+  Defaults to JSON on stdout (one record per line) so log search by
+  podName/actor works out of the box. Operators who want Spring Boot's
+  pretty plaintext during interactive dev set DEV_MODE_LOG=true; the
+  janino-powered <if> below flips the root appender at config-load time.
+
+  MDC keys (podName, actor, errorContext) are
+  populated at request entry by the MdcEnrichmentFilter. They surface
+  here as top-level JSON fields when present.
+-->
+<configuration>
+
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+    <springProperty scope="context" name="appName"
+                    source="spring.application.name"
+                    defaultValue="jmeter-regional-orchestrator"/>
+
+    <appender name="CONSOLE_TEXT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${CONSOLE_LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <appender name="CONSOLE_JSON" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeMdcKeyName>podName</includeMdcKeyName>
+            <includeMdcKeyName>actor</includeMdcKeyName>
+            <includeMdcKeyName>errorContext</includeMdcKeyName>
+            <!-- OBSERVABILITY Phase E — access-log MDC keys populated
+                 by AccessLogFilter before each "access" log line. -->
+            <includeMdcKeyName>method</includeMdcKeyName>
+            <includeMdcKeyName>path</includeMdcKeyName>
+            <includeMdcKeyName>status</includeMdcKeyName>
+            <includeMdcKeyName>latencyMs</includeMdcKeyName>
+            <includeMdcKeyName>clientIp</includeMdcKeyName>
+            <includeMdcKeyName>userAgent</includeMdcKeyName>
+            <customFields>{"service":"${appName}"}</customFields>
+        </encoder>
+    </appender>
+
+    <if condition='"true".equals(System.getenv("DEV_MODE_LOG"))'>
+        <then>
+            <root level="INFO"><appender-ref ref="CONSOLE_TEXT"/></root>
+        </then>
+        <else>
+            <root level="INFO"><appender-ref ref="CONSOLE_JSON"/></root>
+        </else>
+    </if>
+
+</configuration>

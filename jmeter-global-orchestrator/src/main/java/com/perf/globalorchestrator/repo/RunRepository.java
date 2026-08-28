@@ -239,6 +239,14 @@ public class RunRepository {
                 runId);
     }
 
+    /** Compare-and-set on the run state; 0 rows means the run has moved on (an abort landed). */
+    public int updateRunStateFrom(String runId, RunState from, RunState to, String reason) {
+        return jdbc.update(
+                "UPDATE \"globalOrchestrator\".\"run\" SET \"state\"=?, \"stateReason\"=? "
+                + "WHERE \"runId\"=? AND \"state\"=?",
+                to.name(), reason, runId, from.name());
+    }
+
     public void updateRunState(String runId, RunState state, String reason) {
         jdbc.update(
                 "UPDATE \"globalOrchestrator\".\"run\" "
@@ -260,6 +268,16 @@ public class RunRepository {
      * keeps the terminal audit event and the runTrend snapshot single-shot.
      * {@code completedAt} COALESCEs so the first stamp wins.
      */
+    /** FAILs PREPARING runs created before {@code cutoff}; returns their ids. */
+    public List<String> failStalePreparing(Instant cutoff, String reason) {
+        return jdbc.queryForList(
+                "UPDATE \"globalOrchestrator\".\"run\" "
+                + "SET \"state\"='FAILED', \"stateReason\"=?, \"completedAt\"=COALESCE(\"completedAt\", now()) "
+                + "WHERE \"state\"='PREPARING' AND \"createdAt\" < ? "
+                + "RETURNING \"runId\"",
+                String.class, reason, Timestamp.from(cutoff));
+    }
+
     public int updateRunStateClaimingTerminal(String runId, RunState state, String reason) {
         return jdbc.update(
                 "UPDATE \"globalOrchestrator\".\"run\" "
@@ -325,6 +343,18 @@ public class RunRepository {
      * the {@code runId} of each member it failed (with duplicates when a run had
      * several members on lost pods) so the caller can roll those runs up.
      */
+    /** Per-worker form of {@link #failActiveMembersOnLostPods}: the kubelet said why this one died. Returns the affected runIds. */
+    public List<String> failActiveMembersForWorker(String workerId, String reason) {
+        return jdbc.queryForList(
+                "UPDATE \"globalOrchestrator\".\"runFleetMember\" "
+                + "SET \"state\"='FAILED', \"stateReason\"=?, "
+                + "    \"completedAt\"=COALESCE(\"completedAt\", now()) "
+                + "WHERE \"workerId\"=? "
+                + "  AND \"state\" IN ('PENDING','REQUESTED','ACCEPTED','RUNNING','DRAINING') "
+                + "RETURNING \"runId\"",
+                String.class, reason, workerId);
+    }
+
     public List<String> failActiveMembersOnLostPods(String reason) {
         return jdbc.queryForList(
                 "UPDATE \"globalOrchestrator\".\"runFleetMember\" m "
