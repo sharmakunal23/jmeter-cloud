@@ -19,7 +19,7 @@ import java.util.List;
  * {@link ApplicationHealthPoller} already use, and the row-claim gives HA for
  * free — run N global-orchestrator replicas (e.g. on EKS) and each due
  * schedule fires exactly once, no leader election, no Quartz cluster tables,
- * no double-fire config landmine. {@code nextFireAt} lives in Postgres, so a
+ * no double-fire config landmine. {@code nextFireAt} lives in the database, so a
  * fire missed during a restart is caught on the next tick and advanced to the
  * next future slot (catch-up-once).
  *

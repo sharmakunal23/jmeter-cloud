@@ -10,9 +10,6 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Timestamp;
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -47,8 +44,8 @@ public class ApplicationCapacityRepository {
             rs.getString("applicationId"),
             rs.getString("region"),
             rs.getInt("maxAvailable"),
-            instant(rs, "createdAt"),
-            instant(rs, "updatedAt"));
+            OracleBind.instant(rs, "createdAt"),
+            OracleBind.instant(rs, "updatedAt"));
 
     public ApplicationCapacityRepository(@Qualifier("runStateJdbcTemplate") JdbcTemplate jdbc) {
         this.jdbc = jdbc;
@@ -74,11 +71,13 @@ public class ApplicationCapacityRepository {
     @CacheEvict(cacheNames = CacheConfig.CACHE_APPLICATION_CAPACITY, allEntries = true)
     public void upsert(String applicationId, String region, int maxAvailable) {
         jdbc.update(
-                "INSERT INTO \"globalOrchestrator\".\"applicationCapacity\" "
-                + "(\"applicationId\",\"region\",\"maxAvailable\") VALUES (?,?,?) "
-                + "ON CONFLICT (\"applicationId\",\"region\") DO UPDATE "
-                + "SET \"maxAvailable\" = EXCLUDED.\"maxAvailable\", \"updatedAt\" = now()",
-                applicationId, region, maxAvailable);
+                "MERGE INTO \"globalOrchestrator\".\"applicationCapacity\" t "
+                + "USING (SELECT ? AS \"applicationId\", ? AS \"region\" FROM dual) s "
+                + "ON (t.\"applicationId\" = s.\"applicationId\" AND t.\"region\" = s.\"region\") "
+                + "WHEN MATCHED THEN UPDATE SET t.\"maxAvailable\" = ?, t.\"updatedAt\" = SYSTIMESTAMP "
+                + "WHEN NOT MATCHED THEN INSERT (\"applicationId\",\"region\",\"maxAvailable\") "
+                + "VALUES (s.\"applicationId\", s.\"region\", ?)",
+                applicationId, region, maxAvailable, maxAvailable);
     }
 
     /** Replace the entire capacity grid for an application (used by PUT /applications/{id}). */
@@ -112,8 +111,8 @@ public class ApplicationCapacityRepository {
                                appId,
                                rs.getString("region"),
                                rs.getInt("maxAvailable"),
-                               instant(rs, "createdAt"),
-                               instant(rs, "updatedAt")));
+                               OracleBind.instant(rs, "createdAt"),
+                               OracleBind.instant(rs, "updatedAt")));
                 });
         return out;
     }
@@ -148,10 +147,5 @@ public class ApplicationCapacityRepository {
                 "DELETE FROM \"globalOrchestrator\".\"applicationCapacity\" "
                 + "WHERE \"applicationId\" = ? AND \"region\" = ?",
                 applicationId, region) > 0;
-    }
-
-    private static Instant instant(ResultSet rs, String col) throws SQLException {
-        Timestamp t = rs.getTimestamp(col);
-        return t == null ? null : t.toInstant();
     }
 }

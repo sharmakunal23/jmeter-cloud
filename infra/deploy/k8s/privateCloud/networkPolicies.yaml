@@ -102,10 +102,12 @@ spec:
             matchLabels:
               com.perf.jmeterCloud.role: local-orchestrator
       ports: [{ protocol: TCP, port: 8080 }]
+    # The database is the operator's instance behind the `oracle` ExternalName
+    # Service (oracle/kube/overlays/privateCloud) — no pod to select. Fill in
+    # its address; a podSelector here would silently block every DB call.
     - to:
-        - podSelector:
-            matchLabels: { app: postgres }
-      ports: [{ protocol: TCP, port: 5432 }]
+        - ipBlock: { cidr: 10.0.0.0/32 }   # <oracle-host-ip>/32
+      ports: [{ protocol: TCP, port: 1521 }]
     - to:
         - podSelector:
             matchLabels: { app: redis }
@@ -154,10 +156,12 @@ spec:
               com.perf.jmeterCloud.role: local-orchestrator
       ports: [{ protocol: TCP, port: 8083 }]
   egress:
+    # The database is the operator's instance behind the `oracle` ExternalName
+    # Service (oracle/kube/overlays/privateCloud) — no pod to select. Fill in
+    # its address; a podSelector here would silently block every DB call.
     - to:
-        - podSelector:
-            matchLabels: { app: postgres }
-      ports: [{ protocol: TCP, port: 5432 }]
+        - ipBlock: { cidr: 10.0.0.0/32 }   # <oracle-host-ip>/32
+      ports: [{ protocol: TCP, port: 1521 }]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -180,27 +184,7 @@ spec:
   # egress:
   #   - ports: [{ protocol: TCP, port: 443 }]
 ---
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: postgres
-spec:
-  podSelector:
-    matchLabels: { app: postgres }
-  policyTypes: [Ingress]
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels: { app: global-orchestrator }
-        - podSelector:
-            matchLabels: { app: metrics-consumer }
-        - podSelector:
-            matchLabels: { app: grafana }
-        - podSelector:
-            matchLabels: { app: flyway-migrate }
-      ports: [{ protocol: TCP, port: 5432 }]
----
-# Flyway migration Job needs egress to postgres.
+# Flyway migration Job needs egress to oracle.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -210,10 +194,12 @@ spec:
     matchLabels: { app: flyway-migrate }
   policyTypes: [Egress]
   egress:
+    # The database is the operator's instance behind the `oracle` ExternalName
+    # Service (oracle/kube/overlays/privateCloud) — no pod to select. Fill in
+    # its address; a podSelector here would silently block every DB call.
     - to:
-        - podSelector:
-            matchLabels: { app: postgres }
-      ports: [{ protocol: TCP, port: 5432 }]
+        - ipBlock: { cidr: 10.0.0.0/32 }   # <oracle-host-ip>/32
+      ports: [{ protocol: TCP, port: 1521 }]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -229,19 +215,3 @@ spec:
             matchLabels: { app: global-orchestrator }
       ports: [{ protocol: TCP, port: 6379 }]
 ---
-# Grafana: operator access is port-forward (bypasses policy) or an
-# optional second Ingress host — add an ingress-controller rule like the
-# UI's if you expose it.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: grafana
-spec:
-  podSelector:
-    matchLabels: { app: grafana }
-  policyTypes: [Egress]
-  egress:
-    - to:
-        - podSelector:
-            matchLabels: { app: postgres }
-      ports: [{ protocol: TCP, port: 5432 }]

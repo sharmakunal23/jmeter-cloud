@@ -13,9 +13,9 @@ the SECURITY track (S-0/D-6, S-2/S-9, S-5/S-11, S-15).
 
 ## 1. Secrets sourcing (operator decision — pick one before first apply)
 
-Four Secrets exist, all consumed by name (`postgres-credentials`,
+Three Secrets exist, all consumed by name (`oracle-credentials`,
 `metrics-consumer-credentials`, `global-orchestrator-credentials`,
-`grafana-credentials`; exact keys documented in each service's
+exact keys documented in each service's
 `kube/overlays/privateCloud/kustomization.yaml` header).
 
 | Option | When it's the right call |
@@ -35,7 +35,7 @@ private cloud it must ONLY exist as the `anthropicApiKey` key of
 
 ## 2. Rotate the four initdb `localdev` passwords (execute during cutover)
 
-`postgres/initdb/01_createDatabases.sql` creates `jmetercloud`,
+`oracle/initdb/01_createSchemasAndUsers.sql` creates the owners `metrics` and `"globalOrchestrator"`,
 `metricsWriter`, `metricsReader`, `globalOrchestratorWriter` with
 password `localdev` (public in this repo). On the private cluster,
 immediately after first boot:
@@ -52,9 +52,9 @@ only reads credentials at boot):
 
 | Role | Secret (key) | Restart |
 |------|--------------|---------|
-| `jmetercloud` | `postgres-credentials` (postgresUser/postgresPassword) | postgres probes use it (`pg_isready`); Flyway Job re-runs use it |
+| `metrics`, `"globalOrchestrator"` (schema owners) | `oracle-credentials` (metricsOwnerPassword/globalrunOwnerPassword) | the Flyway Job connects as each owner |
 | `metricsWriter` | `metrics-consumer-credentials` | `deployment/metrics-consumer` |
-| `metricsReader` | `global-orchestrator-credentials` (metricsReader*) + `grafana-credentials` (metricsReaderPassword) | `deployment/global-orchestrator`, `deployment/grafana` |
+| `metricsReader` | `global-orchestrator-credentials` (metricsReader*) | `deployment/global-orchestrator` |
 | `globalOrchestratorWriter` | `global-orchestrator-credentials` (globalrunWriter*) | `deployment/global-orchestrator` |
 
 ## 3. NetworkPolicies (manifest ready — enable when the CNI enforces)
@@ -64,7 +64,7 @@ one allow per seam:
 
 - ingress-controller → **ui**:80; ui → **global**:8082 + **document**:8084
 - global → each **regional**:8088 (the `REGIONS` URLs — external when the
-  data center is another cluster), **postgres**:5432, **redis**:6379,
+  data center is another cluster), **oracle**:1521, **redis**:6379,
   api.anthropic.com (443), corporate SMTP. The global never talks to a
   worker or a kube-apiserver directly.
 - regional → kube-apiserver (its own cluster), **workers**:8080
@@ -72,7 +72,7 @@ one allow per seam:
   address is per-run operator input; tightening = S-5/S-11, deferred).
   Only operator-declared workers also call global:8082 (register/heartbeat);
   workers a regional creates never do.
-- consumer → postgres; grafana → postgres; flyway Job → postgres
+- consumer → oracle; flyway Job → oracle
 - everyone → kube-dns:53
 
 It is **commented in the umbrella** because kind's kindnet doesn't
@@ -92,7 +92,6 @@ commented `tls:` block. At migration:
    (`kubectl create secret tls jmeter-cloud-tls ...`).
 3. Force HTTPS (`nginx.ingress.kubernetes.io/ssl-redirect: "true"`) and
    add HSTS once the cert is stable.
-4. Revisit the Grafana iframe-embedding envs
    (`GF_SECURITY_ALLOW_EMBEDDING=true`, `COOKIE_SAMESITE=none`,
    `CONTENT_SECURITY_POLICY=false` — compose-parity defaults): once the
    platform hostname exists, scope CSP `frame-ancestors` to it instead
@@ -105,12 +104,11 @@ they mirror the pod nginx's blob-upload limits.
 
 | PVC | Contents | Posture |
 |-----|----------|---------|
-| `postgres` (StatefulSet template, 10Gi) | ALL platform state: runs, registry, capacity, audit trail, metrics partitions, AI cache | Set an explicit `storageClassName` (SSD-class, `allowVolumeExpansion: true`). **Backups are mandatory**: nightly `pg_dump` CronJob to off-cluster storage, or CSI VolumeSnapshots/Velero on a schedule. Test a restore before go-live. Weekly `workerMetric` partition lifecycle is owned by the metrics-consumer's `PartitionMaintenanceJob` since PARTITION-MAINTENANCE (2026-07-24): boot + daily cron, advisory-lock guarded, `ensureUpcomingPartitions(8)` + `dropOldPartitions(52)` as SECURITY DEFINER functions (V14) — no external cron stopgap needed; retention caps growth at ~52 weeks. |
+| `oracle` (kind StatefulSet template, 10Gi; the operator's instance on privateCloud) | ALL platform state: runs, registry, capacity, audit trail, metrics partitions, AI cache | Set an explicit `storageClassName` (SSD-class, `allowVolumeExpansion: true`) on kind; on privateCloud the instance is the DBA's. **Backups are mandatory**: RMAN or Data Pump on a schedule (or CSI VolumeSnapshots for the kind volume). Test a restore before go-live. Retention is the metrics-consumer's `RetentionJob` (boot + daily, `"maintenanceLock"` `FOR UPDATE SKIP LOCKED`): raw partitions dropped after `retention.rawDays` (30), rollups after `retention.rollupWeeks` (52) — no partition runway to maintain, no external cron. |
 | `document-service-data` (10Gi) | Test plans, data zips, saved JTL archives | Same storageClass treatment. Backup optional-but-recommended (artifacts are re-uploadable; saved results are not). Growth = operator-driven; alert on PVC usage >80%. |
-| grafana (none by default) | Nothing durable (ConfigMap-provisioned) | Only add the commented PVC patch if operators save UI tweaks. No backup obligation. |
 
 Both overlays carry commented `storageClassName` patch stubs
-(postgres) — set them rather than relying on the cluster default.
+(oracle) — set them rather than relying on the cluster default.
 
 ## 6. Alerting obligation (SLIMDOWN D-6, generalized — HARD requirement)
 
@@ -122,7 +120,7 @@ thresholds from the services' JSON logs, plus scrape-free health:
 |--------|-------------------------------------|
 | Rate-limit rejections | global-orchestrator throttled `RATE_LIMITED` WARN |
 | Client-error rate | every service's `AccessLogFilter` line (`status` field, 4xx ratio per service) + metrics-consumer `INGEST_BAD_JSON` / `INGEST_TOO_LARGE` WARNs |
-| Concurrent runs | queryable from `jmetercloud_globalrun` (`SELECT count(*) FROM run WHERE state='RUNNING'`) — schedule it |
+| Concurrent runs | queryable from the `"globalOrchestrator"` schema (`SELECT COUNT(*) FROM "globalOrchestrator"."run" WHERE "state"='RUNNING'`) — schedule it |
 | Upload byte rate | document-service INFO line with `sizeBytes` |
 | Health / restarts | kubelet is the prober — alert on `kube_pod_container_status_restarts_total`-equivalent from the cluster's own monitoring, pod NotReady >5 min, and Flyway Job failures. Do NOT re-add app metrics endpoints for this. |
 

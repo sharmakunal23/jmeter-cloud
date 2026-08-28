@@ -3,7 +3,6 @@ import { Link, useParams } from "react-router-dom";
 
 import { useInterval } from "../hooks/useInterval";
 import { runsApi, type Run, type RunFleetMember, type RunState, type MemberState } from "../api/runs";
-import { grafanaPerTestDeepLink } from "../config";
 import { RegionBadgeList } from "../components/RegionBadge";
 import { RunStreamsPanel } from "../components/RunStreamsPanel";
 import { RunEventsTimeline } from "../components/RunEventsTimeline";
@@ -138,7 +137,7 @@ export function RunDetailPage() {
             Worker-Fleet "Stop test" graceful drain can't handle). It's
             non-terminal-only, so the slot is empty for terminal runs and the
             H1 badge never reflows. "Download results" moved to the tab bar,
-            next to "Open in Grafana" (both run-level, terminal-state actions). */}
+            as a run-level, terminal-state action. */}
         {!isTerminal && (
           <button
             type="button"
@@ -193,8 +192,7 @@ export function RunDetailPage() {
         </div>
         {/* Run-level actions, right-aligned on the tab row. "Download results"
             only when a clean COMPLETED run saved its JTLs (ABORTED/FAILED never
-            offer a download that would 404); "Open in Grafana" opens the full
-            dashboard with the run's exact time range. */}
+            offer a download that would 404). */}
         <div className="runDetail__tabBarActions">
           {run.saveResults && run.state === "COMPLETED" && (
             <a
@@ -205,19 +203,6 @@ export function RunDetailPage() {
               ↓ Download results
             </a>
           )}
-          <a
-            className="btn btn--ghost"
-            href={grafanaPerTestDeepLink(
-              run.runId,
-              run.startedAt ? Date.parse(run.startedAt) : null,
-              run.completedAt ? Date.parse(run.completedAt) : (run.startedAt ? Date.now() : null),
-            )}
-            target="_blank"
-            rel="noreferrer"
-            title="Open the full Grafana dashboard for this run with the run's exact time range"
-          >
-            ↗ Open in Grafana
-          </a>
         </div>
       </div>
 

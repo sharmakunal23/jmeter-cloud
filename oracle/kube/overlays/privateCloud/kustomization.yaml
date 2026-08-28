@@ -1,0 +1,33 @@
+# privateCloud overlay: the real hosting target. The database is the
+# operator's Oracle instance (externalName.yaml); only the Flyway Job runs
+# in-cluster.
+#
+# ONCE, BY A DBA: run oracle/initdb/01_createSchemasAndUsers.sql against
+# the platform's PDB with real passwords (it creates the two schema owners
+# and the four application users; nothing else needs instance privileges).
+#
+# CREDENTIALS (required before first apply — never committed):
+#   kubectl -n jmeter-cloud create secret generic oracle-credentials \
+#     --from-literal=metricsOwnerPassword=<owner-password> \
+#     --from-literal=globalrunOwnerPassword=<owner-password>
+# (Or via external-secrets/sealed-secrets.) The application users' secrets
+# are per service: metrics-consumer-credentials, global-orchestrator-credentials.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  - externalName.yaml
+
+# Private-registry rewrite — set the real registry, then uncomment:
+# images:
+#   - name: jmeter-cloud-flyway
+#     newName: registry.internal.example.com/jmeter-cloud/jmeter-cloud-flyway
+#     newTag: "1.0.0"
+
+# A PDB service other than FREEPDB1 — adjust, then uncomment:
+# patches:
+#   - target: { kind: Job, name: flyway-migrate }
+#     patch: |-
+#       - op: replace
+#         path: /spec/template/spec/containers/0/env/0/value
+#         value: jdbc:oracle:thin:@//oracle:1521/<pdb-service>

@@ -43,8 +43,8 @@ in as each KUBE phase lands, so the umbrellas always build clean.
 1. **Kustomize, not Helm.** Built into kubectl; two overlays cover our
    environments; no new tooling (repo posture: no top-level build tool).
 2. **Service-name parity.** Every K8s `Service` is named exactly like
-   its compose service (`postgres`, `redis`, `metrics-consumer`,
-   `document-service`, `global-orchestrator`, `mailhog`, `grafana`) so
+   its compose service (`oracle`, `redis`, `metrics-consumer`,
+   `document-service`, `global-orchestrator`, `mailhog`) so
    every existing URL default works unchanged. This is the migration
    contract — breaking parity means hunting config in every consumer.
 3. **One namespace: `jmeter-cloud`** for services and the dynamically
@@ -95,7 +95,7 @@ kind additionally needs local-only images side-loaded (`kind load
 docker-image <image>:dev`) since there is no registry to pull from —
 build them with `--provenance=false` (BuildKit attestation manifests
 break the containerd import) and let public multi-arch images
-(postgres:16, grafana, flyway) pull from their registries instead.
+(gvenzl/oracle-free, mailhog) pull from their registries instead.
 
 ### The full image inventory (build + push)
 
@@ -105,7 +105,7 @@ the repo root:
 
 | Image | Build (from repo root) | Deployed via |
 |-------|------------------------|--------------|
-| `jmeter-cloud-flyway` | `docker build --provenance=false -t jmeter-cloud-flyway:dev postgres/` | `postgres/kube` Job |
+| `jmeter-cloud-flyway` | `docker build --provenance=false -t jmeter-cloud-flyway:dev oracle/` | `oracle/kube` Job |
 | `jmeter-metrics-consumer` | `docker build --provenance=false -t jmeter-metrics-consumer:dev jmeter-metrics-consumer/` | `jmeter-metrics-consumer/kube` |
 | `document-service` | `docker build --provenance=false -t document-service:dev document-service/` | `document-service/kube` |
 | `jmeter-global-orchestrator` | `docker build --provenance=false -t jmeter-global-orchestrator:dev jmeter-global-orchestrator/` | `jmeter-global-orchestrator/kube` |
@@ -146,7 +146,7 @@ exposure gate (profile `local` only while the cluster is private).
 ## Boot expectations
 
 Kubernetes has no `depends_on`: services start concurrently and converge
-via readiness gates. Initial crash-loops or NotReady while postgres
+via readiness gates. Initial crash-loops or NotReady while oracle
 starts and the Flyway Job applies migrations are **normal** — the stack
 settles once the schema exists. Don't "fix" this with startup ordering
 hacks; fix a service only if it fails to converge after the DB is ready.
@@ -176,12 +176,11 @@ correctness. The per-service verdict:
 | Service | Safe replicas | Why |
 |---------|---------------|-----|
 | `jmeter-cloud-ui` | **any** | nginx + static assets, no state |
-| `metrics-consumer` | **any** | ingest is idempotent (`ON CONFLICT (runId, workerId, label, windowSecond) DO NOTHING`); `PartitionMaintenanceJob` is guarded by a Postgres advisory lock so only one replica does the weekly-partition work per tick |
+| `metrics-consumer` | **any** | ingest is idempotent (staged prune on `(runId, workerId, label, windowSecond)`); `RetentionJob` takes `"maintenanceLock"` `FOR UPDATE SKIP LOCKED`, so replicas never race |
 | `global-orchestrator` | **any** (after the MULTI-INSTANCE fixes) | see the guarantees below |
 | `jmeter-regional-orchestrator` | **any** | stateless — every call is a cluster API call or a relayed worker call; nothing is cached or scheduled |
 | `document-service` | **1** — hard constraint on `LocalFsBlobStore` | RWO PVC + `Recreate` strategy; two replicas can't mount the same volume, and a second writer would fork the blob tree. Scale out **only** after switching to `S3BlobStore` (`-Pcloud`) |
-| `postgres` | **1** (StatefulSet) | single primary; replicas are a v2 topic |
-| `grafana` | **1** | ConfigMap-provisioned onto emptyDir |
+| `oracle` | **1** (StatefulSet on kind; the operator's instance on privateCloud) | single instance; HA is the database's own concern |
 
 **What makes the orchestrators safe:**
 

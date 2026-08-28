@@ -1,0 +1,94 @@
+# oracle subsystem — Compose fragment.
+#
+# Oracle Database 23ai Free (gvenzl multi-arch image — runs natively on
+# arm64). One PDB, FREEPDB1, holding two schemas that replace the two
+# Postgres databases:
+#   - metrics             — written by jmeter-metrics-consumer, read by
+#                           jmeter-global-orchestrator
+#   - "globalOrchestrator" — owned by jmeter-global-orchestrator (run state)
+# initdb/ creates the schema owners and the four application users once;
+# the Flyway migrations under migrations/ create everything inside them.
+#
+# Service name `oracle` is also the K8s Service name (KUBE contract:
+# compose name == Service name).
+#
+# Standalone:
+#   docker compose -f oracle/docker-compose.yml --profile default up
+
+services:
+
+  # -------------------------------------------------------------------------
+  # flyway-migrate — applies both migration sets on every stack start, then
+  # exits (idempotent via each schema's flyway_schema_history).
+  # Two invocations because Flyway keeps one history table per schema and
+  # connects AS THE SCHEMA OWNER, so the application users never hold DDL.
+  # The image is built from ./Dockerfile because the stock flyway/flyway
+  # image ships no Oracle driver; migrations are still bind-mounted here so
+  # an edit needs no rebuild (K8s uses the copy baked into the image).
+  # -------------------------------------------------------------------------
+  flyway-migrate:
+    build: .
+    image: jmeter-cloud-flyway:dev
+    profiles: [default]
+    depends_on:
+      oracle:
+        condition: service_healthy
+    volumes:
+      - ./migrations/metrics:/flyway/sql/metrics:ro
+      - ./migrations/globalrun:/flyway/sql/globalrun:ro
+    environment:
+      TZ: UTC
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        flyway
+        -url=jdbc:oracle:thin:@//oracle:1521/FREEPDB1
+        -user=metrics
+        -password=${DB_METRICS_OWNER_PASSWORD:-localdev}
+        -locations=filesystem:/flyway/sql/metrics
+        -connectRetries=30
+        migrate &&
+        flyway
+        -url=jdbc:oracle:thin:@//oracle:1521/FREEPDB1
+        '-user="globalOrchestrator"'
+        -password=${DB_GLOBALRUN_OWNER_PASSWORD:-localdev}
+        -locations=filesystem:/flyway/sql/globalrun
+        -connectRetries=30
+        migrate
+    restart: "no"
+
+  oracle:
+    # 23-slim: multi-arch (amd64 + arm64), smallest footprint that still
+    # carries Partitioning — the retention design depends on it.
+    image: gvenzl/oracle-free:23-slim
+    profiles: [default]
+    # Self-heal on crash/OOM or host reboot: committed data lives in the
+    # named volume, and every service stalls until the database is back.
+    restart: unless-stopped
+    ports:
+      - "${DB_PORT:-1521}:1521"
+    environment:
+      # SYS / SYSTEM password — local-only. The target infra supplies its
+      # own instance; this container never leaves a developer machine.
+      ORACLE_PASSWORD: ${DB_ADMIN_PASSWORD:-localdev}
+      # Session time zone must be UTC on every service and on the database
+      # (SYSTIMESTAMP carries the server offset; all comparisons are absolute).
+      TZ: UTC
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+      # *.sql here run ONCE, as SYS against the instance, on first start
+      # against an empty volume. Re-run needs `docker compose down -v`.
+      - ./initdb:/container-entrypoint-initdb.d:ro
+    healthcheck:
+      # Ships in the image: exits 0 once the listener answers and FREEPDB1
+      # is open. First start creates the database — allow minutes, not
+      # seconds, before counting failures.
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 240s
+
+volumes:
+  oracle-data:

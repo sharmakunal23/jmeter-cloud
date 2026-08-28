@@ -1,0 +1,13 @@
+# oracle base — the Flyway migration Job only. Where the database itself
+# runs is the overlay's call: kind adds ../../local (an in-cluster Oracle
+# Free StatefulSet); privateCloud adds an ExternalName Service `oracle`
+# pointing at the operator's instance. Both keep the Service name `oracle`
+# so every JDBC URL default works unchanged (service-name parity).
+#
+# The `oracle-credentials` Secret (keys: metricsOwnerPassword,
+# globalrunOwnerPassword) is NOT defined here: kind generates it with the
+# local dev values; privateCloud creates it out-of-band.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - flywayJob.yaml

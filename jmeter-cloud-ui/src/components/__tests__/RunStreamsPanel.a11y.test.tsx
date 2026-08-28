@@ -58,7 +58,7 @@ describe("RunStreamsPanel — accessibility (vitest-axe)", () => {
     const { container } = render(
       <RunStreamsPanel runId="run-a11y" fleetMembers={TWO_LIVE} runState="RUNNING" />,
     );
-    // iframes:false → don't recurse into the Grafana iframe (jsdom can't
+    // iframes:false → don't recurse into iframes (jsdom can't
     // postMessage across frames; the iframe content isn't ours to a11y-test
     // here anyway).
     const results = await axe(container, { iframes: false });
@@ -70,7 +70,7 @@ describe("RunStreamsPanel — accessibility (vitest-axe)", () => {
       <RunStreamsPanel runId="run-a11y" fleetMembers={TWO_LIVE} runState="RUNNING" />,
     );
     fireEvent.click(screen.getByRole("tab", { name: "Console" }));
-    // iframes:false → don't recurse into the Grafana iframe (jsdom can't
+    // iframes:false → don't recurse into iframes (jsdom can't
     // postMessage across frames; the iframe content isn't ours to a11y-test
     // here anyway).
     const results = await axe(container, { iframes: false });
@@ -82,7 +82,7 @@ describe("RunStreamsPanel — accessibility (vitest-axe)", () => {
       <RunStreamsPanel runId="run-a11y" fleetMembers={TWO_LIVE} runState="RUNNING" />,
     );
     fireEvent.click(screen.getByRole("tab", { name: "Logs" }));
-    // iframes:false → don't recurse into the Grafana iframe (jsdom can't
+    // iframes:false → don't recurse into iframes (jsdom can't
     // postMessage across frames; the iframe content isn't ours to a11y-test
     // here anyway).
     const results = await axe(container, { iframes: false });
@@ -94,7 +94,7 @@ describe("RunStreamsPanel — accessibility (vitest-axe)", () => {
       <RunStreamsPanel runId="run-a11y" fleetMembers={[]} runState="PREPARING" />,
     );
     fireEvent.click(screen.getByRole("tab", { name: "Console" }));
-    // iframes:false → don't recurse into the Grafana iframe (jsdom can't
+    // iframes:false → don't recurse into iframes (jsdom can't
     // postMessage across frames; the iframe content isn't ours to a11y-test
     // here anyway).
     const results = await axe(container, { iframes: false });

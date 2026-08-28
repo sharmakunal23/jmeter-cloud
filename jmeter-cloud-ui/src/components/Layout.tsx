@@ -43,9 +43,6 @@ export function Layout() {
         <a className="appHeader__link" href="/swagger-ui.html" target="_blank" rel="noreferrer">
           API
         </a>
-        <a className="appHeader__link" href="http://localhost:3000/" target="_blank" rel="noreferrer">
-          Grafana
-        </a>
       </header>
       <main className="appMain">
         <Outlet />

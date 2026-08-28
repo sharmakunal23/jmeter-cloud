@@ -2,64 +2,8 @@ import type { RunFleetMember } from "./api/runs";
 
 /**
  * Browser-side configuration. In local-dev these are hardcoded to the
- * docker-compose port layout; cloud deployments inject the runtime
- * values via {@code VITE_*} env vars at build time.
+ * docker-compose port layout.
  */
-
-export const GRAFANA_BASE_URL: string =
-  (import.meta.env.VITE_GRAFANA_URL as string | undefined) ?? "http://localhost:3000";
-
-/**
- * Builds the URL the run-detail page embeds for live per-test metrics.
- * Targets the {@code perTestLiveMetrics} dashboard provisioned in
- * {@code grafana/dashboards/perTestLiveMetrics.json}.
- *
- * <p>{@code kiosk=tv} hides Grafana's chrome (header / sidebar) so the
- * iframe shows just the panels. {@code refresh=10s} matches the Grafana
- * dashboard's intrinsic refresh; bumping it down would just hammer
- * Postgres without buying us anything visible. {@code from=now-3h}
- * matches the dashboard's default time range so just-finished runs
- * appear in the timeseries panels without the operator widening the
- * range manually.
- */
-export function grafanaPerTestEmbed(runId: string): string {
-  const base = GRAFANA_BASE_URL.replace(/\/$/, "");
-  const params = new URLSearchParams({
-    "var-runId": runId,
-    "kiosk":     "tv",
-    "refresh":   "10s",
-    "from":      "now-3h",
-    "to":        "now",
-  });
-  return `${base}/d/perTestLiveMetrics/per-test-live-metrics?${params.toString()}`;
-}
-
-/**
- * Full-Grafana deep link for a finished run. Same dashboard as
- * {@link grafanaPerTestEmbed}, but with {@code kiosk} omitted (so the
- * operator gets Grafana's full chrome for drill-down) and an EXPLICIT
- * {@code from} / {@code to} time range. The explicit range matters
- * because Grafana defaults to "now-Xh"; for a run that completed
- * yesterday, the embed's "now-3h" shows nothing useful, but the
- * deep-link with concrete millisecond bounds renders correctly.
- *
- * <p>Both bounds are Unix epoch milliseconds. When omitted (e.g. the
- * run is still PREPARING and we have no timestamp range yet), Grafana
- * falls back to its dashboard default — fine for live runs.
- */
-export function grafanaPerTestDeepLink(
-  runId: string,
-  fromMs?: number | null,
-  toMs?: number | null,
-): string {
-  const base = GRAFANA_BASE_URL.replace(/\/$/, "");
-  const params = new URLSearchParams({ "var-runId": runId });
-  if (fromMs != null && toMs != null) {
-    params.set("from", String(fromMs));
-    params.set("to",   String(toMs));
-  }
-  return `${base}/d/perTestLiveMetrics/per-test-live-metrics?${params.toString()}`;
-}
 
 /**
  * Best-effort URL that opens the local-orchestrator's

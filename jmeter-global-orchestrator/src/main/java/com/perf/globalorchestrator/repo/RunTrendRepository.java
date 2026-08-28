@@ -8,13 +8,11 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 
 /**
- * JDBC access for {@code globalOrchestrator.runTrend}
- * (Flyway V24). Uses the run-state (writer) JdbcTemplate: global-orch both
+ * JDBC access for {@code globalOrchestrator.runTrend}. Uses the run-state (writer) JdbcTemplate: global-orch both
  * writes the snapshot (on a run-terminal transition) and reads the 7-day
  * baseline (for the daily perf-test report). The metrics datasource can't be
  * used — it's read-only — and the metrics-consumer can't write it (it never
@@ -31,7 +29,6 @@ public class RunTrendRepository {
     }
 
     private static RunTrend mapRow(ResultSet rs, int n) throws SQLException {
-        Timestamp completedAt = rs.getTimestamp("completedAt");
         return new RunTrend(
                 rs.getString("runId"),
                 rs.getString("applicationName"),
@@ -40,29 +37,28 @@ public class RunTrendRepository {
                 rs.getDouble("p99Ms"),
                 rs.getDouble("errorRate"),
                 rs.getDouble("throughputRps"),
-                completedAt == null ? null : completedAt.toInstant());
+                OracleBind.instant(rs, "completedAt"));
     }
 
     /**
-     * Insert one snapshot. {@code ON CONFLICT (runId) DO NOTHING} makes a
-     * repeat emit (e.g. a status re-poll racing the terminal fence) a no-op,
-     * so the caller never has to reason about exactly-once at the write.
+     * Insert one snapshot; a repeat emit (e.g. a status re-poll racing the
+     * terminal fence) is a no-op, so the caller never has to reason about
+     * exactly-once at the write.
      */
     public void insert(RunTrend t) {
         jdbc.update(
-                "INSERT INTO \"globalOrchestrator\".\"runTrend\" "
+                "MERGE INTO \"globalOrchestrator\".\"runTrend\" t "
+                + "USING (SELECT ? AS \"runId\" FROM dual) s ON (t.\"runId\" = s.\"runId\") "
+                + "WHEN NOT MATCHED THEN INSERT "
                 + "(\"runId\",\"applicationName\",\"p50Ms\",\"p95Ms\",\"p99Ms\","
                 + " \"errorRate\",\"throughputRps\",\"completedAt\") "
-                + "VALUES (?,?,?,?,?,?,?,?) "
-                + "ON CONFLICT (\"runId\") DO NOTHING",
+                + "VALUES (s.\"runId\",?,?,?,?,?,?,?)",
                 t.runId(), t.applicationName(), t.p50Ms(), t.p95Ms(), t.p99Ms(),
-                t.errorRate(), t.throughputRps(),
-                t.completedAt() == null ? null : Timestamp.from(t.completedAt()));
+                t.errorRate(), t.throughputRps(), OracleBind.ts(t.completedAt()));
     }
 
     /**
-     * HARD-DELETE / purge — drop a run's frozen baseline row. Needs the V27
-     * DELETE grant (V24 created the table SELECT/INSERT-only). Idempotent:
+     * HARD-DELETE / purge — drop a run's frozen baseline row. Idempotent:
      * returns 0 when the run had no snapshot (e.g. it FAILED/ABORTED, or
      * metrics-consumer lag meant no rows existed at the terminal moment).
      */
@@ -80,6 +76,6 @@ public class RunTrendRepository {
                 + "FROM \"globalOrchestrator\".\"runTrend\" "
                 + "WHERE \"applicationName\"=? AND \"completedAt\" >= ? "
                 + "ORDER BY \"completedAt\" DESC",
-                rowMapper, applicationName, Timestamp.from(since));
+                rowMapper, applicationName, OracleBind.ts(since));
     }
 }

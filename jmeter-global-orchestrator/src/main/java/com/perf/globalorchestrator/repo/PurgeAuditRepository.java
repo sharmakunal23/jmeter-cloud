@@ -6,7 +6,7 @@ import org.springframework.stereotype.Repository;
 
 /**
  * HARD-DELETE / purge — append-only tombstone for
- * physical deletes, backed by {@code "globalOrchestrator"."purgeAudit"} (V27).
+ * physical deletes, backed by {@code "globalOrchestrator"."purgeAudit"}.
  *
  * <p>A purged run's own {@code runEvent} audit trail is cascaded away with the
  * run row, so the "who purged what, when, and how much was reclaimed" record has
@@ -38,9 +38,10 @@ public class PurgeAuditRepository {
                 + "(\"purgeId\",\"targetType\",\"targetId\",\"applicationName\",\"actor\","
                 + " \"reason\",\"metricRowsDeleted\",\"blobsDeleted\",\"childRunsPurged\","
                 + " \"purgedAt\",\"details\") "
-                + "VALUES (?,?,?,?,?,?,?,?,?, now(), ?::jsonb)",
-                purgeId, targetType, targetId, applicationName, actor,
-                reason, metricRowsDeleted, blobsDeleted, childRunsPurged,
-                detailsJson);
+                + "VALUES (?,?,?,?,?,?,?,?,?, SYSTIMESTAMP, ?)",
+                purgeId, targetType, targetId, applicationName,
+                OracleBind.text(actor, OracleBind.NAME_CHARS),
+                OracleBind.text(reason, OracleBind.TEXT_CHARS), metricRowsDeleted, blobsDeleted, childRunsPurged,
+                OracleBind.clob(detailsJson));
     }
 }

@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 400" width="900" height="400" font-family="-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L7,3 z" fill="#64748b"/></marker>
+    <marker id="s" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L7,3 z" fill="#047857"/></marker>
+  </defs>
+  <rect width="900" height="400" fill="#fafaf9"/>
+  <text x="30" y="34" font-size="15" font-weight="700" fill="#0f172a">oracle — one database, two schemas, role-scoped access</text>
+  <text x="30" y="54" font-size="10" fill="#64748b">Flyway-migrated as each schema owner. Application users stage rows and call packages; only owners hold DDL.</text>
+
+  <!-- services -->
+  <g>
+    <rect x="30" y="110" width="250" height="54" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+    <text x="155" y="132" text-anchor="middle" font-size="12" font-weight="600" fill="#1e3a8a">metrics-consumer</text>
+    <text x="155" y="150" text-anchor="middle" font-size="10" fill="#475569">metricsWriter · stage rows, call packages</text>
+
+    <rect x="30" y="222" width="250" height="66" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+    <text x="155" y="244" text-anchor="middle" font-size="12" font-weight="600" fill="#1e3a8a">global-orchestrator</text>
+    <text x="155" y="261" text-anchor="middle" font-size="10" fill="#475569">metricsReader · metricsPurger</text>
+    <text x="155" y="276" text-anchor="middle" font-size="10" fill="#475569">globalOrchestratorWriter</text>
+  </g>
+
+  <!-- database group -->
+  <g>
+    <rect x="400" y="80" width="330" height="296" rx="10" fill="none" stroke="#a7f3d0" stroke-width="1.4"/>
+    <text x="414" y="98" font-size="10" font-weight="600" letter-spacing="1" fill="#065f46">DATABASE · ONE PDB</text>
+
+    <rect x="420" y="112" width="290" height="112" rx="8" fill="#d1fae5" stroke="#047857" stroke-width="1.4"/>
+    <text x="565" y="134" text-anchor="middle" font-size="12" font-weight="600" fill="#065f46">metrics schema</text>
+    <text x="565" y="153" text-anchor="middle" font-size="9.5" fill="#047857" font-family="monospace">workerMetric · workerMetricStatus</text>
+    <text x="565" y="169" text-anchor="middle" font-size="9" fill="#047857">interval partitions, weekly · retention by drop</text>
+    <text x="565" y="187" text-anchor="middle" font-size="9.5" fill="#047857" font-family="monospace">runSecond · runSecondStatus · runLabel</text>
+    <text x="565" y="207" text-anchor="middle" font-size="9" fill="#047857">metricsIngest · metricsRetention packages</text>
+
+    <rect x="420" y="244" width="290" height="112" rx="8" fill="#d1fae5" stroke="#047857" stroke-width="1.4"/>
+    <text x="565" y="266" text-anchor="middle" font-size="12" font-weight="600" fill="#065f46">globalOrchestrator schema</text>
+    <text x="565" y="287" text-anchor="middle" font-size="10" fill="#047857">run · runFleetMember · pod · application</text>
+    <text x="565" y="305" text-anchor="middle" font-size="10" fill="#047857">capacity · cronJob · audit · aiResponse</text>
+    <text x="565" y="335" text-anchor="middle" font-size="9" fill="#047857">claims package — SKIP LOCKED, one row at a time</text>
+  </g>
+
+  <!-- flyway -->
+  <rect x="750" y="196" width="134" height="76" rx="8" fill="#ffffff" stroke="#6ee7b7" stroke-width="1.3" stroke-dasharray="3,3"/>
+  <text x="817" y="220" text-anchor="middle" font-size="12" font-weight="600" fill="#065f46">Flyway migrate</text>
+  <text x="817" y="238" text-anchor="middle" font-size="10" fill="#475569">as each owner</text>
+  <text x="817" y="256" text-anchor="middle" font-size="10" fill="#475569">metrics/ · globalrun/</text>
+
+  <!-- service → schema -->
+  <g stroke="#64748b" stroke-width="1.4" fill="none" marker-end="url(#a)">
+    <path d="M280,137 C340,137 360,160 418,160"/>
+    <path d="M280,246 C340,246 360,200 418,200"/>
+    <path d="M280,268 C340,268 360,300 418,300"/>
+  </g>
+  <!-- flyway → schema (DDL) -->
+  <g stroke="#047857" stroke-width="1.3" fill="none" stroke-dasharray="3,3" marker-end="url(#s)">
+    <path d="M750,204 C732,204 726,186 712,180"/>
+    <path d="M750,266 C732,266 726,284 712,290"/>
+  </g>
+
+  <g font-size="9" fill="#64748b">
+    <text x="300" y="127" text-anchor="start">batch-stage + ingestStaged</text>
+    <text x="300" y="190" text-anchor="start">read rollups · purge</text>
+    <text x="292" y="322" text-anchor="start">read/write · claims</text>
+    <text x="742" y="172" text-anchor="end" fill="#047857">DDL</text>
+  </g>
+</svg>

@@ -4,7 +4,6 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -12,7 +11,7 @@ import java.util.Optional;
 
 /**
  * AI-1 / AI-2 — durable cache for Claude responses, backed
- * by {@code "globalOrchestrator"."aiResponse"} (V26). Writes go through the
+ * by {@code "globalOrchestrator"."aiResponse"}. Writes go through the
  * least-privilege {@code globalOrchestratorWriter} role (the run-state
  * datasource); the metrics datasource is read-only.
  *
@@ -34,9 +33,8 @@ public class AiResponseRepository {
      * older than {@code ttl} (an expired entry is a miss, not a stale hit).
      */
     public Optional<CachedAiResponse> find(String kind, String cacheKey, String promptVersion, Duration ttl) {
-        Timestamp cutoff = Timestamp.from(Instant.now().minus(ttl));
         List<CachedAiResponse> rows = jdbc.query(
-                "SELECT \"response\"::text AS responseJson, \"model\", \"tokensIn\", \"tokensOut\", \"createdAt\" "
+                "SELECT \"response\" AS responseJson, \"model\", \"tokensIn\", \"tokensOut\", \"createdAt\" "
                         + "FROM \"globalOrchestrator\".\"aiResponse\" "
                         + "WHERE \"kind\" = ? AND \"cacheKey\" = ? AND \"promptVersion\" = ? AND \"createdAt\" > ?",
                 (rs, n) -> new CachedAiResponse(
@@ -44,8 +42,8 @@ public class AiResponseRepository {
                         rs.getString("model"),
                         rs.getInt("tokensIn"),
                         rs.getInt("tokensOut"),
-                        rs.getTimestamp("createdAt").toInstant()),
-                kind, cacheKey, promptVersion, cutoff);
+                        OracleBind.instant(rs, "createdAt")),
+                kind, cacheKey, promptVersion, OracleBind.ts(Instant.now().minus(ttl)));
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
@@ -56,16 +54,17 @@ public class AiResponseRepository {
     public void upsert(String kind, String cacheKey, String promptVersion,
                        String responseJson, String model, int tokensIn, int tokensOut) {
         jdbc.update(
-                "INSERT INTO \"globalOrchestrator\".\"aiResponse\" "
+                "MERGE INTO \"globalOrchestrator\".\"aiResponse\" t "
+                        + "USING (SELECT ? AS \"kind\", ? AS \"cacheKey\", ? AS \"promptVersion\" FROM dual) s "
+                        + "ON (t.\"kind\" = s.\"kind\" AND t.\"cacheKey\" = s.\"cacheKey\" AND t.\"promptVersion\" = s.\"promptVersion\") "
+                        + "WHEN MATCHED THEN UPDATE SET "
+                        + "  t.\"response\" = ?, t.\"model\" = ?, t.\"tokensIn\" = ?, t.\"tokensOut\" = ?, t.\"createdAt\" = SYSTIMESTAMP "
+                        + "WHEN NOT MATCHED THEN INSERT "
                         + "(\"kind\", \"cacheKey\", \"promptVersion\", \"response\", \"model\", \"tokensIn\", \"tokensOut\", \"createdAt\") "
-                        + "VALUES (?, ?, ?, ?::jsonb, ?, ?, ?, now()) "
-                        + "ON CONFLICT (\"kind\", \"cacheKey\", \"promptVersion\") DO UPDATE SET "
-                        + "  \"response\"  = EXCLUDED.\"response\", "
-                        + "  \"model\"     = EXCLUDED.\"model\", "
-                        + "  \"tokensIn\"  = EXCLUDED.\"tokensIn\", "
-                        + "  \"tokensOut\" = EXCLUDED.\"tokensOut\", "
-                        + "  \"createdAt\" = now()",
-                kind, cacheKey, promptVersion, responseJson, model, tokensIn, tokensOut);
+                        + "VALUES (s.\"kind\", s.\"cacheKey\", s.\"promptVersion\", ?, ?, ?, ?, SYSTIMESTAMP)",
+                kind, cacheKey, promptVersion,
+                OracleBind.clob(responseJson), model, tokensIn, tokensOut,
+                OracleBind.clob(responseJson), model, tokensIn, tokensOut);
     }
 
     /**
@@ -85,10 +84,9 @@ public class AiResponseRepository {
 
     /** Housekeeping: drop entries past the TTL. Returns the row count removed. */
     public int pruneOlderThan(Duration ttl) {
-        Timestamp cutoff = Timestamp.from(Instant.now().minus(ttl));
         return jdbc.update(
                 "DELETE FROM \"globalOrchestrator\".\"aiResponse\" WHERE \"createdAt\" <= ?",
-                cutoff);
+                OracleBind.ts(Instant.now().minus(ttl)));
     }
 
     /**

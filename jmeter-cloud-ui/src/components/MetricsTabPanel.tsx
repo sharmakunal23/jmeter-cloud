@@ -16,18 +16,11 @@ import {
 
 /**
  * Historical metrics for the run-detail Metrics tab: four native uPlot charts
- * driven by `GET /api/v1/runs/{runId}/timeseries`, in place of a Grafana
- * iframe.
+ * driven by `GET /api/v1/runs/{runId}/timeseries`.
  *
- * **The reason it is native is historical correctness.** Grafana embeds default
- * to `now-3h`, so a run that finished yesterday renders empty; this query is
- * keyed by runId and any run renders. Keeping the data in this app's memory as
- * plain arrays is also what lets the compare page and the AI panels reuse it —
- * a cross-origin iframe is opaque.
- *
- * Full Grafana drill-down is still one click away via the header deep-link,
- * which passes explicit `from` / `to` bounds derived from the run's own window
- * so old runs render correctly there too.
+ * The query is keyed by runId, so a run of any age renders, and keeping the
+ * data as plain arrays in this app is what lets the compare page and the AI
+ * panels reuse it.
  */
 export interface MetricsTabPanelProps {
   runId: string;

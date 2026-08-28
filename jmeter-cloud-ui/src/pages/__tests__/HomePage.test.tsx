@@ -89,7 +89,7 @@ describe("HomePage — health checklist", () => {
     expect(screen.getByRole("heading", { name: "Upcoming scheduled runs", level: 2 })).toBeInTheDocument();
   });
 
-  it("Platform section lists global-orchestrator, document-service, postgres", async () => {
+  it("Platform section lists global-orchestrator, document-service, oracle", async () => {
     apps.list.mockResolvedValue([]);
     renderPage();
     await waitFor(() => {
@@ -97,7 +97,7 @@ describe("HomePage — health checklist", () => {
       expect(platform).not.toBeNull();
       expect(platform).toHaveTextContent("global-orchestrator");
       expect(platform).toHaveTextContent("document-service");
-      expect(platform).toHaveTextContent("postgres");
+      expect(platform).toHaveTextContent("oracle");
     });
   });
 

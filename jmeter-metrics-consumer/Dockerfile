@@ -16,7 +16,7 @@ RUN mvn package -DskipTests -q
 FROM eclipse-temurin:21-jre@sha256:010e0a06bd4e0184dec58626afb3ba727b42c56c91b977e2f0a9e0837e0fa3fb
 
 LABEL org.opencontainers.image.title="jmeter-metrics-consumer" \
-      org.opencontainers.image.description="HTTP ingest service landing WorkerMetricBatch JSON envelopes into Postgres"
+      org.opencontainers.image.description="HTTP ingest service landing WorkerMetricBatch JSON envelopes in the Oracle metrics schema"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends wget \

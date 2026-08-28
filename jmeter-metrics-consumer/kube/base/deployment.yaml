@@ -36,24 +36,26 @@ spec:
               value: "8083"
             - name: HTTP_BIND_ADDRESS
               value: 0.0.0.0
-            # Same JDBC options as compose (reWriteBatchedInserts is free
-            # defense-in-depth; assumeMinServerVersion skips a
-            # version-detection round-trip). `postgres` resolves by
-            # Service-name parity (KUBE-1).
-            - name: POSTGRES_METRICS_URL
-              value: jdbc:postgresql://postgres:5432/jmetercloud_metrics?reWriteBatchedInserts=true&assumeMinServerVersion=16
-            # Per-app least-privilege role (INSERT-only on metrics.*),
-            # created by initdb; grants confered by the Flyway migrations.
-            - name: POSTGRES_USER
+            # ORACLE-MIGRATION: `oracle` resolves by Service-name parity
+            # (KUBE-1) — an in-cluster StatefulSet on kind, an ExternalName
+            # to the operator's instance on privateCloud (both land in the
+            # track's cutover phase; until then only the compose path runs).
+            - name: DB_METRICS_URL
+              value: jdbc:oracle:thin:@//oracle:1521/FREEPDB1
+            # Per-app least-privilege user (stage + execute only), created by
+            # oracle/initdb; grants conferred by the metrics V1 migration.
+            - name: DB_METRICS_USER
               valueFrom:
                 secretKeyRef:
                   name: metrics-consumer-credentials
-                  key: postgresUser
-            - name: POSTGRES_PASSWORD
+                  key: dbUser
+            - name: DB_METRICS_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: metrics-consumer-credentials
-                  key: postgresPassword
+                  key: dbPassword
+            - name: TZ
+              value: UTC
           volumeMounts:
             # Heap-dump destination (-XX:+HeapDumpOnOutOfMemoryError).
             # emptyDir survives the in-place container restart an

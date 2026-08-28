@@ -4,10 +4,12 @@
 #   kubectl -n jmeter-cloud create secret generic global-orchestrator-credentials \
 #     --from-literal=metricsReaderUser=metricsReader \
 #     --from-literal=metricsReaderPassword=<rotated> \
+#     --from-literal=metricsPurgerUser=metricsPurger \
+#     --from-literal=metricsPurgerPassword=<rotated> \
 #     --from-literal=globalrunWriterUser=globalOrchestratorWriter \
 #     --from-literal=globalrunWriterPassword=<rotated> \
 #     --from-literal=anthropicApiKey=<key-or-empty>
-# (initdb creates the roles with 'localdev' — rotate with ALTER USER;
+# (oracle/initdb creates the users with 'localdev' — rotate with ALTER USER;
 # tracked under KUBE-11. Empty anthropicApiKey ⇒ AI disabled.)
 #
 # MAIL: no MailHog here — uncomment the patch below with the corporate

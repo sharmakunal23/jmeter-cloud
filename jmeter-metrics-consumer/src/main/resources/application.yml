@@ -4,17 +4,25 @@ spring:
   profiles:
     default: local
   datasource:
-    # reWriteBatchedInserts is a no-op for the hot path, which already emits
-    # multi-row VALUES — kept so any future addBatch()/batchUpdate() code gets
-    # the binary protocol for free. assumeMinServerVersion skips a
-    # version-detection round-trip per connection.
-    url: ${POSTGRES_METRICS_URL:jdbc:postgresql://postgres:5432/jmetercloud_metrics?reWriteBatchedInserts=true&assumeMinServerVersion=16}
-    username: ${POSTGRES_USER:jmetercloud}
-    password: ${POSTGRES_PASSWORD:localdev}
+    # Oracle, one PDB. The username is wrapped in double quotes HERE so the
+    # env var carries the bare camelCase name: an unquoted Oracle identifier
+    # folds to UPPER, and "metricsWriter" was created quoted.
+    url: ${DB_METRICS_URL:jdbc:oracle:thin:@//oracle:1521/FREEPDB1}
+    username: '"${DB_METRICS_USER:metricsWriter}"'
+    password: ${DB_METRICS_PASSWORD:localdev}
     hikari:
       pool-name: metricsConsumerWriterPool
       maximum-pool-size: 8
       minimum-idle: 2
+      data-source-properties:
+        # Every chunk reuses the same three statements; the implicit cache
+        # skips re-parsing them on each pooled connection.
+        oracle.jdbc.implicitStatementCacheSize: 16
+  jdbc:
+    template:
+      # Bounds a hung database call so one stuck chunk cannot pin a request
+      # thread (Oracle has no server-side statement timeout to set instead).
+      query-timeout: 60
 
 server:
   port: ${HTTP_PORT:8083}
@@ -68,9 +76,9 @@ springdoc:
     path: /v3/api-docs
 
 metricsConsumer:
-  # Writer's per-INSERT chunk size. 5000 bounds Postgres parse time and the
-  # bind buffer when one call delivers tens of thousands of rows.
-  maxRowsPerInsert: ${METRICS_MAX_ROWS_PER_INSERT:5000}
+  # Rows staged per transaction (two round-trips each). 5000 bounds the bind
+  # buffer when one call delivers tens of thousands of rows.
+  maxRowsPerChunk: ${METRICS_MAX_ROWS_PER_CHUNK:5000}
   # Ingest body cap — defense in depth against oversize envelopes.
   ingest:
     maxBodyBytes: ${METRICS_INGEST_MAX_BODY_BYTES:2097152}
@@ -81,12 +89,11 @@ metricsConsumer:
   heartbeat:
     intervalMs: ${HEARTBEAT_INTERVAL_MS:30000}
     staleAfterSeconds: ${HEARTBEAT_STALE_AFTER_SECONDS:300}
-  # Owns the weekly workerMetric partition runway: at boot and daily, it
-  # pre-creates `weeksAhead` partitions and DROPs those past `retentionWeeks`.
-  # This was once a manual cron responsibility, and when it lapsed the runway
-  # ran out and ingest failed with missing-partition errors.
-  partitionMaintenance:
-    weeksAhead: ${PARTITION_WEEKS_AHEAD:8}
-    retentionWeeks: ${PARTITION_RETENTION_WEEKS:52}
+  # Retention by partition drop, at boot and daily: raw per-worker rows for
+  # rawDays, the rollups every read uses for rollupWeeks. Nothing to
+  # pre-create — Oracle makes a week's partition on its first insert.
+  retention:
+    rawDays: ${RETENTION_RAW_DAYS:30}
+    rollupWeeks: ${RETENTION_ROLLUP_WEEKS:52}
     # Daily at 03:17 UTC — offbeat minute avoids herding with on-the-hour jobs.
-    cron: ${PARTITION_MAINTENANCE_CRON:0 17 3 * * *}
+    cron: ${RETENTION_CRON:0 17 3 * * *}

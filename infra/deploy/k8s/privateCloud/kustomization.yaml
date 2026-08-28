@@ -18,7 +18,7 @@ labels:
     includeSelectors: false
 resources:
   - ../namespace
-  - ../../../../postgres/kube/overlays/privateCloud
+  - ../../../../oracle/kube/overlays/privateCloud
   - ../../../../jmeter-metrics-consumer/kube/overlays/privateCloud
   - ../../../../document-service/kube/overlays/privateCloud
   - ../../../../jmeter-global-orchestrator/kube/overlays/privateCloud
@@ -27,7 +27,6 @@ resources:
   # on their own cluster and are listed in the global's REGIONS.
   - ../../../../jmeter-regional-orchestrator/kube/base
   - ../../../../jmeter-cloud-ui/kube/overlays/privateCloud
-  - ../../../../grafana/kube/overlays/privateCloud
   # KUBE-11 — default-deny NetworkPolicies. Enable ONLY on a CNI that
   # enforces them, after filling the placeholders + verifying kubelet
   # probes (see ../privateCloudHardening.md §3):

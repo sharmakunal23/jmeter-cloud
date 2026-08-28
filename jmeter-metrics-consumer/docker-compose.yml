@@ -11,16 +11,16 @@ services:
     # load-bearing fix for "metrics died after the test" — the consumer runs
     # `-XX:+ExitOnOutOfMemoryError` (Dockerfile), so any OOM deliberately
     # exits the JVM; without a restart policy the container then stayed dead
-    # and no metrics reached Postgres/Grafana. `unless-stopped` brings it
+    # and no metrics reached the database. `unless-stopped` brings it
     # straight back, and the workers' disk-backed buffer + retry plus the
-    # idempotent ON CONFLICT DO NOTHING write make the replay loss-free.
+    # idempotent staged ingest make the replay loss-free.
     restart: unless-stopped
     depends_on:
-      postgres:
+      oracle:
         condition: service_healthy
       # Wait for Flyway to land the metrics schema before connecting —
       # otherwise the consumer's startup health probe finds an empty
-      # database and the first INSERT 500s.
+      # schema and the first ingest 503s.
       flyway-migrate:
         condition: service_completed_successfully
     ports:
@@ -28,16 +28,15 @@ services:
     environment:
       HTTP_PORT:           "8083"
       HTTP_BIND_ADDRESS:   0.0.0.0
-      # See the application.yml comment for the
-      # nuance (no-op on our hot path because we already use multi-row
-      # VALUES, but free defense-in-depth + skips a version-detection
-      # round-trip at connect time).
-      POSTGRES_METRICS_URL: jdbc:postgresql://postgres:5432/jmetercloud_metrics?reWriteBatchedInserts=true&assumeMinServerVersion=16
-      # Connect as the per-app metricsWriter — INSERT only on metrics.*.
-      # Flyway's migration step (run by the cluster-owner) issued the
-      # GRANTs.
-      POSTGRES_USER:       ${POSTGRES_METRICS_WRITER_USER:-metricsWriter}
-      POSTGRES_PASSWORD:   ${POSTGRES_METRICS_WRITER_PASSWORD:-localdev}
+      # ORACLE-MIGRATION (2026-08-28): the metrics schema is in Oracle.
+      DB_METRICS_URL:      jdbc:oracle:thin:@//oracle:1521/FREEPDB1
+      # Connect as the per-app metricsWriter — it can only stage rows and
+      # execute the ingest/retention packages (grants issued by the metrics
+      # V1 migration, run by the schema owner). Bare name; application.yml
+      # adds the quotes Oracle needs for a camelCase user.
+      DB_METRICS_USER:     ${DB_METRICS_WRITER_USER:-metricsWriter}
+      DB_METRICS_PASSWORD: ${DB_METRICS_WRITER_PASSWORD:-localdev}
+      TZ:                  UTC
       # SLIMDOWN (2026-07-20): the MANAGEMENT_TRACING_* / MANAGEMENT_OTLP_*
       # env is gone — the service no longer carries Micrometer/OTel.
     # Heap-dump output volume — survives container restart so the operator

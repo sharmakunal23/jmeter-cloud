@@ -19,9 +19,9 @@
     <name>jmeter-metrics-consumer</name>
     <description>
         Ingests WorkerMetricBatch JSON envelopes POSTed by the
-        local-orchestrator workers (POST /api/v1/ingest) and writes
-        per-second rows into Postgres for query by the orchestrators
-        and Grafana.
+        local-orchestrator workers (POST /api/v1/ingest) and lands
+        per-second rows plus the rollup deltas in the Oracle metrics
+        schema the orchestrators read.
     </description>
 
     <properties>
@@ -54,9 +54,13 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-jdbc</artifactId>
         </dependency>
+        <!-- ORACLE-MIGRATION (2026-08-28): the metrics schema lives in Oracle.
+             ojdbc11 is BOM-managed (oracle-database.version); the same build
+             is baked into the jmeter-cloud-flyway image so the Job and the
+             service share one driver. -->
         <dependency>
-            <groupId>org.postgresql</groupId>
-            <artifactId>postgresql</artifactId>
+            <groupId>com.oracle.database.jdbc</groupId>
+            <artifactId>ojdbc11</artifactId>
             <scope>runtime</scope>
         </dependency>
         <!-- SLIMDOWN (2026-07-20) — no metrics/tracing stack in this service:
@@ -105,8 +109,16 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
-        <!-- Flyway, used by the IT to apply the canonical metrics migration
-             into the Testcontainers Postgres before the consumer connects. -->
+        <!-- ORACLE-MIGRATION OM-6 — the opt-in database contract tests
+             (`mvn test -PdbTests`, JUnit tag `db`): Testcontainers boots
+             Oracle Free, Flyway applies the real migrations from
+             ../oracle/migrations, and the tests exercise the SQL the default
+             loop never touches. All test scope; nothing here ships. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>oracle-free</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>
@@ -114,12 +126,7 @@
         </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>
-            <artifactId>flyway-database-postgresql</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.awaitility</groupId>
-            <artifactId>awaitility</artifactId>
+            <artifactId>flyway-database-oracle</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -146,12 +153,38 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
-            <!-- Failsafe runs the *IT.java behavior tests against
-                 Testcontainers Postgres under `mvn verify`. -->
+            <!-- The `db`-tagged contract tests need Docker and ~1 min for
+                 Oracle Free to boot, so the default loop skips them; the
+                 dbTests profile below runs ONLY them. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <excludedGroups>db</excludedGroups>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 
     <profiles>
+        <!-- ORACLE-MIGRATION OM-6 — `mvn test -PdbTests` runs the `db`-tagged
+             contract tests against a Testcontainers Oracle Free and nothing
+             else. Requires Docker. -->
+        <profile>
+            <id>dbTests</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <excludedGroups combine.self="override"/>
+                            <groups>db</groups>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
         <!-- SECURITY S-14 — OWASP dependency CVE gate. Inert by default so the
              offline `mvn -o ...` flow is unaffected; activate online in CI:
                mvn -P securityScan verify

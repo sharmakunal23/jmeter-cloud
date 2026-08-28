@@ -6,8 +6,9 @@ info:
   summary: Fan-out layer driving many jmeter-local-orchestrators across regions.
   description: |
     The control plane: clients hit this service, and it fans `POST /api/v1/test`
-    out to many `jmeter-local-orchestrator` workers, tracking run state in
-    Postgres and serving aggregated metrics back from the rollup tables.
+    out to many `jmeter-local-orchestrator` workers, tracking run state in the
+    Oracle `"globalOrchestrator"` schema and serving aggregated metrics back
+    from the `metrics` rollup tables.
 
     Pod selection is registry-driven and runs claim only IDLE pods belonging
     to their own application. Liveness has two sources: dynamic workers in a
@@ -51,6 +52,12 @@ tags:
       cron expression. A DB-claim scheduler (FOR UPDATE SKIP LOCKED) fires due
       schedules HA-safely across replicas; `nextFireAt` is materialised so a
       missed fire is caught (catch-up-once) after a restart.
+  - name: admin
+    description: |
+      Operator escape hatches for a stuck fleet — forced reconcile / recycle
+      sweeps and a raw worker spin / teardown that skip the capacity and
+      in-use checks. Every route answers `409 PROVISIONING_DISABLED` under
+      `PROVISIONING_MODE=STATIC`.
   - name: ai
     description: |
       AI analysis — Claude-backed, server-side proxy. The
@@ -718,9 +725,7 @@ paths:
         Server-side downsamples when the raw second count exceeds 1500
         (≈ 25 min runs); `bucketSize` reports the bucket width in
         seconds. The UI uses `fromSecond` / `toSecond` to label the
-        time axis and to build the "Open in Grafana" deep-link with
-        an explicit time range (so finished runs render correctly in
-        Grafana, not Grafana's "now-5m" default).
+        time axis.
 
         When `byRegion=true`, the response additionally carries a
         `regions` map (region → the same four series) alongside the
@@ -1187,6 +1192,145 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/RegionStatus" }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Admin — escape hatches, DYNAMIC mode only
+  # ────────────────────────────────────────────────────────────────────────
+  /api/v1/admin/reconcilePods:
+    post:
+      tags: [admin]
+      summary: Force one reconciler sweep now
+      description: |
+        Runs the registry-vs-cluster reconcile the scheduler runs every tick
+        and reports what it changed. `409 PROVISIONING_DISABLED` in static
+        mode, where the reconciler is not wired.
+      responses:
+        "200":
+          description: Sweep summary.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [adopted, started, orphansDeleted, errors]
+                properties:
+                  adopted:        { type: integer, description: Cluster workers with no registry row that were adopted. }
+                  started:        { type: integer, description: Registry rows whose worker was re-created. }
+                  orphansDeleted: { type: integer, description: Registry rows with no worker that were removed. }
+                  errors:         { type: integer }
+        "409":
+          description: Workers are operator-managed in this deployment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProvisioningDisabledResponse" }
+
+  /api/v1/admin/recyclePods:
+    post:
+      tags: [admin]
+      summary: Force one recycle sweep now
+      description: |
+        Runs the recycle-policy sweep immediately instead of waiting for its
+        cadence — the way to smoke-test a threshold policy. `409
+        PROVISIONING_DISABLED` in static mode.
+      responses:
+        "200":
+          description: Sweep summary.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [recycled, skipped, errors]
+                properties:
+                  recycled: { type: integer }
+                  skipped:  { type: integer }
+                  errors:   { type: integer }
+        "409":
+          description: Workers are operator-managed in this deployment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProvisioningDisabledResponse" }
+
+  /api/v1/admin/spinPod:
+    post:
+      tags: [admin]
+      summary: Spin one worker, bypassing the capacity checks
+      description: |
+        Allocates the next free name for the (application, region) and asks
+        the region to create the worker — **without** the `maxAvailable`
+        check `POST …/capacity/{region}/pods` enforces. For a stuck fleet
+        only. `400` when either field is blank, `404` for an unknown
+        application, `409 PROVISIONING_DISABLED` in static mode.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [applicationId, region]
+              properties:
+                applicationId: { type: string }
+                region:        { type: string }
+      responses:
+        "201":
+          description: The worker was requested; it registers itself once ready.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [podName, applicationId, region, baseUrl]
+                properties:
+                  podName:       { type: string }
+                  applicationId: { type: string }
+                  region:        { type: string }
+                  baseUrl:       { type: string }
+        "400":
+          description: "`INVALID_REQUEST` — applicationId and region are required."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: "`APPLICATION_NOT_FOUND`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: Workers are operator-managed in this deployment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProvisioningDisabledResponse" }
+
+  /api/v1/admin/pods/{podName}:
+    parameters:
+      - { name: podName, in: path, required: true, schema: { type: string } }
+    delete:
+      tags: [admin]
+      summary: Tear a worker down, bypassing the in-use check
+      description: |
+        Stops and removes the worker in its region regardless of whether a
+        run holds it; the registry row is removed by the next reconciler
+        sweep (or `POST /api/v1/admin/reconcilePods`). `404 POD_NOT_REGISTERED`
+        when the registry has no row (its region is then unknown), `409
+        PROVISIONING_DISABLED` in static mode.
+      responses:
+        "200":
+          description: The worker was stopped.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [podName, stopped]
+                properties:
+                  podName: { type: string }
+                  stopped: { type: boolean, enum: [true] }
+        "404":
+          description: "`POD_NOT_REGISTERED`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: Workers are operator-managed in this deployment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProvisioningDisabledResponse" }
 
   # ────────────────────────────────────────────────────────────────────────
   # Capacity (Phase 3 of the capacity rework)

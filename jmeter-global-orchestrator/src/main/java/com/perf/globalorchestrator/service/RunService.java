@@ -1525,7 +1525,7 @@ public class RunService {
             body.put("runId", runId);
             // Each worker must stamp ITS OWN region onto every WorkerMetric it
             // publishes — the metrics "region" column drives the UI's split-by-
-            // region view + per-region Grafana. Previously this sent the
+            // region view. Previously this sent the
             // orchestrator's own service-wide `region` (default us-east-1) for
             // EVERY member, so a multi-region fleet's us-west-2 workers reported
             // their metrics as us-east-1 and the run looked single-region.

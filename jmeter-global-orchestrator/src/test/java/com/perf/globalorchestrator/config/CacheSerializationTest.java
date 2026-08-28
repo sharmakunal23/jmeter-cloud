@@ -70,7 +70,7 @@ class CacheSerializationTest {
     @DisplayName("rollup List<Map<String,Object>> with mixed JDBC value types round-trips")
     void rollupRoundTrips() {
         // Mirrors MetricsRollupRepository.rollupByLabel output: a list of
-        // column->value maps where values are the JDBC-mapped types Postgres
+        // column->value maps where values are the JDBC-mapped types the driver
         // hands back (BigDecimal sums, Double averages, Long counts, String).
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("label", "GET /checkout");

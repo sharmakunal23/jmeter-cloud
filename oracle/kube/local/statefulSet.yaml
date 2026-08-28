@@ -1,0 +1,79 @@
+# Oracle Database Free, single replica, for a validation cluster. First
+# boot creates the database (~40 s on a laptop, longer on a slow disk) and
+# runs initdb/ once; later boots reuse the volume. Free is capped at
+# 2 CPU threads / 2 GB SGA+PGA / 12 GB data — right for kind, not for a
+# fleet's production history.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: oracle
+  labels:
+    app: oracle
+spec:
+  serviceName: oracle-hl
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oracle
+  template:
+    metadata:
+      labels:
+        app: oracle
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: oracle
+          image: gvenzl/oracle-free:23-slim
+          ports:
+            - name: sqlnet
+              containerPort: 1521
+          env:
+            - name: ORACLE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: oracle-credentials
+                  key: adminPassword
+            - name: TZ
+              value: UTC
+          volumeMounts:
+            - name: data
+              mountPath: /opt/oracle/oradata
+            - name: initdb
+              mountPath: /container-entrypoint-initdb.d
+              readOnly: true
+          # healthcheck.sh ships in the image: exit 0 once FREEPDB1 is open.
+          startupProbe:
+            exec:
+              command: ["healthcheck.sh"]
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: ["healthcheck.sh"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["healthcheck.sh"]
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              memory: 2Gi
+              cpu: 500m
+            limits:
+              memory: 3Gi
+      volumes:
+        - name: initdb
+          configMap:
+            name: oracle-initdb
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

@@ -1,0 +1,33 @@
+# Two Services, one selector:
+#   oracle     — ClusterIP, the client entry point. Named exactly like the
+#                compose service (service-name parity) so every JDBC URL
+#                default works unchanged.
+#   oracle-hl  — headless, owned by the StatefulSet for stable pod DNS.
+apiVersion: v1
+kind: Service
+metadata:
+  name: oracle
+  labels:
+    app: oracle
+spec:
+  selector:
+    app: oracle
+  ports:
+    - name: sqlnet
+      port: 1521
+      targetPort: sqlnet
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oracle-hl
+  labels:
+    app: oracle
+spec:
+  clusterIP: None
+  selector:
+    app: oracle
+  ports:
+    - name: sqlnet
+      port: 1521
+      targetPort: sqlnet

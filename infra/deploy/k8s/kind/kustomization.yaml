@@ -18,13 +18,12 @@ labels:
     includeSelectors: false
 resources:
   - ../namespace
-  - ../../../../postgres/kube/overlays/kind
+  - ../../../../oracle/kube/overlays/kind
   - ../../../../jmeter-metrics-consumer/kube/overlays/kind
   - ../../../../document-service/kube/overlays/kind
   - ../../../../jmeter-global-orchestrator/kube/overlays/kind
   - ../../../../jmeter-regional-orchestrator/kube/base
   - ../../../../jmeter-cloud-ui/kube/overlays/kind
-  - ../../../../grafana/kube/overlays/kind
 patches:
   # The in-cluster regional serves the one region the global's REGIONS
   # names (`local`); worker memory is sized for a validation cluster.

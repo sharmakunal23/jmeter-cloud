@@ -11,7 +11,7 @@ resources:
 secretGenerator:
   - name: metrics-consumer-credentials
     literals:
-      - postgresUser=metricsWriter
-      - postgresPassword=localdev
+      - dbUser=metricsWriter
+      - dbPassword=localdev
     options:
       disableNameSuffixHash: true

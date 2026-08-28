@@ -2,8 +2,8 @@
 #
 # CREDENTIALS (required before first apply — never committed):
 #   kubectl -n jmeter-cloud create secret generic metrics-consumer-credentials \
-#     --from-literal=postgresUser=metricsWriter \
-#     --from-literal=postgresPassword=<rotated>
+#     --from-literal=dbUser=metricsWriter \
+#     --from-literal=dbPassword=<rotated>
 # (initdb creates metricsWriter with 'localdev' — rotate with ALTER USER;
 # tracked under KUBE-11.)
 apiVersion: kustomize.config.k8s.io/v1beta1

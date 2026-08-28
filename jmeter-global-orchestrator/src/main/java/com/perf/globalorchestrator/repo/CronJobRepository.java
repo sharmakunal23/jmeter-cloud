@@ -9,20 +9,21 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
 /**
- * JDBC access for {@code globalOrchestrator.cronJob} (Flyway V20).
+ * JDBC access for {@code globalOrchestrator.cronJob}.
  * Mirrors {@link RunRepository}'s conventions: the run-state JdbcTemplate,
  * inline-lambda RowMapper, quoted-camelCase SQL.
  *
- * <p>The claim path ({@link #findDueForUpdate}) uses {@code FOR UPDATE SKIP
- * LOCKED} — it MUST be called inside a transaction (the caller,
- * {@code CronFireService.claimDue}, is {@code @Transactional}) or the row lock
- * is released immediately and the HA guarantee is lost.
+ * <p>The claim path ({@link #findDueForUpdate}) goes through
+ * {@code "globalOrchestrator"."claims"."claimDueCronJobs"}, which locks the due
+ * rows one at a time with {@code FOR UPDATE SKIP LOCKED} — it MUST be called
+ * inside a transaction (the caller, {@code CronFireService.claimDue}, is
+ * {@code @Transactional}) or the row locks are released immediately and the HA
+ * guarantee is lost.
  */
 @Repository
 public class CronJobRepository {
@@ -38,10 +39,9 @@ public class CronJobRepository {
             "\"cronJobId\",\"name\",\"applicationName\",\"templateBlobId\",\"cronExpression\","
             + "\"timeZone\",\"enabled\",\"createdBy\",\"createdAt\",\"lastFiredAt\","
             + "\"lastFiredRunId\",\"lastFireStatus\",\"nextFireAt\",\"claimedAt\","
-            // Phase C — kind/region. kind is NOT NULL (V22 default LAUNCH_RUN),
-            // region is nullable (only set for DRAIN_REGION/PROVISION_REGION).
-            // Phase E — recipients (report kinds only).
-            // V25 — customSubject/customIntro (optional, report kinds only).
+            // kind is NOT NULL (default LAUNCH_RUN); region only for
+            // DRAIN_REGION/PROVISION_REGION; recipients/customSubject/customIntro
+            // for report kinds only.
             + "\"kind\",\"region\",\"recipients\",\"customSubject\",\"customIntro\"";
 
     private static CronJob mapRow(ResultSet rs, int n) throws SQLException {
@@ -68,12 +68,11 @@ public class CronJobRepository {
     }
 
     private static Instant instant(ResultSet rs, String col) throws SQLException {
-        Timestamp t = rs.getTimestamp(col);
-        return t == null ? null : t.toInstant();
+        return OracleBind.instant(rs, col);
     }
 
-    private static Timestamp ts(Instant i) {
-        return i == null ? null : Timestamp.from(i);
+    private static Object ts(Instant i) {
+        return OracleBind.ts(i);
     }
 
     /** Insert a new schedule. Relies on the UNIQUE(applicationName,name) constraint
@@ -115,18 +114,16 @@ public class CronJobRepository {
     }
 
     /**
-     * The HA claim query — enabled rows whose {@code nextFireAt} is due, locked
-     * with {@code FOR UPDATE SKIP LOCKED} so a sibling replica's concurrent
-     * sweep skips already-claimed rows. MUST run inside a transaction.
+     * The HA claim — up to {@code limit} enabled rows whose {@code nextFireAt} is
+     * due, each locked {@code FOR UPDATE SKIP LOCKED} by the claims package so a
+     * sibling replica's concurrent sweep skips already-claimed rows. MUST run
+     * inside a transaction.
      */
     public List<CronJob> findDueForUpdate(Instant now, int limit) {
-        return jdbc.query(
-                "SELECT " + COLS + " FROM \"globalOrchestrator\".\"cronJob\" "
-                + "WHERE \"enabled\"=true AND \"nextFireAt\" IS NOT NULL AND \"nextFireAt\" <= ? "
-                + "ORDER BY \"nextFireAt\" ASC "
-                + "LIMIT ? "
-                + "FOR UPDATE SKIP LOCKED",
-                rowMapper, ts(now), limit);
+        return OracleBind.refCursor(jdbc,
+                "BEGIN \"globalOrchestrator\".\"claims\".\"claimDueCronJobs\"(?, ?, ?); END;",
+                cs -> { cs.setObject(1, OracleBind.ts(now)); cs.setInt(2, limit); },
+                3, rowMapper);
     }
 
     /**
@@ -185,9 +182,8 @@ public class CronJobRepository {
                 ts(nextFireAt), cronJobId);
     }
 
-    /** Enable / disable. Disabling clears {@code nextFireAt} (and the partial
-     *  index) so the sweep can't see the row; enabling sets the freshly-computed
-     *  next slot. */
+    /** Enable / disable. Disabling clears {@code nextFireAt} so the sweep can't
+     *  see the row; enabling sets the freshly-computed next slot. */
     public void setEnabled(String cronJobId, boolean enabled, Instant nextFireAt) {
         jdbc.update(
                 "UPDATE \"globalOrchestrator\".\"cronJob\" "

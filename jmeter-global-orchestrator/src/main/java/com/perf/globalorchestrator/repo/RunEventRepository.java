@@ -9,10 +9,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
-import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Timestamp;
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -45,7 +42,7 @@ public class RunEventRepository {
 
     private static RowMapper<RunEvent> buildRowMapper(ObjectMapper json) {
         return (rs, n) -> {
-            String payloadRaw = rs.getString("payload");
+            String payloadRaw = OracleBind.json(rs, "payload");
             Map<String, Object> payload;
             if (payloadRaw == null || payloadRaw.isBlank()) {
                 payload = Map.of();
@@ -64,16 +61,15 @@ public class RunEventRepository {
                     rs.getString("actorSource"),
                     payload,
                     rs.getString("result"),
-                    instant(rs, "occurredAt"));
+                    OracleBind.instant(rs, "occurredAt"));
         };
     }
 
     /**
      * Append one audit event. Idempotent on the {@code eventId} PK — a retried
-     * request carrying the same id hits {@code ON CONFLICT DO NOTHING} and is
-     * silently dropped (decision #10). The {@code ?::jsonb} cast lets Postgres
-     * parse + validate the payload server-side, same as
-     * {@link RunRepository#insertFleetMember}.
+     * request carrying the same id matches the MERGE and is silently dropped
+     * (decision #10). The column's {@code IS JSON} check validates the payload
+     * server-side, same as {@link RunRepository#insertFleetMember}.
      */
     public void insert(RunEvent e) {
         String payloadJson;
@@ -84,14 +80,16 @@ public class RunEventRepository {
             throw new IllegalStateException("failed to serialise runEvent payload", ex);
         }
         jdbc.update(
-                "INSERT INTO \"globalOrchestrator\".\"runEvent\" "
+                "MERGE INTO \"globalOrchestrator\".\"runEvent\" t "
+                + "USING (SELECT ? AS \"eventId\" FROM dual) s ON (t.\"eventId\" = s.\"eventId\") "
+                + "WHEN NOT MATCHED THEN INSERT "
                 + "(\"eventId\",\"runId\",\"eventType\",\"actor\",\"actorSource\","
                 + " \"payload\",\"result\",\"occurredAt\") "
-                + "VALUES (?,?,?,?,?, ?::jsonb, ?,?) "
-                + "ON CONFLICT (\"eventId\") DO NOTHING",
+                + "VALUES (s.\"eventId\",?,?,?,?,?,?,?)",
                 e.eventId(), e.runId(), e.eventType().name(),
-                e.actor(), e.actorSource(), payloadJson, e.result(),
-                Timestamp.from(e.occurredAt()));
+                OracleBind.text(e.actor(), OracleBind.NAME_CHARS), e.actorSource(),
+                OracleBind.clob(payloadJson), e.result(),
+                OracleBind.ts(e.occurredAt()));
     }
 
     /**
@@ -111,8 +109,8 @@ public class RunEventRepository {
     }
 
     /**
-     * One page of the reverse-chronological timeline ({@code LIMIT}/{@code
-     * OFFSET}, newest first). The ORDER BY matches {@link #findByRunId(String)}
+     * One page of the reverse-chronological timeline (offset/limit, newest
+     * first). The ORDER BY matches {@link #findByRunId(String)}
      * so paging is stable across requests. {@code offset}/{@code limit} are
      * assumed already clamped by the service.
      */
@@ -121,8 +119,8 @@ public class RunEventRepository {
                 "SELECT * FROM \"globalOrchestrator\".\"runEvent\" "
                 + "WHERE \"runId\"=? "
                 + "ORDER BY \"occurredAt\" DESC, \"eventId\" DESC "
-                + "LIMIT ? OFFSET ?",
-                rowMapper, runId, limit, offset);
+                + "OFFSET ? ROWS FETCH NEXT ? ROWS ONLY",
+                rowMapper, runId, offset, limit);
     }
 
     /**
@@ -131,15 +129,15 @@ public class RunEventRepository {
      * guard so neither a global-orchestrator restart nor the background
      * reconciliation sweeper re-emits an event a prior poll already wrote
      * (the in-memory dedup set in {@code RunService} is lost on restart).
-     * Reads {@code payload->>'workerId'} — the {@code ResultsSaved} record's
-     * first component.
+     * Reads {@code JSON_VALUE(payload, '$.workerId')} — the {@code ResultsSaved}
+     * record's first component.
      */
     public java.util.Set<String> resultsSavedWorkerIds(String runId) {
         return new java.util.HashSet<>(jdbc.queryForList(
-                "SELECT DISTINCT \"payload\"->>'workerId' "
+                "SELECT DISTINCT JSON_VALUE(\"payload\", '$.workerId') "
                 + "FROM \"globalOrchestrator\".\"runEvent\" "
                 + "WHERE \"runId\"=? AND \"eventType\"='RESULTS_SAVED' "
-                + "  AND \"payload\"->>'workerId' IS NOT NULL",
+                + "  AND JSON_VALUE(\"payload\", '$.workerId') IS NOT NULL",
                 String.class, runId));
     }
 
@@ -153,9 +151,4 @@ public class RunEventRepository {
 
     /** One page of audit events plus the total count across all pages. */
     public record RunEventsPage(List<RunEvent> events, long total) {}
-
-    private static Instant instant(ResultSet rs, String col) throws SQLException {
-        Timestamp t = rs.getTimestamp(col);
-        return t == null ? null : t.toInstant();
-    }
 }

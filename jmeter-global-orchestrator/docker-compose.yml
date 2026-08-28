@@ -12,7 +12,7 @@ services:
     # must come back automatically.
     restart: unless-stopped
     depends_on:
-      postgres:
+      oracle:
         condition: service_healthy
       flyway-migrate:
         condition: service_completed_successfully
@@ -28,15 +28,19 @@ services:
     environment:
       HTTP_PORT:                "8082"
       HTTP_BIND_ADDRESS:        0.0.0.0
-      # Two datasources, two role identities. metrics = read-only rollups;
-      # globalrun = run-state writes. Wired by config/DataSourceConfig.java
-      # (Step 14 closed the Step 9 follow-up of splitting the datasources).
-      POSTGRES_METRICS_URL:                   jdbc:postgresql://postgres:5432/jmetercloud_metrics
-      POSTGRES_USER:                          ${POSTGRES_METRICS_READER_USER:-metricsReader}
-      POSTGRES_PASSWORD:                      ${POSTGRES_METRICS_READER_PASSWORD:-localdev}
-      POSTGRES_GLOBALRUN_URL:                 jdbc:postgresql://postgres:5432/jmetercloud_globalrun
-      POSTGRES_GLOBALRUN_WRITER_USER:         ${POSTGRES_GLOBALRUN_WRITER_USER:-globalOrchestratorWriter}
-      POSTGRES_GLOBALRUN_WRITER_PASSWORD:     ${POSTGRES_GLOBALRUN_WRITER_PASSWORD:-localdev}
+      # ORACLE-MIGRATION (2026-08-28): one PDB, three role identities —
+      # metrics reader (rollups), metrics purger (DELETE only), run-state
+      # writer. Wired by config/DataSourceConfig.java, which quotes the
+      # bare camelCase usernames for Oracle.
+      DB_METRICS_URL:              jdbc:oracle:thin:@//oracle:1521/FREEPDB1
+      DB_METRICS_READER_USER:      ${DB_METRICS_READER_USER:-metricsReader}
+      DB_METRICS_READER_PASSWORD:  ${DB_METRICS_READER_PASSWORD:-localdev}
+      DB_METRICS_PURGER_USER:      ${DB_METRICS_PURGER_USER:-metricsPurger}
+      DB_METRICS_PURGER_PASSWORD:  ${DB_METRICS_PURGER_PASSWORD:-localdev}
+      DB_GLOBALRUN_URL:            jdbc:oracle:thin:@//oracle:1521/FREEPDB1
+      DB_GLOBALRUN_WRITER_USER:    ${DB_GLOBALRUN_WRITER_USER:-globalOrchestratorWriter}
+      DB_GLOBALRUN_WRITER_PASSWORD: ${DB_GLOBALRUN_WRITER_PASSWORD:-localdev}
+      TZ:                          UTC
       # Phase 6: LOCAL_ORCHESTRATOR_URLS removed. Worker discovery is
       # via the runtime pod registry (Step 15) and PodProvisioner
       # creates per-app workers on demand; the static URL list is dead.
@@ -84,14 +88,14 @@ services:
   # global-orchestrator's @Cacheable / @CacheEvict layer (Spring Cache over
   # spring-data-redis) reads/writes here so every orchestrator instance shares
   # one cache. Local dev runs a single unauthenticated KRaft-style instance,
-  # mirroring the no-auth-locally posture of postgres; the cloud
+  # mirroring the no-auth-locally posture of the database; the cloud
   # deployment swaps in a managed Redis (ElastiCache) via REDIS_HOST/REDIS_PORT
   # with no code change. AOF persistence is off — the cache is rebuildable from
-  # Postgres on restart, so durability buys nothing here.
+  # the database on restart, so durability buys nothing here.
   redis:
     image: redis:7-alpine
     profiles: [default]
-    restart: unless-stopped   # Reliability (Round 5): self-heal — the cache is rebuildable from Postgres on restart.
+    restart: unless-stopped   # Reliability (Round 5): self-heal — the cache is rebuildable from the database on restart.
     command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
     ports:
       - "${REDIS_PORT:-6379}:6379"

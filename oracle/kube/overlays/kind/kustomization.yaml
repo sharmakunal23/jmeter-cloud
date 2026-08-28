@@ -1,0 +1,22 @@
+# kind overlay: local validation cluster — an in-cluster Oracle Free plus
+# the Flyway Job. Generates the credentials Secret with the same dev
+# defaults the compose fragment uses (already public in this repo).
+#
+# Images: side-load before applying —
+#   docker build --provenance=false -t jmeter-cloud-flyway:dev oracle/
+#   kind load docker-image jmeter-cloud-flyway:dev gvenzl/oracle-free:23-slim
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  - ../../local
+secretGenerator:
+  - name: oracle-credentials
+    literals:
+      - adminPassword=localdev
+      - metricsOwnerPassword=localdev
+      - globalrunOwnerPassword=localdev
+    options:
+      # Fixed name — a hash suffix would change the flyway Job spec on
+      # every credential edit and trip Job immutability on re-apply.
+      disableNameSuffixHash: true

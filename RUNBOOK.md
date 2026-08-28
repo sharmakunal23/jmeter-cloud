@@ -18,8 +18,8 @@ platform is* and how the pieces fit together, see [`README.md`](./README.md).
 | Need | Why |
 |------|-----|
 | Docker Engine + Compose v2 (`docker compose`, not `docker-compose`) | Everything runs as containers, composed from per-subsystem fragments via `include:`. |
-| ~5 GB free RAM for Docker | Postgres + Redis + 4 Spring services + Grafana + worker pods. |
-| Ports free on the host | See the port table below — mainly `3000`, `5432`, `8082–8086`. |
+| ~7 GB free RAM for Docker | Oracle Free (~2.2 GB) + Redis + 4 Spring services + worker pods. |
+| Ports free on the host | See the port table below — mainly `1521`, `8082–8086`. |
 
 No JDK, Maven, or Node is required to *run* the stack — images build inside Docker. You only
 need those to develop a single service outside its container.
@@ -32,26 +32,26 @@ cp .env.example .env
 
 `.env` is git-ignored and holds local config. Everything in it has a working local default.
 The only secret is `ANTHROPIC_API_KEY` — **leave it blank to keep the AI-analysis features
-disabled**; paste an Anthropic key to enable them. The Postgres/Grafana passwords are
+disabled**; paste an Anthropic key to enable them. The database passwords are
 throwaway local credentials, fine as-is.
 
 ## 3. Bring the stack up
 
 ```bash
-# Full stack (default profile): postgres + redis + the 4 services + UI + observability
+# Full stack (default profile): oracle + redis + the 4 services + UI
 docker compose up -d --build
 ```
 
 First build is ~5 min cold; subsequent starts ~30 s. Compose starts things in dependency
 order and waits on health checks, so a one-shot `up` is safe — services that depend on
-Postgres wait until it is healthy.
+Oracle wait until it is healthy (~40 s from an empty volume).
 
 ![Boot order](./docs/diagrams/bootOrder.svg)
 
 **Variants:**
 
 ```bash
-docker compose up -d --build postgres flyway-migrate   # just the data substrate
+docker compose up -d --build oracle flyway-migrate     # just the data substrate
 docker compose ps                                   # health of every container
 docker compose logs -f global-orchestrator          # follow one service's logs
 ```
@@ -67,8 +67,7 @@ same host port. Ports are configurable in `.env`.
 
 | Port | Service | URL | Health check |
 |------|---------|-----|--------------|
-| `3000` | Grafana | http://localhost:3000 | login `admin` / `admin` (from `.env`) |
-| `5432` | Postgres | `localhost:5432` (`jmetercloud` / `localdev`) | `pg_isready` |
+| `1521` | Oracle Database Free (`FREEPDB1`) | `localhost:1521/FREEPDB1` (`system` / `localdev`; schema owners `metrics`, `"globalOrchestrator"`) | `healthcheck.sh` (in the image) |
 | `8025` | MailHog (dev SMTP) | http://localhost:8025 | — |
 | `8080` | Worker HTTP API (`jmeter-local-orchestrator`) | http://localhost:8080 | `GET /actuator/health` |
 | `8082` | global-orchestrator | http://localhost:8082 | `GET /actuator/health` |
@@ -102,8 +101,7 @@ The metric pipeline behind that run:
 
 ## 6. Watch it
 
-- **Live per-run charts:** the UI run-detail **Metrics** tab (Postgres-backed uPlot), or Grafana's
-  Application Performance dashboard (`perTestLiveMetrics`) at http://localhost:3000 (the `runId`
+- **Live per-run charts:** the UI run-detail **Metrics** tab (native uPlot on the Oracle rollups).
   variable is auto-populated). It's the only provisioned dashboard — the infra dashboards and
   Jaeger tracing retired with the SLIMDOWN track (2026-07-21; hosting infra provides observability).
 - **Logs:** `docker compose logs -f <service>` — JSON, one record per line, each carrying
@@ -112,7 +110,7 @@ The metric pipeline behind that run:
 ## 7. Tear down
 
 ```bash
-docker compose down        # stop + remove containers; Postgres volumes PERSIST
+docker compose down        # stop + remove containers; the Oracle volume PERSISTS
 docker compose down -v     # also delete volumes — full reset (wipes all runs + metrics)
 docker compose stop        # pause without removing containers
 ```
@@ -137,7 +135,7 @@ compose names exactly**, so every inter-service URL default works unchanged.
 #    attestations break the containerd import).
 kind create cluster --name jmeter-cloud
 
-docker build --provenance=false -t jmeter-cloud-flyway:dev postgres/
+docker build --provenance=false -t jmeter-cloud-flyway:dev oracle/
 docker build --provenance=false -t jmeter-metrics-consumer:dev jmeter-metrics-consumer/
 docker build --provenance=false -t document-service:dev document-service/
 docker build --provenance=false -t jmeter-global-orchestrator:dev jmeter-global-orchestrator/
@@ -148,7 +146,7 @@ docker build --provenance=false -t jmeter-local-orchestrator:dev \
 kind load docker-image --name jmeter-cloud \
   jmeter-cloud-flyway:dev jmeter-metrics-consumer:dev document-service:dev \
   jmeter-global-orchestrator:dev jmeter-cloud-ui:dev jmeter-local-orchestrator:dev
-# (postgres:16 / grafana / mailhog are public multi-arch images — the
+# (gvenzl/oracle-free / mailhog are public multi-arch images — the
 # kubelet pulls them; multi-arch images won't side-load anyway.)
 
 # 1. Boot everything (namespace jmeter-cloud + all services):
@@ -156,7 +154,6 @@ kubectl apply -k infra/deploy/k8s/kind
 
 # 2. Reach it (no host ports on kind — port-forward):
 kubectl -n jmeter-cloud port-forward svc/jmeter-cloud-ui 8086:80  # UI
-kubectl -n jmeter-cloud port-forward svc/grafana 3000:3000        # Grafana
 
 # 3. Tear down:
 kubectl delete namespace jmeter-cloud   # stack only (PVCs included)
@@ -165,7 +162,7 @@ kind delete cluster --name jmeter-cloud # whole cluster
 
 **Boot expectations:** Kubernetes has no `depends_on` — pods start
 concurrently and converge via readiness gates. A restart or two on the
-Java services while postgres starts and the Flyway Job applies
+Java services while oracle starts and the Flyway Job applies
 migrations is **normal** (a from-scratch boot converges in well under a
 minute); don't "fix" it with ordering hacks. Worker pods are created by the
 in-cluster `jmeter-regional-orchestrator` (`REGION=local`), which the

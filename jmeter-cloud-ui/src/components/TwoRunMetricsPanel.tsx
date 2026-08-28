@@ -18,7 +18,7 @@ import {
  * Two-run comparison panel for {@code RunsComparePage}. Renders
  * three native uPlot charts (Total TPS, Response Time, Error %)
  * with both runs overlaid as separate series. Replaces the side-by-side
- * Grafana iframes — operators can finally read the delta directly
+ * side-by-side iframes — operators can finally read the delta directly
  * instead of eyeballing two embeds.
  *
  * <p><b>Time-axis alignment.</b> Default = elapsed seconds from each

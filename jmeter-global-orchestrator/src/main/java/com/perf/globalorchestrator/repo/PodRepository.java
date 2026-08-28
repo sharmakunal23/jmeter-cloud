@@ -11,13 +11,15 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Timestamp;
+import java.sql.Types;
 import java.time.Instant;
 import java.util.List;
 
 /**
- * CRUD for {@code globalOrchestrator.pod} — the Step 15 pod registry.
- * Uses the run-state datasource (RW), same as {@link RunRepository}.
+ * CRUD for {@code globalOrchestrator.pod} — the worker registry.
+ * Uses the run-state datasource (RW), same as {@link RunRepository}. The two
+ * claim paths go through {@code "globalOrchestrator"."claims"}, which locks
+ * one row at a time with {@code FOR UPDATE SKIP LOCKED}.
  */
 @Repository
 public class PodRepository {
@@ -29,13 +31,13 @@ public class PodRepository {
     }
 
     /**
-     * Idempotent register-or-refresh. INSERT … ON CONFLICT DO UPDATE so
-     * a re-registering pod (post-restart) gets its identity refreshed
+     * Idempotent register-or-refresh — a MERGE, so a re-registering pod
+     * (post-restart) gets its identity refreshed
      * (state ← IDLE, baseUrl ← whatever it sends, lastHeartbeat ← now).
      *
      * <p>{@code applicationId} (Phase 1 capacity rework) may be {@code null}
      * during the migration window — legacy static pods register without it.
-     * On re-register, COALESCE preserves a previously-set applicationId
+     * On re-register, NVL preserves a previously-set applicationId
      * so a pod that goes through a transient identity wobble doesn't lose
      * its app binding.
      *
@@ -58,21 +60,19 @@ public class PodRepository {
         // stopped); we must not flip it back to IDLE or a concurrent
         // claim could grab a pod the recycler is about to kill.
         jdbc.update(
-                "INSERT INTO \"globalOrchestrator\".\"pod\" "
+                "MERGE INTO \"globalOrchestrator\".\"pod\" t "
+                + "USING (SELECT ? AS \"podId\", ? AS \"region\", ? AS \"baseUrl\", ? AS \"applicationId\" FROM dual) s "
+                + "ON (t.\"podId\" = s.\"podId\") "
+                + "WHEN MATCHED THEN UPDATE SET "
+                + "  t.\"region\"=CASE WHEN t.\"source\"='STATIC' THEN t.\"region\" ELSE s.\"region\" END, "
+                + "  t.\"baseUrl\"=CASE WHEN t.\"source\"='STATIC' THEN t.\"baseUrl\" ELSE s.\"baseUrl\" END, "
+                + "  t.\"state\"=CASE WHEN t.\"state\"='DRAINING_FOR_RECYCLE' THEN 'DRAINING_FOR_RECYCLE' ELSE 'IDLE' END, "
+                + "  t.\"lastHeartbeat\"=SYSTIMESTAMP, "
+                + "  t.\"applicationId\"=NVL(s.\"applicationId\", t.\"applicationId\") "
+                + "WHEN NOT MATCHED THEN INSERT "
                 + "(\"podId\",\"region\",\"baseUrl\",\"state\",\"lastHeartbeat\",\"applicationId\") "
-                + "VALUES (?,?,?,'IDLE', now(), ?) "
-                + "ON CONFLICT (\"podId\") DO UPDATE SET "
-                + "  \"region\"=CASE WHEN \"globalOrchestrator\".\"pod\".\"source\"='STATIC' "
-                + "                  THEN \"globalOrchestrator\".\"pod\".\"region\" "
-                + "                  ELSE EXCLUDED.\"region\" END, "
-                + "  \"baseUrl\"=CASE WHEN \"globalOrchestrator\".\"pod\".\"source\"='STATIC' "
-                + "                   THEN \"globalOrchestrator\".\"pod\".\"baseUrl\" "
-                + "                   ELSE EXCLUDED.\"baseUrl\" END, "
-                + "  \"state\"=CASE WHEN \"globalOrchestrator\".\"pod\".\"state\"='DRAINING_FOR_RECYCLE' "
-                + "                 THEN 'DRAINING_FOR_RECYCLE' ELSE 'IDLE' END, "
-                + "  \"lastHeartbeat\"=now(), "
-                + "  \"applicationId\"=COALESCE(EXCLUDED.\"applicationId\", \"globalOrchestrator\".\"pod\".\"applicationId\")",
-                podId, region, baseUrl, applicationId);
+                + "VALUES (s.\"podId\", s.\"region\", s.\"baseUrl\", 'IDLE', SYSTIMESTAMP, s.\"applicationId\")",
+                podId, region, baseUrl, OracleBind.typed(Types.VARCHAR, applicationId));
     }
 
     /**
@@ -88,21 +88,22 @@ public class PodRepository {
      * could grab a worker that is still unreachable. {@code StaticPodProbe}
      * is the only thing that resurrects it, and only on real evidence.
      *
-     * <p>{@code lastHeartbeat} is seeded to {@code now()} on INSERT so a
+     * <p>{@code lastHeartbeat} is seeded to now on INSERT so a
      * freshly declared worker is claimable immediately rather than being
      * swept LOST before the first probe tick.
      */
     public void declareStatic(String podId, String region, String baseUrl, String applicationId) {
         jdbc.update(
-                "INSERT INTO \"globalOrchestrator\".\"pod\" "
+                "MERGE INTO \"globalOrchestrator\".\"pod\" t "
+                + "USING (SELECT ? AS \"podId\", ? AS \"region\", ? AS \"baseUrl\", ? AS \"applicationId\" FROM dual) s "
+                + "ON (t.\"podId\" = s.\"podId\") "
+                + "WHEN MATCHED THEN UPDATE SET "
+                + "  t.\"region\"=s.\"region\", t.\"baseUrl\"=s.\"baseUrl\", "
+                + "  t.\"applicationId\"=s.\"applicationId\", t.\"source\"='STATIC' "
+                + "WHEN NOT MATCHED THEN INSERT "
                 + "(\"podId\",\"region\",\"baseUrl\",\"state\",\"lastHeartbeat\",\"applicationId\",\"source\") "
-                + "VALUES (?,?,?,'IDLE', now(), ?, 'STATIC') "
-                + "ON CONFLICT (\"podId\") DO UPDATE SET "
-                + "  \"region\"=EXCLUDED.\"region\", "
-                + "  \"baseUrl\"=EXCLUDED.\"baseUrl\", "
-                + "  \"applicationId\"=EXCLUDED.\"applicationId\", "
-                + "  \"source\"='STATIC'",
-                podId, region, baseUrl, applicationId);
+                + "VALUES (s.\"podId\", s.\"region\", s.\"baseUrl\", 'IDLE', SYSTIMESTAMP, s.\"applicationId\", 'STATIC')",
+                podId, region, baseUrl, OracleBind.typed(Types.VARCHAR, applicationId));
     }
 
     /**
@@ -140,7 +141,7 @@ public class PodRepository {
         jdbc.update(
                 "INSERT INTO \"globalOrchestrator\".\"pod\" "
                 + "(\"podId\",\"region\",\"baseUrl\",\"state\",\"lastHeartbeat\",\"applicationId\") "
-                + "VALUES (?,?,?,'LOST', now(), ?)",
+                + "VALUES (?,?,?,'LOST', SYSTIMESTAMP, ?)",
                 podId, region, baseUrl, applicationId);
     }
 
@@ -158,7 +159,7 @@ public class PodRepository {
         // IDLE would re-expose it to claim).
         return jdbc.update(
                 "UPDATE \"globalOrchestrator\".\"pod\" "
-                + "SET \"lastHeartbeat\"=now(), "
+                + "SET \"lastHeartbeat\"=SYSTIMESTAMP, "
                 + "    \"state\"=CASE WHEN \"state\"='DRAINING_FOR_RECYCLE' "
                 + "                   THEN 'DRAINING_FOR_RECYCLE' ELSE 'IDLE' END "
                 + "WHERE \"podId\"=?",
@@ -188,83 +189,56 @@ public class PodRepository {
                     + "SET \"state\"='LOST' "
                     + "WHERE \"state\" NOT IN ('LOST', 'DRAINING_FOR_RECYCLE') "
                     + "  AND \"lastHeartbeat\" < ?",
-                    Timestamp.from(cutoff));
+                    OracleBind.ts(cutoff));
         }
+        Object[] args = new Object[excludedRegions.size() + 1];
+        args[0] = OracleBind.ts(cutoff);
+        for (int i = 0; i < excludedRegions.size(); i++) args[i + 1] = excludedRegions.get(i);
         return jdbc.update(
                 "UPDATE \"globalOrchestrator\".\"pod\" "
                 + "SET \"state\"='LOST' "
                 + "WHERE \"state\" NOT IN ('LOST', 'DRAINING_FOR_RECYCLE') "
                 + "  AND \"lastHeartbeat\" < ? "
-                + "  AND NOT (\"source\"='DYNAMIC' AND \"region\" = ANY (?))",
-                Timestamp.from(cutoff), excludedRegions.toArray(new String[0]));
+                + "  AND NOT (\"source\"='DYNAMIC' AND \"region\" IN (" + MetricsPurgeRepository.marks(excludedRegions) + "))",
+                args);
     }
 
     /**
      * Claims up to {@code limit} IDLE pods that don't have an active
-     * fleet-member reservation. Wraps the SELECT in
-     * {@code FOR UPDATE OF p SKIP LOCKED} so concurrent run-launches
-     * don't double-claim. <strong>Must run inside a transaction</strong>
-     * — the calling service annotates with {@code @Transactional}.
+     * fleet-member reservation, freshest heartbeat first. Each row is locked
+     * {@code FOR UPDATE SKIP LOCKED} by the claims package so concurrent
+     * run-launches don't double-claim. <strong>Must run inside a
+     * transaction</strong> — the calling service annotates with
+     * {@code @Transactional}; the locks are the reservation until the
+     * {@code runFleetMember} rows are committed.
      */
     public List<Pod> claimIdle(int limit) {
-        return jdbc.query(
-                "SELECT p.\"podId\", p.\"region\", p.\"baseUrl\", "
-                + "       p.\"state\", p.\"lastHeartbeat\", p.\"registeredAt\", "
-                + "       p.\"applicationId\", p.\"runsServed\", "
-                + "       p.\"imageDigest\", p.\"provisionedAt\", p.\"source\" "
-                + "FROM \"globalOrchestrator\".\"pod\" p "
-                + "WHERE p.\"state\" = 'IDLE' "
-                + "  AND NOT EXISTS ("
-                + "    SELECT 1 FROM \"globalOrchestrator\".\"runFleetMember\" m "
-                + "    WHERE m.\"workerId\" = p.\"podId\" "
-                + "      AND m.\"state\" IN ('PENDING','REQUESTED','ACCEPTED','RUNNING','DRAINING')) "
-                + "ORDER BY p.\"lastHeartbeat\" DESC "
-                + "LIMIT ? "
-                + "FOR UPDATE OF p SKIP LOCKED",
-                ROW_MAPPER, limit);
+        return claim(null, null, limit);
     }
 
     /**
-     * Phase 4 of the capacity rework — per-application + per-region claim.
-     * Picks IDLE pods bound to {@code applicationId} in {@code region},
-     * skipping any already held by a non-terminal {@code runFleetMember}.
-     *
-     * <p>As of Phase 6b this is the <em>only</em> per-region claim path —
-     * the legacy {@code claimIdleByRegion} null-app fallback was removed
-     * once the static {@code orchestrator-1} / {@code -2} pods were gone
-     * and {@code pod.applicationId} became NOT NULL.
-     *
-     * <p>Same {@code FOR UPDATE … SKIP LOCKED} lock semantics as
-     * {@link #claimIdle(int)} — must run inside a
-     * transaction; concurrent same-app run launches split the available
-     * pods rather than double-claiming.
+     * Per-application + per-region claim: IDLE pods bound to
+     * {@code applicationId} in {@code region}, skipping any already held by a
+     * non-terminal {@code runFleetMember}. Same lock semantics as
+     * {@link #claimIdle(int)} — concurrent same-app launches split the
+     * available pods rather than double-claiming.
      *
      * <p>The application-scoped capacity ceiling
      * ({@code applicationCapacity.maxAvailable}) is enforced upstream in
-     * {@code RunService} BEFORE this query runs. Returning fewer rows
-     * than {@code limit} means the cap-check passed (Max accommodates
-     * the request) but Ready-pod count was short — the operator needs
-     * to spin more pods (or, if a parallel run grabbed them in the
-     * lock window, retry).
+     * {@code RunService} BEFORE this runs. Returning fewer rows than
+     * {@code limit} means the cap-check passed but the ready-pod count was
+     * short — the operator needs to spin more pods (or, if a parallel run
+     * grabbed them in the lock window, retry).
      */
     public List<Pod> claimIdleByRegionAndApp(String region, String applicationId, int limit) {
-        return jdbc.query(
-                "SELECT p.\"podId\", p.\"region\", p.\"baseUrl\", "
-                + "       p.\"state\", p.\"lastHeartbeat\", p.\"registeredAt\", "
-                + "       p.\"applicationId\", p.\"runsServed\", "
-                + "       p.\"imageDigest\", p.\"provisionedAt\", p.\"source\" "
-                + "FROM \"globalOrchestrator\".\"pod\" p "
-                + "WHERE p.\"state\" = 'IDLE' "
-                + "  AND p.\"region\" = ? "
-                + "  AND p.\"applicationId\" = ? "
-                + "  AND NOT EXISTS ("
-                + "    SELECT 1 FROM \"globalOrchestrator\".\"runFleetMember\" m "
-                + "    WHERE m.\"workerId\" = p.\"podId\" "
-                + "      AND m.\"state\" IN ('PENDING','REQUESTED','ACCEPTED','RUNNING','DRAINING')) "
-                + "ORDER BY p.\"lastHeartbeat\" DESC "
-                + "LIMIT ? "
-                + "FOR UPDATE OF p SKIP LOCKED",
-                ROW_MAPPER, region, applicationId, limit);
+        return claim(region, applicationId, limit);
+    }
+
+    private List<Pod> claim(String region, String applicationId, int limit) {
+        return OracleBind.refCursor(jdbc,
+                "BEGIN \"globalOrchestrator\".\"claims\".\"claimIdlePods\"(?, ?, ?, ?); END;",
+                cs -> { cs.setString(1, region); cs.setString(2, applicationId); cs.setInt(3, limit); },
+                4, ROW_MAPPER);
     }
 
     /**
@@ -276,14 +250,13 @@ public class PodRepository {
         return jdbc.query(
                 "SELECT p.\"region\", "
                 + "       COUNT(*) AS \"totalPods\", "
-                + "       COUNT(*) FILTER ("
-                + "         WHERE p.\"state\" = 'IDLE' "
-                + "           AND NOT EXISTS ("
-                + "             SELECT 1 FROM \"globalOrchestrator\".\"runFleetMember\" m "
-                + "             WHERE m.\"workerId\" = p.\"podId\" "
-                + "               AND m.\"state\" IN ('PENDING','REQUESTED','ACCEPTED','RUNNING','DRAINING'))"
-                + "       ) AS \"idlePods\", "
-                + "       COUNT(*) FILTER (WHERE p.\"state\" = 'LOST') AS \"lostPods\" "
+                + "       SUM(CASE WHEN p.\"state\" = 'IDLE' "
+                + "                 AND NOT EXISTS ("
+                + "                   SELECT 1 FROM \"globalOrchestrator\".\"runFleetMember\" m "
+                + "                   WHERE m.\"workerId\" = p.\"podId\" "
+                + "                     AND m.\"state\" IN ('PENDING','REQUESTED','ACCEPTED','RUNNING','DRAINING')) "
+                + "                THEN 1 ELSE 0 END) AS \"idlePods\", "
+                + "       SUM(CASE WHEN p.\"state\" = 'LOST' THEN 1 ELSE 0 END) AS \"lostPods\" "
                 + "FROM \"globalOrchestrator\".\"pod\" p "
                 + "GROUP BY p.\"region\" "
                 + "ORDER BY p.\"region\"",
@@ -367,7 +340,7 @@ public class PodRepository {
      */
     public int countByApplicationAndRegion(String applicationId, String region) {
         Integer n = jdbc.queryForObject(
-                "SELECT count(*)::int FROM \"globalOrchestrator\".\"pod\" "
+                "SELECT count(*) FROM \"globalOrchestrator\".\"pod\" "
                 + "WHERE \"applicationId\" = ? AND \"region\" = ?",
                 Integer.class, applicationId, region);
         return n == null ? 0 : n;
@@ -389,7 +362,7 @@ public class PodRepository {
      * HARD-DELETE / purge Phase 2 — deletes every pod row bound to
      * {@code applicationId}. Called by the application purge BEFORE the
      * application row is removed: {@code pod.applicationId} is
-     * {@code ON DELETE RESTRICT} (V10), so the app row can't be dropped while
+     * a plain foreign key, so the app row can't be dropped while
      * its pods linger. A hidden app has no active runs (the hide guard ensures
      * it), so its pods are idle registry rows; this clears them. Idempotent —
      * returns the rowcount (0 when the app had no pods). Container teardown is a
@@ -432,7 +405,7 @@ public class PodRepository {
                 + "  AND r.\"state\" NOT IN ('COMPLETED','FAILED','ABORTED') "
                 + "  AND m.\"state\" NOT IN ('COMPLETED','FAILED','ABORTED','DRAINED') "
                 + "ORDER BY r.\"createdAt\" DESC "
-                + "LIMIT 1",
+                + "FETCH FIRST 1 ROWS ONLY",
                 (rs, n) -> new ActiveRunBinding(
                         rs.getString("runId"),
                         rs.getString("originRegion"),
@@ -460,7 +433,7 @@ public class PodRepository {
                 + "JOIN \"globalOrchestrator\".\"run\" r ON m.\"runId\" = r.\"runId\" "
                 + "WHERE m.\"workerId\" = ? "
                 + "  AND r.\"state\" NOT IN ('COMPLETED','FAILED','ABORTED') "
-                + "LIMIT 1",
+                + "FETCH FIRST 1 ROWS ONLY",
                 (rs, n) -> 1,
                 workerId);
         return !rows.isEmpty();
@@ -538,11 +511,16 @@ public class PodRepository {
     public int recordProvisionMetadata(String podId, String imageDigest, Instant provisionedAt) {
         return jdbc.update(
                 "UPDATE \"globalOrchestrator\".\"pod\" "
+                // CAST gives Oracle the type of a NULL bind; the non-null value
+                // binds as an OffsetDateTime and keeps its offset. Binding it
+                // with an explicit Types.TIMESTAMP instead drops the offset and
+                // re-reads the wall-clock in the session zone (a 4 h shift in
+                // the contract test) — never type a TIMESTAMP WITH TIME ZONE bind.
                 + "SET \"imageDigest\" = COALESCE(?, \"imageDigest\"), "
-                + "    \"provisionedAt\" = COALESCE(?, \"provisionedAt\") "
+                + "    \"provisionedAt\" = COALESCE(CAST(? AS TIMESTAMP WITH TIME ZONE), \"provisionedAt\") "
                 + "WHERE \"podId\" = ?",
-                imageDigest,
-                provisionedAt == null ? null : Timestamp.from(provisionedAt),
+                OracleBind.typed(Types.VARCHAR, imageDigest),
+                OracleBind.ts(provisionedAt),
                 podId);
     }
 
@@ -559,14 +537,13 @@ public class PodRepository {
             instant(rs, "provisionedAt"),
             podSource(rs));
 
-    /** V29's CHECK constraint guarantees a known value; null only on a pre-V29 read. */
+    /** The CHECK constraint guarantees a known value; null is defensive only. */
     private static PodSource podSource(ResultSet rs) throws SQLException {
         String raw = rs.getString("source");
         return raw == null ? PodSource.DYNAMIC : PodSource.valueOf(raw);
     }
 
     private static Instant instant(ResultSet rs, String col) throws SQLException {
-        Timestamp t = rs.getTimestamp(col);
-        return t == null ? null : t.toInstant();
+        return OracleBind.instant(rs, col);
     }
 }

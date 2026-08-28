@@ -19,7 +19,7 @@ import { formatFuture, formatRelative } from "../lib/time";
  * <p>Two sections:
  * <ul>
  *   <li><strong>Health checklist</strong> — every backend service
- *       (global-orch, document-service, postgres) plus every registered
+ *       (global-orch, document-service, oracle) plus every registered
  *       application. Each row shows a HEALTHY / DEGRADED / UNHEALTHY /
  *       UNKNOWN badge. Backends use {@code /actuator/health}; apps use
  *       the registry's poller-populated {@code lastHealthStatus}.</li>
@@ -50,9 +50,10 @@ const BACKEND_CHECKS: BackendCheck[] = [
   // document-service shares the nginx proxy via /api/v1/blob* but its
   // actuator isn't exposed; ping the listing endpoint as a cheap liveness check.
   { id: "document-service",    label: "document-service",    url: "/api/v1/blob?limit=1" },
-  // postgres is upstream of global-orch's actuator (db check rolls up there);
-  // for a simple-row check we hit /api/v1/regions which queries the run-state DB.
-  { id: "postgres",            label: "postgres (run-state)", url: "/api/v1/regions" },
+  // the database is upstream of global-orch's actuator (db check rolls up
+  // there); for a simple-row check we hit /api/v1/regions, which queries the
+  // "globalOrchestrator" schema.
+  { id: "oracle",              label: "oracle (run-state)",   url: "/api/v1/regions" },
 ];
 
 interface PlatformCheck {

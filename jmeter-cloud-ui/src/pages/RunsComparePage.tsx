@@ -10,7 +10,7 @@ import { TwoRunMetricsPanel, TWO_RUN_PALETTE } from "../components/TwoRunMetrics
  * Two-run comparison view, mounted at {@code /runs?compare=A,B}.
  *
  * <p>HM-7 replaced the previous
- * per-run Grafana-iframe layout with a single {@link TwoRunMetricsPanel}
+ * per-run iframe layout with a single {@link TwoRunMetricsPanel}
  * fed by the new {@code /api/v1/runs/timeseries?ids=A,B} batch
  * endpoint. The page now compares <b>exactly two runs</b> — a
  * deliberate scope decision (2026-05-10) so the chart legend, color

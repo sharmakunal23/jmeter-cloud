@@ -5,10 +5,10 @@
 # Usage:
 #
 #   docker compose up                            # default profile
-#                                                # = full stack: postgres
+#                                                # = full stack: oracle
 #                                                #   + global-orchestrator
 #                                                #   + metrics-consumer + document-service
-#                                                #   + jmeter-cloud-ui + grafana
+#                                                #   + jmeter-cloud-ui
 #
 # The default-profile activation comes from COMPOSE_PROFILES=default in
 # repo-root .env, so plain `docker compose up` does the right thing without
@@ -23,10 +23,9 @@
 # Capacity tab in the UI (`/capacity/{appName}`) to add workers.
 
 include:
-  - path: ./postgres/docker-compose.yml
+  - path: ./oracle/docker-compose.yml
   - path: ./jmeter-local-orchestrator/docker-compose.yml
   - path: ./document-service/docker-compose.yml
   - path: ./jmeter-global-orchestrator/docker-compose.yml
   - path: ./jmeter-metrics-consumer/docker-compose.yml
   - path: ./jmeter-cloud-ui/docker-compose.yml
-  - path: ./grafana/docker-compose.yml

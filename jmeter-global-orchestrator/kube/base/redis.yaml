@@ -1,6 +1,6 @@
 # KUBE-5 — shared Redis cache (CACHE C-0), owned by this service's kube/
 # exactly as it's owned by this service's compose fragment. Same flags:
-# no persistence (the cache rebuilds from Postgres), 256 MB LRU.
+# no persistence (the cache rebuilds from the database), 256 MB LRU.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

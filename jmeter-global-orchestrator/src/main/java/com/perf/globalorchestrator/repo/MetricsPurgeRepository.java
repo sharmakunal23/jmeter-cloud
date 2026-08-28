@@ -4,8 +4,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-import java.sql.Array;
-import java.sql.PreparedStatement;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -15,16 +14,14 @@ import java.util.List;
  *
  * <p><b>The DELETE carries {@code windowSecond} bounds, and must.</b>
  * {@code runId} is not the partition key, so a run-scoped DELETE cannot prune on
- * its own and Postgres scans every weekly partition, including the empty future
- * ones. The purge first reads the run's bounds from {@code metrics."runLabel"},
- * cutting the scan to the one or two partitions the run actually touched.
+ * its own and would probe every weekly partition's index. The purge first reads
+ * the run's bounds from {@code metrics."runLabel"}, cutting the work to the one
+ * or two partitions the run actually touched.
  *
  * <p>Those bounds are exact, not estimated — the rollup maintains them with
  * LEAST/GREATEST over the very rows being deleted, so they can never be narrower
  * than the data. A run with no rollup rows yields null bounds and falls back to
- * the unbounded DELETE. <b>That fallback is why the migration backfills every
- * run unconditionally:</b> complete coverage or none is safe, while partial
- * coverage would silently orphan raw rows outside the bounds.
+ * the unbounded DELETE, so a run can never leave raw rows behind.
  *
  * <p>Rollup rows go too. Reclaiming the raw space while leaving every chart and
  * per-label table intact would be worse than not purging.
@@ -51,8 +48,9 @@ public class MetricsPurgeRepository {
 
     /**
      * Delete every per-second metric row and rollup row for a batch of runs (an
-     * application purge). One {@code = ANY(?)} statement per table so the scan
-     * happens once for the whole batch instead of per-run.
+     * application purge). One {@code IN (…)} statement per table per chunk of
+     * {@value #IN_CHUNK} ids — Oracle caps an IN-list at 1,000 — so the work is
+     * per-batch, not per-run.
      *
      * @return the total number of raw {@code workerMetric} rows deleted.
      */
@@ -61,23 +59,28 @@ public class MetricsPurgeRepository {
 
         Bounds bounds = boundsFor(runIds);
 
-        long rawDeleted;
-        if (bounds == null) {
-            // No rollup coverage for any of these runs — fall back to the
-            // unpruned DELETE rather than guess at bounds.
-            rawDeleted = jdbc.update(
-                    "DELETE FROM metrics.\"workerMetric\" WHERE \"runId\" = ANY(?)",
-                    (PreparedStatement ps) -> ps.setArray(1, textArray(ps, runIds)));
-        } else {
-            rawDeleted = jdbc.update(
-                    "DELETE FROM metrics.\"workerMetric\" "
-                    + "WHERE \"runId\" = ANY(?) "
-                    + "  AND \"windowSecond\" BETWEEN ? AND ?",
-                    (PreparedStatement ps) -> {
-                        ps.setArray(1, textArray(ps, runIds));
-                        ps.setLong(2, bounds.from());
-                        ps.setLong(3, bounds.to());
-                    });
+        long rawDeleted = 0;
+        for (List<String> chunk : chunks(runIds)) {
+            if (bounds == null) {
+                // No rollup coverage for any of these runs — fall back to the
+                // unpruned DELETE rather than guess at bounds.
+                rawDeleted += jdbc.update(
+                        "DELETE FROM metrics.\"workerMetric\" WHERE \"runId\" IN (" + marks(chunk) + ")",
+                        chunk.toArray());
+                jdbc.update(
+                        "DELETE FROM metrics.\"workerMetricStatus\" WHERE \"runId\" IN (" + marks(chunk) + ")",
+                        chunk.toArray());
+            } else {
+                Object[] args = withBounds(chunk, bounds);
+                rawDeleted += jdbc.update(
+                        "DELETE FROM metrics.\"workerMetric\" "
+                        + "WHERE \"runId\" IN (" + marks(chunk) + ") "
+                        + "  AND \"windowSecond\" BETWEEN ? AND ?", args);
+                jdbc.update(
+                        "DELETE FROM metrics.\"workerMetricStatus\" "
+                        + "WHERE \"runId\" IN (" + marks(chunk) + ") "
+                        + "  AND \"windowSecond\" BETWEEN ? AND ?", args);
+            }
         }
 
         // Rollups after raw: the bounds above are read from runLabel, so it has
@@ -90,9 +93,11 @@ public class MetricsPurgeRepository {
     }
 
     private void deleteRollups(String table, List<String> runIds) {
-        jdbc.update(
-                "DELETE FROM metrics.\"" + table + "\" WHERE \"runId\" = ANY(?)",
-                (PreparedStatement ps) -> ps.setArray(1, textArray(ps, runIds)));
+        for (List<String> chunk : chunks(runIds)) {
+            jdbc.update(
+                    "DELETE FROM metrics.\"" + table + "\" WHERE \"runId\" IN (" + marks(chunk) + ")",
+                    chunk.toArray());
+        }
     }
 
     /**
@@ -100,22 +105,46 @@ public class MetricsPurgeRepository {
      * of them has rollup rows to read it from.
      */
     private Bounds boundsFor(List<String> runIds) {
-        return jdbc.query(
-                "SELECT min(\"firstSecond\") AS lo, max(\"lastSecond\") AS hi "
-                + "FROM metrics.\"runLabel\" WHERE \"runId\" = ANY(?)",
-                (PreparedStatement ps) -> ps.setArray(1, textArray(ps, runIds)),
-                rs -> {
-                    if (!rs.next()) return null;
-                    long lo = rs.getLong("lo");
-                    if (rs.wasNull()) return null;   // aggregate over zero rows
-                    long hi = rs.getLong("hi");
-                    return rs.wasNull() ? null : new Bounds(lo, hi);
-                });
+        Bounds all = null;
+        for (List<String> chunk : chunks(runIds)) {
+            Bounds b = jdbc.query(
+                    "SELECT min(\"firstSecond\") AS lo, max(\"lastSecond\") AS hi "
+                    + "FROM metrics.\"runLabel\" WHERE \"runId\" IN (" + marks(chunk) + ")",
+                    rs -> {
+                        if (!rs.next()) return null;
+                        long lo = rs.getLong("lo");
+                        if (rs.wasNull()) return null;   // aggregate over zero rows
+                        long hi = rs.getLong("hi");
+                        return rs.wasNull() ? null : new Bounds(lo, hi);
+                    },
+                    chunk.toArray());
+            if (b == null) continue;
+            all = all == null ? b : new Bounds(Math.min(all.from(), b.from()), Math.max(all.to(), b.to()));
+        }
+        return all;
     }
 
-    private static Array textArray(PreparedStatement ps, List<String> values)
-            throws java.sql.SQLException {
-        return ps.getConnection().createArrayOf("text", values.toArray());
+    /** Oracle caps an IN-list at 1,000 elements before 23ai; half that keeps the statement text small. */
+    static final int IN_CHUNK = 500;
+
+    static List<List<String>> chunks(List<String> ids) {
+        List<List<String>> out = new ArrayList<>();
+        for (int i = 0; i < ids.size(); i += IN_CHUNK) {
+            out.add(ids.subList(i, Math.min(i + IN_CHUNK, ids.size())));
+        }
+        return out;
+    }
+
+    static String marks(List<String> chunk) {
+        return String.join(",", java.util.Collections.nCopies(chunk.size(), "?"));
+    }
+
+    private static Object[] withBounds(List<String> chunk, Bounds bounds) {
+        Object[] args = new Object[chunk.size() + 2];
+        for (int i = 0; i < chunk.size(); i++) args[i] = chunk.get(i);
+        args[chunk.size()] = bounds.from();
+        args[chunk.size() + 1] = bounds.to();
+        return args;
     }
 
     /** Inclusive {@code windowSecond} range covering a set of runs. */

@@ -20,7 +20,7 @@ import java.util.Map;
  * SCHEMA-OPT Phase 1. Both queries here are whole-test aggregates, so against
  * {@code metrics."workerMetric"} they scanned every row a run ever produced
  * (~154M at 20 workers × 200 labels × 15 h) and crossed the read pool's 30 s
- * {@code statement_timeout} — meaning {@code GET /runs/{id}/metrics}, the
+ * query timeout — meaning {@code GET /runs/{id}/metrics}, the
  * {@code runTrend} snapshot taken at completion and AI insights did not merely
  * slow down, they failed. {@code metrics."runLabel"} holds one already-folded
  * row per (runId, label): 200 rows for that same run.
@@ -49,7 +49,7 @@ public class MetricsRollupRepository {
                 + "       \"samples\"          AS \"totalThroughput\", "
                 + "       \"errors\"           AS \"totalErrors\", "
                 + "       CASE WHEN \"samples\" > 0 "
-                + "            THEN \"errors\"::double precision / \"samples\" "
+                + "            THEN \"errors\" / \"samples\" "
                 + "            ELSE 0 END      AS \"errorRate\", "
                 + "       \"sumP50\" / \"rowCount\" AS \"avgP50Ms\", "
                 + "       \"sumP95\" / \"rowCount\" AS \"avgP95Ms\", "

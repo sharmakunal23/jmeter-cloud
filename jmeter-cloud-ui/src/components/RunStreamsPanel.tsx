@@ -6,13 +6,13 @@ import { MetricsTabPanel } from "./MetricsTabPanel";
 
 /**
  * Tabbed run-detail streams pane. Replaces the previous
- * stacked-per-pod log panels + Grafana iframe layout with a single
+ * stacked-per-pod log panels + metrics iframe layout with a single
  * tab strip:
  *
  * <ul>
- *   <li><b>Metrics</b> — embedded Grafana iframe. Frozen via
+ *   <li><b>Metrics</b> — the native uPlot panel (formerly an embedded iframe). Frozen via
  *       {@code src=""} swap when paused so the iframe stops its own
- *       internal polling (the real cost saver — Grafana auto-refresh
+ *       internal polling (the real cost saver — chart auto-refresh
  *       fires every configured interval whether the user is looking or
  *       not).</li>
  *   <li><b>Console</b> — orchestrator's in-memory ring of the JMeter

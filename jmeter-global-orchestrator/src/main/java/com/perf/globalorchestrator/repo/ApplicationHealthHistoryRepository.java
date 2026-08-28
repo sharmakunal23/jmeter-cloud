@@ -8,14 +8,13 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
 /**
  * Append-only access for
- * {@code globalOrchestrator.applicationHealthHistory} (Flyway V23). Written by
+ * {@code globalOrchestrator.applicationHealthHistory}. Written by
  * {@code ApplicationHealthPoller} on a status change; read by
  * {@code InfraReadinessComposer} to compute 24h downtime windows.
  */
@@ -30,12 +29,11 @@ public class ApplicationHealthHistoryRepository {
     }
 
     private static ApplicationHealthHistory mapRow(ResultSet rs, int n) throws SQLException {
-        Timestamp t = rs.getTimestamp("changedAt");
         return new ApplicationHealthHistory(
                 rs.getString("historyId"),
                 rs.getString("applicationId"),
                 rs.getString("status"),
-                t == null ? null : t.toInstant());
+                OracleBind.instant(rs, "changedAt"));
     }
 
     public void insert(ApplicationHealthHistory h) {
@@ -43,7 +41,7 @@ public class ApplicationHealthHistoryRepository {
                 "INSERT INTO \"globalOrchestrator\".\"applicationHealthHistory\" "
                 + "(\"historyId\",\"applicationId\",\"status\",\"changedAt\") VALUES (?,?,?,?)",
                 h.historyId(), h.applicationId(), h.status(),
-                h.changedAt() == null ? null : Timestamp.from(h.changedAt()));
+                OracleBind.ts(h.changedAt()));
     }
 
     /** Transitions for one app at/after {@code since}, oldest first (for window walking). */
@@ -53,13 +51,12 @@ public class ApplicationHealthHistoryRepository {
                 + "FROM \"globalOrchestrator\".\"applicationHealthHistory\" "
                 + "WHERE \"applicationId\"=? AND \"changedAt\" >= ? "
                 + "ORDER BY \"changedAt\" ASC",
-                rowMapper, applicationId, Timestamp.from(since));
+                rowMapper, applicationId, OracleBind.ts(since));
     }
 
     /**
      * HARD-DELETE / purge Phase 2 — drop an application's entire health-transition
-     * log. Needs the V28 DELETE grant (V23 created the table SELECT/INSERT-only).
-     * Idempotent: returns the rowcount (0 when the app never logged a transition).
+     * log. Idempotent: returns the rowcount (0 when the app never logged a transition).
      */
     public int deleteByApplicationId(String applicationId) {
         return jdbc.update(
@@ -75,7 +72,7 @@ public class ApplicationHealthHistoryRepository {
                 "SELECT \"historyId\",\"applicationId\",\"status\",\"changedAt\" "
                 + "FROM \"globalOrchestrator\".\"applicationHealthHistory\" "
                 + "WHERE \"applicationId\"=? AND \"changedAt\" < ? "
-                + "ORDER BY \"changedAt\" DESC LIMIT 1",
-                rowMapper, applicationId, Timestamp.from(ts)).stream().findFirst();
+                + "ORDER BY \"changedAt\" DESC FETCH FIRST 1 ROWS ONLY",
+                rowMapper, applicationId, OracleBind.ts(ts)).stream().findFirst();
     }
 }

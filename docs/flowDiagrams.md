@@ -5,7 +5,7 @@ prose only says what a diagram cannot.
 
 1. [Control plane — starting a run](#1-control-plane--starting-a-run)
 2. [Pod registry — register, heartbeat, sweep, claim](#2-pod-registry--register-heartbeat-sweep-claim)
-3. [Data plane — metrics from JMeter to Grafana](#3-data-plane--metrics-from-jmeter-to-grafana)
+3. [Data plane — metrics from JMeter to the UI](#3-data-plane--metrics-from-jmeter-to-the-ui)
 4. [Artifact plane — test plans, data files, results](#4-artifact-plane--test-plans-data-files-results)
 5. [Run lifecycle — local-orchestrator state machine](#5-run-lifecycle--local-orchestrator-state-machine)
 6. [UI request routing — nginx fan-out](#6-ui-request-routing--nginx-fan-out)
@@ -24,7 +24,7 @@ sequenceDiagram
     participant U  as Browser (UI)
     participant NX as nginx (jmeter-cloud-ui)
     participant GO as global-orchestrator
-    participant PG as Postgres<br/>(jmetercloud_globalrun)
+    participant PG as Database<br/>(globalOrchestrator schema)
     participant RO as regional-orchestrator<br/>(in the region's cluster)
     participant LO as local-orchestrator-N<br/>(JMeter baked in)
     participant JM as JMeter (child process)
@@ -88,7 +88,7 @@ sequenceDiagram
     participant GO as global-orchestrator<br/>(WorkerLivenessProbe, every 15 s)
     participant RO as regional-orchestrator
     participant K8 as Kubernetes API
-    participant PG as Postgres<br/>(globalOrchestrator.pod)
+    participant PG as Database<br/>(globalOrchestrator.pod)
 
     Note over GO,PG: POST …/capacity/{region}/pods registers the pod LOST<br/>(unclaimable), asks the regional to create it, and waits up to 20 s<br/>for readiness. Slower pods answer ready=false and this loop flips them IDLE.
 
@@ -116,7 +116,7 @@ sequenceDiagram
     autonumber
     participant LO as local-orchestrator pod<br/>(PodRegistrar bean)
     participant GO as global-orchestrator
-    participant PG as Postgres<br/>(globalOrchestrator.pod)
+    participant PG as Database<br/>(globalOrchestrator.pod)
     participant SW as PodSweeper @Scheduled<br/>(every 30 s)
 
     Note over LO: @PostConstruct fires a daemon thread<br/>so Spring init never blocks on the global.
@@ -147,7 +147,7 @@ re-registration needed.
 
 ---
 
-## 3. Data plane — metrics from JMeter to Grafana
+## 3. Data plane — metrics from JMeter to the UI
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -179,32 +179,32 @@ re-registration needed.
 │                                                                       │
 │   ┌─ Jackson decode; required identity fields validated here so a     │
 │   │  semantically-broken envelope is a terminal 400, not a 503 loop   │
-│   └─ ONE statement per chunk:                                         │
-│        WITH "ins" AS (                                                │
-│          INSERT INTO metrics."workerMetric" VALUES (…), (…), …        │
-│          ON CONFLICT ("runId","workerId","label","windowSecond")      │
-│          DO NOTHING                                                   │
-│          RETURNING …          ← only rows that ACTUALLY landed        │
-│        ) → upsert runSecond / runSecondStatus / runLabel rollups      │
+│   └─ TWO round-trips per chunk, one transaction:                      │
+│        JDBC batch → metrics."workerMetricStage" (+ status stage)      │
+│        CALL metrics."metricsIngest"."ingestStaged"(:landed)           │
+│          1 prune rows already in "workerMetric"   ← replays leave     │
+│          2 INSERT the rest (ORA-00001 = a concurrent replica won →    │
+│            whole tx rolls back → 503 → worker replays)                │
+│          3 MERGE runSecond / runSecondStatus / runLabel FROM stage    │
 │                                                                       │
-│   That RETURNING is the whole correctness argument: the raw insert    │
-│   is idempotent but "+= delta" is not, so a replayed envelope adds    │
-│   nothing because it inserted nothing.                                │
+│   The prune is the whole correctness argument: after it the stage    │
+│   holds exactly the rows this transaction inserts, so a replayed      │
+│   envelope adds nothing because it inserted nothing.                  │
 │                                                                       │
 │   202 → worker deletes from its buffer                                │
 │   400/413 → terminal, worker drops + counts                           │
 │   503 → worker retries from disk (ingest is idempotent)               │
 └────────────┬─────────────────────────────────────────────────────────┘
              │
-             │ partitioned by ISO week on "windowSecond"
+             │ INTERVAL-partitioned weekly on "windowSecond"
              ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  Postgres — jmetercloud_metrics                                       │
+│  Oracle — metrics schema (one PDB)                                    │
 │                                                                       │
-│   metrics."workerMetric"  (parent partitioned table)                  │
-│     ├ workerMetric_2026w19   ← week-19 rows                          │
-│     └ … weekly partitions kept 8 weeks ahead by the consumer's        │
-│          PartitionMaintenanceJob (boot + daily, advisory-locked)      │
+│   metrics."workerMetric" + "workerMetricStatus" (one row per code)    │
+│     ├ SYS_P…  ← a week's partition, created on its first insert       │
+│     └ dropped after retention.rawDays by the consumer's RetentionJob  │
+│          (boot + daily, "maintenanceLock" FOR UPDATE SKIP LOCKED)     │
 │                                                                       │
 │   metrics."runSecond" / "runSecondStatus" / "runLabel"                │
 │     └ the rollups every orchestrator read uses                        │
@@ -213,7 +213,7 @@ re-registration needed.
              │ rollups  │ raw table
              ▼          ▼
    ┌──────────────────┐  ┌──────────────────────┐
-   │  orchestrators   │  │  Grafana             │
+   │  orchestrators   │  │  rebuild · purge     │
    │  /timeseries     │  │  perTestLiveMetrics  │
    │  /metrics        │  │  (the ONLY remaining │
    │                  │  │   raw-table reader)  │
@@ -228,8 +228,8 @@ Latency budget across the data plane (target SLO):
 | Aggregator → dispatcher queue | sub-microsecond (CAS) | sub-microsecond |
 | Dispatcher → disk buffer | < 5 ms (gzip + atomic rename) | < 10 ms |
 | POST /ingest → consumer | < 20 ms | < 50 ms |
-| Consumer → Postgres | < 5 ms | < 20 ms |
-| Postgres → Grafana panel | < 500 ms (panel refresh) | < 2 s |
+| Consumer → Oracle (stage + ingest call) | p50 3 ms (measured 2026-08-28, 8 workers) | p99 7 ms, max 17 ms |
+| Oracle → UI Metrics tab poll (`/timeseries`) | p50 8 ms (measured) | p99 17 ms |
 | **End-to-end** | **< 1 s** | **< 3 s** |
 
 ---
@@ -328,8 +328,7 @@ flowchart LR
 
     GO -. "fan-out POST /test<br/>+ status poll<br/>+ log proxy" .-> LO[local-orchestrator:8080]
 
-    B -. "deep-link, new tab<br/>(not embedded)" .-> GR[Grafana]
-    GR -. "SQL via provisioned<br/>datasource" .-> PG[(Database<br/>jmetercloud_metrics)]
+    GR -. "SQL via provisioned<br/>datasource" .-> PG[(Database<br/>metrics schema)]
 ```
 
 **Order matters in `nginx.conf`:** `^~ /api/v1/blob` must precede the general
@@ -338,7 +337,7 @@ compose and Kubernetes — `DNS_RESOLVER` and `SVC_SUFFIX` are derived at
 container start, because nginx's `resolver` ignores resolv.conf search domains
 and in-cluster upstreams must be FQDNs.
 
-Metrics render natively in the UI; Grafana is a deep-link for drill-down, not
+Metrics render natively in the UI; there is no external dashboard, not
 an embed.
 
 ---
@@ -349,7 +348,7 @@ Arrows are the literal `depends_on` edges. A failed parent stops everything
 below it from starting.
 
 ```
-postgres (healthy)
+oracle (healthy)
    │
    ├─► flyway-migrate (one-shot)
    │      │  Applies metrics V1 (workerMetric partitions + helpers)
@@ -379,9 +378,9 @@ multiRegion profile adds:
    └─► orchestrator-2 (parallel to orchestrator-1, different region tag)
 ```
 
-**Cold-cache time-to-healthy:** ~60 s end-to-end (postgres 5 s,
+**Cold-cache time-to-healthy:** ~90 s end-to-end (oracle ~40 s cold,
 flyway-migrate 5 s, the Spring Boot apps + UI ~30-60 s in parallel,
-grafana 10 s). **Warm cache:** ~30 s.
+flyway 5 s). **Warm cache:** ~30 s.
 
 ---
 

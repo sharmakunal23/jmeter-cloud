@@ -22,7 +22,7 @@ import java.util.Map;
  * a run is terminal the rows are immutable and so is the aggregate.
  *
  * <p>The {@code condition} SpEL gates the cache entirely: when it is false
- * Spring does no lookup and no put, and the call goes straight to Postgres for
+ * Spring does no lookup and no put, and the call goes straight to the database for
  * fresh data. The timeseries key is
  * {@code runId + ':' + byRegion + ':' + windowSeconds} and deliberately excludes
  * state, so an entry cached while terminal is found whatever the caller passes;
@@ -67,7 +67,7 @@ public class CachingMetricsService {
                key = "#runId + ':' + #byRegion + ':' + (#windowSeconds == null ? 'all' : #windowSeconds)",
                condition = "#state != null && #state.terminal")
     public MetricsTimeseries timeseries(String runId, RunState state, boolean byRegion, Long windowSeconds) {
-        // Live runs bypass the cache (the condition above) and hit Postgres fresh
+        // Live runs bypass the cache (the condition above) and hit the database fresh
         // on every 5 s poll — trim the unsettled trailing edge so the chart is
         // stable poll-to-poll. Terminal runs are immutable: settle 0 shows the
         // true final second, and that complete response is what gets cached.

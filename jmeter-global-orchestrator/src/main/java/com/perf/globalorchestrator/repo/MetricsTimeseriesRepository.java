@@ -117,7 +117,7 @@ public class MetricsTimeseriesRepository {
      *        data are excluded from the response. Those most-recent seconds are
      *        still being produced: each worker holds a per-second window open for
      *        a ~2 s close grace, and the metrics-consumer adds ingest +
-     *        batch-INSERT lag before the rows land in Postgres. So on a run polled
+     *        batch-INSERT lag before the rows land in the database. So on a run polled
      *        every 5 s the trailing seconds are only partially aggregated and
      *        change shape each poll — a half-counted second shows as a transient
      *        TPS dip / RT spike, and because the chart auto-scales its Y axis that
@@ -304,12 +304,12 @@ public class MetricsTimeseriesRepository {
         // milliseconds, which is why V17 deliberately left the type alone.
         return jdbc.query(
                 "SELECT \"windowSecond\" AS sec, "
-                + "       sum(\"samples\")::bigint AS tps, "
+                + "       sum(\"samples\") AS tps, "
                 + "       CASE WHEN sum(\"samples\") > 0 "
                 + "            THEN sum(\"sumElapsedMs\") / sum(\"samples\") "
                 + "            ELSE 0 END AS avg_rt_ms, "
                 + "       CASE WHEN sum(\"samples\") > 0 "
-                + "            THEN 100.0 * sum(\"errors\")::double precision / sum(\"samples\") "
+                + "            THEN 100.0 * sum(\"errors\") / sum(\"samples\") "
                 + "            ELSE 0 END AS error_pct "
                 + "FROM metrics.\"runSecond\" "
                 + "WHERE \"runId\" = ? " + windowClause(bounds)
@@ -366,9 +366,9 @@ public class MetricsTimeseriesRepository {
         Map<String, Map<Long, RawSums>> byRegion = new LinkedHashMap<>();
         jdbc.query(
                 "SELECT \"region\" AS region, \"windowSecond\" AS sec, "
-                + "       sum(\"samples\")::bigint AS tps, "
+                + "       sum(\"samples\") AS tps, "
                 + "       sum(\"sumElapsedMs\") AS sum_elapsed_ms, "
-                + "       sum(\"errors\")::bigint AS errors "
+                + "       sum(\"errors\") AS errors "
                 + "FROM metrics.\"runSecond\" "
                 + "WHERE \"runId\" = ? " + windowClause(bounds)
                 + "GROUP BY \"region\", \"windowSecond\" "
@@ -446,24 +446,16 @@ public class MetricsTimeseriesRepository {
     /**
      * Latest data second for a run, or {@code null} if it has no rows yet.
      *
-     * <p>This runs on <em>every</em> live poll (any window selector or settle
-     * margin needs it), so its plan matters more than its simplicity suggests.
-     * Against the raw table it was the single worst query in the platform: the
-     * only usable index is {@code ("runId","label","windowSecond")}, and with
-     * {@code runId} pinned by equality the index orders by {@code label} first —
-     * so there is no pathkey on {@code windowSecond} alone and the planner cannot
-     * reduce this to a backward index scan with {@code LIMIT 1}. It degenerated
-     * into reading every index entry for the run (~154M at fleet scale), across
-     * every partition, since it carries no {@code windowSecond} predicate to
-     * prune on.
-     *
-     * <p>{@code metrics."runSecond"} is keyed {@code ("runId","windowSecond",
-     * "region")} precisely so that {@code windowSecond} IS the next ordering
-     * column after the equality, and this collapses to one row.
+     * <p>This runs on <em>every</em> live poll, so it reads
+     * {@code metrics."runLabel"."lastSecond"} — one unpartitioned row per label,
+     * maintained by the rollup as {@code GREATEST} over every row that landed —
+     * rather than {@code max("windowSecond")} on the interval-partitioned
+     * {@code "runSecond"}, where a {@code runId}-only predicate cannot prune and
+     * the optimizer probes every week's partition (~52 at full retention).
      */
     private Long maxWindowSecond(String runId) {
         return jdbc.queryForObject(
-                "SELECT max(\"windowSecond\") FROM metrics.\"runSecond\" WHERE \"runId\" = ?",
+                "SELECT max(\"lastSecond\") FROM metrics.\"runLabel\" WHERE \"runId\" = ?",
                 (rs, i) -> { long v = rs.getLong(1); return rs.wasNull() ? null : v; },
                 runId);
     }

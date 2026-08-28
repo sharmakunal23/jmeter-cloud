@@ -14,7 +14,7 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Timestamp;
+import java.sql.Types;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -45,9 +45,8 @@ public class RunRepository {
 
     private static RowMapper<RunFleetMember> buildMemberRowMapper(ObjectMapper json) {
         return (rs, n) -> {
-            // properties JSONB → Map<String,String>. {} default keeps reads
-            // identical for legacy rows that pre-date the V3 migration.
-            String propsRaw = rs.getString("properties");
+            // properties JSON → Map<String,String>; {} when absent.
+            String propsRaw = OracleBind.json(rs, "properties");
             Map<String, String> props;
             if (propsRaw == null || propsRaw.isBlank()) {
                 props = Map.of();
@@ -58,16 +57,16 @@ public class RunRepository {
                     throw new SQLException("failed to deserialise runFleetMember.properties", e);
                 }
             }
-            // joinedAtSecond → NULL for original-fleet members (V11
-            // column added by MID-TEST-SCALING Phase A; NULL is the
-            // default for any row written before scale-up landed).
-            Long joinedAtSecond = (Long) rs.getObject("joinedAtSecond");
-            // Phase F2 — runsServed is joined from the pod table at
-            // SELECT time (see findMembers). Null when the pod row is
-            // gone (drained pod whose member row outlived it) or when
-            // the read path didn't include the join (insert codepaths).
+            // joinedAtSecond → NULL for original-fleet members. Read through
+            // getLong + wasNull: Oracle surfaces NUMBER as BigDecimal from
+            // getObject, so a cast to Long would throw.
+            Long joinedAtSecond = nullableLong(rs, "joinedAtSecond");
+            // runsServed is joined from the pod table at SELECT time (see
+            // findMembers). Null when the pod row is gone (drained pod whose
+            // member row outlived it) or when the read path didn't include
+            // the join (insert codepaths).
             Long runsServed = hasColumn(rs, "podRunsServed")
-                    ? (Long) rs.getObject("podRunsServed")
+                    ? nullableLong(rs, "podRunsServed")
                     : null;
             return new RunFleetMember(
                     rs.getString("runId"),
@@ -75,7 +74,7 @@ public class RunRepository {
                     rs.getString("region"),
                     MemberState.valueOf(rs.getString("state")),
                     rs.getString("stateReason"),
-                    (Integer) rs.getObject("fanoutStatusCode"),
+                    nullableInt(rs, "fanoutStatusCode"),
                     rs.getString("podBaseUrl"),
                     instant(rs, "createdAt"),
                     instant(rs, "startedAt"),
@@ -84,6 +83,16 @@ public class RunRepository {
                     joinedAtSecond,
                     runsServed);
         };
+    }
+
+    private static Long nullableLong(ResultSet rs, String col) throws SQLException {
+        long v = rs.getLong(col);
+        return rs.wasNull() ? null : v;
+    }
+
+    private static Integer nullableInt(ResultSet rs, String col) throws SQLException {
+        int v = rs.getInt(col);
+        return rs.wasNull() ? null : v;
     }
 
     /** True iff the row's metadata has a column by this name. Cheap; used
@@ -106,15 +115,13 @@ public class RunRepository {
                 + "VALUES (?,?,?,?,?,?,?,?,?)",
                 run.runId(), run.originRegion(), run.testPlanBlobId(),
                 run.dataFilesBlobId(), run.application(),
-                run.initiatedBy(), run.state().name(),
-                Timestamp.from(run.createdAt()), run.saveResults());
+                OracleBind.text(run.initiatedBy(), OracleBind.NAME_CHARS), run.state().name(),
+                OracleBind.ts(run.createdAt()), run.saveResults());
     }
 
     public void insertFleetMember(RunFleetMember m) {
-        // properties → JSONB. PreparedStatement bindings are typed as
-        // strings; the explicit `::jsonb` cast lets Postgres parse the
-        // JSON server-side and reject malformed input. The
-        // properties-validation contract is upstream
+        // properties → CLOB; the column's IS JSON check rejects malformed
+        // input server-side. The properties-validation contract is upstream
         // (StartTestRequest's compact constructor on the local-orch),
         // so a write here only fails on a programming error.
         String propsJson;
@@ -128,9 +135,9 @@ public class RunRepository {
                 "INSERT INTO \"globalOrchestrator\".\"runFleetMember\" "
                 + "(\"runId\",\"workerId\",\"region\",\"state\",\"podBaseUrl\","
                 + " \"createdAt\",\"properties\",\"joinedAtSecond\") "
-                + "VALUES (?,?,?,?,?,?, ?::jsonb, ?)",
+                + "VALUES (?,?,?,?,?,?, ?, ?)",
                 m.runId(), m.workerId(), m.region(), m.state().name(),
-                m.podBaseUrl(), Timestamp.from(m.createdAt()), propsJson,
+                m.podBaseUrl(), OracleBind.ts(m.createdAt()), OracleBind.clob(propsJson),
                 m.joinedAtSecond());
     }
 
@@ -144,7 +151,7 @@ public class RunRepository {
      */
     public void clearSaveResults(String runId) {
         jdbc.update(
-                "UPDATE \"globalOrchestrator\".\"run\" SET \"saveResults\"=false WHERE \"runId\"=?",
+                "UPDATE \"globalOrchestrator\".\"run\" SET \"saveResults\"=0 WHERE \"runId\"=?",
                 runId);
     }
 
@@ -158,26 +165,26 @@ public class RunRepository {
      * finishes AFTER the run goes terminal, once no UI is polling) is observed
      * and recorded. Bounded by {@code completedAfter} so a run whose upload
      * never lands (e.g. a worker died post-completion) stops being polled
-     * instead of being chased forever, and {@code LIMIT 200} caps a tick.
+     * instead of being chased forever, and the 200-row fetch caps a tick.
      */
     public List<String> runIdsAwaitingResultsSaved(Instant completedAfter) {
         return jdbc.queryForList(
                 "SELECT r.\"runId\" FROM \"globalOrchestrator\".\"run\" r "
-                + "WHERE r.\"state\"='COMPLETED' AND r.\"saveResults\"=true "
+                + "WHERE r.\"state\"='COMPLETED' AND r.\"saveResults\"=1 "
                 + "  AND r.\"completedAt\" >= ? "
                 + "  AND (SELECT count(*) FROM \"globalOrchestrator\".\"runFleetMember\" m "
                 + "         WHERE m.\"runId\"=r.\"runId\" AND m.\"podBaseUrl\" IS NOT NULL "
                 + "           AND m.\"state\" IN ('COMPLETED','DRAINED')) "
-                + "      > (SELECT count(DISTINCT e.\"payload\"->>'workerId') "
+                + "      > (SELECT count(DISTINCT JSON_VALUE(e.\"payload\", '$.workerId')) "
                 + "           FROM \"globalOrchestrator\".\"runEvent\" e "
                 + "           WHERE e.\"runId\"=r.\"runId\" AND e.\"eventType\"='RESULTS_SAVED') "
                 + "ORDER BY r.\"completedAt\" "
-                + "LIMIT 200",
-                String.class, Timestamp.from(completedAfter));
+                + "FETCH FIRST 200 ROWS ONLY",
+                String.class, OracleBind.ts(completedAfter));
     }
 
     /**
-     * Soft-delete — mark a run hidden (sets {@code hiddenAt=now()}) so it drops
+     * Soft-delete — mark a run hidden (stamps {@code hiddenAt}) so it drops
      * out of the default listing. Reversible: the row, fleet members, and audit
      * trail are retained; {@link #listRuns(ListRunsCriteria)} filters
      * {@code hiddenAt IS NULL} unless {@code includeHidden}. The
@@ -185,7 +192,7 @@ public class RunRepository {
      */
     public void markHidden(String runId) {
         jdbc.update(
-                "UPDATE \"globalOrchestrator\".\"run\" SET \"hiddenAt\"=now() "
+                "UPDATE \"globalOrchestrator\".\"run\" SET \"hiddenAt\"=SYSTIMESTAMP "
                 + "WHERE \"runId\"=? AND \"hiddenAt\" IS NULL",
                 runId);
     }
@@ -226,8 +233,8 @@ public class RunRepository {
 
     /**
      * HARD-DELETE / purge — physically removes the run row. The FK
-     * {@code ON DELETE CASCADE} on {@code runFleetMember} (V1) and {@code runEvent}
-     * (V15) takes those child rows with it (the cascade runs with the table
+     * {@code ON DELETE CASCADE} on {@code runFleetMember} and {@code runEvent}
+     * takes those child rows with it (the cascade runs with the table
      * owner's privileges, so no extra grant is needed). Idempotent: a re-run of a
      * partially-completed purge matches zero rows. Returns the rowcount (1 when
      * the run existed, 0 when already gone). NOT to be confused with
@@ -244,7 +251,7 @@ public class RunRepository {
         return jdbc.update(
                 "UPDATE \"globalOrchestrator\".\"run\" SET \"state\"=?, \"stateReason\"=? "
                 + "WHERE \"runId\"=? AND \"state\"=?",
-                to.name(), reason, runId, from.name());
+                to.name(), OracleBind.text(reason, OracleBind.TEXT_CHARS), runId, from.name());
     }
 
     public void updateRunState(String runId, RunState state, String reason) {
@@ -252,11 +259,11 @@ public class RunRepository {
                 "UPDATE \"globalOrchestrator\".\"run\" "
                 + "SET \"state\"=?, \"stateReason\"=?, "
                 + "\"startedAt\"=COALESCE(\"startedAt\", "
-                + "  CASE WHEN ? = 'RUNNING' THEN now() ELSE NULL END), "
+                + "  CASE WHEN ? = 'RUNNING' THEN SYSTIMESTAMP ELSE NULL END), "
                 + "\"completedAt\"=COALESCE(\"completedAt\", "
-                + "  CASE WHEN ? IN ('COMPLETED','FAILED','ABORTED') THEN now() ELSE NULL END) "
+                + "  CASE WHEN ? IN ('COMPLETED','FAILED','ABORTED') THEN SYSTIMESTAMP ELSE NULL END) "
                 + "WHERE \"runId\"=?",
-                state.name(), reason, state.name(), state.name(), runId);
+                state.name(), OracleBind.text(reason, OracleBind.TEXT_CHARS), state.name(), state.name(), runId);
     }
 
     /**
@@ -268,24 +275,36 @@ public class RunRepository {
      * keeps the terminal audit event and the runTrend snapshot single-shot.
      * {@code completedAt} COALESCEs so the first stamp wins.
      */
-    /** FAILs PREPARING runs created before {@code cutoff}; returns their ids. */
+    /**
+     * FAILs PREPARING runs created before {@code cutoff}; returns their ids.
+     * Select-then-update (Oracle has no multi-row RETURNING in JDBC): a run that
+     * becomes stale between the two statements is caught by the next sweep.
+     */
     public List<String> failStalePreparing(Instant cutoff, String reason) {
-        return jdbc.queryForList(
-                "UPDATE \"globalOrchestrator\".\"run\" "
-                + "SET \"state\"='FAILED', \"stateReason\"=?, \"completedAt\"=COALESCE(\"completedAt\", now()) "
-                + "WHERE \"state\"='PREPARING' AND \"createdAt\" < ? "
-                + "RETURNING \"runId\"",
-                String.class, reason, Timestamp.from(cutoff));
+        List<String> ids = jdbc.queryForList(
+                "SELECT \"runId\" FROM \"globalOrchestrator\".\"run\" "
+                + "WHERE \"state\"='PREPARING' AND \"createdAt\" < ?",
+                String.class, OracleBind.ts(cutoff));
+        List<String> failed = new ArrayList<>();
+        for (String runId : ids) {
+            int n = jdbc.update(
+                    "UPDATE \"globalOrchestrator\".\"run\" "
+                    + "SET \"state\"='FAILED', \"stateReason\"=?, \"completedAt\"=COALESCE(\"completedAt\", SYSTIMESTAMP) "
+                    + "WHERE \"runId\"=? AND \"state\"='PREPARING'",
+                    OracleBind.text(reason, OracleBind.TEXT_CHARS), runId);
+            if (n > 0) failed.add(runId);
+        }
+        return failed;
     }
 
     public int updateRunStateClaimingTerminal(String runId, RunState state, String reason) {
         return jdbc.update(
                 "UPDATE \"globalOrchestrator\".\"run\" "
                 + "SET \"state\"=?, \"stateReason\"=?, "
-                + "\"completedAt\"=COALESCE(\"completedAt\", now()) "
+                + "\"completedAt\"=COALESCE(\"completedAt\", SYSTIMESTAMP) "
                 + "WHERE \"runId\"=? "
                 + "  AND \"state\" NOT IN ('COMPLETED','FAILED','ABORTED')",
-                state.name(), reason, runId);
+                state.name(), OracleBind.text(reason, OracleBind.TEXT_CHARS), runId);
     }
 
     public void updateMemberState(String runId, String workerId,
@@ -295,11 +314,11 @@ public class RunRepository {
                 "UPDATE \"globalOrchestrator\".\"runFleetMember\" "
                 + "SET \"state\"=?, \"stateReason\"=?, \"fanoutStatusCode\"=COALESCE(?,\"fanoutStatusCode\"), "
                 + "\"startedAt\"=COALESCE(\"startedAt\", "
-                + "  CASE WHEN ? IN ('RUNNING','ACCEPTED') THEN now() ELSE NULL END), "
+                + "  CASE WHEN ? IN ('RUNNING','ACCEPTED') THEN SYSTIMESTAMP ELSE NULL END), "
                 + "\"completedAt\"=COALESCE(\"completedAt\", "
-                + "  CASE WHEN ? IN ('COMPLETED','FAILED','ABORTED') THEN now() ELSE NULL END) "
+                + "  CASE WHEN ? IN ('COMPLETED','FAILED','ABORTED') THEN SYSTIMESTAMP ELSE NULL END) "
                 + "WHERE \"runId\"=? AND \"workerId\"=?",
-                state.name(), reason, fanoutStatusCode,
+                state.name(), OracleBind.text(reason, OracleBind.TEXT_CHARS), OracleBind.typed(Types.INTEGER, fanoutStatusCode),
                 state.name(), state.name(),
                 runId, workerId);
     }
@@ -323,10 +342,10 @@ public class RunRepository {
         return jdbc.update(
                 "UPDATE \"globalOrchestrator\".\"runFleetMember\" "
                 + "SET \"state\"='ABORTED', \"stateReason\"=?, "
-                + "    \"completedAt\"=COALESCE(\"completedAt\", now()) "
+                + "    \"completedAt\"=COALESCE(\"completedAt\", SYSTIMESTAMP) "
                 + "WHERE \"workerId\"=? "
                 + "  AND \"state\" IN ('PENDING','REQUESTED','ACCEPTED','RUNNING','DRAINING')",
-                reason, workerId);
+                OracleBind.text(reason, OracleBind.TEXT_CHARS), workerId);
     }
 
     /**
@@ -345,26 +364,45 @@ public class RunRepository {
      */
     /** Per-worker form of {@link #failActiveMembersOnLostPods}: the kubelet said why this one died. Returns the affected runIds. */
     public List<String> failActiveMembersForWorker(String workerId, String reason) {
-        return jdbc.queryForList(
-                "UPDATE \"globalOrchestrator\".\"runFleetMember\" "
-                + "SET \"state\"='FAILED', \"stateReason\"=?, "
-                + "    \"completedAt\"=COALESCE(\"completedAt\", now()) "
+        List<String> runIds = jdbc.queryForList(
+                "SELECT \"runId\" FROM \"globalOrchestrator\".\"runFleetMember\" "
                 + "WHERE \"workerId\"=? "
-                + "  AND \"state\" IN ('PENDING','REQUESTED','ACCEPTED','RUNNING','DRAINING') "
-                + "RETURNING \"runId\"",
-                String.class, reason, workerId);
+                + "  AND \"state\" IN ('PENDING','REQUESTED','ACCEPTED','RUNNING','DRAINING')",
+                String.class, workerId);
+        List<String> failed = new ArrayList<>();
+        for (String runId : runIds) {
+            int n = jdbc.update(
+                    "UPDATE \"globalOrchestrator\".\"runFleetMember\" "
+                    + "SET \"state\"='FAILED', \"stateReason\"=?, "
+                    + "    \"completedAt\"=COALESCE(\"completedAt\", SYSTIMESTAMP) "
+                    + "WHERE \"runId\"=? AND \"workerId\"=? "
+                    + "  AND \"state\" IN ('PENDING','REQUESTED','ACCEPTED','RUNNING','DRAINING')",
+                    OracleBind.text(reason, OracleBind.TEXT_CHARS), runId, workerId);
+            if (n > 0) failed.add(runId);
+        }
+        return failed;
     }
 
     public List<String> failActiveMembersOnLostPods(String reason) {
-        return jdbc.queryForList(
-                "UPDATE \"globalOrchestrator\".\"runFleetMember\" m "
-                + "SET \"state\"='FAILED', \"stateReason\"=?, "
-                + "    \"completedAt\"=COALESCE(m.\"completedAt\", now()) "
+        List<Map<String, Object>> members = jdbc.queryForList(
+                "SELECT m.\"runId\", m.\"workerId\" "
+                + "FROM \"globalOrchestrator\".\"runFleetMember\" m "
                 + "WHERE m.\"state\" IN ('PENDING','REQUESTED','ACCEPTED','RUNNING','DRAINING') "
                 + "  AND EXISTS (SELECT 1 FROM \"globalOrchestrator\".\"pod\" p "
-                + "              WHERE p.\"podId\" = m.\"workerId\" AND p.\"state\" = 'LOST') "
-                + "RETURNING m.\"runId\"",
-                String.class, reason);
+                + "              WHERE p.\"podId\" = m.\"workerId\" AND p.\"state\" = 'LOST')");
+        List<String> failed = new ArrayList<>();
+        for (Map<String, Object> m : members) {
+            String runId = (String) m.get("runId");
+            int n = jdbc.update(
+                    "UPDATE \"globalOrchestrator\".\"runFleetMember\" "
+                    + "SET \"state\"='FAILED', \"stateReason\"=?, "
+                    + "    \"completedAt\"=COALESCE(\"completedAt\", SYSTIMESTAMP) "
+                    + "WHERE \"runId\"=? AND \"workerId\"=? "
+                    + "  AND \"state\" IN ('PENDING','REQUESTED','ACCEPTED','RUNNING','DRAINING')",
+                    OracleBind.text(reason, OracleBind.TEXT_CHARS), runId, (String) m.get("workerId"));
+            if (n > 0) failed.add(runId);
+        }
+        return failed;
     }
 
     public Optional<Run> findByRunId(String runId) {
@@ -404,7 +442,7 @@ public class RunRepository {
         try {
             String runId = jdbc.queryForObject(
                     "SELECT \"runId\" FROM \"globalOrchestrator\".\"runFleetMember\" "
-                    + "WHERE \"workerId\"=? ORDER BY \"createdAt\" DESC LIMIT 1",
+                    + "WHERE \"workerId\"=? ORDER BY \"createdAt\" DESC FETCH FIRST 1 ROWS ONLY",
                     String.class, workerId);
             return Optional.ofNullable(runId);
         } catch (EmptyResultDataAccessException e) {
@@ -464,11 +502,11 @@ public class RunRepository {
         String sql = "SELECT * FROM \"globalOrchestrator\".\"run\" "
                 + whereClause
                 + "ORDER BY \"createdAt\" DESC "
-                + "LIMIT ? OFFSET ?";
+                + "OFFSET ? ROWS FETCH NEXT ? ROWS ONLY";
         Object[] pageArgs = new Object[args.size() + 2];
         for (int i = 0; i < args.size(); i++) pageArgs[i] = args.get(i);
-        pageArgs[args.size()]     = c.limit();
-        pageArgs[args.size() + 1] = c.offset();
+        pageArgs[args.size()]     = c.offset();
+        pageArgs[args.size() + 1] = c.limit();
 
         List<Run> bare = jdbc.query(sql, RUN_ROW_MAPPER_NO_MEMBERS, pageArgs);
         List<Run> hydrated = new ArrayList<>(bare.size());
@@ -523,7 +561,7 @@ public class RunRepository {
                 + "FROM \"globalOrchestrator\".\"run\" "
                 + "WHERE \"application\" = ? AND \"createdAt\" >= ? "
                 + "GROUP BY \"state\"",
-                application, Timestamp.from(since));
+                application, OracleBind.ts(since));
         Map<String, Long> byState = new java.util.HashMap<>();
         for (Map<String, Object> r : rows) {
             byState.put((String) r.get("state"), ((Number) r.get("n")).longValue());
@@ -588,8 +626,7 @@ public class RunRepository {
             null);
 
     private static Instant instant(ResultSet rs, String col) throws SQLException {
-        Timestamp t = rs.getTimestamp(col);
-        return t == null ? null : t.toInstant();
+        return OracleBind.instant(rs, col);
     }
 
     private static Run withMembers(Run base, List<RunFleetMember> members) {

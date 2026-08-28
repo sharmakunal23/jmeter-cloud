@@ -7,7 +7,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 /**
  * Spring Boot entry point for the metrics-consumer on port 8083, which ingests
  * {@code WorkerMetricBatch} JSON envelopes at {@code POST /api/v1/ingest} and
- * writes per-second rows into the {@code jmetercloud_metrics} database.
+ * lands per-second rows and rollup deltas in the Oracle {@code metrics} schema.
  */
 @SpringBootApplication
 @EnableScheduling

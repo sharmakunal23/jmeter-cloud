@@ -3,6 +3,7 @@ package com.perf.metricsconsumer.http;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.perf.metricsconsumer.health.ConsumerHeartbeat;
 import com.perf.metricsconsumer.jdbc.WorkerMetricWriter;
+import com.perf.metricsconsumer.model.WireBounds;
 import com.perf.metricsconsumer.model.WorkerMetricBatch;
 import com.perf.metricsconsumer.model.WorkerMetricEntry;
 import com.perf.metricsconsumer.util.RateLimitedLogger;
@@ -13,6 +14,7 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.TransactionException;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -25,9 +27,10 @@ import java.util.List;
  * per-second {@link WorkerMetricBatch} here as JSON, and
  * {@link WorkerMetricWriter#writeBatch} lands it idempotently.
  *
- * <p>Required identity fields are validated here rather than left to the
- * INSERT, so a structurally valid but semantically broken envelope is rejected
- * terminally instead of looping forever through the worker's retry path.
+ * <p>Identity fields, size bounds and the numeric invariants the schema's
+ * CHECK constraints enforce are validated here, so a structurally valid but
+ * semantically broken envelope is rejected terminally instead of looping
+ * forever through the worker's retry path as a 503.
  *
  * <p><b>The status codes are a cross-component contract</b> — the worker's
  * dispatcher branches on them, so changing one changes the worker:
@@ -42,8 +45,8 @@ import java.util.List;
  *   <tr><td>{@code 413}</td><td>Body over {@code maxBodyBytes}. Terminal.</td></tr>
  *   <tr><td>{@code 415}</td><td>Non-JSON Content-Type. A worker predating the
  *       JSON wire lands here and retries from its buffer until rebuilt.</td></tr>
- *   <tr><td>{@code 503}</td><td>Postgres unreachable. The worker retries — ingest
- *       is idempotent, so replay is safe.</td></tr>
+ *   <tr><td>{@code 503}</td><td>The database is unreachable or rejected the
+ *       chunk. The worker retries — ingest is idempotent, so replay is safe.</td></tr>
  * </table>
  */
 @RestController
@@ -122,33 +125,75 @@ public class IngestController {
             heartbeat.markBatchProcessed(rowsInserted);
             return ResponseEntity.accepted()
                     .body(new IngestResponse(rowsInserted, "ACCEPTED", null));
-        } catch (DataAccessException e) {
+        } catch (DataAccessException | TransactionException e) {
+            // TransactionException covers a database that is down at
+            // transaction start (CannotCreateTransactionException) — not a
+            // DataAccessException, but the same retryable outcome.
             RL_LOG.warn("INGEST_DB_DOWN",
-                    "Rejected /ingest envelope: Postgres unreachable: {}", e.toString());
+                    "Rejected /ingest envelope: database unavailable: {}", e.toString());
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                    .body(new IngestResponse(0, "POSTGRES_UNAVAILABLE", e.getMessage()));
+                    .body(new IngestResponse(0, "DATABASE_UNAVAILABLE", e.getMessage()));
         }
     }
 
     /**
-     * Semantic validation of fields the INSERT depends on. JSON decode is
-     * lenient (a missing field arrives as null/0), so without this check a
-     * broken envelope would fail the NOT NULL constraints in Postgres and be
-     * misclassified as a retryable {@code 503} — poisoning the worker's disk
-     * buffer with an envelope that can never succeed. Returns the first
-     * violation, or null when the envelope is insertable.
+     * Returns the first reason the envelope could never land, or null when it
+     * is insertable. Mirrors the schema: identity fields present and within
+     * {@link WireBounds#ID_CHARS}, {@code windowSecond} a positive epoch second,
+     * counts non-negative with {@code errorCount <= throughput}. JSON decode is
+     * lenient (a missing field arrives as null/0), and a violation that reached
+     * the database would be a retryable 503 poisoning the worker's disk buffer.
      * An EMPTY entries list is valid — 202 with {@code rowsInserted: 0}.
      */
-    private static String firstViolation(WorkerMetricBatch env) {
-        if (isBlank(env.runId()))            return "runId is required";
-        if (isBlank(env.workerId()))         return "workerId is required";
-        if (isBlank(env.region()))           return "region is required";
+    static String firstViolation(WorkerMetricBatch env) {
+        String v;
+        if ((v = idViolation("runId", env.runId())) != null)       return v;
+        if ((v = idViolation("workerId", env.workerId())) != null) return v;
+        if ((v = idViolation("region", env.region())) != null)     return v;
         if (isBlank(env.windowTimestamp()))  return "windowTimestamp is required";
+        if (env.windowSecond() < 1 || env.windowSecond() > WireBounds.MAX_WINDOW_SECOND) {
+            return "windowSecond must be an epoch second in 1.." + WireBounds.MAX_WINDOW_SECOND
+                    + ", got " + env.windowSecond();
+        }
         if (env.entries() == null)           return "entries is required (may be empty, not absent)";
         for (int i = 0; i < env.entries().size(); i++) {
             WorkerMetricEntry entry = env.entries().get(i);
-            if (entry == null)               return "entries[" + i + "] is null";
-            if (isBlank(entry.label()))      return "entries[" + i + "].label is required";
+            String at = "entries[" + i + "]";
+            if (entry == null)               return at + " is null";
+            if (isBlank(entry.label()))      return at + ".label is required";
+            if (entry.throughput() < 0)      return at + ".throughput must be >= 0";
+            if (entry.errorCount() < 0)      return at + ".errorCount must be >= 0";
+            if (entry.errorCount() > entry.throughput()) {
+                return at + ".errorCount (" + entry.errorCount() + ") exceeds throughput ("
+                        + entry.throughput() + ")";
+            }
+            if (entry.resolvedSumElapsedMs() < 0) return at + ".sumElapsedMs must be >= 0";
+            if (entry.rawMaxMs() < 0)        return at + ".rawMaxMs must be >= 0";
+            if (entry.activeThreads() < 0)   return at + ".activeThreads must be >= 0";
+            if (entry.bytesReceived() < 0)   return at + ".bytesReceived must be >= 0";
+            if (entry.bytesSent() < 0)       return at + ".bytesSent must be >= 0";
+            if (entry.p50Ms() < 0 || entry.p90Ms() < 0 || entry.p95Ms() < 0 || entry.p99Ms() < 0) {
+                return at + " has a negative percentile";
+            }
+            // Jackson decodes "Infinity"/"NaN"/1e999 into non-finite doubles, and
+            // neither is caught by a "< 0" check; a NUMBER(10) column also caps
+            // every count at 2^31-1. Reject here rather than clamp silently.
+            if (!Double.isFinite(entry.p50Ms()) || !Double.isFinite(entry.p90Ms())
+                    || !Double.isFinite(entry.p95Ms()) || !Double.isFinite(entry.p99Ms())) {
+                return at + " has a non-finite percentile";
+            }
+            if (entry.throughput() > Integer.MAX_VALUE || entry.rawMaxMs() > Integer.MAX_VALUE
+                    || entry.activeThreads() > Integer.MAX_VALUE || entry.p99Ms() > Integer.MAX_VALUE) {
+                return at + " has a value beyond the column range (2147483647)";
+            }
+        }
+        return null;
+    }
+
+    private static String idViolation(String field, String value) {
+        if (isBlank(value)) return field + " is required";
+        if (value.length() > WireBounds.ID_CHARS) {
+            return field + " exceeds " + WireBounds.ID_CHARS + " chars (" + value.length() + ")";
         }
         return null;
     }
@@ -163,7 +208,7 @@ public class IngestController {
      * @param rowsInserted number of rows actually written; may be less than
      *                     envelope's entry count if duplicates collapsed
      * @param code         short status code: {@code ACCEPTED}, {@code INVALID_JSON},
-     *                     {@code PAYLOAD_TOO_LARGE}, {@code POSTGRES_UNAVAILABLE}
+     *                     {@code PAYLOAD_TOO_LARGE}, {@code DATABASE_UNAVAILABLE}
      * @param message      human-readable detail; null on success
      */
     public record IngestResponse(int rowsInserted, String code, String message) { }

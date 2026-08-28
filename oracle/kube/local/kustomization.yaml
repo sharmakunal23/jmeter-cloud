@@ -1,0 +1,21 @@
+# oracle local — an in-cluster Oracle Free for a validation cluster (kind).
+# Not for the private cloud, which points the `oracle` Service at the
+# operator's instance instead.
+#
+# initdb/01_createSchemasAndUsers.sql is a VERBATIM COPY of
+# oracle/initdb/01_createSchemasAndUsers.sql (kustomize cannot reference
+# files outside this kustomization root). If you touch one, touch both —
+# `diff oracle/initdb oracle/kube/local/initdb` must stay empty.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - statefulSet.yaml
+  - service.yaml
+configMapGenerator:
+  - name: oracle-initdb
+    files:
+      - initdb/01_createSchemasAndUsers.sql
+    options:
+      # Fixed name: a hash suffix would make any initdb edit roll the
+      # StatefulSet pod for a script that only runs on first boot.
+      disableNameSuffixHash: true

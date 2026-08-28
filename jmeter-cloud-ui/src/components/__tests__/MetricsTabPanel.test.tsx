@@ -180,12 +180,12 @@ describe("MetricsTabPanel — error state", () => {
   });
 });
 
-// "Open in Grafana" moved out of the Metrics panel up to the run-detail
+// The retired "Open in Grafana" action never lived in the Metrics panel; keep the panel
 // tab bar (RunDetailPage) — it's a run-level action, not a metrics one.
-describe("MetricsTabPanel — no Grafana link (moved to the run-detail tab bar)", () => {
-  it("does not render an Open in Grafana link", () => {
+describe("MetricsTabPanel — no external dashboard link", () => {
+  it("does not render an external dashboard link", () => {
     render(<MetricsTabPanel runId="01J000RUN" runState="COMPLETED" />);
-    expect(screen.queryByRole("link", { name: /Open in Grafana/ })).toBeNull();
+    expect(screen.queryByRole("link", { name: /Open in/ })).toBeNull();
   });
 });
 

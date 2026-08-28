@@ -330,7 +330,7 @@ public class RunController {
     /**
      * HM-1 — per-second timeseries for the run-detail Metrics tab. Drives
      * the four native uPlot charts (TPS, avg RT, error %, status codes)
-     * that replace the Grafana iframe in HM-3. Empty arrays during
+     * that replaced the former Grafana iframe. Empty arrays during
      * PREPARING (rather than 404) so the polling UI doesn't flash a red
      * error before the consumer has written its first row.
      */

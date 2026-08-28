@@ -30,7 +30,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * AI-0/AI-1/AI-2 — controller-level tests of the HTTP contract + error mapping,
  * with a real {@link AiQuotaGuard} (cap = 1) and mocked {@link AiClient} /
- * {@link AiInsightsService}. Standalone MockMvc (no Spring context, no Postgres)
+ * {@link AiInsightsService}. Standalone MockMvc (no Spring context, no database)
  * keeps these fast; the DB-backed cache behaviour is covered by
  * {@link AiInsightsIT}.
  */

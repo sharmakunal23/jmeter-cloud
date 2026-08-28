@@ -74,7 +74,7 @@ stated goals (reliability + smooth AWS move):
   the row lock guarantees each due schedule fires exactly once — no leader
   election, no Quartz cluster tables, no double-fire config landmine. This is
   the single biggest "smooth AWS" win and the reason Quartz was rejected.
-- **Restart-safe + catch-up-once.** `nextFireAt` is materialised in Postgres, so
+- **Restart-safe + catch-up-once.** `nextFireAt` is materialised in the database, so
   a fire missed during a deploy fires once on the next tick, then advances to
   the next future slot (never a backlog replay).
 - **No new dependency.** Spring's `CronExpression` does the parsing + next-fire.

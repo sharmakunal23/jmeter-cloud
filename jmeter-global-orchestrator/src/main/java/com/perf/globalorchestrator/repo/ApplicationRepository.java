@@ -13,7 +13,6 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -21,9 +20,9 @@ import java.util.Optional;
 
 /**
  * D-AppRegistry — persistence for {@code globalOrchestrator.application}.
- * Reads + writes via the runState datasource (RW). JSONB columns are
- * round-tripped through Jackson with explicit {@code ::jsonb} casts so
- * Postgres parses + validates them server-side.
+ * Reads + writes via the runState datasource (RW). The JSON columns are
+ * round-tripped through Jackson; their {@code IS JSON} checks validate them
+ * server-side.
  */
 @Repository
 public class ApplicationRepository {
@@ -48,14 +47,14 @@ public class ApplicationRepository {
                 rs.getString("name"),
                 rs.getString("sealId"),
                 rs.getString("description"),
-                jsonbList(json, rs.getString("healthEndpoints"), URLS_TYPE, List.of()),
+                jsonbList(json, OracleBind.json(rs, "healthEndpoints"), URLS_TYPE, List.of()),
                 null,                                     // capacity hydrated separately
                 instant(rs, "createdAt"),
                 instant(rs, "lastHealthCheckedAt"),
                 statusOrNull(rs.getString("lastHealthStatus")),
-                rs.getString("lastHealthDetails") == null
+                OracleBind.json(rs, "lastHealthDetails") == null
                         ? null
-                        : jsonbList(json, rs.getString("lastHealthDetails"), DETAILS_TYPE, List.of()),
+                        : jsonbList(json, OracleBind.json(rs, "lastHealthDetails"), DETAILS_TYPE, List.of()),
                 RecyclePolicy.valueOf(rs.getString("recyclePolicy")),
                 nullableInt(rs, "maxRunsPerPod"),
                 nullableInt(rs, "podMaxAgeHours"),
@@ -78,9 +77,9 @@ public class ApplicationRepository {
                 + " \"healthEndpoints\",\"createdAt\","
                 + " \"recyclePolicy\",\"maxRunsPerPod\",\"podMaxAgeHours\","
                 + " \"alwaysOn\") "
-                + "VALUES (?,?,?,?, ?::jsonb, ?, ?, ?, ?, ?)",
+                + "VALUES (?,?,?,?, ?, ?, ?, ?, ?, ?)",
                 app.applicationId(), app.name(), app.sealId(), app.description(),
-                endpointsJson, Timestamp.from(app.createdAt()),
+                OracleBind.clob(endpointsJson), OracleBind.ts(app.createdAt()),
                 app.recyclePolicy().name(), app.maxRunsPerPod(), app.podMaxAgeHours(),
                 app.alwaysOn());
         return findById(app.applicationId()).orElseThrow();
@@ -140,8 +139,7 @@ public class ApplicationRepository {
      * Visible (non-hidden) applications only. Soft-deleted rows
      * ({@code hiddenAt IS NOT NULL}) are excluded so they drop out of the
      * applications list, launcher picker, capacity matrix, and health poller
-     * — every surface reads through here. The partial index
-     * {@code application_visible_name_idx} (V20) backs this predicate.
+     * — every surface reads through here.
      */
     public List<Application> findAll() {
         return jdbc.query(
@@ -179,18 +177,18 @@ public class ApplicationRepository {
             updated = jdbc.update(
                     "UPDATE \"globalOrchestrator\".\"application\" "
                     + "SET \"name\"=?, \"sealId\"=?, \"description\"=?, "
-                    + "    \"healthEndpoints\"=?::jsonb, \"alwaysOn\"=? "
+                    + "    \"healthEndpoints\"=?, \"alwaysOn\"=? "
                     + "WHERE \"applicationId\"=?",
-                    name, sealId, description, endpointsJson, alwaysOn, applicationId);
+                    name, sealId, description, OracleBind.clob(endpointsJson), alwaysOn, applicationId);
         } else {
             updated = jdbc.update(
                     "UPDATE \"globalOrchestrator\".\"application\" "
                     + "SET \"name\"=?, \"sealId\"=?, \"description\"=?, "
-                    + "    \"healthEndpoints\"=?::jsonb, "
+                    + "    \"healthEndpoints\"=?, "
                     + "    \"recyclePolicy\"=?, \"maxRunsPerPod\"=?, \"podMaxAgeHours\"=?, "
                     + "    \"alwaysOn\"=? "
                     + "WHERE \"applicationId\"=?",
-                    name, sealId, description, endpointsJson,
+                    name, sealId, description, OracleBind.clob(endpointsJson),
                     recyclePolicy.name(), maxRunsPerPod, podMaxAgeHours,
                     alwaysOn, applicationId);
         }
@@ -210,9 +208,9 @@ public class ApplicationRepository {
         jdbc.update(
                 "UPDATE \"globalOrchestrator\".\"application\" "
                 + "SET \"lastHealthStatus\"=?, \"lastHealthCheckedAt\"=?, "
-                + "    \"lastHealthDetails\"=?::jsonb "
+                + "    \"lastHealthDetails\"=? "
                 + "WHERE \"applicationId\"=?",
-                status.name(), Timestamp.from(checkedAt), detailsJson, applicationId);
+                status.name(), OracleBind.ts(checkedAt), OracleBind.clob(detailsJson), applicationId);
     }
 
     /**
@@ -239,7 +237,7 @@ public class ApplicationRepository {
     public boolean softDelete(String applicationId, String archivedName) {
         return jdbc.update(
                 "UPDATE \"globalOrchestrator\".\"application\" "
-                + "SET \"name\"=?, \"hiddenAt\"=now() "
+                + "SET \"name\"=?, \"hiddenAt\"=SYSTIMESTAMP "
                 + "WHERE \"applicationId\"=? AND \"hiddenAt\" IS NULL",
                 archivedName, applicationId) > 0;
     }
@@ -250,7 +248,7 @@ public class ApplicationRepository {
         try {
             return json.writeValueAsString(value);
         } catch (Exception e) {
-            throw new IllegalStateException("failed to serialise application JSONB column", e);
+            throw new IllegalStateException("failed to serialise application JSON column", e);
         }
     }
 
@@ -259,7 +257,7 @@ public class ApplicationRepository {
         try {
             return json.readValue(raw, type);
         } catch (Exception e) {
-            throw new IllegalStateException("failed to deserialise application JSONB column", e);
+            throw new IllegalStateException("failed to deserialise application JSON column", e);
         }
     }
 
@@ -268,7 +266,6 @@ public class ApplicationRepository {
     }
 
     private static Instant instant(ResultSet rs, String col) throws SQLException {
-        Timestamp t = rs.getTimestamp(col);
-        return t == null ? null : t.toInstant();
+        return OracleBind.instant(rs, col);
     }
 }

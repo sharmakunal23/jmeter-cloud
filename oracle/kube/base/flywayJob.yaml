@@ -1,0 +1,77 @@
+# Flyway migration Job: the K8s equivalent of the compose `flyway-migrate`
+# one-shot service. Same two invocations (metrics + globalrun), each as its
+# schema owner, same idempotency (re-runs no-op via each schema's
+# flyway_schema_history). Migrations are baked into the image
+# (oracle/Dockerfile) — K8s has no repo checkout to bind-mount.
+#
+# No `depends_on` here — `-connectRetries=60` rides out the database still
+# coming up (Oracle Free needs ~40 s from an empty volume; the operator's
+# instance is already there). Dependent services may crash-loop until this
+# Job completes; that's the documented convergence model
+# (infra/deploy/k8s/README.md).
+#
+# Idempotent re-apply: ttlSecondsAfterFinished garbage-collects the Job
+# 10 min after success, so a later `kubectl apply -k` recreates and re-runs
+# it (new migrations get applied). Within the TTL window a re-apply with a
+# CHANGED spec hits Job immutability — fallback:
+#   kubectl -n jmeter-cloud delete job flyway-migrate && kubectl apply -k …
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: flyway-migrate
+  labels:
+    app: flyway-migrate
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        app: flyway-migrate
+    spec:
+      enableServiceLinks: false
+      restartPolicy: OnFailure
+      containers:
+        - name: flyway
+          # Built from oracle/Dockerfile (flyway/flyway:11 + the services'
+          # ojdbc11, migrations baked in). Overlays retag/redirect.
+          image: jmeter-cloud-flyway:dev
+          env:
+            # One PDB; privateCloud patches this to the operator's service.
+            - name: DB_URL
+              value: jdbc:oracle:thin:@//oracle:1521/FREEPDB1
+            - name: DB_METRICS_OWNER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: oracle-credentials
+                  key: metricsOwnerPassword
+            - name: DB_GLOBALRUN_OWNER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: oracle-credentials
+                  key: globalrunOwnerPassword
+            - name: TZ
+              value: UTC
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              flyway
+              -url="$DB_URL"
+              -user=metrics
+              -password="$DB_METRICS_OWNER_PASSWORD"
+              -locations=filesystem:/flyway/sql/metrics
+              -connectRetries=60
+              migrate &&
+              flyway
+              -url="$DB_URL"
+              '-user="globalOrchestrator"'
+              -password="$DB_GLOBALRUN_OWNER_PASSWORD"
+              -locations=filesystem:/flyway/sql/globalrun
+              -connectRetries=60
+              migrate
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi

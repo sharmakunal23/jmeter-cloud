@@ -16,6 +16,8 @@ secretGenerator:
     literals:
       - metricsReaderUser=metricsReader
       - metricsReaderPassword=localdev
+      - metricsPurgerUser=metricsPurger
+      - metricsPurgerPassword=localdev
       - globalrunWriterUser=globalOrchestratorWriter
       - globalrunWriterPassword=localdev
       - anthropicApiKey=

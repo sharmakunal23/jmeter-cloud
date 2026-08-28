@@ -20,7 +20,7 @@
     <description>
         Fan-out layer that drives many jmeter-local-orchestrators across
         regions/clusters. Owns run-state, coordinates fleet-wide test
-        starts, and reads aggregated metrics from the Postgres replica.
+        starts, and reads aggregated metrics from the Oracle rollups.
     </description>
 
     <properties>
@@ -62,9 +62,11 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
+        <!-- ORACLE-MIGRATION (2026-08-28): both schemas live in Oracle.
+             ojdbc11 is BOM-managed (oracle-database.version). -->
         <dependency>
-            <groupId>org.postgresql</groupId>
-            <artifactId>postgresql</artifactId>
+            <groupId>com.oracle.database.jdbc</groupId>
+            <artifactId>ojdbc11</artifactId>
             <scope>runtime</scope>
         </dependency>
         <!-- SLIMDOWN SL-E (2026-07-22): micrometer-registry-prometheus,
@@ -114,6 +116,16 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- ORACLE-MIGRATION OM-6 — the opt-in database contract tests
+             (`mvn test -PdbTests`, JUnit tag `db`): Testcontainers boots
+             Oracle Free, Flyway applies the real migrations from
+             ../oracle/migrations, and the tests exercise the SQL the default
+             loop never touches. All test scope; nothing here ships. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>oracle-free</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>
@@ -121,7 +133,7 @@
         </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>
-            <artifactId>flyway-database-postgresql</artifactId>
+            <artifactId>flyway-database-oracle</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -148,11 +160,39 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
+            <!-- The `db`-tagged contract tests need Docker and ~1 min for
+                 Oracle Free to boot, so the default loop skips them; the
+                 dbTests profile below runs ONLY them. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <excludedGroups>db</excludedGroups>
+                </configuration>
+            </plugin>
             <!-- Failsafe wires *IT.java behavior tests into `mvn verify`. -->
         </plugins>
     </build>
 
     <profiles>
+        <!-- ORACLE-MIGRATION OM-6 — `mvn test -PdbTests` runs the `db`-tagged
+             contract tests against a Testcontainers Oracle Free and nothing
+             else. Requires Docker. -->
+        <profile>
+            <id>dbTests</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <excludedGroups combine.self="override"/>
+                            <groups>db</groups>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
         <!-- The -Pcloud profile (AWS SES + the src/main/java-cloud source
              root) was removed: SMTP is the one email backend; the deploy
              environment's relay is configured via the existing spring.mail

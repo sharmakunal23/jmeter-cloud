@@ -51,32 +51,46 @@ spec:
               value: "8082"
             - name: HTTP_BIND_ADDRESS
               value: 0.0.0.0
-            # Two datasources, two role identities (parity with compose;
-            # `postgres` resolves by Service name).
-            - name: POSTGRES_METRICS_URL
-              value: jdbc:postgresql://postgres:5432/jmetercloud_metrics
-            - name: POSTGRES_USER
+            # ORACLE-MIGRATION: one PDB, three role identities (parity with
+            # compose; `oracle` resolves by Service name — an in-cluster
+            # StatefulSet on kind, an ExternalName on privateCloud, both from
+            # the track's cutover phase).
+            - name: DB_METRICS_URL
+              value: jdbc:oracle:thin:@//oracle:1521/FREEPDB1
+            - name: DB_METRICS_READER_USER
               valueFrom:
                 secretKeyRef:
                   name: global-orchestrator-credentials
                   key: metricsReaderUser
-            - name: POSTGRES_PASSWORD
+            - name: DB_METRICS_READER_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: global-orchestrator-credentials
                   key: metricsReaderPassword
-            - name: POSTGRES_GLOBALRUN_URL
-              value: jdbc:postgresql://postgres:5432/jmetercloud_globalrun
-            - name: POSTGRES_GLOBALRUN_WRITER_USER
+            - name: DB_METRICS_PURGER_USER
+              valueFrom:
+                secretKeyRef:
+                  name: global-orchestrator-credentials
+                  key: metricsPurgerUser
+            - name: DB_METRICS_PURGER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: global-orchestrator-credentials
+                  key: metricsPurgerPassword
+            - name: DB_GLOBALRUN_URL
+              value: jdbc:oracle:thin:@//oracle:1521/FREEPDB1
+            - name: DB_GLOBALRUN_WRITER_USER
               valueFrom:
                 secretKeyRef:
                   name: global-orchestrator-credentials
                   key: globalrunWriterUser
-            - name: POSTGRES_GLOBALRUN_WRITER_PASSWORD
+            - name: DB_GLOBALRUN_WRITER_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: global-orchestrator-credentials
                   key: globalrunWriterPassword
+            - name: TZ
+              value: UTC
             - name: GLOBAL_ORCHESTRATOR_REGION
               value: us-east-1
             - name: GLOBAL_ORCHESTRATOR_FANOUT_THREADS
@@ -113,7 +127,7 @@ spec:
             failureThreshold: 24   # up to 120 s for a cold JVM start
           livenessProbe:
             # Liveness GROUP only — process-up. The aggregate (db + redis
-            # + mail) belongs to readiness: a MailHog/postgres outage must
+            # + mail) belongs to readiness: a MailHog/database outage must
             # never restart-loop the control plane.
             httpGet:
               path: /actuator/health/liveness
@@ -122,7 +136,7 @@ spec:
             failureThreshold: 3
           readinessProbe:
             # Aggregate — same gate as the compose healthcheck and the UI
-            # Home checklist: NotReady until postgres, redis, and mail are
+            # Home checklist: NotReady until the database, redis, and mail are
             # all reachable.
             httpGet:
               path: /actuator/health

@@ -52,11 +52,11 @@
   <text x="42" y="344" font-size="10" font-weight="600" letter-spacing="1" fill="#065f46">DATA STORAGE</text>
 
   <rect x="210" y="356" width="220" height="40" rx="6" fill="#d1fae5" stroke="#047857" stroke-width="1.3"/>
-  <text x="320" y="373" text-anchor="middle" font-size="12" font-weight="600" fill="#065f46">jmetercloud_globalrun</text>
+  <text x="320" y="373" text-anchor="middle" font-size="12" font-weight="600" fill="#065f46">globalOrchestrator schema</text>
   <text x="320" y="388" text-anchor="middle" font-size="10" fill="#475569">run · runFleetMember · pod · capacity</text>
 
   <rect x="42" y="356" width="150" height="40" rx="6" fill="#ffffff" stroke="#6ee7b7" stroke-width="1.3"/>
-  <text x="117" y="373" text-anchor="middle" font-size="12" font-weight="600" fill="#065f46">jmetercloud_metrics</text>
+  <text x="117" y="373" text-anchor="middle" font-size="12" font-weight="600" fill="#065f46">metrics schema</text>
   <text x="117" y="388" text-anchor="middle" font-size="10" fill="#475569">rollups, read-only</text>
 
   <!-- arrows -->

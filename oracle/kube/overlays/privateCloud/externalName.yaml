@@ -1,0 +1,16 @@
+# The operator's Oracle instance, reachable as `oracle` inside the cluster
+# (service-name parity keeps every JDBC URL default unchanged). Replace the
+# placeholder host; if the PDB service is not FREEPDB1, patch DB_URL on the
+# flyway Job and DB_*_URL on the two services in this overlay.
+apiVersion: v1
+kind: Service
+metadata:
+  name: oracle
+  labels:
+    app: oracle
+spec:
+  type: ExternalName
+  externalName: oracle.internal.example.com
+  ports:
+    - name: sqlnet
+      port: 1521

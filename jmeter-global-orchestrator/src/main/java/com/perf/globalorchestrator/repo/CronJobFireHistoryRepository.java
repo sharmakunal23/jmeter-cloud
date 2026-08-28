@@ -8,13 +8,11 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 
 /**
- * Append-only access for {@code globalOrchestrator.cronJobFireHistory}
- * (Flyway V20). One row per fire attempt; never updated or deleted (the role
+ * Append-only access for {@code globalOrchestrator.cronJobFireHistory}. One row per fire attempt; never updated or deleted (the role
  * has only SELECT + INSERT, like {@code runEvent}).
  */
 @Repository
@@ -28,11 +26,10 @@ public class CronJobFireHistoryRepository {
     }
 
     private static CronJobFire mapRow(ResultSet rs, int n) throws SQLException {
-        Timestamp firedAt = rs.getTimestamp("firedAt");
         return new CronJobFire(
                 rs.getString("fireId"),
                 rs.getString("cronJobId"),
-                firedAt == null ? null : firedAt.toInstant(),
+                OracleBind.instant(rs, "firedAt"),
                 rs.getString("outcome"),
                 rs.getString("runId"),
                 rs.getString("errorReason"));
@@ -44,8 +41,8 @@ public class CronJobFireHistoryRepository {
                 + "(\"fireId\",\"cronJobId\",\"firedAt\",\"outcome\",\"runId\",\"errorReason\") "
                 + "VALUES (?,?,?,?,?,?)",
                 f.fireId(), f.cronJobId(),
-                f.firedAt() == null ? null : Timestamp.from(f.firedAt()),
-                f.outcome(), f.runId(), f.errorReason());
+                OracleBind.ts(f.firedAt()),
+                f.outcome(), f.runId(), OracleBind.text(f.errorReason(), OracleBind.TEXT_CHARS));
     }
 
     /** Newest-first fire history for one schedule, capped at {@code limit}. */
@@ -53,7 +50,7 @@ public class CronJobFireHistoryRepository {
         return jdbc.query(
                 "SELECT \"fireId\",\"cronJobId\",\"firedAt\",\"outcome\",\"runId\",\"errorReason\" "
                 + "FROM \"globalOrchestrator\".\"cronJobFireHistory\" "
-                + "WHERE \"cronJobId\"=? ORDER BY \"firedAt\" DESC LIMIT ?",
+                + "WHERE \"cronJobId\"=? ORDER BY \"firedAt\" DESC FETCH FIRST ? ROWS ONLY",
                 rowMapper, cronJobId, limit);
     }
 

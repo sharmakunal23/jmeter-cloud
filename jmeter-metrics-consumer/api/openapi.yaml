@@ -3,12 +3,13 @@ openapi: 3.0.3
 info:
   title: jmeter-metrics-consumer
   version: 1.0.0
-  summary: HTTP ingest service that lands WorkerMetricBatch envelopes into Postgres.
+  summary: HTTP ingest service that lands WorkerMetricBatch envelopes in the Oracle metrics schema.
   description: |
     Accepts JSON `WorkerMetricBatch` envelopes at `POST /api/v1/ingest` — the
-    platform's only metrics path — and writes them into
-    `metrics."workerMetric"` with `ON CONFLICT DO NOTHING`, so duplicates from
-    a worker's retry machinery collapse at the database.
+    platform's only metrics path — and lands them in `metrics."workerMetric"`
+    through a staged, idempotent ingest: rows already present are pruned
+    before the insert, so duplicates from a worker's retry machinery collapse
+    at the database and the rollups absorb only rows that actually landed.
 
     **This document is the canonical wire contract.** The producer
     (`jmeter-local-orchestrator`) keeps a structurally identical record, and a
@@ -125,31 +126,32 @@ paths:
             in its disk buffer until the worker image is rebuilt.
         '503':
           description: |
-            Postgres unreachable (`DataAccessException`). The dispatcher
-            SHOULD retry via its disk-buffer retry sweeper.
+            The database is unreachable or rejected the chunk (a concurrent
+            replica landed the same key first). The dispatcher SHOULD retry via
+            its disk-buffer retry sweeper — ingest is idempotent.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/IngestResponse'
               example:
                 rowsInserted: 0
-                code: POSTGRES_UNAVAILABLE
-                message: "Connection to postgres:5432 refused"
+                code: DATABASE_UNAVAILABLE
+                message: "IO Error: The Network Adapter could not establish the connection"
 
   /actuator/health:
     get:
       tags: [actuator]
       summary: Aggregate health — DB connectivity + ingest-progress staleness.
       description: |
-        DOWN if Postgres is unreachable or no envelope has been ingested for
+        DOWN if the database is unreachable or no envelope has been ingested for
         `metricsConsumer.heartbeat.staleAfterSeconds` (the `ingestProgress`
         indicator). Probe paths: `/actuator/health/liveness` (process up),
         `/actuator/health/readiness` (DB reachable).
       responses:
         '200':
-          description: UP — service can read/write Postgres and is ingesting.
+          description: UP — service can reach the database and is ingesting.
         '503':
-          description: DOWN — Postgres unreachable or ingest is stale.
+          description: DOWN — database unreachable or ingest is stale.
 
   /actuator/info:
     get:
@@ -172,7 +174,9 @@ components:
         windowSecond:
           type: integer
           format: int64
-          description: Epoch second of the 1-s tumbling window (idempotency-key component).
+          minimum: 1
+          maximum: 9999999999
+          description: Epoch second of the 1-s tumbling window (idempotency-key component). A millisecond value is rejected 400.
           example: 1784600000
         windowTimestamp:
           type: string
@@ -180,14 +184,17 @@ components:
           example: "2026-07-20T21:33:20Z"
         region:
           type: string
+          maxLength: 64
           description: Worker's region tag.
           example: us-east-1
         workerId:
           type: string
+          maxLength: 64
           description: Pod/worker identity (idempotency-key component).
           example: acaps-us-east-1-worker-1
         runId:
           type: string
+          maxLength: 64
           description: Run this window belongs to (idempotency-key component).
           example: 01KY1535CHHF9WG5HHZETVEQBZ
         joinedAtSecond:
@@ -208,21 +215,25 @@ components:
       description: |
         One per-label aggregate inside an envelope. Envelope-level identity
         (runId, workerId, region, windowSecond, …) is projected onto each
-        Postgres row at insert time — this object carries only the
-        per-label numbers. All response-time fields are milliseconds.
+        stored row at insert time — this object carries only the per-label
+        numbers. All response-time fields are milliseconds. Counts must be
+        non-negative with `errorCount <= throughput` (400 otherwise).
       required: [label]
       properties:
         label:
           type: string
-          description: JMeter sampler label (idempotency-key component).
+          description: JMeter sampler label (idempotency-key component). Stored truncated to 255 characters.
           example: "GET /api/v1/checkout/items"
         throughput:
           type: integer
           format: int64
+          minimum: 0
           description: Samples completed in this window.
         errorCount:
           type: integer
           format: int64
+          minimum: 0
+          description: Failed samples in this window; never more than `throughput`.
         errorRate:
           type: number
           format: double
@@ -280,7 +291,10 @@ components:
           additionalProperties:
             type: integer
             format: int64
-          description: HTTP status code → count for this window. Null/absent is treated as empty.
+          description: |
+            JMeter `responseCode` → count for this window. Null/absent is treated
+            as empty; a blank code is stored as `(none)`, a code longer than 128
+            characters is stored truncated, and counts ≤ 0 are skipped.
           example: { "200": 240, "404": 3, "500": 1 }
         activeThreads:
           type: integer
@@ -296,19 +310,19 @@ components:
           type: integer
           description: |
             Rows actually written to `metrics."workerMetric"`. May be less
-            than the envelope's entry count if duplicates collapsed via
-            `ON CONFLICT DO NOTHING`.
+            than the envelope's entry count if duplicates were pruned as
+            already present.
           example: 200
         code:
           type: string
-          enum: [ACCEPTED, INVALID_JSON, PAYLOAD_TOO_LARGE, POSTGRES_UNAVAILABLE]
+          enum: [ACCEPTED, INVALID_JSON, PAYLOAD_TOO_LARGE, DATABASE_UNAVAILABLE]
           description: |
             Short status code.
 
             - `ACCEPTED` — happy path (HTTP 202)
-            - `INVALID_JSON` — body malformed or a required field missing (HTTP 400; do not retry)
+            - `INVALID_JSON` — body malformed, a required field missing, an identity field over 64 chars, or a count invariant broken (HTTP 400; do not retry)
             - `PAYLOAD_TOO_LARGE` — body exceeded `maxBodyBytes` (HTTP 413; do not retry)
-            - `POSTGRES_UNAVAILABLE` — DB unreachable (HTTP 503; retry)
+            - `DATABASE_UNAVAILABLE` — database unreachable or the chunk was rolled back (HTTP 503; retry)
           example: ACCEPTED
         message:
           type: string
