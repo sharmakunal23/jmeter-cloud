@@ -57,12 +57,12 @@ class IngestValidationTest {
     @Test
     void non_finite_and_out_of_range_numbers_are_rejected_not_clamped() {
         WorkerMetricEntry infinite = new WorkerMetricEntry("x", 1, 0, 0, 1, 1L, Double.POSITIVE_INFINITY, 1, 1, 1, 1, 1, 1, 0, 0, Map.of(), 1);
-        assertEquals("entries[0] has a non-finite percentile",
+        assertEquals("entries[0] has a non-finite latency",
                 IngestController.firstViolation(envelope("run-A", 1L, List.of(infinite))));
         WorkerMetricEntry nan = new WorkerMetricEntry("x", 1, 0, 0, 1, 1L, 1, Double.NaN, 1, 1, 1, 1, 1, 0, 0, Map.of(), 1);
-        assertEquals("entries[0] has a non-finite percentile",
+        assertEquals("entries[0] has a non-finite latency",
                 IngestController.firstViolation(envelope("run-A", 1L, List.of(nan))));
-        WorkerMetricEntry huge = new WorkerMetricEntry("x", 1, 0, 0, 1, 1L, 1, 1, 1, 1, 1, 1, 5_000_000_000L, 0, 0, Map.of(), 1);
+        WorkerMetricEntry huge = new WorkerMetricEntry("x", 1, 0, 0, 1, 1L, 1, 1, 1, 1, 1, 1, 10_000_000_000L, 0, 0, Map.of(), 1);
         assertTrue(IngestController.firstViolation(envelope("run-A", 1L, List.of(huge))).contains("beyond the column range"));
     }
 

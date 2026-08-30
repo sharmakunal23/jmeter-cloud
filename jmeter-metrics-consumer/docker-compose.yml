@@ -29,13 +29,11 @@ services:
       HTTP_PORT:           "8083"
       HTTP_BIND_ADDRESS:   0.0.0.0
       # ORACLE-MIGRATION (2026-08-28): the metrics schema is in Oracle.
-      DB_METRICS_URL:      jdbc:oracle:thin:@//oracle:1521/FREEPDB1
-      # Connect as the per-app metricsWriter — it can only stage rows and
-      # execute the ingest/retention packages (grants issued by the metrics
-      # V1 migration, run by the schema owner). Bare name; application.yml
-      # adds the quotes Oracle needs for a camelCase user.
-      DB_METRICS_USER:     ${DB_METRICS_WRITER_USER:-metricsWriter}
-      DB_METRICS_PASSWORD: ${DB_METRICS_WRITER_PASSWORD:-localdev}
+      ORACLE_METRICS_URL:      jdbc:oracle:thin:@//oracle:1521/FREEPDB1
+      # Connect AS the metrics schema owner (CARDZATE_DB_GRAF), like the hosted
+      # proxy client, so every statement uses unqualified names.
+      ORACLE_METRICS_USER:     ${ORACLE_METRICS_USER:-CARDZATE_DB_GRAF}
+      ORACLE_METRICS_PASSWORD: ${ORACLE_METRICS_OWNER_PASSWORD:-localdev}
       TZ:                  UTC
       # SLIMDOWN (2026-07-20): the MANAGEMENT_TRACING_* / MANAGEMENT_OTLP_*
       # env is gone — the service no longer carries Micrometer/OTel.

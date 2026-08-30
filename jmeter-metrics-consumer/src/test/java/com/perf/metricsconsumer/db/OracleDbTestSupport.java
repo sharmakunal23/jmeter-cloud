@@ -17,13 +17,16 @@ import java.time.Duration;
 /**
  * One Oracle Free container per test JVM, initialised exactly like the local
  * stack: {@code oracle/initdb} creates the owners and users on first boot, and
- * Flyway applies {@code oracle/migrations/metrics} as the {@code metrics} owner.
+ * Flyway applies {@code oracle/migrations/metrics} — the shared V1 and every
+ * rendered {@code R__group_*.sql} — as the {@code CARDZATE_DB_GRAF} owner.
  * Subclasses are {@code @Tag("db")} and run only under {@code -PdbTests}.
  */
 @Tag("db")
 public abstract class OracleDbTestSupport {
 
     static final String PASSWORD = "localdev";
+    /** The metrics schema owner; the consumer connects as it, like the hosted proxy client. */
+    static final String OWNER = "CARDZATE_DB_GRAF";
 
     static final OracleContainer ORACLE = new OracleContainer(DockerImageName.parse("gvenzl/oracle-free:23-slim"))
             .withPassword(PASSWORD)
@@ -34,7 +37,7 @@ public abstract class OracleDbTestSupport {
 
     static {
         ORACLE.start();
-        migrate("metrics", "oracle/migrations/metrics");
+        migrate(OWNER, "oracle/migrations/metrics");
     }
 
     static String jdbcUrl() {
@@ -53,9 +56,9 @@ public abstract class OracleDbTestSupport {
         return Paths.get("..", relative).toAbsolutePath().normalize();
     }
 
-    /** The schema owner — sees every table, can call the packages directly. */
+    /** The schema owner — every object, unqualified names, exactly the consumer's session. */
     static JdbcTemplate owner() {
-        return new JdbcTemplate(new DriverManagerDataSource(jdbcUrl(), "metrics", PASSWORD));
+        return new JdbcTemplate(new DriverManagerDataSource(jdbcUrl(), OWNER, PASSWORD));
     }
 
     @DynamicPropertySource
@@ -64,8 +67,8 @@ public abstract class OracleDbTestSupport {
         // above; Boot's auto-configuration would otherwise run Flyway again
         // as the application user, which holds no DDL privilege.
         registry.add("spring.flyway.enabled", () -> "false");
-        registry.add("DB_METRICS_URL", OracleDbTestSupport::jdbcUrl);
-        registry.add("DB_METRICS_USER", () -> "metricsWriter");
-        registry.add("DB_METRICS_PASSWORD", () -> PASSWORD);
+        registry.add("ORACLE_METRICS_URL", OracleDbTestSupport::jdbcUrl);
+        registry.add("ORACLE_METRICS_USER", () -> OWNER);
+        registry.add("ORACLE_METRICS_PASSWORD", () -> PASSWORD);
     }
 }

@@ -2,26 +2,27 @@ openapi: 3.0.3
 
 info:
   title: jmeter-metrics-consumer
-  version: 1.0.0
-  summary: HTTP ingest service that lands WorkerMetricBatch envelopes in the Oracle metrics schema.
+  version: 2.0.0
+  summary: HTTP ingest service that lands WorkerMetricBatch envelopes in an application group's fact table.
   description: |
-    Accepts JSON `WorkerMetricBatch` envelopes at `POST /api/v1/ingest` — the
-    platform's only metrics path — and lands them in `metrics."workerMetric"`
-    through a staged, idempotent ingest: rows already present are pruned
-    before the insert, so duplicates from a worker's retry machinery collapse
-    at the database and the rollups absorb only rows that actually landed.
+    Accepts JSON `WorkerMetricBatch` envelopes at `POST /api/v1/ingest?groupId=<g>`
+    — the platform's only metrics path — resolves `groupId` through
+    `GROUP_REGISTRY` and lands the rows in that group's `<GROUP_ID>_METRICS`
+    table in the `CARDZATE_DB_GRAF` schema: the run, worker and labels become
+    surrogate keys in the shared `RUN`, `WORKER`, `LABEL` dimensions, and the
+    fact insert is first-write-wins on `(RUN_ID, WORKER_ID, LABEL_ID, WINDOW_SECOND)`,
+    so a replay from a worker's disk buffer reports `rowsInserted: 0` and that
+    is success.
 
     **This document is the canonical wire contract.** The producer
     (`jmeter-local-orchestrator`) keeps a structurally identical record, and a
     shared golden-payload test (`goldenWorkerMetricBatch.json`) in both trees
     pins the two together. The shape is fixed per deploy — there is no schema
-    registry.
+    registry. Decoders ignore unknown fields, so **adding** a field is
+    producer-first safe; renaming or removing one rebuilds both sides together.
 
-    Decoders ignore unknown fields, so **adding** a field is producer-first
-    safe. Renaming or removing one rebuilds both sides together.
-
-    No auth locally, matching the platform's local profile; the cloud profile
-    gates this endpoint behind a bearer JWT.
+    No auth under the `local` profile; under `cloud` the endpoint requires
+    `Authorization: Bearer <METRICS_AUTH_TOKEN>`.
   contact:
     name: Performance Engineering
   license:
@@ -42,28 +43,44 @@ tags:
   - name: ingest
     description: THE metrics ingest path — JSON envelope POSTs from the workers.
   - name: actuator
-    description: |
-      Health and info only — `/actuator/prometheus` is 404 by design.
+    description: Health and info only — `/actuator/prometheus` is 404 by design.
+
+security:
+  - bearerToken: []
 
 paths:
 
   /api/v1/ingest:
     post:
       tags: [ingest]
-      summary: Ingest a single WorkerMetricBatch envelope.
+      summary: Ingest one WorkerMetricBatch envelope into its group's fact table.
       description: |
-        Called by every worker's dispatcher, one envelope per (worker, second).
-        The `WorkerMetricBatch` schema below is the canonical definition of the
-        body, and the `(runId, workerId, label, windowSecond)` PK absorbs
-        duplicates from the workers' buffer retries.
+        Called by every worker's dispatcher, one envelope per (worker, window).
+        `groupId` names the application group (`cps` → `CPS_METRICS`); the
+        `WorkerMetricBatch` schema below is the canonical body.
 
-        **Body size cap** is `metricsConsumer.ingest.maxBodyBytes` (default
-        2 MB). Checked before parse so an oversize garbage payload can't
-        pin parser memory. **Semantic validation** after decode: missing
-        or blank identity fields (`runId`, `workerId`, `region`,
-        `windowTimestamp`, any `entries[].label`, or a null `entries`
-        array) are terminal `400`s — never a retryable `503`.
+        Order of checks: body size (`413`) → JSON decode and semantic
+        validation (`400 BAD_REQUEST`) → group routing (`400 UNKNOWN_GROUP`)
+        → dimension resolution + insert. Identity strings become surrogate
+        keys — `RUN (GROUP_ID = TABLE_PREFIX, RUN_KEY = runId)`,
+        `WORKER (RUN_ID, WORKER_KEY = workerId)`, `LABEL (GROUP_ID, LABEL_KEY = label)`;
+        `region`, `joinedAtSecond` and `FIRST_SEEN` are written once, on
+        creation. `statusCodes` is folded into `HTTP_2XX…HTTP_5XX` / `HTTP_OTHER`
+        (a three-digit key whose first digit is 2–5 lands in its class, anything
+        else in OTHER); `windowTimestamp`, `errorRate` and `sumElapsedMs` are
+        not stored as such (`sumElapsedMs / throughput` feeds `AVG_MS`, and
+        `rawMaxMs` when present feeds `MAX_MS`).
+
+        First write wins: a re-sent envelope with different values changes
+        nothing. `rowsInserted` counts rows actually inserted.
       operationId: ingestEnvelope
+      parameters:
+        - name: groupId
+          in: query
+          required: true
+          schema: { type: string, pattern: "^[a-z][a-z0-9_]{0,29}$" }
+          description: The application group whose tables receive the rows (`GROUP_REGISTRY.GROUP_ID`). Case-sensitive; blank, unknown or disabled → `400 UNKNOWN_GROUP`.
+          example: cps
       requestBody:
         description: JSON `WorkerMetricBatch` — the canonical wire schema.
         required: true
@@ -73,101 +90,116 @@ paths:
               $ref: '#/components/schemas/WorkerMetricBatch'
       responses:
         '202':
-          description: Accepted. `rowsInserted` may be less than entry count if duplicates collapsed on the PK.
+          description: Accepted. `rowsInserted` is the rows actually inserted — 0 on a replay, which is success.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/IngestResponse'
               examples:
                 happyPath:
-                  summary: 200-entry envelope, 200 fresh rows
-                  value:
-                    rowsInserted: 200
-                    code: ACCEPTED
-                    message: null
-                idempotent:
-                  summary: All entries collided with existing PKs
-                  value:
-                    rowsInserted: 0
-                    code: ACCEPTED
-                    message: null
+                  value: { rowsInserted: 200, code: ACCEPTED, message: null }
+                replay:
+                  value: { rowsInserted: 0, code: ACCEPTED, message: null }
         '400':
           description: |
-            Body is not valid JSON, or a required field is missing/blank
-            (semantic validation). The dispatcher should NOT retry —
-            payload is malformed.
+            Terminal — the dispatcher must not retry unchanged.
+            `UNKNOWN_GROUP`: `groupId` blank, unknown or disabled (not cached — a newly registered group works on the next request).
+            `BAD_REQUEST`: body not valid JSON, a required field missing or blank, an identity field over 64 chars, a count invariant broken, a non-finite latency.
+            `MISSING_PARAMETER`: a framework-level required parameter is absent.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/IngestResponse'
               examples:
+                unknownGroup:
+                  value: { rowsInserted: 0, code: UNKNOWN_GROUP, message: "unknown or disabled group: nope" }
                 malformed:
-                  value: { rowsInserted: 0, code: INVALID_JSON, message: "Unexpected character..." }
-                missingField:
-                  value: { rowsInserted: 0, code: INVALID_JSON, message: "runId is required" }
+                  value: { rowsInserted: 0, code: BAD_REQUEST, message: "runId is required" }
+        '401':
+          description: | 
+            Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResponse'
+              example: { rowsInserted: 0, code: UNAUTHORIZED, message: "missing or invalid bearer token" }
+        '405':
+          description: Non-POST method.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResponse'
         '413':
-          description: |
-            Body exceeded `metricsConsumer.ingest.maxBodyBytes`. Defense
-            in depth — checked before parse.
+          description: Body exceeded `metricsConsumer.ingest.maxBodyBytes` (default 2 MiB), checked before parse. Terminal.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/IngestResponse'
-              example:
-                rowsInserted: 0
-                code: PAYLOAD_TOO_LARGE
-                message: "body 3500000 bytes exceeds maxBodyBytes 2097152"
+              example: { rowsInserted: 0, code: PAYLOAD_TOO_LARGE, message: "body 3500000 bytes exceeds maxBodyBytes 2097152" }
         '415':
-          description: |
-            Non-JSON `Content-Type` (e.g. a pre-JSON-INGEST worker still
-            POSTing `application/avro`). Spring's `consumes` guard —
-            body is Spring's default error shape, not `IngestResponse`.
-            The old worker treats 415 as retryable and keeps the envelope
-            in its disk buffer until the worker image is rebuilt.
-        '503':
-          description: |
-            The database is unreachable or rejected the chunk (a concurrent
-            replica landed the same key first). The dispatcher SHOULD retry via
-            its disk-buffer retry sweeper — ingest is idempotent.
+          description: `Content-Type` is not `application/json`. Terminal.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/IngestResponse'
-              example:
-                rowsInserted: 0
-                code: DATABASE_UNAVAILABLE
-                message: "IO Error: The Network Adapter could not establish the connection"
+              example: { rowsInserted: 0, code: UNSUPPORTED_MEDIA_TYPE, message: "Content-Type must be application/json" }
+        '500':
+          description: An invalid `GROUP_REGISTRY` row, an unresolvable dimension or a bind mismatch. Rows may be partially written; retry with backoff — ingest is idempotent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResponse'
+              example: { rowsInserted: 0, code: INTERNAL_ERROR, message: "internal error" }
+        '503':
+          description: The database is unreachable or rejected the chunk. Rows may be partially written; the dispatcher retries from its disk buffer — safe, because a landed row is skipped on replay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResponse'
+              example: { rowsInserted: 0, code: ORACLE_UNAVAILABLE, message: "database unavailable; retry" }
 
   /actuator/health:
     get:
       tags: [actuator]
+      security: []
       summary: Aggregate health — DB connectivity + ingest-progress staleness.
       description: |
         DOWN if the database is unreachable or no envelope has been ingested for
         `metricsConsumer.heartbeat.staleAfterSeconds` (the `ingestProgress`
-        indicator). Probe paths: `/actuator/health/liveness` (process up),
-        `/actuator/health/readiness` (DB reachable).
+        indicator — normal between runs). Probe paths: `/actuator/health/liveness`
+        (process up), `/actuator/health/readiness` (DB reachable).
       responses:
         '200':
-          description: UP — service can reach the database and is ingesting.
+          description: UP.
         '503':
           description: DOWN — database unreachable or ingest is stale.
 
   /actuator/info:
     get:
       tags: [actuator]
+      security: []
       summary: Build info exposed by Spring Boot Actuator.
       responses:
         '200':
           description: Build / version metadata.
 
 components:
+  securitySchemes:
+    bearerToken:
+      type: http
+      scheme: bearer
+      description: |
+        `Authorization: Bearer <METRICS_AUTH_TOKEN>` on exactly `/api/v1/ingest`,
+        compared in constant time. Enforced under the `cloud` profile only; the
+        `local` profile runs without it. Actuator and the API docs are never
+        gated.
+
   schemas:
     WorkerMetricBatch:
       type: object
       description: |
         The metrics-ingest wire envelope — one per (workerId, windowSecond),
-        POSTed by each worker every second. **This schema is the canonical wire
+        POSTed by each worker every window. **This schema is the canonical wire
         contract.** Decoders ignore unknown fields.
       required: [windowSecond, windowTimestamp, region, workerId, runId, entries]
       properties:
@@ -176,34 +208,33 @@ components:
           format: int64
           minimum: 1
           maximum: 9999999999
-          description: Epoch second of the 1-s tumbling window (idempotency-key component). A millisecond value is rejected 400.
-          example: 1784600000
+          description: Epoch second at which the window starts, grid-aligned to the window width (`WINDOW_SECOND`, the partition key). A millisecond value is rejected 400.
+          example: 1784599995
         windowTimestamp:
           type: string
-          description: Human-readable timestamp of the window (stored verbatim).
-          example: "2026-07-20T21:33:20Z"
+          description: The window start as ISO-8601 UTC. Required on the wire; not stored.
+          example: "2026-07-20T21:33:15Z"
         region:
           type: string
           maxLength: 64
-          description: Worker's region tag.
-          example: us-east-1
+          description: Worker's region tag → `WORKER.REGION`, written on the worker's first envelope.
+          example: na-east
         workerId:
           type: string
           maxLength: 64
-          description: Pod/worker identity (idempotency-key component).
-          example: acaps-us-east-1-worker-1
+          description: Pod / worker identity → `WORKER.WORKER_KEY` (unique per run).
+          example: cps-na-east-worker-1
         runId:
           type: string
           maxLength: 64
-          description: Run this window belongs to (idempotency-key component).
+          description: Run this window belongs to → `RUN.RUN_KEY` (unique per group).
           example: 01KY1535CHHF9WG5HHZETVEQBZ
         joinedAtSecond:
           type: integer
           format: int64
           default: 0
-          description: |
-            MID-TEST-SCALING — seconds after run start at which this worker
-            joined the fleet. 0 (or absent) = original-fleet worker.
+          minimum: 0
+          description: Seconds after run start at which this worker joined → `WORKER.JOINED_AT_SECOND`, create-only. 0 (or absent) = original fleet.
         entries:
           type: array
           description: One per-label aggregate per entry. May be empty (202 with rowsInserted 0), never absent.
@@ -213,116 +244,92 @@ components:
     WorkerMetricEntry:
       type: object
       description: |
-        One per-label aggregate inside an envelope. Envelope-level identity
-        (runId, workerId, region, windowSecond, …) is projected onto each
-        stored row at insert time — this object carries only the per-label
-        numbers. All response-time fields are milliseconds. Counts must be
+        One per-label aggregate inside an envelope — one row of the group's fact
+        table. All response-time fields are milliseconds. Counts must be
         non-negative with `errorCount <= throughput` (400 otherwise).
       required: [label]
       properties:
         label:
           type: string
-          description: JMeter sampler label (idempotency-key component). Stored truncated to 255 characters.
-          example: "GET /api/v1/checkout/items"
+          description: JMeter sampler label → `LABEL.LABEL_KEY`; classified into `LABEL.APPLICATION` by the group's classifier on first sight. Stored truncated to 1000 bytes.
+          example: "TG5 GET /api/v1/checkout/items"
         throughput:
           type: integer
           format: int64
           minimum: 0
-          description: Samples completed in this window.
+          description: Samples completed in this window → `THROUGHPUT`.
         errorCount:
           type: integer
           format: int64
           minimum: 0
-          description: Failed samples in this window; never more than `throughput`.
+          description: Failed samples in this window → `ERROR_COUNT`; never more than `throughput`.
         errorRate:
           type: number
           format: double
-          description: errorCount / throughput. Finite — JSON cannot carry NaN/Infinity; the producer guarantees finite values.
+          description: errorCount / throughput. Accepted, not stored.
         avgRespTimeMs:
           type: number
           format: double
-          description: |
-            sumElapsedMs / throughput. **Derived and lossy** — kept on the wire
-            for backward compatibility only. Since SCHEMA-OPT Phase 2 the
-            consumer stores `sumElapsedMs` instead, and falls back to
-            `round(avgRespTimeMs × throughput)` only when a producer predating
-            that field omits it.
+          description: Mean response time → `AVG_MS`, unless `sumElapsedMs` is present (then `sumElapsedMs / throughput` is stored — exact).
         sumElapsedMs:
           type: integer
           format: int64
-          description: |
-            Exact total elapsed milliseconds across every sample in this window
-            — the response-time fact. Stored verbatim; readers divide by
-            `throughput` at the end, which is why a sum can be folded across
-            workers, labels and time without weighting drift and a mean cannot.
-            Optional: absent from producers older than SCHEMA-OPT Phase 2
-            (2026-07-30), in which case the consumer reconstructs it from
-            `avgRespTimeMs`.
-        p50Ms:
-          type: number
-          format: double
-        p90Ms:
-          type: number
-          format: double
-        p95Ms:
-          type: number
-          format: double
-        p99Ms:
-          type: number
-          format: double
-        minMs:
-          type: number
-          format: double
+          description: Optional exact total elapsed milliseconds across the window's samples; the platform's worker sends it, other producers may omit it.
+        p50Ms: { type: number, format: double, description: "→ `P50_MS`" }
+        p90Ms: { type: number, format: double, description: "→ `P90_MS`" }
+        p95Ms: { type: number, format: double, description: "→ `P95_MS`" }
+        p99Ms: { type: number, format: double, description: "→ `P99_MS`" }
+        minMs: { type: number, format: double, description: "→ `MIN_MS`" }
         maxMs:
           type: number
           format: double
+          description: → `MAX_MS`, unless `rawMaxMs` is present and positive (the exact maximum wins over a histogram bucket edge).
         rawMaxMs:
           type: integer
           format: int64
-          description: Un-histogrammed max (exact, not 2-significant-digit-quantized).
-        bytesReceived:
-          type: integer
-          format: int64
-        bytesSent:
-          type: integer
-          format: int64
+          description: Optional exact, un-histogrammed maximum. The platform's worker sends it.
+        bytesReceived: { type: integer, format: int64, description: "→ `BYTES_RECV`" }
+        bytesSent:     { type: integer, format: int64, description: "→ `BYTES_SENT`" }
         statusCodes:
           type: object
           additionalProperties:
             type: integer
             format: int64
           description: |
-            JMeter `responseCode` → count for this window. Null/absent is treated
-            as empty; a blank code is stored as `(none)`, a code longer than 128
-            characters is stored truncated, and counts ≤ 0 are skipped.
+            JMeter `responseCode` → count for this window, folded into
+            `HTTP_2XX`, `HTTP_3XX`, `HTTP_4XX`, `HTTP_5XX` (a key of exactly three
+            digits whose first is 2–5) and `HTTP_OTHER` (everything else — 1xx,
+            "99", "0200", "Non HTTP response code: …", a null key). A null count
+            is 0. Per-code detail is not recoverable from the schema.
           example: { "200": 240, "404": 3, "500": 1 }
         activeThreads:
           type: integer
           format: int64
-          description: JMeter active thread count during this window.
+          description: JMeter active thread count during this window → `ACTIVE_THREADS`.
 
     IngestResponse:
       type: object
-      description: Response shape for `POST /api/v1/ingest`.
+      description: The one response shape of `POST /api/v1/ingest`, whatever the outcome.
       required: [rowsInserted, code]
       properties:
         rowsInserted:
           type: integer
-          description: |
-            Rows actually written to `metrics."workerMetric"`. May be less
-            than the envelope's entry count if duplicates were pruned as
-            already present.
+          description: Rows actually inserted into the group's fact table. 0 on a replay — success, not an error.
           example: 200
         code:
           type: string
-          enum: [ACCEPTED, INVALID_JSON, PAYLOAD_TOO_LARGE, DATABASE_UNAVAILABLE]
+          enum: [ACCEPTED, UNKNOWN_GROUP, BAD_REQUEST, PAYLOAD_TOO_LARGE, MISSING_PARAMETER, UNAUTHORIZED, UNSUPPORTED_MEDIA_TYPE, METHOD_NOT_ALLOWED, ORACLE_UNAVAILABLE, INTERNAL_ERROR]
           description: |
-            Short status code.
-
-            - `ACCEPTED` — happy path (HTTP 202)
-            - `INVALID_JSON` — body malformed, a required field missing, an identity field over 64 chars, or a count invariant broken (HTTP 400; do not retry)
-            - `PAYLOAD_TOO_LARGE` — body exceeded `maxBodyBytes` (HTTP 413; do not retry)
-            - `DATABASE_UNAVAILABLE` — database unreachable or the chunk was rolled back (HTTP 503; retry)
+            - `ACCEPTED` — HTTP 202
+            - `UNKNOWN_GROUP` — 400, terminal
+            - `BAD_REQUEST` — 400, terminal
+            - `PAYLOAD_TOO_LARGE` — 413, terminal
+            - `MISSING_PARAMETER` — 400, terminal
+            - `UNAUTHORIZED` — 401, keep buffered, retry slowly
+            - `UNSUPPORTED_MEDIA_TYPE` — 415, terminal
+            - `METHOD_NOT_ALLOWED` — 405
+            - `ORACLE_UNAVAILABLE` — 503, retry with backoff
+            - `INTERNAL_ERROR` — 500, retry with backoff; do not hot-loop
           example: ACCEPTED
         message:
           type: string

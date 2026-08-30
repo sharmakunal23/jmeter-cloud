@@ -4,16 +4,18 @@ spring:
   profiles:
     default: local
   datasource:
-    # Oracle, one PDB. The username is wrapped in double quotes HERE so the
-    # env var carries the bare camelCase name: an unquoted Oracle identifier
-    # folds to UPPER, and "metricsWriter" was created quoted.
-    url: ${DB_METRICS_URL:jdbc:oracle:thin:@//oracle:1521/FREEPDB1}
-    username: '"${DB_METRICS_USER:metricsWriter}"'
-    password: ${DB_METRICS_PASSWORD:localdev}
+    # Oracle, one PDB. The service connects AS the metrics schema owner
+    # (CARDZATE_DB_GRAF) — the hosted proxy client does the same — so every
+    # statement uses unqualified names. The username is quoted HERE so an
+    # env var may carry a case-sensitive name.
+    url: ${ORACLE_METRICS_URL:jdbc:oracle:thin:@//oracle:1521/FREEPDB1}
+    username: '"${ORACLE_METRICS_USER:CARDZATE_DB_GRAF}"'
+    password: ${ORACLE_METRICS_PASSWORD:localdev}
     hikari:
       pool-name: metricsConsumerWriterPool
-      maximum-pool-size: 8
-      minimum-idle: 2
+      # Sized like the hosted consumer; the same env names override there.
+      maximum-pool-size: ${HIKARI_MAX_POOL_SIZE:10}
+      minimum-idle: ${HIKARI_MIN_IDLE:4}
       data-source-properties:
         # Every chunk reuses the same three statements; the implicit cache
         # skips re-parsing them on each pooled connection.
@@ -27,6 +29,10 @@ spring:
 server:
   port: ${HTTP_PORT:8083}
   address: ${HTTP_BIND_ADDRESS:0.0.0.0}
+  tomcat:
+    threads:
+      # 20× the pool, as on the hosted consumer.
+      max: ${TOMCAT_MAX_THREADS:200}
 
 management:
   endpoints:
@@ -34,7 +40,7 @@ management:
       exposure:
         # health,info ONLY. Never drop health — the compose healthcheck, the
         # UI Home checklist and the cloud probes all depend on it.
-        include: health,info
+        include: keepalive,health,info
   endpoint:
     health:
       show-details: always
@@ -76,9 +82,23 @@ springdoc:
     path: /v3/api-docs
 
 metricsConsumer:
-  # Rows staged per transaction (two round-trips each). 5000 bounds the bind
-  # buffer when one call delivers tens of thousands of rows.
-  maxRowsPerChunk: ${METRICS_MAX_ROWS_PER_CHUNK:5000}
+  # Rows per JDBC batch (the hosted consumer's knob and default).
+  maxRowsPerInsert: ${METRICS_MAX_ROWS_PER_INSERT:5000}
+  # The bearer token workers present on POST /api/v1/ingest. Enforced by
+  # IngestAuthFilter under the cloud profile only (blank locally, where the
+  # platform runs without auth); under cloud a blank value fails boot.
+  auth:
+    token: ${METRICS_AUTH_TOKEN:}
+  # GROUP_REGISTRY lookups (?groupId= → fact table) and the dimension ids
+  # (RUN / WORKER / LABEL) are cached per instance. A repointed or disabled
+  # group is honoured only after the TTL or a restart; an unknown group is
+  # never cached, so a newly registered one works on its next request.
+  groupCache:
+    ttl: ${GROUP_CACHE_TTL:24h}
+    maxSize: ${GROUP_CACHE_MAX_SIZE:1024}
+  dimCache:
+    ttl: ${DIM_CACHE_TTL:24h}
+    maxSize: ${DIM_CACHE_MAX_SIZE:100000}
   # Ingest body cap — defense in depth against oversize envelopes.
   ingest:
     maxBodyBytes: ${METRICS_INGEST_MAX_BODY_BYTES:2097152}
@@ -89,11 +109,6 @@ metricsConsumer:
   heartbeat:
     intervalMs: ${HEARTBEAT_INTERVAL_MS:30000}
     staleAfterSeconds: ${HEARTBEAT_STALE_AFTER_SECONDS:300}
-  # Retention by partition drop, at boot and daily: raw per-worker rows for
-  # rawDays, the rollups every read uses for rollupWeeks. Nothing to
-  # pre-create — Oracle makes a week's partition on its first insert.
-  retention:
-    rawDays: ${RETENTION_RAW_DAYS:30}
-    rollupWeeks: ${RETENTION_ROLLUP_WEEKS:52}
-    # Daily at 03:17 UTC — offbeat minute avoids herding with on-the-hour jobs.
-    cron: ${RETENTION_CRON:0 17 3 * * *}
+  # Retention is the database's job: each group's nightly DBMS_SCHEDULER job
+  # (<GROUP_ID>_NIGHTLY_MAINT, rendered from oracle/groups/) archives aged
+  # daily partitions into <GROUP_ID>_METRICS_H and prunes history.
