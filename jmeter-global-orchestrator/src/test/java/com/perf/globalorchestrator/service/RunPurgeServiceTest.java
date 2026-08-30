@@ -48,6 +48,7 @@ class RunPurgeServiceTest {
     private RunTrendRepository runTrends;
     private AiResponseRepository aiResponses;
     private MetricsPurgeRepository metricsPurge;
+    private MetricsGroupResolver metricsGroups;
     private DocumentServiceClient docClient;
     private PurgeAuditRepository purgeAudit;
     private RunPurgeService svc;
@@ -60,7 +61,10 @@ class RunPurgeServiceTest {
         metricsPurge = mock(MetricsPurgeRepository.class);
         docClient = mock(DocumentServiceClient.class);
         purgeAudit = mock(PurgeAuditRepository.class);
-        svc = new RunPurgeService(runs, runTrends, aiResponses, metricsPurge, docClient,
+        metricsGroups = mock(MetricsGroupResolver.class);
+        when(metricsGroups.resolve(any())).thenReturn(java.util.Optional.of(
+                new com.perf.globalorchestrator.repo.MetricsTarget("cps", "CPS", "CPS_METRICS", "CPS_METRICS_H", 4711L)));
+        svc = new RunPurgeService(runs, runTrends, aiResponses, metricsPurge, metricsGroups, docClient,
                 purgeAudit, new ObjectMapper());
         // Wire the @Lazy self-proxy to this instance so the @Transactional tail
         // executes inline (no Spring context in a unit test).
@@ -80,7 +84,7 @@ class RunPurgeServiceTest {
         when(runs.findByRunId(RUN_ID)).thenReturn(java.util.Optional.empty());
         assertThatThrownBy(() -> svc.purgeRun(RUN_ID, Actor.ANONYMOUS_ACTOR, null))
                 .isInstanceOf(RunService.RunNotFoundException.class);
-        verify(metricsPurge, never()).deleteByRunId(any());
+        verify(metricsPurge, never()).deleteRun(any(), any());
     }
 
     @Test
@@ -89,7 +93,7 @@ class RunPurgeServiceTest {
         when(runs.findByRunId(RUN_ID)).thenReturn(java.util.Optional.of(run(RunState.RUNNING, "tp", null)));
         assertThatThrownBy(() -> svc.purgeRun(RUN_ID, Actor.ANONYMOUS_ACTOR, null))
                 .isInstanceOf(RunNotPurgeableException.class);
-        verify(metricsPurge, never()).deleteByRunId(any());
+        verify(metricsPurge, never()).deleteRun(any(), any());
         verify(runs, never()).deleteRunRow(any());
     }
 
@@ -100,7 +104,7 @@ class RunPurgeServiceTest {
         when(runs.isRunHidden(RUN_ID)).thenReturn(false);
         assertThatThrownBy(() -> svc.purgeRun(RUN_ID, Actor.ANONYMOUS_ACTOR, null))
                 .isInstanceOf(RunNotPurgeableException.class);
-        verify(metricsPurge, never()).deleteByRunId(any());
+        verify(metricsPurge, never()).deleteRun(any(), any());
         verify(runs, never()).deleteRunRow(any());
     }
 
@@ -112,7 +116,7 @@ class RunPurgeServiceTest {
         when(docClient.listResultBlobIds(RUN_ID)).thenReturn(List.of("res1", "res2"));
         when(runs.countOtherRunsReferencingBlob(eq("tpBlob"), eq(RUN_ID))).thenReturn(0);
         when(runs.countOtherRunsReferencingBlob(eq("dfBlob"), eq(RUN_ID))).thenReturn(0);
-        when(metricsPurge.deleteByRunId(RUN_ID)).thenReturn(42L);
+        when(metricsPurge.deleteRun(any(), any())).thenReturn(42L);
 
         PurgeResult result = svc.purgeRun(RUN_ID, Actor.fromHeader("alice"), "cleanup");
 
@@ -126,7 +130,7 @@ class RunPurgeServiceTest {
         verify(docClient).deleteBlob("dfBlob");
         // Metrics deleted before the run row (so a metrics failure can't orphan rows).
         var io = inOrder(metricsPurge, aiResponses, runTrends, runs, purgeAudit);
-        io.verify(metricsPurge).deleteByRunId(RUN_ID);
+        io.verify(metricsPurge).deleteRun(any(), any());
         io.verify(aiResponses).deleteForRun(RUN_ID);
         io.verify(runTrends).deleteByRunId(RUN_ID);
         io.verify(runs).deleteRunRow(RUN_ID);
@@ -141,7 +145,7 @@ class RunPurgeServiceTest {
         when(runs.isRunHidden(RUN_ID)).thenReturn(true);
         when(docClient.listResultBlobIds(RUN_ID)).thenReturn(List.of("res1"));
         when(runs.countOtherRunsReferencingBlob(eq("sharedTp"), eq(RUN_ID))).thenReturn(2);
-        when(metricsPurge.deleteByRunId(RUN_ID)).thenReturn(7L);
+        when(metricsPurge.deleteRun(any(), any())).thenReturn(7L);
 
         PurgeResult result = svc.purgeRun(RUN_ID, Actor.ANONYMOUS_ACTOR, null);
 
@@ -157,13 +161,13 @@ class RunPurgeServiceTest {
         when(runs.findByRunId(RUN_ID)).thenReturn(java.util.Optional.of(run(RunState.COMPLETED, "tp", null)));
         when(runs.isRunHidden(RUN_ID)).thenReturn(true);
         when(docClient.listResultBlobIds(RUN_ID)).thenThrow(new BlobAccessException("connection refused"));
-        when(metricsPurge.deleteByRunId(RUN_ID)).thenReturn(5L);
+        when(metricsPurge.deleteRun(any(), any())).thenReturn(5L);
 
         PurgeResult result = svc.purgeRun(RUN_ID, Actor.ANONYMOUS_ACTOR, null);
 
         assertThat(result.blobStepComplete()).isFalse();
         assertThat(result.blobsDeleted()).isZero();
-        verify(metricsPurge).deleteByRunId(RUN_ID);
+        verify(metricsPurge).deleteRun(any(), any());
         verify(runs).deleteRunRow(RUN_ID);
     }
 }

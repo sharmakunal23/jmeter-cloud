@@ -34,7 +34,7 @@ public abstract class OracleDbTestSupport {
 
     static {
         ORACLE.start();
-        migrate("metrics", "oracle/migrations/metrics");
+        migrate("CARDZATE_DB_GRAF", "oracle/migrations/metrics");
         migrate("\"globalOrchestrator\"", "oracle/migrations/globalrun");
     }
 
@@ -54,9 +54,9 @@ public abstract class OracleDbTestSupport {
         return Paths.get("..", relative).toAbsolutePath().normalize();
     }
 
-    /** The metrics owner — seeds raw rows through the ingest package for the purge test. */
+    /** The metrics owner (CARDZATE_DB_GRAF) — sees every group table with unqualified names. */
     static JdbcTemplate metricsOwner() {
-        return new JdbcTemplate(new DriverManagerDataSource(jdbcUrl(), "metrics", PASSWORD));
+        return new JdbcTemplate(new DriverManagerDataSource(jdbcUrl(), "CARDZATE_DB_GRAF", PASSWORD));
     }
 
     /** The control-plane owner — sees every table for assertions. */
@@ -70,13 +70,13 @@ public abstract class OracleDbTestSupport {
         // above; Boot's auto-configuration would otherwise run Flyway again
         // as the application user, which holds no DDL privilege.
         registry.add("spring.flyway.enabled", () -> "false");
-        registry.add("DB_METRICS_URL", OracleDbTestSupport::jdbcUrl);
-        registry.add("DB_METRICS_READER_USER", () -> "metricsReader");
-        registry.add("DB_METRICS_READER_PASSWORD", () -> PASSWORD);
-        registry.add("DB_METRICS_PURGER_USER", () -> "metricsPurger");
-        registry.add("DB_METRICS_PURGER_PASSWORD", () -> PASSWORD);
-        registry.add("DB_GLOBALRUN_URL", OracleDbTestSupport::jdbcUrl);
-        registry.add("DB_GLOBALRUN_WRITER_USER", () -> "globalOrchestratorWriter");
-        registry.add("DB_GLOBALRUN_WRITER_PASSWORD", () -> PASSWORD);
+        registry.add("ORACLE_METRICS_URL", OracleDbTestSupport::jdbcUrl);
+        registry.add("ORACLE_METRICS_READER_USER", () -> "metricsReader");
+        registry.add("ORACLE_METRICS_READER_PASSWORD", () -> PASSWORD);
+        registry.add("ORACLE_METRICS_PURGER_USER", () -> "metricsPurger");
+        registry.add("ORACLE_METRICS_PURGER_PASSWORD", () -> PASSWORD);
+        registry.add("ORACLE_GLOBALRUN_URL", OracleDbTestSupport::jdbcUrl);
+        registry.add("ORACLE_GLOBALRUN_WRITER_USER", () -> "globalOrchestratorWriter");
+        registry.add("ORACLE_GLOBALRUN_WRITER_PASSWORD", () -> PASSWORD);
     }
 }

@@ -52,6 +52,7 @@ public class RunPurgeService {
     private final RunTrendRepository runTrends;
     private final AiResponseRepository aiResponses;
     private final MetricsPurgeRepository metricsPurge;
+    private final MetricsGroupResolver metricsGroups;
     private final DocumentServiceClient docClient;
     private final PurgeAuditRepository purgeAudit;
     private final ObjectMapper json;
@@ -70,6 +71,7 @@ public class RunPurgeService {
                            RunTrendRepository runTrends,
                            AiResponseRepository aiResponses,
                            MetricsPurgeRepository metricsPurge,
+                           MetricsGroupResolver metricsGroups,
                            DocumentServiceClient docClient,
                            PurgeAuditRepository purgeAudit,
                            ObjectMapper json) {
@@ -77,6 +79,7 @@ public class RunPurgeService {
         this.runTrends = runTrends;
         this.aiResponses = aiResponses;
         this.metricsPurge = metricsPurge;
+        this.metricsGroups = metricsGroups;
         this.docClient = docClient;
         this.purgeAudit = purgeAudit;
         this.json = json;
@@ -136,7 +139,11 @@ public class RunPurgeService {
                     runId, e.getMessage(), runId);
         }
         // ── 2. Metrics — required; abort before touching the run row ─────
-        long metricRows = metricsPurge.deleteByRunId(runId);
+        // A run whose application has no group never landed rows anywhere.
+        long metricRows = metricsGroups.resolve(run)
+                .map(t -> metricsPurge.deleteRun(t, com.perf.globalorchestrator.repo.RunWindow.of(run)))
+                .orElse(0L);
+        metricsGroups.forgetRun(runId);
 
         // ── 3. Run-state — transactional, through the self proxy ─────────
         String detailsJson = writeDetails(blobStepComplete);

@@ -88,7 +88,7 @@ function makeHookReturn(overrides: Partial<{
 function sampleData(): MetricsTimeseries {
   return {
     runId: "01J000RUN",
-    bucketSize: 1,
+    bucketSize: 15,
     fromSecond: 1_700_000_000,
     toSecond:   1_700_000_005,
     series: {
@@ -96,8 +96,8 @@ function sampleData(): MetricsTimeseries {
       avgRtMs:  [{ sec: 1_700_000_000, v: 12 }, { sec: 1_700_000_001, v: 14 }],
       errorPct: [{ sec: 1_700_000_000, v: 0 }, { sec: 1_700_000_001, v: 1.5 }],
       statusCodes: {
-        "200": [{ sec: 1_700_000_000, v: 5 }, { sec: 1_700_000_001, v: 5 }],
-        "500": [{ sec: 1_700_000_001, v: 1 }],
+        "2xx": [{ sec: 1_700_000_000, v: 5 }, { sec: 1_700_000_001, v: 5 }],
+        "5xx": [{ sec: 1_700_000_001, v: 1 }],
       },
     },
   };
@@ -127,24 +127,34 @@ describe("MetricsTabPanel — happy path", () => {
     ]);
   });
 
-  it("status-codes chart sorts numeric codes ascending and color-codes them", () => {
+  it("status-codes chart orders the HTTP classes ascending and color-codes them", () => {
     render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
     const statusChart = chartCalls.instances.find((c) => c.title === "Status codes")!;
-    expect(statusChart.seriesLabels).toEqual(["200", "500"]);
+    expect(statusChart.seriesLabels).toEqual(["2xx", "5xx"]);
   });
 
   it("renders the data-summary text with point count + last fetch time", () => {
     render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    expect(screen.getByText(/2 seconds of data/)).toBeInTheDocument();
+    expect(screen.getByText(/2 points · 15-s buckets/)).toBeInTheDocument();
     expect(screen.getByText(/last fetch/i)).toBeInTheDocument();
   });
 
-  it("the bucketSize > 1 case surfaces in the status text", () => {
+  it("a coarser bucket surfaces in the status text", () => {
     const data = sampleData();
-    data.bucketSize = 5;
+    data.bucketSize = 60;
     hookState.current = makeHookReturn({ data });
     render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    expect(screen.getByText(/bucketed at 5-s windows/)).toBeInTheDocument();
+    expect(screen.getByText(/2 points · 60-s buckets/)).toBeInTheDocument();
+  });
+
+  it("the Response Time chart adds P95 / P99 when the series carry them", () => {
+    const data = sampleData();
+    data.series.p95Ms = [{ sec: 1_700_000_000, v: 300 }, { sec: 1_700_000_001, v: 310 }];
+    data.series.p99Ms = [{ sec: 1_700_000_000, v: 800 }, { sec: 1_700_000_001, v: 820 }];
+    hookState.current = makeHookReturn({ data });
+    render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
+    const rt = chartCalls.instances.find((c) => c.title === "Response Time")!;
+    expect(rt.seriesLabels).toEqual(["Avg", "P95", "P99"]);
   });
 });
 
@@ -394,7 +404,7 @@ describe("MetricsTabPanel — time-window selector", () => {
     expect(windowSelect().value).toBe("30m");
     const labels = Array.from(windowSelect().options).map((o) => o.textContent);
     expect(labels).toEqual([
-      "Whole test", "Last 5 min", "Last 10 min", "Last 30 min",
+      "Whole test", "Last 5 min", "Last 10 min", "Last 15 min", "Last 30 min",
       "Last 1 hour", "Last 2 hours", "Last 4 hours",
     ]);
   });

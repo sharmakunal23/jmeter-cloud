@@ -338,6 +338,8 @@ public class RunController {
     public ResponseEntity<MetricsTimeseries> getRunTimeseries(
             @PathVariable String runId,
             @RequestParam(name = "byRegion", defaultValue = "false") boolean byRegion,
+            @RequestParam(name = "byApplication", defaultValue = "false") boolean byApplication,
+            @RequestParam(name = "granularity", required = false) Integer granularity,
             @RequestParam(name = "window", defaultValue = "all") String window) {
         // Validate the runId exists. getRun throws RunNotFoundException
         // on miss, mapped to 404 by the existing handler — same shape
@@ -349,7 +351,10 @@ public class RunController {
         // window restricts to the last 5m/10m/30m/1h/2h/4h of the run (or
         // "all" = whole test); it trims the per-poll scan on long live runs.
         Long windowSeconds = parseWindowSeconds(window);
-        return ResponseEntity.ok(metrics.timeseries(runId, run.state(), byRegion, windowSeconds));
+        if (granularity != null && granularity != 15 && granularity != 30 && granularity != 60) {
+            throw new IllegalArgumentException("granularity must be 15, 30 or 60 seconds; got " + granularity);
+        }
+        return ResponseEntity.ok(metrics.timeseries(runId, run.state(), byRegion, byApplication, granularity, windowSeconds));
     }
 
     /**
@@ -364,13 +369,14 @@ public class RunController {
         }
         return switch (window) {
             case "5m"  -> 5L * 60;
+            case "15m" -> 15L * 60;
             case "10m" -> 10L * 60;
             case "30m" -> 30L * 60;
             case "1h"  -> 60L * 60;
             case "2h"  -> 2L * 60 * 60;
             case "4h"  -> 4L * 60 * 60;
             default -> throw new IllegalArgumentException(
-                    "unknown window '" + window + "'; allowed: 5m, 10m, 30m, 1h, 2h, 4h, all");
+                    "unknown window '" + window + "'; allowed: 5m, 10m, 15m, 30m, 1h, 2h, 4h, all");
         };
     }
 

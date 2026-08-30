@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { runsApi, type MetricsTimeseries, type MetricsWindow, type RunState } from "../api/runs";
+import { runsApi, type MetricsGranularity, type MetricsTimeseries, type MetricsWindow, type RunState } from "../api/runs";
 import { useVisiblePolling, type PauseReason } from "./useVisiblePolling";
 
 /**
@@ -42,6 +42,7 @@ export function useMetricsTimeseries(
   runState: RunState | null,
   byRegion = false,
   window: MetricsWindow = "all",
+  granularity?: MetricsGranularity,
 ): UseMetricsTimeseriesResult {
   const [status, setStatus]           = useState<UseMetricsTimeseriesStatus>({ kind: "loading" });
   const [data, setData]               = useState<MetricsTimeseries | null>(null);
@@ -51,7 +52,7 @@ export function useMetricsTimeseries(
     if (!runId) return new AbortController();
     const ctl = new AbortController();
     runsApi
-      .timeseries(runId, ctl.signal, { byRegion, window })
+      .timeseries(runId, ctl.signal, { byRegion, window, granularity })
       .then((next) => {
         setData(next);
         setLastUpdated(new Date());
@@ -63,7 +64,7 @@ export function useMetricsTimeseries(
         setStatus({ kind: "error", message });
       });
     return ctl;
-  }, [runId, byRegion, window]);
+  }, [runId, byRegion, window, granularity]);
 
   // Initial fetch on mount + whenever the runId changes.
   useEffect(() => {

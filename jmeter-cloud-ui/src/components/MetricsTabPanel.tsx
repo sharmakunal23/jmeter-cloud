@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { MetricsTimeseries, MetricsTimeseriesSeries, MetricsWindow, RunState, TimeseriesPoint } from "../api/runs";
+import type { MetricsGranularity, MetricsTimeseries, MetricsTimeseriesSeries, MetricsWindow, RunState, TimeseriesPoint } from "../api/runs";
+import type { MetricsView } from "../lib/grafanaLink";
 import { isTerminalRunState, useMetricsTimeseries } from "../hooks/useMetricsTimeseries";
 import { useAiStatus } from "../hooks/useAiStatus";
 import { useRunInsights } from "../hooks/useRunInsights";
@@ -25,6 +26,8 @@ import {
 export interface MetricsTabPanelProps {
   runId: string;
   runState: RunState;
+  /** Fired on mount and whenever the window / granularity pickers change — feeds the "Open in Grafana" link. */
+  onViewChange?: (view: MetricsView) => void;
 }
 
 const HEIGHT_GRID    = 220;                  // 2-column compact view
@@ -32,12 +35,31 @@ const HEIGHT_STACKED = STACKED_CHART_HEIGHT;  // 1-column detailed view — matc
 
 const TPS_COLOR      = "#2563eb"; // brand blue
 const AVG_RT_COLOR   = "#0ea5e9"; // info blue
+const P95_COLOR      = "#7c3aed"; // violet
+const P99_COLOR      = "#db2777"; // pink
 const ERROR_COLOR    = "#dc2626"; // err red
 
 const LAYOUT_STORAGE_KEY = "jmeterCloud.metricsLayout";
 const REGION_STORAGE_KEY = "jmeterCloud.metricsSplitByRegion";
 const WINDOW_STORAGE_KEY = "jmeterCloud.metricsWindow";
+const GRANULARITY_STORAGE_KEY = "jmeterCloud.metricsGranularity";
 type Layout = "grid" | "stacked";
+/** "auto" lets the server pick the smallest bucket that keeps the payload bounded. */
+type GranularityChoice = "auto" | MetricsGranularity;
+const GRANULARITY_OPTIONS: ReadonlyArray<{ value: GranularityChoice; label: string }> = [
+  { value: "auto", label: "Auto" },
+  { value: 15,     label: "15 s" },
+  { value: 30,     label: "30 s" },
+  { value: 60,     label: "60 s" },
+];
+
+function readStoredGranularity(): GranularityChoice {
+  try {
+    const v = window.localStorage.getItem(GRANULARITY_STORAGE_KEY);
+    if (v === "15" || v === "30" || v === "60") return Number(v) as MetricsGranularity;
+  } catch { /* private mode */ }
+  return "auto";
+}
 
 /**
  * Time-window options for the metrics charts. The default depends on the
@@ -49,6 +71,7 @@ const WINDOW_OPTIONS: ReadonlyArray<{ value: MetricsWindow; label: string }> = [
   { value: "all", label: "Whole test" },
   { value: "5m",  label: "Last 5 min" },
   { value: "10m", label: "Last 10 min" },
+  { value: "15m", label: "Last 15 min" },
   { value: "30m", label: "Last 30 min" },
   { value: "1h",  label: "Last 1 hour" },
   { value: "2h",  label: "Last 2 hours" },
@@ -98,7 +121,7 @@ function readStoredSplitByRegion(): boolean {
   } catch { return false; }
 }
 
-export function MetricsTabPanel({ runId, runState }: MetricsTabPanelProps) {
+export function MetricsTabPanel({ runId, runState, onViewChange }: MetricsTabPanelProps) {
   // "Split by region" — off by default (the aggregate view is the
   // default the operator asked to keep). When on, the hook fetches the
   // per-region breakdown (one extra GROUP BY server-side) and the charts
@@ -122,8 +145,20 @@ export function MetricsTabPanel({ runId, runState }: MetricsTabPanelProps) {
     catch { /* private mode */ }
   };
 
+  // Bucket width — the Grafana granularity picker; "auto" = the server's choice.
+  const [granularity, setGranularity] = useState<GranularityChoice>(readStoredGranularity);
+  const pickGranularity = (g: GranularityChoice) => {
+    setGranularity(g);
+    try { window.localStorage.setItem(GRANULARITY_STORAGE_KEY, String(g)); }
+    catch { /* private mode */ }
+  };
+
+  useEffect(() => {
+    onViewChange?.({ window: timeWindow, granularity });
+  }, [onViewChange, timeWindow, granularity]);
+
   const { status, data, lastUpdated, isPaused, pauseReason } =
-    useMetricsTimeseries(runId, runState, splitByRegion, timeWindow);
+    useMetricsTimeseries(runId, runState, splitByRegion, timeWindow, granularity === "auto" ? undefined : granularity);
 
   const [layout, setLayout] = useState<Layout>(readStoredLayout);
   useEffect(() => {
@@ -168,11 +203,16 @@ export function MetricsTabPanel({ runId, runState }: MetricsTabPanelProps) {
     },
     [data, regionMode, regionKeys],
   );
+  // Aggregate mode charts the mean with the throughput-weighted p95 / p99 beside it
+  // (the hosted Grafana "Response Time" panel); region mode keeps one mean per region.
   const avgRtSeries = useMemo<TimeseriesSeries[]>(
     () => {
       if (!data) return [];
       if (regionMode) return regionSeries(data.regions!, regionKeys, "avgRtMs");
-      return [{ label: "Avg RT (ms)", color: AVG_RT_COLOR, data: data.series.avgRtMs }];
+      const series: TimeseriesSeries[] = [{ label: "Avg", color: AVG_RT_COLOR, data: data.series.avgRtMs }];
+      if (data.series.p95Ms?.length) series.push({ label: "P95", color: P95_COLOR, data: data.series.p95Ms });
+      if (data.series.p99Ms?.length) series.push({ label: "P99", color: P99_COLOR, data: data.series.p99Ms });
+      return series;
     },
     [data, regionMode, regionKeys],
   );
@@ -236,9 +276,8 @@ export function MetricsTabPanel({ runId, runState }: MetricsTabPanelProps) {
                 ? <span className="text--error">error: {errorMessage}</span>
                 : <>
                     {hasAnyData
-                      ? `${data!.series.tps.length} second${data!.series.tps.length === 1 ? "" : "s"} of data`
+                      ? `${data!.series.tps.length} point${data!.series.tps.length === 1 ? "" : "s"} · ${data!.bucketSize}-s buckets`
                       : "no metrics yet"}
-                    {data && data.bucketSize > 1 && <> · bucketed at {data.bucketSize}-s windows</>}
                     {lastUpdated && <> · last fetch {lastUpdated.toLocaleTimeString()}</>}
                     {isPaused && <> · <span className="badge badge--warn" title={pauseTooltip(pauseReason)}>{pauseLabel(pauseReason)}</span></>}
                   </>}
@@ -274,6 +313,19 @@ export function MetricsTabPanel({ runId, runState }: MetricsTabPanelProps) {
           >
             ⟲ Reset zoom
           </button>
+          <label className="metricsPanel__windowPicker">
+            <span className="visuallyHidden">Granularity</span>
+            <select
+              className="formSelect"
+              value={String(granularity)}
+              onChange={(e) => pickGranularity(e.target.value === "auto" ? "auto" : Number(e.target.value) as MetricsGranularity)}
+              title="Bucket width per point — 15 s is the workers' window; Auto keeps long runs bounded"
+            >
+              {GRANULARITY_OPTIONS.map((o) => (
+                <option key={String(o.value)} value={String(o.value)}>{o.label}</option>
+              ))}
+            </select>
+          </label>
           <label className="metricsPanel__windowPicker">
             <span className="visuallyHidden">Time window</span>
             <select
@@ -407,11 +459,9 @@ export function MetricsTabPanel({ runId, runState }: MetricsTabPanelProps) {
 // ── helpers ────────────────────────────────────────────────────────────
 
 /**
- * Build the per-status-code series with stable colors. Bucketed by
- * 2xx/3xx/4xx/5xx because the JMeter response code keys are usually
- * canonical HTTP statuses but JMeter also emits non-HTTP markers
- * ({@code "Non HTTP response code: …"}); those land in the "other"
- * bucket with a neutral grey.
+ * Build the status-class series with stable colors. The server folds JMeter
+ * response codes into `2xx` … `5xx` and `other` (non-HTTP markers, 1xx, malformed
+ * codes) — the schema keeps no per-code detail.
  */
 function buildStatusCodeSeries(
   codes: MetricsTimeseries["series"]["statusCodes"],
@@ -471,12 +521,14 @@ function compareCodes(a: string, b: string): number {
 }
 
 function colorForCode(code: string): string {
+  // Keys are HTTP classes ("2xx" … "5xx", "other"); a raw code still maps by its class.
   const n = parseInt(code, 10);
-  if (isNaN(n))           return "#94a3b8"; // slate-400 — non-HTTP marker
-  if (n >= 200 && n < 300) return "#10b981"; // ok green
-  if (n >= 300 && n < 400) return "#0ea5e9"; // info blue
-  if (n >= 400 && n < 500) return "#f59e0b"; // warn amber
-  if (n >= 500)            return "#dc2626"; // err red
+  if (isNaN(n))                       return "#94a3b8"; // slate-400 — "other" / non-HTTP marker
+  const klass = n >= 100 ? Math.floor(n / 100) : n;
+  if (klass === 2) return "#10b981"; // ok green
+  if (klass === 3) return "#0ea5e9"; // info blue
+  if (klass === 4) return "#f59e0b"; // warn amber
+  if (klass === 5) return "#dc2626"; // err red
   return "#94a3b8";
 }
 

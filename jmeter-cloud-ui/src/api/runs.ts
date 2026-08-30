@@ -137,20 +137,26 @@ export interface TimeseriesPoint {
  * the whole test. Mirrors the values the global-orchestrator accepts on
  * {@code GET /runs/{id}/timeseries?window=…}.
  */
-export type MetricsWindow = "all" | "5m" | "10m" | "30m" | "1h" | "2h" | "4h";
+export type MetricsWindow = "all" | "5m" | "10m" | "15m" | "30m" | "1h" | "2h" | "4h";
 
-/** The four per-second series the charts consume — shared by the total and each region. */
+/** Bucket width in seconds — the Grafana granularity picker's values; omit for the server's automatic choice. */
+export type MetricsGranularity = 15 | 30 | 60;
+
+/** The series the charts consume — shared by the total and each region / application split. */
 export interface MetricsTimeseriesSeries {
   tps:      TimeseriesPoint[];
   avgRtMs:  TimeseriesPoint[];
   errorPct: TimeseriesPoint[];
-  /** Per-status-code timeseries. Keys are HTTP code strings (or JMeter's non-HTTP marker). */
+  /** Counts per second by HTTP class: keys `2xx`, `3xx`, `4xx`, `5xx`, `other` (the schema keeps no per-code detail). */
   statusCodes: Record<string, TimeseriesPoint[]>;
+  /** Throughput-weighted p95 / p99 per bucket. */
+  p95Ms?: TimeseriesPoint[];
+  p99Ms?: TimeseriesPoint[];
 }
 
 export interface MetricsTimeseries {
   runId: string;
-  /** 1 = no bucketing; > 1 means each point covers `bucketSize` seconds (server-side downsample). */
+  /** Seconds per point: 15 (the workers' window), 30 or 60 — the server's automatic choice or the requested granularity. */
   bucketSize: number;
   fromSecond: number | null;
   toSecond: number | null;
@@ -162,6 +168,8 @@ export interface MetricsTimeseries {
    * these. Absent/empty when the breakdown wasn't requested.
    */
   regions?: Record<string, MetricsTimeseriesSeries>;
+  /** Per-application split (`LABEL.APPLICATION`), present only with `byApplication=true`. */
+  applications?: Record<string, MetricsTimeseriesSeries>;
 }
 
 /**
@@ -644,10 +652,12 @@ export const runsApi = {
   timeseries: (
     runId: string,
     signal?: AbortSignal,
-    opts: { byRegion?: boolean; window?: MetricsWindow } = {},
+    opts: { byRegion?: boolean; byApplication?: boolean; granularity?: MetricsGranularity; window?: MetricsWindow } = {},
   ): Promise<MetricsTimeseries> => {
     const params = new URLSearchParams();
     if (opts.byRegion) params.set("byRegion", "true");
+    if (opts.byApplication) params.set("byApplication", "true");
+    if (opts.granularity) params.set("granularity", String(opts.granularity));
     if (opts.window && opts.window !== "all") params.set("window", opts.window);
     const qs = params.toString();
     return request<MetricsTimeseries>(

@@ -6,29 +6,21 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Per-second timeseries for a single run, served by
- * {@code GET /api/v1/runs/{runId}/timeseries} (HM-1). Drives the four
- * native charts in the run-detail Metrics tab (UI-side: HM-3): TPS,
- * average response time, error percentage, and status-code breakdown.
+ * Bucketed timeseries for one run, served by
+ * {@code GET /api/v1/runs/{runId}/timeseries} and read straight from the
+ * run's group fact table ({@code <GROUP_ID>_METRICS}, plus the archived-day
+ * table for older data): TPS, response time (mean, p95, p99), error
+ * percentage and the HTTP class buckets, every point a throughput-weighted
+ * fold of the 15-second worker rows inside a {@link #bucketSize}-second bucket
+ * (15, 30 or 60 — the Grafana granularity picker's values).
  *
- * <p><b>Bucketing.</b> When the raw second-by-second point count
- * exceeds {@link com.perf.globalorchestrator.repo.MetricsTimeseriesRepository#BUCKET_TARGET},
- * the points are aggregated server-side into wider buckets so the wire
- * payload stays bounded for long-running tests. {@link #bucketSize()}
- * reports the number of raw seconds per returned point ({@code 1}
- * means no bucketing). Both {@code fromSecond} and {@code toSecond} are
- * always raw Unix epoch seconds.
- *
- * <p><b>Per-region breakdown.</b> When the caller requests
- * {@code ?byRegion=true}, {@link #regions} carries the same four series
- * split per AWS region ({@code us-east-1}, {@code us-west-2}, …) so the
- * UI's "Split by region" toggle can compare regions side by side. The
- * top-level {@link #series} stays the all-regions total in both modes
- * (it's the exact fold of the per-region rows), so the aggregate view
- * never has to be recomputed when the operator flips the toggle. When
- * the breakdown isn't requested {@code regions} is empty and omitted
- * from the JSON ({@link JsonInclude.Include#NON_EMPTY}), leaving the
- * default payload byte-for-byte unchanged.
+ * <p>{@link #regions} (on {@code byRegion=true}) splits the same series per
+ * {@code WORKER.REGION} — hot rows only, since the archived-day table has no
+ * worker dimension; {@link #applications} (on {@code byApplication=true})
+ * splits them per {@code LABEL.APPLICATION}, the group classifier's value.
+ * Both are omitted from the JSON when empty, so the default payload shape is
+ * unchanged. {@code fromSecond} / {@code toSecond} are the first and last bucket
+ * starts (epoch seconds).
  */
 public record MetricsTimeseries(
         String runId,
@@ -37,42 +29,55 @@ public record MetricsTimeseries(
         Long   toSecond,
         Series series,
         @JsonInclude(JsonInclude.Include.NON_EMPTY)
-        Map<String, Series> regions
+        Map<String, Series> regions,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+        Map<String, Series> applications
 ) {
 
-    /**
-     * Normalize a missing {@code regions} to an empty map. The field is
-     * {@code @JsonInclude(NON_EMPTY)}, so the default (no-breakdown) payload
-     * omits it on the wire; deserializing that payload hands the canonical
-     * constructor {@code null}. Without this, a cached value round-tripped
-     * through Redis comes back as {@code regions=null} (≠ the original
-     * {@code regions={}}) and every reader must null-check. Keep it empty.
-     */
+    /** Missing maps come back from the cache as null — keep them empty. */
     public MetricsTimeseries {
         if (regions == null) regions = Map.of();
+        if (applications == null) applications = Map.of();
     }
 
-    /** Convenience constructor for the default (no region breakdown) path. */
     public MetricsTimeseries(String runId, int bucketSize, Long fromSecond, Long toSecond, Series series) {
-        this(runId, bucketSize, fromSecond, toSecond, series, Map.of());
+        this(runId, bucketSize, fromSecond, toSecond, series, Map.of(), Map.of());
+    }
+
+    public MetricsTimeseries(String runId, int bucketSize, Long fromSecond, Long toSecond, Series series,
+                             Map<String, Series> regions) {
+        this(runId, bucketSize, fromSecond, toSecond, series, regions, Map.of());
     }
 
     /**
-     * The four series the UI consumes. {@code statusCodes} is a map
-     * keyed by HTTP status (or whatever JMeter wrote — could be
-     * {@code "Non HTTP response code:..."} for non-HTTP samplers).
+     * The series the UI charts. {@code statusCodes} is keyed by HTTP class —
+     * {@code 2xx}, {@code 3xx}, {@code 4xx}, {@code 5xx}, {@code other} — as
+     * counts per second; the schema keeps no per-code detail.
      */
     public record Series(
-            List<TimeseriesPoint>            tps,
-            List<TimeseriesPoint>            avgRtMs,
-            List<TimeseriesPoint>            errorPct,
-            Map<String, List<TimeseriesPoint>> statusCodes
-    ) { }
+            List<TimeseriesPoint>              tps,
+            List<TimeseriesPoint>              avgRtMs,
+            List<TimeseriesPoint>              errorPct,
+            Map<String, List<TimeseriesPoint>> statusCodes,
+            List<TimeseriesPoint>              p95Ms,
+            List<TimeseriesPoint>              p99Ms
+    ) {
+        public Series {
+            if (p95Ms == null) p95Ms = List.of();
+            if (p99Ms == null) p99Ms = List.of();
+            if (statusCodes == null) statusCodes = Map.of();
+        }
 
-    /**
-     * One sample. {@code sec} is a Unix epoch second; {@code v} is the
-     * metric value (TPS, ms, percentage, count). Compact name kept on
-     * the wire to keep payloads small for long runs.
-     */
+        public Series(List<TimeseriesPoint> tps, List<TimeseriesPoint> avgRtMs,
+                      List<TimeseriesPoint> errorPct, Map<String, List<TimeseriesPoint>> statusCodes) {
+            this(tps, avgRtMs, errorPct, statusCodes, List.of(), List.of());
+        }
+
+        public static Series empty() {
+            return new Series(List.of(), List.of(), List.of(), Map.of(), List.of(), List.of());
+        }
+    }
+
+    /** One sample: {@code sec} is the bucket's start (epoch second), {@code v} the value. */
     public record TimeseriesPoint(long sec, double v) { }
 }

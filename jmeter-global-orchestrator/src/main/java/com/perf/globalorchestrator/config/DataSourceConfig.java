@@ -59,8 +59,10 @@ public class DataSourceConfig {
             @Value("${spring.datasource.url:jdbc:oracle:thin:@//oracle:1521/FREEPDB1}")
             String url,
             @Value("${spring.datasource.username:metricsReader}") String user,
-            @Value("${spring.datasource.password:localdev}") String password) {
+            @Value("${spring.datasource.password:localdev}") String password,
+            @Value("${globalOrchestrator.metricsSchema:CARDZATE_DB_GRAF}") String metricsSchema) {
         HikariConfig cfg = pool(url, user, password, "globalOrchestratorMetricsPool");
+        cfg.setConnectionInitSql(currentSchema(metricsSchema));
         cfg.setMaximumPoolSize(10);
         cfg.setMinimumIdle(2);
         // The role's grants (SELECT only) are the enforcement; this flag is a
@@ -88,8 +90,10 @@ public class DataSourceConfig {
             @Value("${globalOrchestrator.metricsPurgeUrl:jdbc:oracle:thin:@//oracle:1521/FREEPDB1}")
             String url,
             @Value("${globalOrchestrator.metricsPurgeUser:metricsPurger}") String user,
-            @Value("${globalOrchestrator.metricsPurgePassword:localdev}") String password) {
+            @Value("${globalOrchestrator.metricsPurgePassword:localdev}") String password,
+            @Value("${globalOrchestrator.metricsSchema:CARDZATE_DB_GRAF}") String metricsSchema) {
         HikariConfig cfg = pool(url, user, password, "globalOrchestratorMetricsPurgePool");
+        cfg.setConnectionInitSql(currentSchema(metricsSchema));
         // Purge is infrequent + operator-driven; a tiny pool is plenty and keeps
         // the DELETE-capable connection count minimal.
         cfg.setMaximumPoolSize(2);
@@ -140,6 +144,18 @@ public class DataSourceConfig {
             jdbc.setQueryTimeout(Math.max(1, statementTimeoutMs / 1000));
         }
         return jdbc;
+    }
+
+    /**
+     * The metrics pools resolve unqualified names in the metrics schema
+     * ({@code CARDZATE_DB_GRAF}), so their SQL is the hosted consumer's SQL. The
+     * name is an identifier, validated before it is spliced.
+     */
+    static String currentSchema(String schema) {
+        if (!schema.matches("[A-Za-z][A-Za-z0-9_]{0,127}")) {
+            throw new IllegalArgumentException("metricsSchema is not an identifier: " + schema);
+        }
+        return "ALTER SESSION SET CURRENT_SCHEMA = " + schema;
     }
 
     /** {@code metricsReader} → {@code "metricsReader"}; an already-quoted name passes through. */

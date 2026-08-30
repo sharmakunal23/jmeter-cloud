@@ -57,7 +57,7 @@
 
   <rect x="42" y="356" width="150" height="40" rx="6" fill="#ffffff" stroke="#6ee7b7" stroke-width="1.3"/>
   <text x="117" y="373" text-anchor="middle" font-size="12" font-weight="600" fill="#065f46">metrics schema</text>
-  <text x="117" y="388" text-anchor="middle" font-size="10" fill="#475569">rollups, read-only</text>
+  <text x="117" y="388" text-anchor="middle" font-size="10" fill="#475569">group facts, read-only</text>
 
   <!-- arrows -->
   <g stroke="#64748b" stroke-width="1.3" fill="none" marker-end="url(#a)">
@@ -76,7 +76,7 @@
     <text x="589" y="205" text-anchor="start">/api/v1/pods · /api/v1/workers</text>
     <text x="589" y="217" text-anchor="start">/workers/status · /workers/{pod}/…</text>
     <text x="328" y="290" text-anchor="start" fill="#065f46">claims · members · liveness</text>
-    <text x="146" y="300" text-anchor="start" fill="#065f46">read rollups</text>
+    <text x="146" y="300" text-anchor="start" fill="#065f46">read facts</text>
     <text x="710" y="112" text-anchor="middle" fill="#065f46">cache</text>
   </g>
 </svg>
