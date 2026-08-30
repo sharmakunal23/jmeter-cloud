@@ -7,8 +7,8 @@ info:
   description: |
     The control plane: clients hit this service, and it fans `POST /api/v1/test`
     out to many `jmeter-local-orchestrator` workers, tracking run state in the
-    Oracle `"globalOrchestrator"` schema and serving aggregated metrics back
-    from the `metrics` rollup tables.
+    `ORCH_*` tables of the Oracle schema `CARDZATE_DB_GRAF` and serving metrics
+    back from the application group's fact tables beside them.
 
     Pod selection is registry-driven and runs claim only IDLE pods belonging
     to their own application. Liveness has two sources: dynamic workers in a

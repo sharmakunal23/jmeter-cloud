@@ -14,12 +14,12 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * JDBC access for {@code globalOrchestrator.cronJob}.
+ * JDBC access for {@code ORCH_CRON_JOB}.
  * Mirrors {@link RunRepository}'s conventions: the run-state JdbcTemplate,
  * inline-lambda RowMapper, quoted-camelCase SQL.
  *
  * <p>The claim path ({@link #findDueForUpdate}) goes through
- * {@code "globalOrchestrator"."claims"."claimDueCronJobs"}, which locks the due
+ * {@code ORCH_CLAIMS.CLAIM_DUE_CRON_JOBS}, which locks the due
  * rows one at a time with {@code FOR UPDATE SKIP LOCKED} — it MUST be called
  * inside a transaction (the caller, {@code CronFireService.claimDue}, is
  * {@code @Transactional}) or the row locks are released immediately and the HA
@@ -36,35 +36,35 @@ public class CronJobRepository {
     }
 
     private static final String COLS =
-            "\"cronJobId\",\"name\",\"applicationName\",\"templateBlobId\",\"cronExpression\","
-            + "\"timeZone\",\"enabled\",\"createdBy\",\"createdAt\",\"lastFiredAt\","
-            + "\"lastFiredRunId\",\"lastFireStatus\",\"nextFireAt\",\"claimedAt\","
+            "CRON_JOB_ID,NAME,APPLICATION_NAME,TEMPLATE_BLOB_ID,CRON_EXPRESSION,"
+            + "TIME_ZONE,ENABLED,CREATED_BY,CREATED_AT,LAST_FIRED_AT,"
+            + "LAST_FIRED_RUN_ID,LAST_FIRE_STATUS,NEXT_FIRE_AT,CLAIMED_AT,"
             // kind is NOT NULL (default LAUNCH_RUN); region only for
             // DRAIN_REGION/PROVISION_REGION; recipients/customSubject/customIntro
             // for report kinds only.
-            + "\"kind\",\"region\",\"recipients\",\"customSubject\",\"customIntro\"";
+            + "KIND,REGION,RECIPIENTS,CUSTOM_SUBJECT,CUSTOM_INTRO";
 
     private static CronJob mapRow(ResultSet rs, int n) throws SQLException {
         return new CronJob(
-                rs.getString("cronJobId"),
-                rs.getString("name"),
-                rs.getString("applicationName"),
-                rs.getString("templateBlobId"),
-                rs.getString("cronExpression"),
-                rs.getString("timeZone"),
-                rs.getBoolean("enabled"),
-                rs.getString("createdBy"),
-                instant(rs, "createdAt"),
-                instant(rs, "lastFiredAt"),
-                rs.getString("lastFiredRunId"),
-                rs.getString("lastFireStatus"),
-                instant(rs, "nextFireAt"),
-                instant(rs, "claimedAt"),
-                CronJobKind.valueOf(rs.getString("kind")),
-                rs.getString("region"),
-                rs.getString("recipients"),
-                rs.getString("customSubject"),
-                rs.getString("customIntro"));
+                rs.getString("CRON_JOB_ID"),
+                rs.getString("NAME"),
+                rs.getString("APPLICATION_NAME"),
+                rs.getString("TEMPLATE_BLOB_ID"),
+                rs.getString("CRON_EXPRESSION"),
+                rs.getString("TIME_ZONE"),
+                rs.getBoolean("ENABLED"),
+                rs.getString("CREATED_BY"),
+                instant(rs, "CREATED_AT"),
+                instant(rs, "LAST_FIRED_AT"),
+                rs.getString("LAST_FIRED_RUN_ID"),
+                rs.getString("LAST_FIRE_STATUS"),
+                instant(rs, "NEXT_FIRE_AT"),
+                instant(rs, "CLAIMED_AT"),
+                CronJobKind.valueOf(rs.getString("KIND")),
+                rs.getString("REGION"),
+                rs.getString("RECIPIENTS"),
+                rs.getString("CUSTOM_SUBJECT"),
+                rs.getString("CUSTOM_INTRO"));
     }
 
     private static Instant instant(ResultSet rs, String col) throws SQLException {
@@ -79,7 +79,7 @@ public class CronJobRepository {
      *  to surface duplicates as {@code DuplicateKeyException} (controller → 409). */
     public CronJob insert(CronJob c) {
         jdbc.update(
-                "INSERT INTO \"globalOrchestrator\".\"cronJob\" (" + COLS + ") "
+                "INSERT INTO ORCH_CRON_JOB (" + COLS + ") "
                 + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 c.cronJobId(), c.name(), c.applicationName(), c.templateBlobId(),
                 c.cronExpression(), c.timeZone(), c.enabled(), c.createdBy(),
@@ -92,7 +92,7 @@ public class CronJobRepository {
 
     public Optional<CronJob> findById(String cronJobId) {
         List<CronJob> rows = jdbc.query(
-                "SELECT " + COLS + " FROM \"globalOrchestrator\".\"cronJob\" WHERE \"cronJobId\"=?",
+                "SELECT " + COLS + " FROM ORCH_CRON_JOB WHERE CRON_JOB_ID=?",
                 rowMapper, cronJobId);
         return rows.stream().findFirst();
     }
@@ -102,14 +102,14 @@ public class CronJobRepository {
     public List<CronJob> findAll(String applicationFilter) {
         if (applicationFilter == null || applicationFilter.isBlank()) {
             return jdbc.query(
-                    "SELECT " + COLS + " FROM \"globalOrchestrator\".\"cronJob\" "
-                    + "ORDER BY \"nextFireAt\" ASC NULLS LAST, \"createdAt\" DESC",
+                    "SELECT " + COLS + " FROM ORCH_CRON_JOB "
+                    + "ORDER BY NEXT_FIRE_AT ASC NULLS LAST, CREATED_AT DESC",
                     rowMapper);
         }
         return jdbc.query(
-                "SELECT " + COLS + " FROM \"globalOrchestrator\".\"cronJob\" "
-                + "WHERE \"applicationName\"=? "
-                + "ORDER BY \"nextFireAt\" ASC NULLS LAST, \"createdAt\" DESC",
+                "SELECT " + COLS + " FROM ORCH_CRON_JOB "
+                + "WHERE APPLICATION_NAME=? "
+                + "ORDER BY NEXT_FIRE_AT ASC NULLS LAST, CREATED_AT DESC",
                 rowMapper, applicationFilter.trim());
     }
 
@@ -121,7 +121,7 @@ public class CronJobRepository {
      */
     public List<CronJob> findDueForUpdate(Instant now, int limit) {
         return OracleBind.refCursor(jdbc,
-                "BEGIN \"globalOrchestrator\".\"claims\".\"claimDueCronJobs\"(?, ?, ?); END;",
+                "BEGIN ORCH_CLAIMS.CLAIM_DUE_CRON_JOBS(?, ?, ?); END;",
                 cs -> { cs.setObject(1, OracleBind.ts(now)); cs.setInt(2, limit); },
                 3, rowMapper);
     }
@@ -135,8 +135,8 @@ public class CronJobRepository {
      */
     public void reschedule(String cronJobId, Instant nextFireAt, Instant claimedAt) {
         jdbc.update(
-                "UPDATE \"globalOrchestrator\".\"cronJob\" "
-                + "SET \"nextFireAt\"=?, \"claimedAt\"=? WHERE \"cronJobId\"=?",
+                "UPDATE ORCH_CRON_JOB "
+                + "SET NEXT_FIRE_AT=?, CLAIMED_AT=? WHERE CRON_JOB_ID=?",
                 ts(nextFireAt), ts(claimedAt), cronJobId);
     }
 
@@ -145,9 +145,9 @@ public class CronJobRepository {
      *  Clears {@code claimedAt} — the in-flight marker. */
     public void recordFire(String cronJobId, Instant firedAt, String runId, String outcomeName) {
         jdbc.update(
-                "UPDATE \"globalOrchestrator\".\"cronJob\" "
-                + "SET \"lastFiredAt\"=?, \"lastFiredRunId\"=?, \"lastFireStatus\"=?, \"claimedAt\"=NULL "
-                + "WHERE \"cronJobId\"=?",
+                "UPDATE ORCH_CRON_JOB "
+                + "SET LAST_FIRED_AT=?, LAST_FIRED_RUN_ID=?, LAST_FIRE_STATUS=?, CLAIMED_AT=NULL "
+                + "WHERE CRON_JOB_ID=?",
                 ts(firedAt), runId, outcomeName, cronJobId);
     }
 
@@ -161,12 +161,12 @@ public class CronJobRepository {
                        Instant nextFireAt, CronJobKind kind, String region, String recipients,
                        String customSubject, String customIntro) {
         jdbc.update(
-                "UPDATE \"globalOrchestrator\".\"cronJob\" "
-                + "SET \"name\"=?, \"applicationName\"=?, \"templateBlobId\"=?, "
-                + "\"cronExpression\"=?, \"timeZone\"=?, \"nextFireAt\"=?, "
-                + "\"kind\"=?, \"region\"=?, \"recipients\"=?, "
-                + "\"customSubject\"=?, \"customIntro\"=? "
-                + "WHERE \"cronJobId\"=?",
+                "UPDATE ORCH_CRON_JOB "
+                + "SET NAME=?, APPLICATION_NAME=?, TEMPLATE_BLOB_ID=?, "
+                + "CRON_EXPRESSION=?, TIME_ZONE=?, NEXT_FIRE_AT=?, "
+                + "KIND=?, REGION=?, RECIPIENTS=?, "
+                + "CUSTOM_SUBJECT=?, CUSTOM_INTRO=? "
+                + "WHERE CRON_JOB_ID=?",
                 name, applicationName, templateBlobId, cronExpression, timeZone,
                 ts(nextFireAt), kind.name(), region, recipients,
                 customSubject, customIntro, cronJobId);
@@ -177,8 +177,8 @@ public class CronJobRepository {
      *  {@code claimedAt} so a stale in-flight marker can't block the new slot. */
     public void setNextFireAt(String cronJobId, Instant nextFireAt) {
         jdbc.update(
-                "UPDATE \"globalOrchestrator\".\"cronJob\" "
-                + "SET \"nextFireAt\"=?, \"claimedAt\"=NULL WHERE \"cronJobId\"=?",
+                "UPDATE ORCH_CRON_JOB "
+                + "SET NEXT_FIRE_AT=?, CLAIMED_AT=NULL WHERE CRON_JOB_ID=?",
                 ts(nextFireAt), cronJobId);
     }
 
@@ -186,13 +186,13 @@ public class CronJobRepository {
      *  see the row; enabling sets the freshly-computed next slot. */
     public void setEnabled(String cronJobId, boolean enabled, Instant nextFireAt) {
         jdbc.update(
-                "UPDATE \"globalOrchestrator\".\"cronJob\" "
-                + "SET \"enabled\"=?, \"nextFireAt\"=?, \"claimedAt\"=NULL WHERE \"cronJobId\"=?",
+                "UPDATE ORCH_CRON_JOB "
+                + "SET ENABLED=?, NEXT_FIRE_AT=?, CLAIMED_AT=NULL WHERE CRON_JOB_ID=?",
                 enabled, ts(nextFireAt), cronJobId);
     }
 
     public int delete(String cronJobId) {
         return jdbc.update(
-                "DELETE FROM \"globalOrchestrator\".\"cronJob\" WHERE \"cronJobId\"=?", cronJobId);
+                "DELETE FROM ORCH_CRON_JOB WHERE CRON_JOB_ID=?", cronJobId);
     }
 }

@@ -16,14 +16,17 @@ import java.time.Duration;
 
 /**
  * One Oracle Free container per test JVM, initialised exactly like the local
- * stack: {@code oracle/initdb} creates the owners and users on first boot, and
- * Flyway applies both migration sets as their owners. Subclasses are
- * {@code @Tag("db")} and run only under {@code -PdbTests}.
+ * stack: {@code oracle/initdb} creates the owner and the users on first boot,
+ * and Flyway applies {@code oracle/migrations} (V1 metrics, V2 control plane,
+ * the rendered group bundles) as the owner. Subclasses are {@code @Tag("db")}
+ * and run only under {@code -PdbTests}.
  */
 @Tag("db")
 public abstract class OracleDbTestSupport {
 
     static final String PASSWORD = "localdev";
+    /** The platform schema's owner — every table, unqualified names. */
+    static final String OWNER = "CARDZATE_DB_GRAF";
 
     static final OracleContainer ORACLE = new OracleContainer(DockerImageName.parse("gvenzl/oracle-free:23-slim"))
             .withPassword(PASSWORD)
@@ -34,8 +37,7 @@ public abstract class OracleDbTestSupport {
 
     static {
         ORACLE.start();
-        migrate("CARDZATE_DB_GRAF", "oracle/migrations/metrics");
-        migrate("\"globalOrchestrator\"", "oracle/migrations/globalrun");
+        migrate(OWNER, "oracle/migrations");
     }
 
     static String jdbcUrl() {
@@ -54,14 +56,9 @@ public abstract class OracleDbTestSupport {
         return Paths.get("..", relative).toAbsolutePath().normalize();
     }
 
-    /** The metrics owner (CARDZATE_DB_GRAF) — sees every group table with unqualified names. */
-    static JdbcTemplate metricsOwner() {
-        return new JdbcTemplate(new DriverManagerDataSource(jdbcUrl(), "CARDZATE_DB_GRAF", PASSWORD));
-    }
-
-    /** The control-plane owner — sees every table for assertions. */
-    static JdbcTemplate globalOwner() {
-        return new JdbcTemplate(new DriverManagerDataSource(jdbcUrl(), "\"globalOrchestrator\"", PASSWORD));
+    /** The owner — sees every table (ORCH_* and the group facts) for assertions. */
+    static JdbcTemplate owner() {
+        return new JdbcTemplate(new DriverManagerDataSource(jdbcUrl(), OWNER, PASSWORD));
     }
 
     @DynamicPropertySource
@@ -71,12 +68,12 @@ public abstract class OracleDbTestSupport {
         // as the application user, which holds no DDL privilege.
         registry.add("spring.flyway.enabled", () -> "false");
         registry.add("ORACLE_METRICS_URL", OracleDbTestSupport::jdbcUrl);
-        registry.add("ORACLE_METRICS_READER_USER", () -> "metricsReader");
+        registry.add("ORACLE_METRICS_READER_USER", () -> "METRICS_READER");
         registry.add("ORACLE_METRICS_READER_PASSWORD", () -> PASSWORD);
-        registry.add("ORACLE_METRICS_PURGER_USER", () -> "metricsPurger");
+        registry.add("ORACLE_METRICS_PURGER_USER", () -> "METRICS_PURGER");
         registry.add("ORACLE_METRICS_PURGER_PASSWORD", () -> PASSWORD);
         registry.add("ORACLE_GLOBALRUN_URL", OracleDbTestSupport::jdbcUrl);
-        registry.add("ORACLE_GLOBALRUN_WRITER_USER", () -> "globalOrchestratorWriter");
+        registry.add("ORACLE_GLOBALRUN_WRITER_USER", () -> "GLOBAL_ORCHESTRATOR_WRITER");
         registry.add("ORACLE_GLOBALRUN_WRITER_PASSWORD", () -> PASSWORD);
     }
 }

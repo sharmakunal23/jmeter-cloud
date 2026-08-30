@@ -5,7 +5,7 @@ import java.time.Instant;
 /**
  * A Pod the provisioner currently sees in the cluster. Returned by
  * {@link PodProvisioner#listFor(String, String)} during reconciliation, not
- * derived from the {@code globalOrchestrator.pod} registry table.
+ * derived from the {@code ORCH_POD} registry table.
  *
  * <p>{@link #status()} is the Pod phase mapped to {@code running} /
  * {@code exited} / {@code created}. The reconciler maps this to whether the

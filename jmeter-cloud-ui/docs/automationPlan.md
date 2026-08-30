@@ -34,29 +34,9 @@ Three operator stories drive the scope:
 
 ## Data model
 
-New table in `globalOrchestrator` (Flyway V?? when impl lands):
-
-```sql
-CREATE TABLE "globalOrchestrator"."cronJob" (
-    "cronJobId"        TEXT         NOT NULL PRIMARY KEY,           -- ULID
-    "name"             TEXT         NOT NULL,                       -- operator label, unique per app
-    "applicationName"  TEXT         NOT NULL,                       -- run.application key
-    "templateBlobId"   TEXT         NOT NULL,                       -- document-service blob (X-Type=template)
-    "cronExpression"   TEXT         NOT NULL,                       -- e.g. "0 2 * * *"
-    "timeZone"         TEXT         NOT NULL DEFAULT 'UTC',
-    "enabled"          BOOLEAN      NOT NULL DEFAULT true,
-    "createdBy"        TEXT,                                         -- operator email / sub
-    "createdAt"        TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    "lastFiredAt"      TIMESTAMPTZ,
-    "lastFiredRunId"   TEXT,                                         -- FK to run.runId (no constraint — runs may be purged)
-    "lastFireStatus"   TEXT,                                         -- LAUNCHED / SKIPPED / FAILED
-    "nextFireAt"       TIMESTAMPTZ,                                  -- materialised by the scheduler
-    UNIQUE ("applicationName", "name")
-);
-
-CREATE INDEX "idx_cronJob_nextFireAt" ON "globalOrchestrator"."cronJob" ("nextFireAt")
-    WHERE "enabled" = true;
-```
+The table is `ORCH_CRON_JOB` in `CARDZATE_DB_GRAF` (`oracle/migrations/V2__controlPlaneSchema.sql`):
+unique `(APPLICATION_NAME, NAME)`, `(ENABLED, NEXT_FIRE_AT)` indexed for the claim
+sweep (`ORCH_CLAIMS.CLAIM_DUE_CRON_JOBS`), fire history in `ORCH_CRON_JOB_FIRE_HISTORY`.
 
 `UNIQUE (applicationName, name)` — operators can have a "nightly" CRON
 for `checkout-svc` and another `nightly` for `payment-api` without

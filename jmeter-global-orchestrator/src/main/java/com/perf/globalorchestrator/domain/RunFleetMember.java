@@ -6,7 +6,7 @@ import java.time.Instant;
 import java.util.Map;
 
 /**
- * One row from {@code globalOrchestrator.runFleetMember}.
+ * One row from {@code ORCH_RUN_FLEET_MEMBER}.
  *
  * <p><b>Track G (Step 31)</b> added {@code properties} — the JMeter
  * {@code -J} system properties this pod was launched with. Stored as

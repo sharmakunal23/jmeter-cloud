@@ -2,7 +2,7 @@
 /**
  * renderGroup.mjs — renders an application group's descriptor
  * (oracle/groups/<groupId>.json) into its SQL bundle
- * (oracle/migrations/metrics/R__group_<groupId>.sql): the hosted
+ * (oracle/migrations/R__group_<groupId>.sql): the hosted
  * environment's per-group steps, with every object named from
  * P = UPPER(groupId) — P_METRICS, P_METRICS_H, P_CLASSIFY_LABEL,
  * P_ARCHIVE_TO_H, P_PRUNE_H, P_MAINTAIN, P_NIGHTLY_MAINT.
@@ -21,11 +21,11 @@ import { dirname, join, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const migrationsDir = resolve(here, "..", "migrations", "metrics");
+const migrationsDir = resolve(here, "..", "migrations");
 
 const GROUP_ID = /^[a-z][a-z0-9_]{0,29}$/;
 const APPLICATION = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-const USER = /^[A-Za-z][A-Za-z0-9_]{0,29}$/;
+const USER = /^[A-Z][A-Z0-9_]{0,127}$/; // unquoted UPPER_SNAKE, like every identifier
 
 // ── CLI ─────────────────────────────────────────────────────────────────
 
@@ -161,16 +161,16 @@ function render(d, sourceFile) {
   ]).join("\n");
   const grants = [
     ...d.readers.flatMap((u) => [
-      `GRANT SELECT ON LABEL          TO "${u}";`,
-      `GRANT SELECT ON RUN            TO "${u}";`,
-      `GRANT SELECT ON WORKER         TO "${u}";`,
-      `GRANT SELECT ON GROUP_REGISTRY TO "${u}";`,
-      `GRANT SELECT ON ${P}_METRICS   TO "${u}";`,
-      `GRANT SELECT ON ${P}_METRICS_H TO "${u}";`,
+      `GRANT SELECT ON LABEL          TO ${u};`,
+      `GRANT SELECT ON RUN            TO ${u};`,
+      `GRANT SELECT ON WORKER         TO ${u};`,
+      `GRANT SELECT ON GROUP_REGISTRY TO ${u};`,
+      `GRANT SELECT ON ${P}_METRICS   TO ${u};`,
+      `GRANT SELECT ON ${P}_METRICS_H TO ${u};`,
     ]),
     ...d.purgers.flatMap((u) => [
-      `GRANT SELECT, DELETE ON ${P}_METRICS   TO "${u}";`,
-      `GRANT SELECT, DELETE ON ${P}_METRICS_H TO "${u}";`,
+      `GRANT SELECT, DELETE ON ${P}_METRICS   TO ${u};`,
+      `GRANT SELECT, DELETE ON ${P}_METRICS_H TO ${u};`,
     ]),
   ].join("\n");
   const idx = (s) => `BEGIN

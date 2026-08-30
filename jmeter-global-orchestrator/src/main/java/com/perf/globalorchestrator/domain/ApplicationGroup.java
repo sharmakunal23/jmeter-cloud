@@ -13,7 +13,7 @@ import java.util.List;
  * {@code GROUP_REGISTRY} there. The group also owns the worker pool
  * ({@code groupCapacity}, {@code pod}) and the pool's recycle policy
  * (GROUP-CAPACITY, 2026-08-31). Persisted in
- * {@code "globalOrchestrator"."applicationGroup"}.
+ * {@code ORCH_APPLICATION_GROUP}.
  *
  * @param grafanaLiveUrl    the group's live Grafana dashboard (reads
  *                          {@code <P>_METRICS}); the UI's "Open in Grafana"

@@ -4,15 +4,14 @@ spring:
   profiles:
     default: local
   # Three pools are wired manually in DataSourceConfig against the one
-  # Oracle PDB — the run-state writer ("globalOrchestrator" schema), the
-  # metrics reader and the metrics purger (the CARDZATE_DB_GRAF metrics
-  # schema — both pools set CURRENT_SCHEMA to it, ORACLE_METRICS_SCHEMA). Spring Boot's
+  # platform schema, CARDZATE_DB_GRAF (ORACLE_METRICS_SCHEMA) — the run-state
+  # writer on the ORCH_* tables, the metrics reader and the metrics purger on
+  # the group fact tables; every pool sets CURRENT_SCHEMA to it. Spring Boot's
   # auto-config bows out because the beans are explicit. The
-  # spring.datasource.* keys below feed the metrics READER pool. Usernames
-  # are bare camelCase here; DataSourceConfig adds the quotes Oracle needs.
+  # spring.datasource.* keys below feed the metrics READER pool.
   datasource:
     url: ${ORACLE_METRICS_URL:jdbc:oracle:thin:@//oracle:1521/FREEPDB1}
-    username: ${ORACLE_METRICS_READER_USER:metricsReader}
+    username: ${ORACLE_METRICS_READER_USER:METRICS_READER}
     password: ${ORACLE_METRICS_READER_PASSWORD:localdev}
   # Surface ISO-8601 Instants on the wire (default Spring Boot config).
   # Nine @Scheduled beans share this scheduler (probes, sweepers, cron). One
@@ -129,32 +128,32 @@ metrics:
   windowSeconds: ${METRICS_WINDOW_SECONDS:15}
 
 globalOrchestrator:
-  # The metrics schema the reader/purge pools resolve unqualified names in.
-  metricsSchema: ${ORACLE_METRICS_SCHEMA:CARDZATE_DB_GRAF}
+  # The one platform schema every pool resolves unqualified names in.
+  schema: ${ORACLE_METRICS_SCHEMA:CARDZATE_DB_GRAF}
   # Comma-separated list of local-orchestrator base URLs the fan-out layer
   # talks to. Local-mode default points at orchestrator-1 (multi-region
   # adds orchestrator-2). Step 15 introduces registry-driven pod claiming;
   # this static list is the v1 of pod selection.
   localOrchestratorUrls: ${LOCAL_ORCHESTRATOR_URLS:http://orchestrator-1:8080}
-  # Region label written into globalOrchestrator.run.originRegion.
+  # Region label written into ORCH_RUN.ORIGIN_REGION.
   region: ${GLOBAL_ORCHESTRATOR_REGION:us-east-1}
   # Bounded thread pool sized to the local-orchestrator's HTTP_MAX_THREADS;
   # production fleets > 100 pods should switch to a reactive WebClient.
   fanoutThreads: ${GLOBAL_ORCHESTRATOR_FANOUT_THREADS:32}
-  # Run state lives in the "globalOrchestrator" schema — writes go through
-  # the globalOrchestratorWriter least-privilege user. Same PDB as metrics.
+  # Run state lives in the ORCH_* tables of the platform schema — writes go
+  # through the GLOBAL_ORCHESTRATOR_WRITER least-privilege user.
   runStateUrl:      ${ORACLE_GLOBALRUN_URL:jdbc:oracle:thin:@//oracle:1521/FREEPDB1}
-  runStateUser:     ${ORACLE_GLOBALRUN_WRITER_USER:globalOrchestratorWriter}
+  runStateUser:     ${ORACLE_GLOBALRUN_WRITER_USER:GLOBAL_ORCHESTRATOR_WRITER}
   runStatePassword: ${ORACLE_GLOBALRUN_WRITER_PASSWORD:localdev}
   runStateStatementTimeoutMs: ${RUN_STATE_STATEMENT_TIMEOUT_MS:30000}
 
   # HARD-DELETE / purge — a SEPARATE read-write pool used ONLY to DELETE a
-  # purged run's metric rows, as the dedicated metricsPurger user (SELECT +
+  # purged run's metric rows, as the dedicated METRICS_PURGER user (SELECT +
   # DELETE); the hot metrics read pool above stays read-only. The query
   # timeout is generous (120 s) because a run-scoped DELETE removes every
   # row a whole test produced.
   metricsPurgeUrl:               ${ORACLE_METRICS_URL:jdbc:oracle:thin:@//oracle:1521/FREEPDB1}
-  metricsPurgeUser:              ${ORACLE_METRICS_PURGER_USER:metricsPurger}
+  metricsPurgeUser:              ${ORACLE_METRICS_PURGER_USER:METRICS_PURGER}
   metricsPurgePassword:          ${ORACLE_METRICS_PURGER_PASSWORD:localdev}
   metricsPurgeStatementTimeoutMs: ${METRICS_PURGE_STATEMENT_TIMEOUT_MS:120000}
 

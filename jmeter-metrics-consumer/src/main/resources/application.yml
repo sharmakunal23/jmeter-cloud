@@ -4,12 +4,11 @@ spring:
   profiles:
     default: local
   datasource:
-    # Oracle, one PDB. The service connects AS the metrics schema owner
+    # Oracle, one PDB. The service connects AS the schema owner
     # (CARDZATE_DB_GRAF) — the hosted proxy client does the same — so every
-    # statement uses unqualified names. The username is quoted HERE so an
-    # env var may carry a case-sensitive name.
+    # statement uses unqualified names.
     url: ${ORACLE_METRICS_URL:jdbc:oracle:thin:@//oracle:1521/FREEPDB1}
-    username: '"${ORACLE_METRICS_USER:CARDZATE_DB_GRAF}"'
+    username: ${ORACLE_METRICS_USER:CARDZATE_DB_GRAF}
     password: ${ORACLE_METRICS_PASSWORD:localdev}
     hikari:
       pool-name: metricsConsumerWriterPool

@@ -16,9 +16,9 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * CRUD for {@code globalOrchestrator.pod} — the worker registry.
+ * CRUD for {@code ORCH_POD} — the worker registry.
  * Uses the run-state datasource (RW), same as {@link RunRepository}. The two
- * claim paths go through {@code "globalOrchestrator"."claims"}, which locks
+ * claim paths go through {@code ORCH_CLAIMS}, which locks
  * one row at a time with {@code FOR UPDATE SKIP LOCKED}.
  */
 @Repository
@@ -60,18 +60,18 @@ public class PodRepository {
         // stopped); we must not flip it back to IDLE or a concurrent
         // claim could grab a pod the recycler is about to kill.
         jdbc.update(
-                "MERGE INTO \"globalOrchestrator\".\"pod\" t "
-                + "USING (SELECT ? AS \"podId\", ? AS \"region\", ? AS \"baseUrl\", ? AS \"groupId\" FROM dual) s "
-                + "ON (t.\"podId\" = s.\"podId\") "
+                "MERGE INTO ORCH_POD t "
+                + "USING (SELECT ? AS POD_ID, ? AS REGION, ? AS BASE_URL, ? AS GROUP_ID FROM dual) s "
+                + "ON (t.POD_ID = s.POD_ID) "
                 + "WHEN MATCHED THEN UPDATE SET "
-                + "  t.\"region\"=CASE WHEN t.\"source\"='STATIC' THEN t.\"region\" ELSE s.\"region\" END, "
-                + "  t.\"baseUrl\"=CASE WHEN t.\"source\"='STATIC' THEN t.\"baseUrl\" ELSE s.\"baseUrl\" END, "
-                + "  t.\"state\"=CASE WHEN t.\"state\"='DRAINING_FOR_RECYCLE' THEN 'DRAINING_FOR_RECYCLE' ELSE 'IDLE' END, "
-                + "  t.\"lastHeartbeat\"=SYSTIMESTAMP, "
-                + "  t.\"groupId\"=NVL(s.\"groupId\", t.\"groupId\") "
+                + "  t.REGION=CASE WHEN t.SOURCE='STATIC' THEN t.REGION ELSE s.REGION END, "
+                + "  t.BASE_URL=CASE WHEN t.SOURCE='STATIC' THEN t.BASE_URL ELSE s.BASE_URL END, "
+                + "  t.STATE=CASE WHEN t.STATE='DRAINING_FOR_RECYCLE' THEN 'DRAINING_FOR_RECYCLE' ELSE 'IDLE' END, "
+                + "  t.LAST_HEARTBEAT=SYSTIMESTAMP, "
+                + "  t.GROUP_ID=NVL(s.GROUP_ID, t.GROUP_ID) "
                 + "WHEN NOT MATCHED THEN INSERT "
-                + "(\"podId\",\"region\",\"baseUrl\",\"state\",\"lastHeartbeat\",\"groupId\") "
-                + "VALUES (s.\"podId\", s.\"region\", s.\"baseUrl\", 'IDLE', SYSTIMESTAMP, s.\"groupId\")",
+                + "(POD_ID,REGION,BASE_URL,STATE,LAST_HEARTBEAT,GROUP_ID) "
+                + "VALUES (s.POD_ID, s.REGION, s.BASE_URL, 'IDLE', SYSTIMESTAMP, s.GROUP_ID)",
                 podId, region, baseUrl, OracleBind.typed(Types.VARCHAR, groupId));
     }
 
@@ -94,15 +94,15 @@ public class PodRepository {
      */
     public void declareStatic(String podId, String region, String baseUrl, String groupId) {
         jdbc.update(
-                "MERGE INTO \"globalOrchestrator\".\"pod\" t "
-                + "USING (SELECT ? AS \"podId\", ? AS \"region\", ? AS \"baseUrl\", ? AS \"groupId\" FROM dual) s "
-                + "ON (t.\"podId\" = s.\"podId\") "
+                "MERGE INTO ORCH_POD t "
+                + "USING (SELECT ? AS POD_ID, ? AS REGION, ? AS BASE_URL, ? AS GROUP_ID FROM dual) s "
+                + "ON (t.POD_ID = s.POD_ID) "
                 + "WHEN MATCHED THEN UPDATE SET "
-                + "  t.\"region\"=s.\"region\", t.\"baseUrl\"=s.\"baseUrl\", "
-                + "  t.\"groupId\"=s.\"groupId\", t.\"source\"='STATIC' "
+                + "  t.REGION=s.REGION, t.BASE_URL=s.BASE_URL, "
+                + "  t.GROUP_ID=s.GROUP_ID, t.SOURCE='STATIC' "
                 + "WHEN NOT MATCHED THEN INSERT "
-                + "(\"podId\",\"region\",\"baseUrl\",\"state\",\"lastHeartbeat\",\"groupId\",\"source\") "
-                + "VALUES (s.\"podId\", s.\"region\", s.\"baseUrl\", 'IDLE', SYSTIMESTAMP, s.\"groupId\", 'STATIC')",
+                + "(POD_ID,REGION,BASE_URL,STATE,LAST_HEARTBEAT,GROUP_ID,SOURCE) "
+                + "VALUES (s.POD_ID, s.REGION, s.BASE_URL, 'IDLE', SYSTIMESTAMP, s.GROUP_ID, 'STATIC')",
                 podId, region, baseUrl, OracleBind.typed(Types.VARCHAR, groupId));
     }
 
@@ -114,11 +114,11 @@ public class PodRepository {
      */
     public List<Pod> findBySource(PodSource source) {
         return jdbc.query(
-                "SELECT \"podId\", \"region\", \"baseUrl\", \"state\", "
-                + "\"lastHeartbeat\", \"registeredAt\", \"groupId\", "
-                + "\"runsServed\", \"imageDigest\", \"provisionedAt\", \"source\" "
-                + "FROM \"globalOrchestrator\".\"pod\" WHERE \"source\" = ? "
-                + "ORDER BY \"podId\"",
+                "SELECT POD_ID, REGION, BASE_URL, STATE, "
+                + "LAST_HEARTBEAT, REGISTERED_AT, GROUP_ID, "
+                + "RUNS_SERVED, IMAGE_DIGEST, PROVISIONED_AT, SOURCE "
+                + "FROM ORCH_POD WHERE SOURCE = ? "
+                + "ORDER BY POD_ID",
                 ROW_MAPPER, source.name());
     }
 
@@ -139,8 +139,8 @@ public class PodRepository {
         // spins (parallel provisioning, two operators) get distinct names —
         // a loser sees DuplicateKeyException and allocates again.
         jdbc.update(
-                "INSERT INTO \"globalOrchestrator\".\"pod\" "
-                + "(\"podId\",\"region\",\"baseUrl\",\"state\",\"lastHeartbeat\",\"groupId\") "
+                "INSERT INTO ORCH_POD "
+                + "(POD_ID,REGION,BASE_URL,STATE,LAST_HEARTBEAT,GROUP_ID) "
                 + "VALUES (?,?,?,'LOST', SYSTIMESTAMP, ?)",
                 podId, region, baseUrl, groupId);
     }
@@ -148,8 +148,8 @@ public class PodRepository {
     /** Marks one pod LOST; returns 1 only on the transition, so callers act on it exactly once. */
     public int markLost(String podId) {
         return jdbc.update(
-                "UPDATE \"globalOrchestrator\".\"pod\" SET \"state\"='LOST' "
-                + "WHERE \"podId\"=? AND \"state\" NOT IN ('LOST', 'DRAINING_FOR_RECYCLE')",
+                "UPDATE ORCH_POD SET STATE='LOST' "
+                + "WHERE POD_ID=? AND STATE NOT IN ('LOST', 'DRAINING_FOR_RECYCLE')",
                 podId);
     }
 
@@ -158,11 +158,11 @@ public class PodRepository {
         // through the heartbeat (pod is mid-recycle; flipping back to
         // IDLE would re-expose it to claim).
         return jdbc.update(
-                "UPDATE \"globalOrchestrator\".\"pod\" "
-                + "SET \"lastHeartbeat\"=SYSTIMESTAMP, "
-                + "    \"state\"=CASE WHEN \"state\"='DRAINING_FOR_RECYCLE' "
+                "UPDATE ORCH_POD "
+                + "SET LAST_HEARTBEAT=SYSTIMESTAMP, "
+                + "    STATE=CASE WHEN STATE='DRAINING_FOR_RECYCLE' "
                 + "                   THEN 'DRAINING_FOR_RECYCLE' ELSE 'IDLE' END "
-                + "WHERE \"podId\"=?",
+                + "WHERE POD_ID=?",
                 podId);
     }
 
@@ -185,21 +185,21 @@ public class PodRepository {
         // the recycle path is the authoritative driver for these rows.
         if (excludedRegions == null || excludedRegions.isEmpty()) {
             return jdbc.update(
-                    "UPDATE \"globalOrchestrator\".\"pod\" "
-                    + "SET \"state\"='LOST' "
-                    + "WHERE \"state\" NOT IN ('LOST', 'DRAINING_FOR_RECYCLE') "
-                    + "  AND \"lastHeartbeat\" < ?",
+                    "UPDATE ORCH_POD "
+                    + "SET STATE='LOST' "
+                    + "WHERE STATE NOT IN ('LOST', 'DRAINING_FOR_RECYCLE') "
+                    + "  AND LAST_HEARTBEAT < ?",
                     OracleBind.ts(cutoff));
         }
         Object[] args = new Object[excludedRegions.size() + 1];
         args[0] = OracleBind.ts(cutoff);
         for (int i = 0; i < excludedRegions.size(); i++) args[i + 1] = excludedRegions.get(i);
         return jdbc.update(
-                "UPDATE \"globalOrchestrator\".\"pod\" "
-                + "SET \"state\"='LOST' "
-                + "WHERE \"state\" NOT IN ('LOST', 'DRAINING_FOR_RECYCLE') "
-                + "  AND \"lastHeartbeat\" < ? "
-                + "  AND NOT (\"source\"='DYNAMIC' AND \"region\" IN (" + MetricsPurgeRepository.marks(excludedRegions) + "))",
+                "UPDATE ORCH_POD "
+                + "SET STATE='LOST' "
+                + "WHERE STATE NOT IN ('LOST', 'DRAINING_FOR_RECYCLE') "
+                + "  AND LAST_HEARTBEAT < ? "
+                + "  AND NOT (SOURCE='DYNAMIC' AND REGION IN (" + MetricsPurgeRepository.marks(excludedRegions) + "))",
                 args);
     }
 
@@ -236,7 +236,7 @@ public class PodRepository {
 
     private List<Pod> claim(String region, String groupId, int limit) {
         return OracleBind.refCursor(jdbc,
-                "BEGIN \"globalOrchestrator\".\"claims\".\"claimIdlePods\"(?, ?, ?, ?); END;",
+                "BEGIN ORCH_CLAIMS.CLAIM_IDLE_PODS(?, ?, ?, ?); END;",
                 cs -> { cs.setString(1, region); cs.setString(2, groupId); cs.setInt(3, limit); },
                 4, ROW_MAPPER);
     }
@@ -248,23 +248,23 @@ public class PodRepository {
      */
     public List<RegionCapacity> regionCapacities() {
         return jdbc.query(
-                "SELECT p.\"region\", "
-                + "       COUNT(*) AS \"totalPods\", "
-                + "       SUM(CASE WHEN p.\"state\" = 'IDLE' "
+                "SELECT p.REGION, "
+                + "       COUNT(*) AS TOTAL_PODS, "
+                + "       SUM(CASE WHEN p.STATE = 'IDLE' "
                 + "                 AND NOT EXISTS ("
-                + "                   SELECT 1 FROM \"globalOrchestrator\".\"runFleetMember\" m "
-                + "                   WHERE m.\"workerId\" = p.\"podId\" "
-                + "                     AND m.\"state\" IN ('PENDING','REQUESTED','ACCEPTED','RUNNING','DRAINING')) "
-                + "                THEN 1 ELSE 0 END) AS \"idlePods\", "
-                + "       SUM(CASE WHEN p.\"state\" = 'LOST' THEN 1 ELSE 0 END) AS \"lostPods\" "
-                + "FROM \"globalOrchestrator\".\"pod\" p "
-                + "GROUP BY p.\"region\" "
-                + "ORDER BY p.\"region\"",
+                + "                   SELECT 1 FROM ORCH_RUN_FLEET_MEMBER m "
+                + "                   WHERE m.WORKER_ID = p.POD_ID "
+                + "                     AND m.STATE IN ('PENDING','REQUESTED','ACCEPTED','RUNNING','DRAINING')) "
+                + "                THEN 1 ELSE 0 END) AS IDLE_PODS, "
+                + "       SUM(CASE WHEN p.STATE = 'LOST' THEN 1 ELSE 0 END) AS LOST_PODS "
+                + "FROM ORCH_POD p "
+                + "GROUP BY p.REGION "
+                + "ORDER BY p.REGION",
                 (rs, n) -> new RegionCapacity(
-                        rs.getString("region"),
-                        rs.getLong("totalPods"),
-                        rs.getLong("idlePods"),
-                        rs.getLong("lostPods")));
+                        rs.getString("REGION"),
+                        rs.getLong("TOTAL_PODS"),
+                        rs.getLong("IDLE_PODS"),
+                        rs.getLong("LOST_PODS")));
     }
 
     /**
@@ -275,8 +275,8 @@ public class PodRepository {
      */
     public List<String> findKnownRegions() {
         return jdbc.queryForList(
-                "SELECT DISTINCT \"region\" FROM \"globalOrchestrator\".\"pod\" "
-                + "ORDER BY \"region\"",
+                "SELECT DISTINCT REGION FROM ORCH_POD "
+                + "ORDER BY REGION",
                 String.class);
     }
 
@@ -290,9 +290,9 @@ public class PodRepository {
      */
     public List<String> findPodIdsByGroupAndRegion(String groupId, String region) {
         return jdbc.queryForList(
-                "SELECT \"podId\" FROM \"globalOrchestrator\".\"pod\" "
-                + "WHERE \"groupId\" = ? AND \"region\" = ? "
-                + "ORDER BY \"podId\"",
+                "SELECT POD_ID FROM ORCH_POD "
+                + "WHERE GROUP_ID = ? AND REGION = ? "
+                + "ORDER BY POD_ID",
                 String.class, groupId, region);
     }
 
@@ -304,12 +304,12 @@ public class PodRepository {
      */
     public List<Pod> findByGroupAndRegion(String groupId, String region) {
         return jdbc.query(
-                "SELECT \"podId\", \"region\", \"baseUrl\", \"state\", "
-                + "       \"lastHeartbeat\", \"registeredAt\", \"groupId\", "
-                + "       \"runsServed\", \"imageDigest\", \"provisionedAt\", \"source\" "
-                + "FROM \"globalOrchestrator\".\"pod\" "
-                + "WHERE \"groupId\" = ? AND \"region\" = ? "
-                + "ORDER BY \"podId\"",
+                "SELECT POD_ID, REGION, BASE_URL, STATE, "
+                + "       LAST_HEARTBEAT, REGISTERED_AT, GROUP_ID, "
+                + "       RUNS_SERVED, IMAGE_DIGEST, PROVISIONED_AT, SOURCE "
+                + "FROM ORCH_POD "
+                + "WHERE GROUP_ID = ? AND REGION = ? "
+                + "ORDER BY POD_ID",
                 ROW_MAPPER, groupId, region);
     }
 
@@ -325,10 +325,10 @@ public class PodRepository {
             return java.util.Optional.empty();
         }
         List<Pod> rows = jdbc.query(
-                "SELECT \"podId\", \"region\", \"baseUrl\", \"state\", "
-                + "\"lastHeartbeat\", \"registeredAt\", \"groupId\", "
-                + "\"runsServed\", \"imageDigest\", \"provisionedAt\", \"source\" "
-                + "FROM \"globalOrchestrator\".\"pod\" WHERE \"podId\" = ?",
+                "SELECT POD_ID, REGION, BASE_URL, STATE, "
+                + "LAST_HEARTBEAT, REGISTERED_AT, GROUP_ID, "
+                + "RUNS_SERVED, IMAGE_DIGEST, PROVISIONED_AT, SOURCE "
+                + "FROM ORCH_POD WHERE POD_ID = ?",
                 ROW_MAPPER, podId);
         return rows.isEmpty() ? java.util.Optional.empty() : java.util.Optional.of(rows.get(0));
     }
@@ -340,8 +340,8 @@ public class PodRepository {
      */
     public int countByGroupAndRegion(String groupId, String region) {
         Integer n = jdbc.queryForObject(
-                "SELECT count(*) FROM \"globalOrchestrator\".\"pod\" "
-                + "WHERE \"groupId\" = ? AND \"region\" = ?",
+                "SELECT count(*) FROM ORCH_POD "
+                + "WHERE GROUP_ID = ? AND REGION = ?",
                 Integer.class, groupId, region);
         return n == null ? 0 : n;
     }
@@ -354,7 +354,7 @@ public class PodRepository {
      */
     public int deleteByPodId(String podId) {
         return jdbc.update(
-                "DELETE FROM \"globalOrchestrator\".\"pod\" WHERE \"podId\" = ?",
+                "DELETE FROM ORCH_POD WHERE POD_ID = ?",
                 podId);
     }
 
@@ -371,7 +371,7 @@ public class PodRepository {
      */
     public int deleteByGroupId(String groupId) {
         return jdbc.update(
-                "DELETE FROM \"globalOrchestrator\".\"pod\" WHERE \"groupId\" = ?",
+                "DELETE FROM ORCH_POD WHERE GROUP_ID = ?",
                 groupId);
     }
 
@@ -397,21 +397,21 @@ public class PodRepository {
      */
     public java.util.Optional<ActiveRunBinding> findActiveRunBindingFor(String podId) {
         List<ActiveRunBinding> rows = jdbc.query(
-                "SELECT r.\"runId\", r.\"originRegion\", r.\"state\", r.\"startedAt\", "
-                + "       r.\"initiatedBy\" "
-                + "FROM \"globalOrchestrator\".\"runFleetMember\" m "
-                + "JOIN \"globalOrchestrator\".\"run\" r ON m.\"runId\" = r.\"runId\" "
-                + "WHERE m.\"workerId\" = ? "
-                + "  AND r.\"state\" NOT IN ('COMPLETED','FAILED','ABORTED') "
-                + "  AND m.\"state\" NOT IN ('COMPLETED','FAILED','ABORTED','DRAINED') "
-                + "ORDER BY r.\"createdAt\" DESC "
+                "SELECT r.RUN_ID, r.ORIGIN_REGION, r.STATE, r.STARTED_AT, "
+                + "       r.INITIATED_BY "
+                + "FROM ORCH_RUN_FLEET_MEMBER m "
+                + "JOIN ORCH_RUN r ON m.RUN_ID = r.RUN_ID "
+                + "WHERE m.WORKER_ID = ? "
+                + "  AND r.STATE NOT IN ('COMPLETED','FAILED','ABORTED') "
+                + "  AND m.STATE NOT IN ('COMPLETED','FAILED','ABORTED','DRAINED') "
+                + "ORDER BY r.CREATED_AT DESC "
                 + "FETCH FIRST 1 ROWS ONLY",
                 (rs, n) -> new ActiveRunBinding(
-                        rs.getString("runId"),
-                        rs.getString("originRegion"),
-                        rs.getString("state"),
-                        instant(rs, "startedAt"),
-                        rs.getString("initiatedBy")),
+                        rs.getString("RUN_ID"),
+                        rs.getString("ORIGIN_REGION"),
+                        rs.getString("STATE"),
+                        instant(rs, "STARTED_AT"),
+                        rs.getString("INITIATED_BY")),
                 podId);
         return rows.isEmpty() ? java.util.Optional.empty() : java.util.Optional.of(rows.get(0));
     }
@@ -429,10 +429,10 @@ public class PodRepository {
     public boolean isWorkerBoundToNonTerminalRun(String workerId) {
         List<Integer> rows = jdbc.query(
                 "SELECT 1 "
-                + "FROM \"globalOrchestrator\".\"runFleetMember\" m "
-                + "JOIN \"globalOrchestrator\".\"run\" r ON m.\"runId\" = r.\"runId\" "
-                + "WHERE m.\"workerId\" = ? "
-                + "  AND r.\"state\" NOT IN ('COMPLETED','FAILED','ABORTED') "
+                + "FROM ORCH_RUN_FLEET_MEMBER m "
+                + "JOIN ORCH_RUN r ON m.RUN_ID = r.RUN_ID "
+                + "WHERE m.WORKER_ID = ? "
+                + "  AND r.STATE NOT IN ('COMPLETED','FAILED','ABORTED') "
                 + "FETCH FIRST 1 ROWS ONLY",
                 (rs, n) -> 1,
                 workerId);
@@ -449,11 +449,11 @@ public class PodRepository {
 
     public List<Pod> findAll() {
         return jdbc.query(
-                "SELECT \"podId\", \"region\", \"baseUrl\", \"state\", "
-                + "       \"lastHeartbeat\", \"registeredAt\", \"groupId\", "
-                + "       \"runsServed\", \"imageDigest\", \"provisionedAt\", \"source\" "
-                + "FROM \"globalOrchestrator\".\"pod\" "
-                + "ORDER BY \"lastHeartbeat\" DESC",
+                "SELECT POD_ID, REGION, BASE_URL, STATE, "
+                + "       LAST_HEARTBEAT, REGISTERED_AT, GROUP_ID, "
+                + "       RUNS_SERVED, IMAGE_DIGEST, PROVISIONED_AT, SOURCE "
+                + "FROM ORCH_POD "
+                + "ORDER BY LAST_HEARTBEAT DESC",
                 ROW_MAPPER);
     }
 
@@ -471,9 +471,9 @@ public class PodRepository {
      */
     public int incrementRunsServed(String podId) {
         return jdbc.update(
-                "UPDATE \"globalOrchestrator\".\"pod\" "
-                + "SET \"runsServed\" = \"runsServed\" + 1 "
-                + "WHERE \"podId\" = ?",
+                "UPDATE ORCH_POD "
+                + "SET RUNS_SERVED = RUNS_SERVED + 1 "
+                + "WHERE POD_ID = ?",
                 podId);
     }
 
@@ -502,44 +502,44 @@ public class PodRepository {
      */
     public int markDrainingForRecycle(String podId) {
         return jdbc.update(
-                "UPDATE \"globalOrchestrator\".\"pod\" "
-                + "SET \"state\" = 'DRAINING_FOR_RECYCLE' "
-                + "WHERE \"podId\" = ? AND \"state\" = 'IDLE'",
+                "UPDATE ORCH_POD "
+                + "SET STATE = 'DRAINING_FOR_RECYCLE' "
+                + "WHERE POD_ID = ? AND STATE = 'IDLE'",
                 podId);
     }
 
     public int recordProvisionMetadata(String podId, String imageDigest, Instant provisionedAt) {
         return jdbc.update(
-                "UPDATE \"globalOrchestrator\".\"pod\" "
+                "UPDATE ORCH_POD "
                 // CAST gives Oracle the type of a NULL bind; the non-null value
                 // binds as an OffsetDateTime and keeps its offset. Binding it
                 // with an explicit Types.TIMESTAMP instead drops the offset and
                 // re-reads the wall-clock in the session zone (a 4 h shift in
                 // the contract test) — never type a TIMESTAMP WITH TIME ZONE bind.
-                + "SET \"imageDigest\" = COALESCE(?, \"imageDigest\"), "
-                + "    \"provisionedAt\" = COALESCE(CAST(? AS TIMESTAMP WITH TIME ZONE), \"provisionedAt\") "
-                + "WHERE \"podId\" = ?",
+                + "SET IMAGE_DIGEST = COALESCE(?, IMAGE_DIGEST), "
+                + "    PROVISIONED_AT = COALESCE(CAST(? AS TIMESTAMP WITH TIME ZONE), PROVISIONED_AT) "
+                + "WHERE POD_ID = ?",
                 OracleBind.typed(Types.VARCHAR, imageDigest),
                 OracleBind.ts(provisionedAt),
                 podId);
     }
 
     private static final RowMapper<Pod> ROW_MAPPER = (rs, n) -> new Pod(
-            rs.getString("podId"),
-            rs.getString("region"),
-            rs.getString("baseUrl"),
-            PodState.valueOf(rs.getString("state")),
-            instant(rs, "lastHeartbeat"),
-            instant(rs, "registeredAt"),
-            rs.getString("groupId"),
-            rs.getLong("runsServed"),
-            rs.getString("imageDigest"),
-            instant(rs, "provisionedAt"),
+            rs.getString("POD_ID"),
+            rs.getString("REGION"),
+            rs.getString("BASE_URL"),
+            PodState.valueOf(rs.getString("STATE")),
+            instant(rs, "LAST_HEARTBEAT"),
+            instant(rs, "REGISTERED_AT"),
+            rs.getString("GROUP_ID"),
+            rs.getLong("RUNS_SERVED"),
+            rs.getString("IMAGE_DIGEST"),
+            instant(rs, "PROVISIONED_AT"),
             podSource(rs));
 
     /** The CHECK constraint guarantees a known value; null is defensive only. */
     private static PodSource podSource(ResultSet rs) throws SQLException {
-        String raw = rs.getString("source");
+        String raw = rs.getString("SOURCE");
         return raw == null ? PodSource.DYNAMIC : PodSource.valueOf(raw);
     }
 

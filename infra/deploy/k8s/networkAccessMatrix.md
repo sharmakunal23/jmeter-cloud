@@ -16,9 +16,9 @@ principal, at deploy time only.
 
 | Service | Oracle | Redis | Mail | Holds state |
 |---|---|---|---|---|
-| `jmeter-global-orchestrator` | yes — 3 pools (`"globalOrchestrator"` writer; `CARDZATE_DB_GRAF` reader + purger) | yes (terminal-run cache) | yes (SMTP, notifications) | the control plane |
+| `jmeter-global-orchestrator` | yes — 3 pools on `CARDZATE_DB_GRAF` (`GLOBAL_ORCHESTRATOR_WRITER` on the `ORCH_*` tables; `METRICS_READER` + `METRICS_PURGER` on the group facts) | yes (terminal-run cache) | yes (SMTP, notifications) | the control plane |
 | `jmeter-metrics-consumer` | yes — 1 pool (`CARDZATE_DB_GRAF` owner) | no | no | none (insert-only edge) |
-| `oracle/` Flyway Job | yes — both schema owners | no | no | deploy time only |
+| `oracle/` Flyway Job | yes — the schema owner | no | no | deploy time only |
 | `jmeter-regional-orchestrator` | **no** | no | no | none |
 | `jmeter-local-orchestrator` (worker) | **no** | no | no | its run's files + a disk buffer of unsent envelopes |
 | `document-service` | **no** | no | no | the blob volume (file system) |

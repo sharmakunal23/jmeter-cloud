@@ -27,18 +27,18 @@ public class CronJobFireHistoryRepository {
 
     private static CronJobFire mapRow(ResultSet rs, int n) throws SQLException {
         return new CronJobFire(
-                rs.getString("fireId"),
-                rs.getString("cronJobId"),
-                OracleBind.instant(rs, "firedAt"),
-                rs.getString("outcome"),
-                rs.getString("runId"),
-                rs.getString("errorReason"));
+                rs.getString("FIRE_ID"),
+                rs.getString("CRON_JOB_ID"),
+                OracleBind.instant(rs, "FIRED_AT"),
+                rs.getString("OUTCOME"),
+                rs.getString("RUN_ID"),
+                rs.getString("ERROR_REASON"));
     }
 
     public void insert(CronJobFire f) {
         jdbc.update(
-                "INSERT INTO \"globalOrchestrator\".\"cronJobFireHistory\" "
-                + "(\"fireId\",\"cronJobId\",\"firedAt\",\"outcome\",\"runId\",\"errorReason\") "
+                "INSERT INTO ORCH_CRON_JOB_FIRE_HISTORY "
+                + "(FIRE_ID,CRON_JOB_ID,FIRED_AT,OUTCOME,RUN_ID,ERROR_REASON) "
                 + "VALUES (?,?,?,?,?,?)",
                 f.fireId(), f.cronJobId(),
                 OracleBind.ts(f.firedAt()),
@@ -48,16 +48,16 @@ public class CronJobFireHistoryRepository {
     /** Newest-first fire history for one schedule, capped at {@code limit}. */
     public List<CronJobFire> findByCronJobId(String cronJobId, int limit) {
         return jdbc.query(
-                "SELECT \"fireId\",\"cronJobId\",\"firedAt\",\"outcome\",\"runId\",\"errorReason\" "
-                + "FROM \"globalOrchestrator\".\"cronJobFireHistory\" "
-                + "WHERE \"cronJobId\"=? ORDER BY \"firedAt\" DESC FETCH FIRST ? ROWS ONLY",
+                "SELECT FIRE_ID,CRON_JOB_ID,FIRED_AT,OUTCOME,RUN_ID,ERROR_REASON "
+                + "FROM ORCH_CRON_JOB_FIRE_HISTORY "
+                + "WHERE CRON_JOB_ID=? ORDER BY FIRED_AT DESC FETCH FIRST ? ROWS ONLY",
                 rowMapper, cronJobId, limit);
     }
 
     /** Count of all recorded fires for a schedule (used by tests / detail page). */
     public int countByCronJobId(String cronJobId) {
         Integer c = jdbc.queryForObject(
-                "SELECT count(*) FROM \"globalOrchestrator\".\"cronJobFireHistory\" WHERE \"cronJobId\"=?",
+                "SELECT count(*) FROM ORCH_CRON_JOB_FIRE_HISTORY WHERE CRON_JOB_ID=?",
                 Integer.class, cronJobId);
         return c == null ? 0 : c;
     }

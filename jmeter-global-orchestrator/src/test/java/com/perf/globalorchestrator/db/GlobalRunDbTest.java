@@ -68,8 +68,7 @@ class GlobalRunDbTest extends OracleDbTestSupport {
     @Autowired @Qualifier("metricsPurgeJdbcTemplate") JdbcTemplate metricsPurge;
     @Autowired PlatformTransactionManager txManager;
 
-    private final JdbcTemplate globalOwner = globalOwner();
-    private final JdbcTemplate metricsOwner = metricsOwner();
+    private final JdbcTemplate owner = owner();
 
     /** An application in the {@code cps} group (created on first use) — every application has a group. */
     private Application app(String id, String name) {
@@ -87,9 +86,11 @@ class GlobalRunDbTest extends OracleDbTestSupport {
 
     @Test
     void both_migrations_applied_and_every_object_is_valid() {
-        assertThat(globalOwner.queryForObject("SELECT COUNT(*) FROM user_objects WHERE status <> 'VALID'", Integer.class)).isZero();
-        assertThat(metricsOwner.queryForObject("SELECT COUNT(*) FROM user_objects WHERE status <> 'VALID'", Integer.class)).isZero();
-        assertThat(globalOwner.queryForObject("SELECT COUNT(*) FROM user_tables WHERE table_name <> 'flyway_schema_history'", Integer.class)).isEqualTo(13);
+        assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_objects WHERE status <> 'VALID'", Integer.class)).isZero();
+        assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_tables WHERE table_name LIKE 'ORCH\\_%' ESCAPE '\\'", Integer.class)).isEqualTo(13);
+        // One convention for the whole schema: nothing quoted-case except Flyway's own history table.
+        assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_objects WHERE object_name <> UPPER(object_name) AND object_name NOT LIKE 'flyway\\_schema\\_history%' ESCAPE '\\'", Integer.class)).isZero();
+        assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_tab_columns WHERE column_name <> UPPER(column_name) AND table_name <> 'flyway_schema_history'", Integer.class)).isZero();
     }
 
     @Test

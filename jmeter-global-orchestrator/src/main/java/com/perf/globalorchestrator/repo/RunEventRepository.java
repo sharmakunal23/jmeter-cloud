@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Persistence for {@code globalOrchestrator.runEvent}. Uses the
+ * Persistence for {@code ORCH_RUN_EVENT}. Uses the
  * <strong>same</strong> runState datasource as {@link RunRepository} so an
  * {@link #insert(RunEvent)} call from inside a {@code @Transactional} run
  * mutation commits (or rolls back) atomically with the mutation — a
@@ -42,7 +42,7 @@ public class RunEventRepository {
 
     private static RowMapper<RunEvent> buildRowMapper(ObjectMapper json) {
         return (rs, n) -> {
-            String payloadRaw = OracleBind.json(rs, "payload");
+            String payloadRaw = OracleBind.json(rs, "PAYLOAD");
             Map<String, Object> payload;
             if (payloadRaw == null || payloadRaw.isBlank()) {
                 payload = Map.of();
@@ -54,14 +54,14 @@ public class RunEventRepository {
                 }
             }
             return new RunEvent(
-                    rs.getString("eventId"),
-                    rs.getString("runId"),
-                    RunEventType.valueOf(rs.getString("eventType")),
-                    rs.getString("actor"),
-                    rs.getString("actorSource"),
+                    rs.getString("EVENT_ID"),
+                    rs.getString("RUN_ID"),
+                    RunEventType.valueOf(rs.getString("EVENT_TYPE")),
+                    rs.getString("ACTOR"),
+                    rs.getString("ACTOR_SOURCE"),
                     payload,
-                    rs.getString("result"),
-                    OracleBind.instant(rs, "occurredAt"));
+                    rs.getString("RESULT"),
+                    OracleBind.instant(rs, "OCCURRED_AT"));
         };
     }
 
@@ -80,12 +80,12 @@ public class RunEventRepository {
             throw new IllegalStateException("failed to serialise runEvent payload", ex);
         }
         jdbc.update(
-                "MERGE INTO \"globalOrchestrator\".\"runEvent\" t "
-                + "USING (SELECT ? AS \"eventId\" FROM dual) s ON (t.\"eventId\" = s.\"eventId\") "
+                "MERGE INTO ORCH_RUN_EVENT t "
+                + "USING (SELECT ? AS EVENT_ID FROM dual) s ON (t.EVENT_ID = s.EVENT_ID) "
                 + "WHEN NOT MATCHED THEN INSERT "
-                + "(\"eventId\",\"runId\",\"eventType\",\"actor\",\"actorSource\","
-                + " \"payload\",\"result\",\"occurredAt\") "
-                + "VALUES (s.\"eventId\",?,?,?,?,?,?,?)",
+                + "(EVENT_ID,RUN_ID,EVENT_TYPE,ACTOR,ACTOR_SOURCE,"
+                + " PAYLOAD,RESULT,OCCURRED_AT) "
+                + "VALUES (s.EVENT_ID,?,?,?,?,?,?,?)",
                 e.eventId(), e.runId(), e.eventType().name(),
                 OracleBind.text(e.actor(), OracleBind.NAME_CHARS), e.actorSource(),
                 OracleBind.clob(payloadJson), e.result(),
@@ -102,9 +102,9 @@ public class RunEventRepository {
      */
     public List<RunEvent> findByRunId(String runId) {
         return jdbc.query(
-                "SELECT * FROM \"globalOrchestrator\".\"runEvent\" "
-                + "WHERE \"runId\"=? "
-                + "ORDER BY \"occurredAt\" DESC, \"eventId\" DESC",
+                "SELECT * FROM ORCH_RUN_EVENT "
+                + "WHERE RUN_ID=? "
+                + "ORDER BY OCCURRED_AT DESC, EVENT_ID DESC",
                 rowMapper, runId);
     }
 
@@ -116,9 +116,9 @@ public class RunEventRepository {
      */
     public List<RunEvent> findByRunId(String runId, int offset, int limit) {
         return jdbc.query(
-                "SELECT * FROM \"globalOrchestrator\".\"runEvent\" "
-                + "WHERE \"runId\"=? "
-                + "ORDER BY \"occurredAt\" DESC, \"eventId\" DESC "
+                "SELECT * FROM ORCH_RUN_EVENT "
+                + "WHERE RUN_ID=? "
+                + "ORDER BY OCCURRED_AT DESC, EVENT_ID DESC "
                 + "OFFSET ? ROWS FETCH NEXT ? ROWS ONLY",
                 rowMapper, runId, offset, limit);
     }
@@ -134,17 +134,17 @@ public class RunEventRepository {
      */
     public java.util.Set<String> resultsSavedWorkerIds(String runId) {
         return new java.util.HashSet<>(jdbc.queryForList(
-                "SELECT DISTINCT JSON_VALUE(\"payload\", '$.workerId') "
-                + "FROM \"globalOrchestrator\".\"runEvent\" "
-                + "WHERE \"runId\"=? AND \"eventType\"='RESULTS_SAVED' "
-                + "  AND JSON_VALUE(\"payload\", '$.workerId') IS NOT NULL",
+                "SELECT DISTINCT JSON_VALUE(PAYLOAD, '$.workerId') "
+                + "FROM ORCH_RUN_EVENT "
+                + "WHERE RUN_ID=? AND EVENT_TYPE='RESULTS_SAVED' "
+                + "  AND JSON_VALUE(PAYLOAD, '$.workerId') IS NOT NULL",
                 String.class, runId));
     }
 
     /** Total event count for a run — drives the {@code X-Total-Count} header. */
     public long countByRunId(String runId) {
         Long n = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM \"globalOrchestrator\".\"runEvent\" WHERE \"runId\"=?",
+                "SELECT COUNT(*) FROM ORCH_RUN_EVENT WHERE RUN_ID=?",
                 Long.class, runId);
         return n == null ? 0L : n;
     }

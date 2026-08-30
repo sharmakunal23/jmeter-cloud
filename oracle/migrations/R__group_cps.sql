@@ -1,22 +1,22 @@
--- R__group_demo.sql — the "Demo" application group (groupId demo, prefix DEMO).
--- Rendered by oracle/groups/renderGroup.mjs from oracle/groups/demo.json
+-- R__group_cps.sql — the "Servicing MQ" application group (groupId cps, prefix CPS).
+-- Rendered by oracle/groups/renderGroup.mjs from oracle/groups/cps.json
 -- — do not hand-edit; change the descriptor and re-run the renderer.
 --
 -- Every statement is idempotent, so this file can be re-run (Flyway
 -- repeatable locally; the DBA's bundle on the hosted database). Objects:
--- DEMO_METRICS (hot, daily partitions, 7 days), DEMO_METRICS_H (+ _STAGE,
--- 30 days), DEMO_CLASSIFY_LABEL, DEMO_ARCHIVE_TO_H, DEMO_PRUNE_H,
--- DEMO_MAINTAIN, job DEMO_NIGHTLY_MAINT, the GROUP_REGISTRY row and the grants.
+-- CPS_METRICS (hot, daily partitions, 7 days), CPS_METRICS_H (+ _STAGE,
+-- 30 days), CPS_CLASSIFY_LABEL, CPS_ARCHIVE_TO_H, CPS_PRUNE_H,
+-- CPS_MAINTAIN, job CPS_NIGHTLY_MAINT, the GROUP_REGISTRY row and the grants.
 
 -- ═══════════════════════════════════════════════════════════════════════
--- 1. DEMO_METRICS — hot 15 s fact: daily partitions, ~7-day retention.
+-- 1. CPS_METRICS — hot 15 s fact: daily partitions, ~7-day retention.
 --    FKs are RELY DISABLE NOVALIDATE: declared for the optimizer but NOT
 --    enforced on insert (the app resolves dims first) — ingest stays as
 --    fast as an FK-less fact. The PK is the ONLY unique index: the
 --    consumer's IGNORE_ROW_ON_DUPKEY_INDEX hint names exactly its columns.
 -- ═══════════════════════════════════════════════════════════════════════
 BEGIN
-EXECUTE IMMEDIATE q'[CREATE TABLE DEMO_METRICS (
+EXECUTE IMMEDIATE q'[CREATE TABLE CPS_METRICS (
         RUN_ID         NUMBER NOT NULL,                 -- FK RUN
         WORKER_ID      NUMBER NOT NULL,                 -- FK WORKER
         LABEL_ID       NUMBER NOT NULL,                 -- FK LABEL
@@ -44,30 +44,30 @@ EXECUTE IMMEDIATE q'[CREATE TABLE DEMO_METRICS (
 
         ACTIVE_THREADS NUMBER(8)   DEFAULT 0 NOT NULL,
 
-        CONSTRAINT DEMO_METRICS_PK
+        CONSTRAINT CPS_METRICS_PK
             PRIMARY KEY (RUN_ID, WORKER_ID, LABEL_ID, WINDOW_SECOND) USING INDEX LOCAL,
-        CONSTRAINT DEMO_METRICS_RUN_FK FOREIGN KEY (RUN_ID)    REFERENCES RUN (RUN_ID)       RELY DISABLE NOVALIDATE,
-        CONSTRAINT DEMO_METRICS_WRK_FK FOREIGN KEY (WORKER_ID) REFERENCES WORKER (WORKER_ID) RELY DISABLE NOVALIDATE,
-        CONSTRAINT DEMO_METRICS_LBL_FK FOREIGN KEY (LABEL_ID)  REFERENCES LABEL (LABEL_ID)   RELY DISABLE NOVALIDATE
+        CONSTRAINT CPS_METRICS_RUN_FK FOREIGN KEY (RUN_ID)    REFERENCES RUN (RUN_ID)       RELY DISABLE NOVALIDATE,
+        CONSTRAINT CPS_METRICS_WRK_FK FOREIGN KEY (WORKER_ID) REFERENCES WORKER (WORKER_ID) RELY DISABLE NOVALIDATE,
+        CONSTRAINT CPS_METRICS_LBL_FK FOREIGN KEY (LABEL_ID)  REFERENCES LABEL (LABEL_ID)   RELY DISABLE NOVALIDATE
     ) PCTFREE 0
       PARTITION BY RANGE (WINDOW_SECOND) INTERVAL (86400)
-      ( PARTITION DEMO_METRICS_P_INIT VALUES LESS THAN (1578268800) )]';
+      ( PARTITION CPS_METRICS_P_INIT VALUES LESS THAN (1578268800) )]';
 EXCEPTION WHEN OTHERS THEN IF SQLCODE NOT IN (-955, -1408) THEN RAISE; END IF;
 END;
 /
 BEGIN
-EXECUTE IMMEDIATE 'CREATE INDEX DEMO_METRICS_RUN_LBL_IDX ON DEMO_METRICS (RUN_ID, LABEL_ID, WINDOW_SECOND) LOCAL';
+EXECUTE IMMEDIATE 'CREATE INDEX CPS_METRICS_RUN_LBL_IDX ON CPS_METRICS (RUN_ID, LABEL_ID, WINDOW_SECOND) LOCAL';
 EXCEPTION WHEN OTHERS THEN IF SQLCODE NOT IN (-955, -1408) THEN RAISE; END IF;
 END;
 /
 
 -- ═══════════════════════════════════════════════════════════════════════
--- 2. DEMO_METRICS_H — worker-aggregated 15 s history, one row per
+-- 2. CPS_METRICS_H — worker-aggregated 15 s history, one row per
 --    (RUN_ID, LABEL_ID, WINDOW_SECOND); daily partitions published atomically
 --    by EXCHANGE PARTITION from the private, non-partitioned _STAGE.
 -- ═══════════════════════════════════════════════════════════════════════
 BEGIN
-EXECUTE IMMEDIATE q'[CREATE TABLE DEMO_METRICS_H (
+EXECUTE IMMEDIATE q'[CREATE TABLE CPS_METRICS_H (
         RUN_ID          NUMBER NOT NULL,
         LABEL_ID        NUMBER NOT NULL,
         WINDOW_SECOND   NUMBER(19) NOT NULL,
@@ -95,18 +95,18 @@ EXECUTE IMMEDIATE q'[CREATE TABLE DEMO_METRICS_H (
 
         ACTIVE_THREADS  NUMBER(12) DEFAULT 0 NOT NULL,
 
-        CONSTRAINT DEMO_METRICS_H_PK
+        CONSTRAINT CPS_METRICS_H_PK
             PRIMARY KEY (RUN_ID, LABEL_ID, WINDOW_SECOND) USING INDEX LOCAL
     ) PCTFREE 0
       ROW STORE COMPRESS ADVANCED
       PARTITION BY RANGE (WINDOW_SECOND)
-      ( PARTITION DEMO_METRICS_H_P_INIT VALUES LESS THAN (1578268800) )]';
+      ( PARTITION CPS_METRICS_H_P_INIT VALUES LESS THAN (1578268800) )]';
 EXCEPTION WHEN OTHERS THEN IF SQLCODE NOT IN (-955, -1408) THEN RAISE; END IF;
 END;
 /
 
 BEGIN
-EXECUTE IMMEDIATE q'[CREATE TABLE DEMO_METRICS_H_STAGE (
+EXECUTE IMMEDIATE q'[CREATE TABLE CPS_METRICS_H_STAGE (
         RUN_ID          NUMBER NOT NULL,
         LABEL_ID        NUMBER NOT NULL,
         WINDOW_SECOND   NUMBER(19) NOT NULL,
@@ -134,7 +134,7 @@ EXECUTE IMMEDIATE q'[CREATE TABLE DEMO_METRICS_H_STAGE (
 
         ACTIVE_THREADS  NUMBER(12) DEFAULT 0 NOT NULL,
 
-        CONSTRAINT DEMO_METRICS_H_STAGE_PK
+        CONSTRAINT CPS_METRICS_H_STAGE_PK
             PRIMARY KEY (RUN_ID, LABEL_ID, WINDOW_SECOND)
     ) PCTFREE 0
       ROW STORE COMPRESS ADVANCED]';
@@ -143,54 +143,59 @@ END;
 /
 
 -- ═══════════════════════════════════════════════════════════════════════
--- 3. DEMO_CLASSIFY_LABEL — label → application by prefix; first match wins.
+-- 3. CPS_CLASSIFY_LABEL — label → application by prefix; first match wins.
 --    Called once per NEW label by the consumer's LABEL insert, never in a
 --    WHERE clause.
 -- ═══════════════════════════════════════════════════════════════════════
-CREATE OR REPLACE FUNCTION DEMO_CLASSIFY_LABEL (p_label IN VARCHAR2)
+CREATE OR REPLACE FUNCTION CPS_CLASSIFY_LABEL (p_label IN VARCHAR2)
     RETURN VARCHAR2 DETERMINISTIC
 AS
 BEGIN
-    -- CHECKOUT
-    IF SUBSTR(p_label, 1, 8) = 'checkout' THEN RETURN 'CHECKOUT'; END IF;
-    IF SUBSTR(p_label, 1, 4) = 'cart' THEN RETURN 'CHECKOUT'; END IF;
-    -- SEARCH
-    IF SUBSTR(p_label, 1, 6) = 'search' THEN RETURN 'SEARCH'; END IF;
+    -- CPP-PCI
+    IF SUBSTR(p_label, 1, 3) = 'TG6' THEN RETURN 'CPP-PCI'; END IF;
+    -- CPS-PCI
+    IF SUBSTR(p_label, 1, 3) = 'TG5' THEN RETURN 'CPS-PCI'; END IF;
+    -- CPP
+    IF SUBSTR(p_label, 1, 3) = 'TG4' THEN RETURN 'CPP'; END IF;
+    -- CPS
+    IF SUBSTR(p_label, 1, 3) = 'TG1' THEN RETURN 'CPS'; END IF;
+    IF SUBSTR(p_label, 1, 3) = 'TG2' THEN RETURN 'CPS'; END IF;
+    IF SUBSTR(p_label, 1, 3) = 'TG3' THEN RETURN 'CPS'; END IF;
     RETURN 'OTHER';
-END DEMO_CLASSIFY_LABEL;
+END CPS_CLASSIFY_LABEL;
 /
 
 -- 4. Re-classify this group's existing labels with the current rules.
 UPDATE LABEL
-SET APPLICATION = DEMO_CLASSIFY_LABEL(LABEL_KEY)
-WHERE GROUP_ID = 'DEMO';
+SET APPLICATION = CPS_CLASSIFY_LABEL(LABEL_KEY)
+WHERE GROUP_ID = 'CPS';
 COMMIT;
 
--- 5. Register demo → DEMO_METRICS so ?groupId=demo routes here.
+-- 5. Register cps → CPS_METRICS so ?groupId=cps routes here.
 MERGE INTO GROUP_REGISTRY t
-    USING (SELECT 'demo' AS GROUP_ID FROM dual) s
+    USING (SELECT 'cps' AS GROUP_ID FROM dual) s
     ON (t.GROUP_ID = s.GROUP_ID)
     WHEN MATCHED THEN UPDATE SET
-        GROUP_NAME         = 'Demo',
-        TABLE_PREFIX       = 'DEMO',
-        METRICS_TABLE      = 'DEMO_METRICS',
-        METRICS_HIST_TABLE = 'DEMO_METRICS_H',
-        CLASSIFY_FN        = 'DEMO_CLASSIFY_LABEL',
+        GROUP_NAME         = 'Servicing MQ',
+        TABLE_PREFIX       = 'CPS',
+        METRICS_TABLE      = 'CPS_METRICS',
+        METRICS_HIST_TABLE = 'CPS_METRICS_H',
+        CLASSIFY_FN        = 'CPS_CLASSIFY_LABEL',
         ENABLED            = 1
     WHEN NOT MATCHED THEN INSERT
         (GROUP_ID, GROUP_NAME, TABLE_PREFIX, METRICS_TABLE, METRICS_HIST_TABLE, CLASSIFY_FN, ENABLED)
-        VALUES ('demo', 'Demo', 'DEMO',
-                'DEMO_METRICS', 'DEMO_METRICS_H', 'DEMO_CLASSIFY_LABEL', 1);
+        VALUES ('cps', 'Servicing MQ', 'CPS',
+                'CPS_METRICS', 'CPS_METRICS_H', 'CPS_CLASSIFY_LABEL', 1);
 COMMIT;
 
 -- ═══════════════════════════════════════════════════════════════════════
--- 6. DEMO_ARCHIVE_TO_H — collapse worker rows of every aged daily partition
+-- 6. CPS_ARCHIVE_TO_H — collapse worker rows of every aged daily partition
 --    into private staging, validate conservation, publish the day
 --    atomically (EXCHANGE PARTITION), then drop the source partition.
 --    Every step is recorded in METRICS_H_AUDIT so a blocked or failed pass
 --    resumes where it stopped.
 -- ═══════════════════════════════════════════════════════════════════════
-CREATE OR REPLACE PROCEDURE DEMO_ARCHIVE_TO_H
+CREATE OR REPLACE PROCEDURE CPS_ARCHIVE_TO_H
 (
     p_hot_days         NUMBER DEFAULT 7,
     p_pause_secs       NUMBER DEFAULT 2,
@@ -268,7 +273,7 @@ CREATE OR REPLACE PROCEDURE DEMO_ARCHIVE_TO_H
                                     THEN SYSTIMESTAMP ELSE COMPLETED_AT END,
                ERROR_CODE    = p_error_code,
                ERROR_MESSAGE = SUBSTR(p_error_message, 1, 2000)
-        WHERE  SOURCE_TABLE = 'DEMO_METRICS'
+        WHERE  SOURCE_TABLE = 'CPS_METRICS'
         AND    PARTITION_HIGH_VALUE = v_hi;
         COMMIT;
     END set_status;
@@ -363,7 +368,7 @@ CREATE OR REPLACE PROCEDURE DEMO_ARCHIVE_TO_H
                 || 'NVL(SUM(HTTP_4XX),0), NVL(SUM(HTTP_5XX),0), '
                 || 'NVL(SUM(HTTP_OTHER),0), NVL(SUM(ACTIVE_THREADS),0), '
                 || 'MIN(MIN_MS), MAX(MAX_MS) '
-                || 'FROM DEMO_METRICS PARTITION ("' || p_partition || '") f '
+                || 'FROM CPS_METRICS PARTITION ("' || p_partition || '") f '
                 || 'WHERE f.WINDOW_SECOND >= :range_low '
                 || 'AND f.WINDOW_SECOND < :range_high'
             INTO p_totals.stored_rows,
@@ -440,7 +445,7 @@ CREATE OR REPLACE PROCEDURE DEMO_ARCHIVE_TO_H
                p_totals.active_threads,
                p_totals.min_ms,
                p_totals.max_ms
-        FROM DEMO_METRICS_H_STAGE;
+        FROM CPS_METRICS_H_STAGE;
     END read_stage_totals;
 
     PROCEDURE read_target_totals
@@ -458,7 +463,7 @@ CREATE OR REPLACE PROCEDURE DEMO_ARCHIVE_TO_H
                 || 'NVL(SUM(HTTP_4XX),0), NVL(SUM(HTTP_5XX),0), '
                 || 'NVL(SUM(HTTP_OTHER),0), NVL(SUM(ACTIVE_THREADS),0), '
                 || 'MIN(MIN_MS), MAX(MAX_MS) '
-                || 'FROM DEMO_METRICS_H PARTITION ("' || p_partition || '")'
+                || 'FROM CPS_METRICS_H PARTITION ("' || p_partition || '")'
             INTO p_totals.stored_rows,
                  p_totals.worker_rows,
                  p_totals.min_window,
@@ -541,8 +546,8 @@ BEGIN
         (
             SELECT partition_name, high_value
             FROM   user_tab_partitions
-            WHERE  table_name = 'DEMO_METRICS'
-            AND    partition_name <> 'DEMO_METRICS_P_INIT'
+            WHERE  table_name = 'CPS_METRICS'
+            AND    partition_name <> 'CPS_METRICS_P_INIT'
             ORDER  BY partition_position
         ) LOOP
         v_hi := TO_NUMBER(p.high_value);
@@ -560,7 +565,7 @@ BEGIN
             TRUNC(v_hi),
             'FM99999999999999999990',
             'NLS_NUMERIC_CHARACTERS=''.,''');
-        v_target_partition := 'DEMO_MH_P_' || TO_CHAR(
+        v_target_partition := 'CPS_MH_P_' || TO_CHAR(
             DATE '1970-01-01' + (v_hi / 86400),
             'YYYYMMDD',
             'NLS_DATE_LANGUAGE=English');
@@ -570,9 +575,9 @@ BEGIN
         MERGE INTO METRICS_H_AUDIT a
             USING
                 (
-                    SELECT 'DEMO' AS table_prefix,
-                           'DEMO_METRICS' AS source_table,
-                           'DEMO_METRICS_H' AS history_table,
+                    SELECT 'CPS' AS table_prefix,
+                           'CPS_METRICS' AS source_table,
+                           'CPS_METRICS_H' AS history_table,
                            v_current_source AS source_partition,
                            v_hi AS partition_high_value,
                            v_target_partition AS target_partition
@@ -599,12 +604,12 @@ BEGIN
         SELECT COUNT(*)
         INTO   v_partition_exists
         FROM   user_tab_partitions
-        WHERE  table_name = 'DEMO_METRICS_H'
+        WHERE  table_name = 'CPS_METRICS_H'
         AND    partition_name = v_target_partition;
 
         IF v_partition_exists = 1 THEN
             EXECUTE IMMEDIATE
-                'SELECT COUNT(*) FROM DEMO_METRICS_H PARTITION ("'
+                'SELECT COUNT(*) FROM CPS_METRICS_H PARTITION ("'
                 || v_target_partition || '") WHERE ROWNUM = 1'
             INTO v_target_has_rows;
 
@@ -623,7 +628,7 @@ BEGIN
 
                 BEGIN
                     EXECUTE IMMEDIATE
-                        'ALTER TABLE DEMO_METRICS DROP PARTITION "'
+                        'ALTER TABLE CPS_METRICS DROP PARTITION "'
                         || v_current_source || '"';
                 EXCEPTION
                     WHEN e_resource_busy THEN
@@ -651,7 +656,7 @@ BEGIN
         set_status('STAGING');
 
         BEGIN
-            EXECUTE IMMEDIATE 'TRUNCATE TABLE DEMO_METRICS_H_STAGE';
+            EXECUTE IMMEDIATE 'TRUNCATE TABLE CPS_METRICS_H_STAGE';
         EXCEPTION
             WHEN e_resource_busy THEN
                 set_status('BLOCKED_PUBLISH', NULL, NULL, SQLCODE, SQLERRM);
@@ -660,7 +665,7 @@ BEGIN
 
         SELECT COUNT(*)
         INTO   v_stage_has_rows
-        FROM   DEMO_METRICS_H_STAGE
+        FROM   CPS_METRICS_H_STAGE
         WHERE  ROWNUM = 1;
 
         IF v_stage_has_rows <> 0 THEN
@@ -672,7 +677,7 @@ BEGIN
             v_chunk_high := LEAST(v_chunk_low + v_chunk_seconds, v_hi);
 
             EXECUTE IMMEDIATE
-                'INSERT /*+ APPEND NO_PARALLEL */ INTO DEMO_METRICS_H_STAGE ('
+                'INSERT /*+ APPEND NO_PARALLEL */ INTO CPS_METRICS_H_STAGE ('
                     || 'RUN_ID, LABEL_ID, WINDOW_SECOND, WORKER_COUNT, '
                     || 'THROUGHPUT, ERROR_COUNT, AVG_MS, P50_MS, P90_MS, P95_MS, P99_MS, '
                     || 'MIN_MS, MAX_MS, BYTES_RECV, BYTES_SENT, '
@@ -687,7 +692,7 @@ BEGIN
                     || 'MIN(MIN_MS), MAX(MAX_MS), SUM(BYTES_RECV), SUM(BYTES_SENT), '
                     || 'SUM(HTTP_2XX), SUM(HTTP_3XX), SUM(HTTP_4XX), SUM(HTTP_5XX), '
                     || 'SUM(HTTP_OTHER), SUM(ACTIVE_THREADS) '
-                    || 'FROM DEMO_METRICS PARTITION ("' || v_current_source || '") f '
+                    || 'FROM CPS_METRICS PARTITION ("' || v_current_source || '") f '
                     || 'WHERE f.WINDOW_SECOND >= :chunk_low '
                     || 'AND f.WINDOW_SECOND < :chunk_high '
                     || 'GROUP BY RUN_ID, LABEL_ID, WINDOW_SECOND'
@@ -719,7 +724,7 @@ BEGIN
         IF v_partition_exists = 0 THEN
             BEGIN
                 EXECUTE IMMEDIATE
-                    'ALTER TABLE DEMO_METRICS_H ADD PARTITION "'
+                    'ALTER TABLE CPS_METRICS_H ADD PARTITION "'
                     || v_target_partition || '" VALUES LESS THAN ('
                     || v_hi_text || ')';
             EXCEPTION
@@ -736,9 +741,9 @@ BEGIN
 
         BEGIN
             EXECUTE IMMEDIATE
-                'ALTER TABLE DEMO_METRICS_H EXCHANGE PARTITION "'
+                'ALTER TABLE CPS_METRICS_H EXCHANGE PARTITION "'
                 || v_target_partition
-                || '" WITH TABLE DEMO_METRICS_H_STAGE '
+                || '" WITH TABLE CPS_METRICS_H_STAGE '
                 || 'INCLUDING INDEXES WITHOUT VALIDATION';
         EXCEPTION
             WHEN e_resource_busy THEN
@@ -758,7 +763,7 @@ BEGIN
 
         BEGIN
             EXECUTE IMMEDIATE
-                'ALTER TABLE DEMO_METRICS DROP PARTITION "'
+                'ALTER TABLE CPS_METRICS DROP PARTITION "'
                 || v_current_source || '"';
         EXCEPTION
             WHEN e_resource_busy THEN
@@ -793,23 +798,23 @@ EXCEPTION
                        UPDATED_AT    = SYSTIMESTAMP,
                        ERROR_CODE    = v_error_code,
                        ERROR_MESSAGE = SUBSTR(v_error_message, 1, 2000)
-                WHERE  SOURCE_TABLE = 'DEMO_METRICS'
+                WHERE  SOURCE_TABLE = 'CPS_METRICS'
                 AND    PARTITION_HIGH_VALUE = v_hi;
                 COMMIT;
             EXCEPTION
                 WHEN OTHERS THEN
                     DBMS_OUTPUT.PUT_LINE(
-                        'DEMO_ARCHIVE_TO_H audit update failed: ' || SQLERRM);
+                        'CPS_ARCHIVE_TO_H audit update failed: ' || SQLERRM);
             END;
         END IF;
         RAISE;
-END DEMO_ARCHIVE_TO_H;
+END CPS_ARCHIVE_TO_H;
 /
 
 -- ═══════════════════════════════════════════════════════════════════════
--- 7. DEMO_PRUNE_H — drop whole daily history partitions past retention.
+-- 7. CPS_PRUNE_H — drop whole daily history partitions past retention.
 -- ═══════════════════════════════════════════════════════════════════════
-CREATE OR REPLACE PROCEDURE DEMO_PRUNE_H
+CREATE OR REPLACE PROCEDURE CPS_PRUNE_H
 (
     p_hist_days  NUMBER DEFAULT 30,
     p_pause_secs NUMBER DEFAULT 1
@@ -841,8 +846,8 @@ BEGIN
         (
             SELECT partition_name, high_value
             FROM   user_tab_partitions
-            WHERE  table_name = 'DEMO_METRICS_H'
-            AND    partition_name <> 'DEMO_METRICS_H_P_INIT'
+            WHERE  table_name = 'CPS_METRICS_H'
+            AND    partition_name <> 'CPS_METRICS_H_P_INIT'
             ORDER  BY partition_position
         ) LOOP
         v_hi := TO_NUMBER(p.high_value);
@@ -855,7 +860,7 @@ BEGIN
     FOR i IN 1 .. v_drop_count LOOP
         BEGIN
             EXECUTE IMMEDIATE
-                'ALTER TABLE DEMO_METRICS_H DROP PARTITION "'
+                'ALTER TABLE CPS_METRICS_H DROP PARTITION "'
                 || v_drop(i) || '"';
         EXCEPTION
             WHEN e_resource_busy THEN
@@ -866,28 +871,28 @@ BEGIN
             DBMS_SESSION.SLEEP(p_pause_secs);
         END IF;
     END LOOP;
-END DEMO_PRUNE_H;
+END CPS_PRUNE_H;
 /
 
 -- ═══════════════════════════════════════════════════════════════════════
--- 8. Incremental-stats prefs + DEMO_MAINTAIN (stale-only gather, local-index health)
+-- 8. Incremental-stats prefs + CPS_MAINTAIN (stale-only gather, local-index health)
 -- ═══════════════════════════════════════════════════════════════════════
 BEGIN
-    DBMS_STATS.SET_TABLE_PREFS(USER, 'DEMO_METRICS',   'INCREMENTAL',       'TRUE');
-    DBMS_STATS.SET_TABLE_PREFS(USER, 'DEMO_METRICS',   'INCREMENTAL_LEVEL', 'PARTITION');
-    DBMS_STATS.SET_TABLE_PREFS(USER, 'DEMO_METRICS',   'GRANULARITY',       'AUTO');
-    DBMS_STATS.SET_TABLE_PREFS(USER, 'DEMO_METRICS_H', 'INCREMENTAL',       'TRUE');
-    DBMS_STATS.SET_TABLE_PREFS(USER, 'DEMO_METRICS_H', 'INCREMENTAL_LEVEL', 'PARTITION');
-    DBMS_STATS.SET_TABLE_PREFS(USER, 'DEMO_METRICS_H', 'GRANULARITY',       'AUTO');
+    DBMS_STATS.SET_TABLE_PREFS(USER, 'CPS_METRICS',   'INCREMENTAL',       'TRUE');
+    DBMS_STATS.SET_TABLE_PREFS(USER, 'CPS_METRICS',   'INCREMENTAL_LEVEL', 'PARTITION');
+    DBMS_STATS.SET_TABLE_PREFS(USER, 'CPS_METRICS',   'GRANULARITY',       'AUTO');
+    DBMS_STATS.SET_TABLE_PREFS(USER, 'CPS_METRICS_H', 'INCREMENTAL',       'TRUE');
+    DBMS_STATS.SET_TABLE_PREFS(USER, 'CPS_METRICS_H', 'INCREMENTAL_LEVEL', 'PARTITION');
+    DBMS_STATS.SET_TABLE_PREFS(USER, 'CPS_METRICS_H', 'GRANULARITY',       'AUTO');
 END;
 /
 
-CREATE OR REPLACE PROCEDURE DEMO_MAINTAIN AS
+CREATE OR REPLACE PROCEDURE CPS_MAINTAIN AS
 BEGIN
     -- Stale-only gathers; DEGREE pinned to 2 (never AUTO_DEGREE) to cap parallel IO.
-    DBMS_STATS.GATHER_TABLE_STATS(USER, 'DEMO_METRICS',
+    DBMS_STATS.GATHER_TABLE_STATS(USER, 'CPS_METRICS',
         options => 'GATHER AUTO', degree => 2, cascade => TRUE);
-    DBMS_STATS.GATHER_TABLE_STATS(USER, 'DEMO_METRICS_H',
+    DBMS_STATS.GATHER_TABLE_STATS(USER, 'CPS_METRICS_H',
         options => 'GATHER AUTO', degree => 2, cascade => TRUE);
 
     -- Defensive: rebuild any local index partition that went UNUSABLE.
@@ -895,34 +900,34 @@ BEGIN
         SELECT index_name, partition_name
         FROM   user_ind_partitions
         WHERE  status = 'UNUSABLE'
-        AND    index_name IN ('DEMO_METRICS_PK','DEMO_METRICS_RUN_LBL_IDX',
-                              'DEMO_METRICS_H_PK')
+        AND    index_name IN ('CPS_METRICS_PK','CPS_METRICS_RUN_LBL_IDX',
+                              'CPS_METRICS_H_PK')
     ) LOOP
         EXECUTE IMMEDIATE 'ALTER INDEX "' || ix.index_name
             || '" REBUILD PARTITION "' || ix.partition_name || '" ONLINE';
     END LOOP;
-END DEMO_MAINTAIN;
+END CPS_MAINTAIN;
 /
 
 -- ═══════════════════════════════════════════════════════════════════════
 -- 9. Nightly job: archive → prune → stats, serialized so nothing contends.
 --    Fires at a minute chosen at deploy time within
---    04:00–06:59 UTC so groups don't all start at once.
+--    04:00–06:59 America/New_York so groups don't all start at once.
 -- ═══════════════════════════════════════════════════════════════════════
 DECLARE
     v_hour   PLS_INTEGER := TRUNC(DBMS_RANDOM.VALUE(4, 7));
     v_minute PLS_INTEGER := TRUNC(DBMS_RANDOM.VALUE(0, 60));
 BEGIN
-    BEGIN DBMS_SCHEDULER.DROP_JOB('DEMO_NIGHTLY_MAINT', force => TRUE);
+    BEGIN DBMS_SCHEDULER.DROP_JOB('CPS_NIGHTLY_MAINT', force => TRUE);
     EXCEPTION WHEN OTHERS THEN NULL; END;
 
     DBMS_SCHEDULER.CREATE_JOB(
-        job_name        => 'DEMO_NIGHTLY_MAINT',
+        job_name        => 'CPS_NIGHTLY_MAINT',
         job_type        => 'PLSQL_BLOCK',
-        job_action      => 'BEGIN DEMO_ARCHIVE_TO_H(7); DEMO_PRUNE_H(30); DEMO_MAINTAIN; END;',
-        start_date      => TIMESTAMP '2026-01-01 04:00:00 UTC',
+        job_action      => 'BEGIN CPS_ARCHIVE_TO_H(7); CPS_PRUNE_H(30); CPS_MAINTAIN; END;',
+        start_date      => TIMESTAMP '2026-01-01 04:00:00 America/New_York',
         repeat_interval => 'FREQ=DAILY;BYHOUR=' || v_hour || ';BYMINUTE=' || v_minute || ';BYSECOND=0',
-        comments        => 'Worker-aggregated history: staged archive -> 30d prune -> stats for DEMO',
+        comments        => 'Worker-aggregated history: staged archive -> 30d prune -> stats for CPS',
         enabled         => TRUE);
 END;
 /
@@ -931,11 +936,11 @@ END;
 -- 10. Grants — readers see the shared dims + this group's facts; purgers
 --     may delete this group's facts.
 -- ═══════════════════════════════════════════════════════════════════════
-GRANT SELECT ON LABEL          TO "metricsReader";
-GRANT SELECT ON RUN            TO "metricsReader";
-GRANT SELECT ON WORKER         TO "metricsReader";
-GRANT SELECT ON GROUP_REGISTRY TO "metricsReader";
-GRANT SELECT ON DEMO_METRICS   TO "metricsReader";
-GRANT SELECT ON DEMO_METRICS_H TO "metricsReader";
-GRANT SELECT, DELETE ON DEMO_METRICS   TO "metricsPurger";
-GRANT SELECT, DELETE ON DEMO_METRICS_H TO "metricsPurger";
+GRANT SELECT ON LABEL          TO METRICS_READER;
+GRANT SELECT ON RUN            TO METRICS_READER;
+GRANT SELECT ON WORKER         TO METRICS_READER;
+GRANT SELECT ON GROUP_REGISTRY TO METRICS_READER;
+GRANT SELECT ON CPS_METRICS   TO METRICS_READER;
+GRANT SELECT ON CPS_METRICS_H TO METRICS_READER;
+GRANT SELECT, DELETE ON CPS_METRICS   TO METRICS_PURGER;
+GRANT SELECT, DELETE ON CPS_METRICS_H TO METRICS_PURGER;

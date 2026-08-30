@@ -6,7 +6,7 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * One row from {@code globalOrchestrator.run} plus its fleet-member children.
+ * One row from {@code ORCH_RUN} plus its fleet-member children.
  *
  * <p>UI-D3 added {@code application} — the application this run was
  * launched against. Supplied by the launcher form (gated behind the

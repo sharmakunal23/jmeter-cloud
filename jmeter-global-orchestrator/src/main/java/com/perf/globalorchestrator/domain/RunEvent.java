@@ -5,7 +5,7 @@ import java.util.Map;
 
 /**
  * One append-only audit event for a state-changing operator
- * action against a run. Persisted to {@code globalOrchestrator.runEvent} by
+ * action against a run. Persisted to {@code ORCH_RUN_EVENT} by
  * {@link com.perf.globalorchestrator.repo.RunEventRepository}.
  *
  * @param eventId     ULID, generated once per operator action. Idempotency

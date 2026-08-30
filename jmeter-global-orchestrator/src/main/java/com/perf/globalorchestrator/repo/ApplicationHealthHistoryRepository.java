@@ -30,16 +30,16 @@ public class ApplicationHealthHistoryRepository {
 
     private static ApplicationHealthHistory mapRow(ResultSet rs, int n) throws SQLException {
         return new ApplicationHealthHistory(
-                rs.getString("historyId"),
-                rs.getString("applicationId"),
-                rs.getString("status"),
-                OracleBind.instant(rs, "changedAt"));
+                rs.getString("HISTORY_ID"),
+                rs.getString("APPLICATION_ID"),
+                rs.getString("STATUS"),
+                OracleBind.instant(rs, "CHANGED_AT"));
     }
 
     public void insert(ApplicationHealthHistory h) {
         jdbc.update(
-                "INSERT INTO \"globalOrchestrator\".\"applicationHealthHistory\" "
-                + "(\"historyId\",\"applicationId\",\"status\",\"changedAt\") VALUES (?,?,?,?)",
+                "INSERT INTO ORCH_APPLICATION_HEALTH_HISTORY "
+                + "(HISTORY_ID,APPLICATION_ID,STATUS,CHANGED_AT) VALUES (?,?,?,?)",
                 h.historyId(), h.applicationId(), h.status(),
                 OracleBind.ts(h.changedAt()));
     }
@@ -47,10 +47,10 @@ public class ApplicationHealthHistoryRepository {
     /** Transitions for one app at/after {@code since}, oldest first (for window walking). */
     public List<ApplicationHealthHistory> findSince(String applicationId, Instant since) {
         return jdbc.query(
-                "SELECT \"historyId\",\"applicationId\",\"status\",\"changedAt\" "
-                + "FROM \"globalOrchestrator\".\"applicationHealthHistory\" "
-                + "WHERE \"applicationId\"=? AND \"changedAt\" >= ? "
-                + "ORDER BY \"changedAt\" ASC",
+                "SELECT HISTORY_ID,APPLICATION_ID,STATUS,CHANGED_AT "
+                + "FROM ORCH_APPLICATION_HEALTH_HISTORY "
+                + "WHERE APPLICATION_ID=? AND CHANGED_AT >= ? "
+                + "ORDER BY CHANGED_AT ASC",
                 rowMapper, applicationId, OracleBind.ts(since));
     }
 
@@ -60,8 +60,8 @@ public class ApplicationHealthHistoryRepository {
      */
     public int deleteByApplicationId(String applicationId) {
         return jdbc.update(
-                "DELETE FROM \"globalOrchestrator\".\"applicationHealthHistory\" "
-                + "WHERE \"applicationId\"=?",
+                "DELETE FROM ORCH_APPLICATION_HEALTH_HISTORY "
+                + "WHERE APPLICATION_ID=?",
                 applicationId);
     }
 
@@ -69,10 +69,10 @@ public class ApplicationHealthHistoryRepository {
      *  as the 24h window opened (null when the app has no earlier transition). */
     public Optional<ApplicationHealthHistory> findLatestBefore(String applicationId, Instant ts) {
         return jdbc.query(
-                "SELECT \"historyId\",\"applicationId\",\"status\",\"changedAt\" "
-                + "FROM \"globalOrchestrator\".\"applicationHealthHistory\" "
-                + "WHERE \"applicationId\"=? AND \"changedAt\" < ? "
-                + "ORDER BY \"changedAt\" DESC FETCH FIRST 1 ROWS ONLY",
+                "SELECT HISTORY_ID,APPLICATION_ID,STATUS,CHANGED_AT "
+                + "FROM ORCH_APPLICATION_HEALTH_HISTORY "
+                + "WHERE APPLICATION_ID=? AND CHANGED_AT < ? "
+                + "ORDER BY CHANGED_AT DESC FETCH FIRST 1 ROWS ONLY",
                 rowMapper, applicationId, OracleBind.ts(ts)).stream().findFirst();
     }
 }

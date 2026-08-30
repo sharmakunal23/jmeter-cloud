@@ -19,11 +19,11 @@ configMapGenerator:
 secretGenerator:
   - name: global-orchestrator-credentials
     literals:
-      - metricsReaderUser=metricsReader
+      - metricsReaderUser=METRICS_READER
       - metricsReaderPassword=localdev
-      - metricsPurgerUser=metricsPurger
+      - metricsPurgerUser=METRICS_PURGER
       - metricsPurgerPassword=localdev
-      - globalrunWriterUser=globalOrchestratorWriter
+      - globalrunWriterUser=GLOBAL_ORCHESTRATOR_WRITER
       - globalrunWriterPassword=localdev
       - anthropicApiKey=
     options:

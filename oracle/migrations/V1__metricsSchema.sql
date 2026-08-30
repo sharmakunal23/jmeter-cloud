@@ -160,18 +160,6 @@ BEGIN
 END METRICS_MAINTAIN_SHARED;
 /
 
--- ═══════════════════════════════════════════════════════════════════════
--- Grants — the platform's users on the shared objects. Each group bundle
--- adds the same users on its own fact tables. The consumer is the owner.
--- ═══════════════════════════════════════════════════════════════════════
-GRANT SELECT ON LABEL           TO "metricsReader";
-GRANT SELECT ON RUN             TO "metricsReader";
-GRANT SELECT ON WORKER          TO "metricsReader";
-GRANT SELECT ON GROUP_REGISTRY  TO "metricsReader";
-GRANT SELECT ON METRICS_H_AUDIT TO "metricsReader";
--- A purge removes a run's facts first, then its run-scoped dimensions;
--- LABEL is shared across runs and is never deleted.
-GRANT SELECT         ON LABEL          TO "metricsPurger";
-GRANT SELECT         ON GROUP_REGISTRY TO "metricsPurger";
-GRANT SELECT, DELETE ON RUN            TO "metricsPurger";
-GRANT SELECT, DELETE ON WORKER         TO "metricsPurger";
+-- Grants to the platform's users (METRICS_READER, METRICS_PURGER) are in
+-- V2__controlPlaneSchema.sql, with the control plane — this file is the
+-- hosted layout only. The consumer is the owner and needs none.

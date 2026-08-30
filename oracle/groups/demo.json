@@ -8,7 +8,7 @@
   "unclassified": "OTHER",
   "hotDays": 7,
   "historyDays": 30,
-  "readers": ["metricsReader"],
-  "purgers": ["metricsPurger"],
+  "readers": ["METRICS_READER"],
+  "purgers": ["METRICS_PURGER"],
   "maintenance": { "timeZone": "UTC", "fromHour": 4, "toHour": 7 }
 }

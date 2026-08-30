@@ -5,7 +5,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import java.time.Instant;
 
 /**
- * One row from {@code globalOrchestrator.pod}. {@code podId} matches
+ * One row from {@code ORCH_POD}. {@code podId} matches
  * {@code workerId} in {@code metrics."workerMetric"} so cross-table
  * joins work; {@code baseUrl} is what the global uses to fan out
  * {@code POST /api/v1/test} during a run.

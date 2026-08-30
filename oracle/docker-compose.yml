@@ -1,13 +1,12 @@
 # oracle subsystem — Compose fragment.
 #
 # Oracle Database 23ai Free (gvenzl multi-arch image — runs natively on
-# arm64). One PDB, FREEPDB1, holding two schemas that replace the two
-# Postgres databases:
-#   - metrics             — written by jmeter-metrics-consumer, read by
-#                           jmeter-global-orchestrator
-#   - "globalOrchestrator" — owned by jmeter-global-orchestrator (run state)
-# initdb/ creates the schema owners and the four application users once;
-# the Flyway migrations under migrations/ create everything inside them.
+# arm64). One PDB, FREEPDB1, one schema, CARDZATE_DB_GRAF: the hosted
+# metrics layout (written by jmeter-metrics-consumer as the owner, read by
+# jmeter-global-orchestrator) plus the ORCH_* control-plane tables
+# (jmeter-global-orchestrator's run state). initdb/ creates the owner and
+# the three application users once; the Flyway migrations under
+# migrations/ create everything inside the schema.
 #
 # Service name `oracle` is also the K8s Service name (KUBE contract:
 # compose name == Service name).
@@ -18,10 +17,9 @@
 services:
 
   # -------------------------------------------------------------------------
-  # flyway-migrate — applies both migration sets on every stack start, then
-  # exits (idempotent via each schema's flyway_schema_history).
-  # Two invocations because Flyway keeps one history table per schema and
-  # connects AS THE SCHEMA OWNER, so the application users never hold DDL.
+  # flyway-migrate — applies migrations/ on every stack start, then exits
+  # (idempotent via the schema's flyway_schema_history). It connects AS THE
+  # SCHEMA OWNER, so the application users never hold DDL.
   # The image is built from ./Dockerfile because the stock flyway/flyway
   # image ships no Oracle driver; migrations are still bind-mounted here so
   # an edit needs no rebuild (K8s uses the copy baked into the image).
@@ -34,8 +32,7 @@ services:
       oracle:
         condition: service_healthy
     volumes:
-      - ./migrations/metrics:/flyway/sql/metrics:ro
-      - ./migrations/globalrun:/flyway/sql/globalrun:ro
+      - ./migrations:/flyway/sql:ro
     environment:
       TZ: UTC
     entrypoint:
@@ -46,14 +43,7 @@ services:
         -url=jdbc:oracle:thin:@//oracle:1521/FREEPDB1
         -user=CARDZATE_DB_GRAF
         -password=${ORACLE_METRICS_OWNER_PASSWORD:-localdev}
-        -locations=filesystem:/flyway/sql/metrics
-        -connectRetries=30
-        migrate &&
-        flyway
-        -url=jdbc:oracle:thin:@//oracle:1521/FREEPDB1
-        '-user="globalOrchestrator"'
-        -password=${ORACLE_GLOBALRUN_OWNER_PASSWORD:-localdev}
-        -locations=filesystem:/flyway/sql/globalrun
+        -locations=filesystem:/flyway/sql
         -connectRetries=30
         migrate
     restart: "no"

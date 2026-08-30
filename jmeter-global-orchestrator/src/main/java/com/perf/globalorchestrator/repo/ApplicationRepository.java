@@ -19,7 +19,7 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * D-AppRegistry — persistence for {@code globalOrchestrator.application}.
+ * D-AppRegistry — persistence for {@code ORCH_APPLICATION}.
  * Reads + writes via the runState datasource (RW). The JSON columns are
  * round-tripped through Jackson; their {@code IS JSON} checks validate them
  * server-side.
@@ -43,19 +43,19 @@ public class ApplicationRepository {
 
     private static RowMapper<Application> buildRowMapper(ObjectMapper json) {
         return (rs, n) -> new Application(
-                rs.getString("applicationId"),
-                rs.getString("name"),
-                rs.getString("sealId"),
-                rs.getString("description"),
-                jsonbList(json, OracleBind.json(rs, "healthEndpoints"), URLS_TYPE, List.of()),
-                instant(rs, "createdAt"),
-                instant(rs, "lastHealthCheckedAt"),
-                statusOrNull(rs.getString("lastHealthStatus")),
-                OracleBind.json(rs, "lastHealthDetails") == null
+                rs.getString("APPLICATION_ID"),
+                rs.getString("NAME"),
+                rs.getString("SEAL_ID"),
+                rs.getString("DESCRIPTION"),
+                jsonbList(json, OracleBind.json(rs, "HEALTH_ENDPOINTS"), URLS_TYPE, List.of()),
+                instant(rs, "CREATED_AT"),
+                instant(rs, "LAST_HEALTH_CHECKED_AT"),
+                statusOrNull(rs.getString("LAST_HEALTH_STATUS")),
+                OracleBind.json(rs, "LAST_HEALTH_DETAILS") == null
                         ? null
-                        : jsonbList(json, OracleBind.json(rs, "lastHealthDetails"), DETAILS_TYPE, List.of()),
-                rs.getString("metricsGroupId"),
-                rs.getString("metricsApplication"));
+                        : jsonbList(json, OracleBind.json(rs, "LAST_HEALTH_DETAILS"), DETAILS_TYPE, List.of()),
+                rs.getString("METRICS_GROUP_ID"),
+                rs.getString("METRICS_APPLICATION"));
     }
 
     private static Integer nullableInt(ResultSet rs, String col) throws SQLException {
@@ -69,10 +69,10 @@ public class ApplicationRepository {
         // to REUSE, so this is always non-null. Thresholds may be null
         // per the cross-field CHECK constraint.
         jdbc.update(
-                "INSERT INTO \"globalOrchestrator\".\"application\" "
-                + "(\"applicationId\",\"name\",\"sealId\",\"description\","
-                + " \"healthEndpoints\",\"createdAt\","
-                + " \"metricsGroupId\",\"metricsApplication\") "
+                "INSERT INTO ORCH_APPLICATION "
+                + "(APPLICATION_ID,NAME,SEAL_ID,DESCRIPTION,"
+                + " HEALTH_ENDPOINTS,CREATED_AT,"
+                + " METRICS_GROUP_ID,METRICS_APPLICATION) "
                 + "VALUES (?,?,?,?, ?, ?, ?, ?)",
                 app.applicationId(), app.name(), app.sealId(), app.description(),
                 OracleBind.clob(endpointsJson), OracleBind.ts(app.createdAt()),
@@ -93,8 +93,8 @@ public class ApplicationRepository {
     public Optional<Application> findById(String applicationId) {
         try {
             return Optional.of(jdbc.queryForObject(
-                    "SELECT * FROM \"globalOrchestrator\".\"application\" "
-                    + "WHERE \"applicationId\"=? AND \"hiddenAt\" IS NULL",
+                    "SELECT * FROM ORCH_APPLICATION "
+                    + "WHERE APPLICATION_ID=? AND HIDDEN_AT IS NULL",
                     rowMapper, applicationId));
         } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
@@ -112,8 +112,8 @@ public class ApplicationRepository {
     public Optional<Application> findHiddenById(String applicationId) {
         try {
             return Optional.of(jdbc.queryForObject(
-                    "SELECT * FROM \"globalOrchestrator\".\"application\" "
-                    + "WHERE \"applicationId\"=? AND \"hiddenAt\" IS NOT NULL",
+                    "SELECT * FROM ORCH_APPLICATION "
+                    + "WHERE APPLICATION_ID=? AND HIDDEN_AT IS NOT NULL",
                     rowMapper, applicationId));
         } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
@@ -123,7 +123,7 @@ public class ApplicationRepository {
     public Optional<Application> findByName(String name) {
         try {
             return Optional.of(jdbc.queryForObject(
-                    "SELECT * FROM \"globalOrchestrator\".\"application\" WHERE \"name\"=?",
+                    "SELECT * FROM ORCH_APPLICATION WHERE NAME=?",
                     rowMapper, name));
         } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
@@ -138,8 +138,8 @@ public class ApplicationRepository {
      */
     public List<Application> findAll() {
         return jdbc.query(
-                "SELECT * FROM \"globalOrchestrator\".\"application\" "
-                + "WHERE \"hiddenAt\" IS NULL ORDER BY \"name\"",
+                "SELECT * FROM ORCH_APPLICATION "
+                + "WHERE HIDDEN_AT IS NULL ORDER BY NAME",
                 rowMapper);
     }
 
@@ -152,8 +152,8 @@ public class ApplicationRepository {
      */
     public List<Application> findHidden() {
         return jdbc.query(
-                "SELECT * FROM \"globalOrchestrator\".\"application\" "
-                + "WHERE \"hiddenAt\" IS NOT NULL ORDER BY \"hiddenAt\" DESC",
+                "SELECT * FROM ORCH_APPLICATION "
+                + "WHERE HIDDEN_AT IS NOT NULL ORDER BY HIDDEN_AT DESC",
                 rowMapper);
     }
 
@@ -162,11 +162,11 @@ public class ApplicationRepository {
                               String metricsGroupId, String metricsApplication) {
         String endpointsJson = serialise(healthEndpoints == null ? List.of() : healthEndpoints);
         int updated = jdbc.update(
-                "UPDATE \"globalOrchestrator\".\"application\" "
-                + "SET \"name\"=?, \"sealId\"=?, \"description\"=?, "
-                + "    \"healthEndpoints\"=?, "
-                + "    \"metricsGroupId\"=?, \"metricsApplication\"=? "
-                + "WHERE \"applicationId\"=?",
+                "UPDATE ORCH_APPLICATION "
+                + "SET NAME=?, SEAL_ID=?, DESCRIPTION=?, "
+                + "    HEALTH_ENDPOINTS=?, "
+                + "    METRICS_GROUP_ID=?, METRICS_APPLICATION=? "
+                + "WHERE APPLICATION_ID=?",
                 name, sealId, description, OracleBind.clob(endpointsJson),
                 metricsGroupId, metricsApplication, applicationId);
         if (updated == 0) {
@@ -183,10 +183,10 @@ public class ApplicationRepository {
                              Instant checkedAt, List<Map<String, Object>> details) {
         String detailsJson = details == null ? null : serialise(details);
         jdbc.update(
-                "UPDATE \"globalOrchestrator\".\"application\" "
-                + "SET \"lastHealthStatus\"=?, \"lastHealthCheckedAt\"=?, "
-                + "    \"lastHealthDetails\"=? "
-                + "WHERE \"applicationId\"=?",
+                "UPDATE ORCH_APPLICATION "
+                + "SET LAST_HEALTH_STATUS=?, LAST_HEALTH_CHECKED_AT=?, "
+                + "    LAST_HEALTH_DETAILS=? "
+                + "WHERE APPLICATION_ID=?",
                 status.name(), OracleBind.ts(checkedAt), OracleBind.clob(detailsJson), applicationId);
     }
 
@@ -198,7 +198,7 @@ public class ApplicationRepository {
      */
     public boolean delete(String applicationId) {
         return jdbc.update(
-                "DELETE FROM \"globalOrchestrator\".\"application\" WHERE \"applicationId\"=?",
+                "DELETE FROM ORCH_APPLICATION WHERE APPLICATION_ID=?",
                 applicationId) > 0;
     }
 
@@ -213,9 +213,9 @@ public class ApplicationRepository {
      */
     public boolean softDelete(String applicationId, String archivedName) {
         return jdbc.update(
-                "UPDATE \"globalOrchestrator\".\"application\" "
-                + "SET \"name\"=?, \"hiddenAt\"=SYSTIMESTAMP "
-                + "WHERE \"applicationId\"=? AND \"hiddenAt\" IS NULL",
+                "UPDATE ORCH_APPLICATION "
+                + "SET NAME=?, HIDDEN_AT=SYSTIMESTAMP "
+                + "WHERE APPLICATION_ID=? AND HIDDEN_AT IS NULL",
                 archivedName, applicationId) > 0;
     }
 

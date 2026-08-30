@@ -2,7 +2,7 @@ package com.perf.globalorchestrator.domain;
 
 /**
  * The kinds of state-changing operator actions captured in
- * {@code globalOrchestrator.runEvent}. Stored as the constant {@code name()};
+ * {@code ORCH_RUN_EVENT}. Stored as the constant {@code name()};
  * see {@link com.perf.globalorchestrator.repo.RunEventRepository}.
  *
  * <p>Only operator-driven run mutations are events. Read operations

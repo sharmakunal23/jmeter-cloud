@@ -2,7 +2,7 @@ package com.perf.globalorchestrator.domain;
 
 /**
  * Per-region capacity rollup served by {@code GET /api/v1/regions}.
- * Counts come from {@code globalOrchestrator.pod} grouped by
+ * Counts come from {@code ORCH_POD} grouped by
  * {@code region}; {@code idlePods} excludes pods already claimed by an
  * active {@code runFleetMember} so the UI sees true availability.
  */

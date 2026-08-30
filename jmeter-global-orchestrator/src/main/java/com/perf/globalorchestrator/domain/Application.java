@@ -9,7 +9,7 @@ import java.util.Map;
 /**
  * D-AppRegistry — registered application with operator-managed metadata
  * + last health-check snapshot. Persisted in
- * {@code globalOrchestrator.application}; polled by
+ * {@code ORCH_APPLICATION}; polled by
  * {@code ApplicationHealthPoller} every minute when {@code healthEndpoints}
  * is non-empty. Capacity and the recycle policy are the group's
  * ({@link ApplicationGroup}), not the application's.

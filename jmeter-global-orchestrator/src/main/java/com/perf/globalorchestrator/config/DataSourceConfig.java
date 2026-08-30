@@ -12,16 +12,17 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import javax.sql.DataSource;
 
 /**
- * Three Hikari pools against the one Oracle PDB, one per role: the run-state
- * writer ({@code "globalOrchestratorWriter"}, primary — Boot's
- * {@code DataSourceHealthIndicator} picks it up), the metrics reader
- * ({@code "metricsReader"}, rollups only) and the metrics purger
- * ({@code "metricsPurger"}, the one DELETE-capable path, lazily initialised).
+ * Three Hikari pools against the one platform schema ({@code CARDZATE_DB_GRAF}),
+ * one per role: the run-state writer ({@code GLOBAL_ORCHESTRATOR_WRITER},
+ * primary — Boot's {@code DataSourceHealthIndicator} picks it up), the metrics
+ * reader ({@code METRICS_READER}, SELECT only) and the metrics purger
+ * ({@code METRICS_PURGER}, the one DELETE-capable path, lazily initialised).
  *
- * <p>Usernames are quoted here so the config carries the bare camelCase name:
- * an unquoted Oracle identifier folds to UPPER and the users were created
- * quoted. Query timeouts are set on the {@link JdbcTemplate}s — Oracle has no
- * session statement timeout to set as init SQL.
+ * <p>Every pool sets {@code CURRENT_SCHEMA} to the platform schema, so each
+ * statement names its table bare ({@code ORCH_RUN}, {@code CPS_METRICS}) exactly
+ * as the hosted consumer does. Query timeouts are set on the
+ * {@link JdbcTemplate}s — Oracle has no session statement timeout to set as
+ * init SQL.
  */
 @Configuration
 public class DataSourceConfig {
@@ -34,9 +35,11 @@ public class DataSourceConfig {
     public DataSource runStateDataSource(
             @Value("${globalOrchestrator.runStateUrl:jdbc:oracle:thin:@//oracle:1521/FREEPDB1}")
             String url,
-            @Value("${globalOrchestrator.runStateUser:globalOrchestratorWriter}") String user,
-            @Value("${globalOrchestrator.runStatePassword:localdev}") String password) {
+            @Value("${globalOrchestrator.runStateUser:GLOBAL_ORCHESTRATOR_WRITER}") String user,
+            @Value("${globalOrchestrator.runStatePassword:localdev}") String password,
+            @Value("${globalOrchestrator.schema:CARDZATE_DB_GRAF}") String schema) {
         HikariConfig cfg = pool(url, user, password, "globalOrchestratorRunStatePool");
+        cfg.setConnectionInitSql(currentSchema(schema));
         cfg.setMaximumPoolSize(10);
         cfg.setMinimumIdle(2);
         return new HikariDataSource(cfg);
@@ -58,11 +61,11 @@ public class DataSourceConfig {
     public DataSource metricsDataSource(
             @Value("${spring.datasource.url:jdbc:oracle:thin:@//oracle:1521/FREEPDB1}")
             String url,
-            @Value("${spring.datasource.username:metricsReader}") String user,
+            @Value("${spring.datasource.username:METRICS_READER}") String user,
             @Value("${spring.datasource.password:localdev}") String password,
-            @Value("${globalOrchestrator.metricsSchema:CARDZATE_DB_GRAF}") String metricsSchema) {
+            @Value("${globalOrchestrator.schema:CARDZATE_DB_GRAF}") String schema) {
         HikariConfig cfg = pool(url, user, password, "globalOrchestratorMetricsPool");
-        cfg.setConnectionInitSql(currentSchema(metricsSchema));
+        cfg.setConnectionInitSql(currentSchema(schema));
         cfg.setMaximumPoolSize(10);
         cfg.setMinimumIdle(2);
         // The role's grants (SELECT only) are the enforcement; this flag is a
@@ -89,17 +92,17 @@ public class DataSourceConfig {
     public DataSource metricsPurgeDataSource(
             @Value("${globalOrchestrator.metricsPurgeUrl:jdbc:oracle:thin:@//oracle:1521/FREEPDB1}")
             String url,
-            @Value("${globalOrchestrator.metricsPurgeUser:metricsPurger}") String user,
+            @Value("${globalOrchestrator.metricsPurgeUser:METRICS_PURGER}") String user,
             @Value("${globalOrchestrator.metricsPurgePassword:localdev}") String password,
-            @Value("${globalOrchestrator.metricsSchema:CARDZATE_DB_GRAF}") String metricsSchema) {
+            @Value("${globalOrchestrator.schema:CARDZATE_DB_GRAF}") String schema) {
         HikariConfig cfg = pool(url, user, password, "globalOrchestratorMetricsPurgePool");
-        cfg.setConnectionInitSql(currentSchema(metricsSchema));
+        cfg.setConnectionInitSql(currentSchema(schema));
         // Purge is infrequent + operator-driven; a tiny pool is plenty and keeps
         // the DELETE-capable connection count minimal.
         cfg.setMaximumPoolSize(2);
         cfg.setMinimumIdle(0);
         // Lazy init — do NOT probe a connection at startup. Booting must not
-        // depend on the metricsPurger credential being reachable; the first
+        // depend on the METRICS_PURGER credential being reachable; the first
         // actual purge surfaces any connectivity problem, and the test suite
         // (which never purges) stays decoupled from this pool.
         cfg.setInitializationFailTimeout(-1);
@@ -122,7 +125,7 @@ public class DataSourceConfig {
     private static HikariConfig pool(String url, String user, String password, String name) {
         HikariConfig cfg = new HikariConfig();
         cfg.setJdbcUrl(url);
-        cfg.setUsername(quoted(user));
+        cfg.setUsername(user);
         cfg.setPassword(password);
         cfg.setPoolName(name);
         // The repositories reuse a fixed set of statements; the implicit
@@ -147,19 +150,14 @@ public class DataSourceConfig {
     }
 
     /**
-     * The metrics pools resolve unqualified names in the metrics schema
-     * ({@code CARDZATE_DB_GRAF}), so their SQL is the hosted consumer's SQL. The
-     * name is an identifier, validated before it is spliced.
+     * Every pool resolves unqualified names in the platform schema
+     * ({@code CARDZATE_DB_GRAF}), so the hub's SQL is the hosted consumer's SQL.
+     * The name is an identifier, validated before it is spliced.
      */
     static String currentSchema(String schema) {
         if (!schema.matches("[A-Za-z][A-Za-z0-9_]{0,127}")) {
-            throw new IllegalArgumentException("metricsSchema is not an identifier: " + schema);
+            throw new IllegalArgumentException("schema is not an identifier: " + schema);
         }
         return "ALTER SESSION SET CURRENT_SCHEMA = " + schema;
-    }
-
-    /** {@code metricsReader} → {@code "metricsReader"}; an already-quoted name passes through. */
-    static String quoted(String user) {
-        return user.startsWith("\"") ? user : "\"" + user + "\"";
     }
 }

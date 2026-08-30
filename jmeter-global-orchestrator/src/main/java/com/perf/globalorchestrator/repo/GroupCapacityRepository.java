@@ -15,7 +15,7 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Persistence for {@code "globalOrchestrator"."groupCapacity"} — one row per
+ * Persistence for {@code ORCH_GROUP_CAPACITY} — one row per
  * (groupId, region), foreign-keyed to {@code applicationGroup} with
  * {@code ON DELETE CASCADE}. The pool is the group's: every application in
  * the group launches against these rows (GROUP-CAPACITY, 2026-08-31).
@@ -35,11 +35,11 @@ public class GroupCapacityRepository {
 
     private final JdbcTemplate jdbc;
     private final RowMapper<GroupCapacity> rowMapper = (rs, n) -> new GroupCapacity(
-            rs.getString("groupId"),
-            rs.getString("region"),
-            rs.getInt("maxAvailable"),
-            OracleBind.instant(rs, "createdAt"),
-            OracleBind.instant(rs, "updatedAt"));
+            rs.getString("GROUP_ID"),
+            rs.getString("REGION"),
+            rs.getInt("MAX_AVAILABLE"),
+            OracleBind.instant(rs, "CREATED_AT"),
+            OracleBind.instant(rs, "UPDATED_AT"));
 
     public GroupCapacityRepository(@Qualifier("runStateJdbcTemplate") JdbcTemplate jdbc) {
         this.jdbc = jdbc;
@@ -48,15 +48,15 @@ public class GroupCapacityRepository {
     @Cacheable(cacheNames = CacheConfig.CACHE_GROUP_CAPACITY, key = "#groupId")
     public List<GroupCapacity> findByGroupId(String groupId) {
         return jdbc.query(
-                "SELECT * FROM \"globalOrchestrator\".\"groupCapacity\" "
-                + "WHERE \"groupId\" = ? ORDER BY \"region\"",
+                "SELECT * FROM ORCH_GROUP_CAPACITY "
+                + "WHERE GROUP_ID = ? ORDER BY REGION",
                 rowMapper, groupId);
     }
 
     public Optional<GroupCapacity> find(String groupId, String region) {
         List<GroupCapacity> rows = jdbc.query(
-                "SELECT * FROM \"globalOrchestrator\".\"groupCapacity\" "
-                + "WHERE \"groupId\" = ? AND \"region\" = ?",
+                "SELECT * FROM ORCH_GROUP_CAPACITY "
+                + "WHERE GROUP_ID = ? AND REGION = ?",
                 rowMapper, groupId, region);
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
@@ -65,23 +65,23 @@ public class GroupCapacityRepository {
     @CacheEvict(cacheNames = CacheConfig.CACHE_GROUP_CAPACITY, allEntries = true)
     public void upsert(String groupId, String region, int maxAvailable) {
         jdbc.update(
-                "MERGE INTO \"globalOrchestrator\".\"groupCapacity\" t "
-                + "USING (SELECT ? AS \"groupId\", ? AS \"region\" FROM dual) s "
-                + "ON (t.\"groupId\" = s.\"groupId\" AND t.\"region\" = s.\"region\") "
-                + "WHEN MATCHED THEN UPDATE SET t.\"maxAvailable\" = ?, t.\"updatedAt\" = SYSTIMESTAMP "
-                + "WHEN NOT MATCHED THEN INSERT (\"groupId\",\"region\",\"maxAvailable\") "
-                + "VALUES (s.\"groupId\", s.\"region\", ?)",
+                "MERGE INTO ORCH_GROUP_CAPACITY t "
+                + "USING (SELECT ? AS GROUP_ID, ? AS REGION FROM dual) s "
+                + "ON (t.GROUP_ID = s.GROUP_ID AND t.REGION = s.REGION) "
+                + "WHEN MATCHED THEN UPDATE SET t.MAX_AVAILABLE = ?, t.UPDATED_AT = SYSTIMESTAMP "
+                + "WHEN NOT MATCHED THEN INSERT (GROUP_ID,REGION,MAX_AVAILABLE) "
+                + "VALUES (s.GROUP_ID, s.REGION, ?)",
                 groupId, region, maxAvailable, maxAvailable);
     }
 
     /** Replace the entire capacity grid for a group. */
     @CacheEvict(cacheNames = CacheConfig.CACHE_GROUP_CAPACITY, allEntries = true)
     public void replaceAll(String groupId, List<GroupCapacity> entries) {
-        jdbc.update("DELETE FROM \"globalOrchestrator\".\"groupCapacity\" WHERE \"groupId\" = ?", groupId);
+        jdbc.update("DELETE FROM ORCH_GROUP_CAPACITY WHERE GROUP_ID = ?", groupId);
         for (GroupCapacity c : entries) {
             jdbc.update(
-                    "INSERT INTO \"globalOrchestrator\".\"groupCapacity\" "
-                    + "(\"groupId\",\"region\",\"maxAvailable\") VALUES (?,?,?)",
+                    "INSERT INTO ORCH_GROUP_CAPACITY "
+                    + "(GROUP_ID,REGION,MAX_AVAILABLE) VALUES (?,?,?)",
                     groupId, c.region(), c.maxAvailable());
         }
     }
@@ -94,17 +94,17 @@ public class GroupCapacityRepository {
     public Map<String, List<GroupCapacity>> findAllGroupedByGroup() {
         Map<String, List<GroupCapacity>> out = new java.util.LinkedHashMap<>();
         jdbc.query(
-                "SELECT * FROM \"globalOrchestrator\".\"groupCapacity\" "
-                + "ORDER BY \"groupId\", \"region\"",
+                "SELECT * FROM ORCH_GROUP_CAPACITY "
+                + "ORDER BY GROUP_ID, REGION",
                 (ResultSet rs) -> {
-                    String groupId = rs.getString("groupId");
+                    String groupId = rs.getString("GROUP_ID");
                     out.computeIfAbsent(groupId, k -> new java.util.ArrayList<>())
                        .add(new GroupCapacity(
                                groupId,
-                               rs.getString("region"),
-                               rs.getInt("maxAvailable"),
-                               OracleBind.instant(rs, "createdAt"),
-                               OracleBind.instant(rs, "updatedAt")));
+                               rs.getString("REGION"),
+                               rs.getInt("MAX_AVAILABLE"),
+                               OracleBind.instant(rs, "CREATED_AT"),
+                               OracleBind.instant(rs, "UPDATED_AT")));
                 });
         return out;
     }
@@ -125,12 +125,12 @@ public class GroupCapacityRepository {
     public int countActivePodsForGroupRegion(String groupId, String region) {
         Integer n = jdbc.queryForObject(
                 "SELECT COUNT(*) "
-                + "  FROM \"globalOrchestrator\".\"runFleetMember\" m "
-                + "  JOIN \"globalOrchestrator\".\"run\" r ON m.\"runId\" = r.\"runId\" "
-                + " WHERE r.\"metricsGroupId\" = ? "
-                + "   AND m.\"region\"         = ? "
-                + "   AND r.\"state\" NOT IN ('COMPLETED','FAILED','ABORTED') "
-                + "   AND m.\"state\" IN ('PENDING','REQUESTED','ACCEPTED','RUNNING','DRAINING')",
+                + "  FROM ORCH_RUN_FLEET_MEMBER m "
+                + "  JOIN ORCH_RUN r ON m.RUN_ID = r.RUN_ID "
+                + " WHERE r.METRICS_GROUP_ID = ? "
+                + "   AND m.REGION         = ? "
+                + "   AND r.STATE NOT IN ('COMPLETED','FAILED','ABORTED') "
+                + "   AND m.STATE IN ('PENDING','REQUESTED','ACCEPTED','RUNNING','DRAINING')",
                 Integer.class, groupId, region);
         return n == null ? 0 : n;
     }
@@ -138,7 +138,7 @@ public class GroupCapacityRepository {
     /** Capacity rows a group holds (any region) — the delete guard. */
     public int countByGroupId(String groupId) {
         Integer n = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM \"globalOrchestrator\".\"groupCapacity\" WHERE \"groupId\" = ?",
+                "SELECT COUNT(*) FROM ORCH_GROUP_CAPACITY WHERE GROUP_ID = ?",
                 Integer.class, groupId);
         return n == null ? 0 : n;
     }
@@ -146,8 +146,8 @@ public class GroupCapacityRepository {
     @CacheEvict(cacheNames = CacheConfig.CACHE_GROUP_CAPACITY, allEntries = true)
     public boolean delete(String groupId, String region) {
         return jdbc.update(
-                "DELETE FROM \"globalOrchestrator\".\"groupCapacity\" "
-                + "WHERE \"groupId\" = ? AND \"region\" = ?",
+                "DELETE FROM ORCH_GROUP_CAPACITY "
+                + "WHERE GROUP_ID = ? AND REGION = ?",
                 groupId, region) > 0;
     }
 }

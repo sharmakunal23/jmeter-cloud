@@ -10,7 +10,7 @@ import java.util.List;
  *
  * <p>Reuses {@link FleetAllocationEntry} for the per-region count + optional
  * {@code perNodeProperties}. The original run's {@code testPlanBlobId} and
- * {@code dataFilesBlobId} are sourced from the {@code globalOrchestrator.run}
+ * {@code dataFilesBlobId} are sourced from the {@code ORCH_RUN}
  * row at the server, so the caller doesn't repeat them.
  *
  * <p>Properties are NOT inherited from existing fleet members — position-

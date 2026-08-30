@@ -35,11 +35,11 @@ sequenceDiagram
     rect rgba(200,220,255,0.25)
         Note over GO,PG: Atomic claim transaction
         loop once per fleetAllocation entry
-            GO->>PG: SELECT … FROM "globalOrchestrator"."pod"<br/>WHERE state='IDLE' AND region=? AND groupId=?<br/>AND NOT EXISTS (active runFleetMember)<br/>FOR UPDATE SKIP LOCKED LIMIT count
+            GO->>PG: ORCH_CLAIMS.CLAIM_IDLE_PODS(region, groupId, count)<br/>candidates: ORCH_POD WHERE STATE='IDLE'<br/>AND NOT EXISTS (active ORCH_RUN_FLEET_MEMBER)<br/>then one FOR UPDATE SKIP LOCKED lock per row
         end
-        GO->>PG: INSERT INTO "globalOrchestrator"."run" (state=PREPARING)
-        GO->>PG: INSERT "runFleetMember" rows (state=PENDING) per claimed pod
-        GO->>PG: UPDATE "run" SET state=STARTING
+        GO->>PG: INSERT INTO ORCH_RUN (STATE=PREPARING)
+        GO->>PG: INSERT ORCH_RUN_FLEET_MEMBER rows (STATE=PENDING) per claimed pod
+        GO->>PG: UPDATE ORCH_RUN SET STATE=STARTING
     end
 
     alt shortfall and spinShortfall (async launch)
@@ -351,9 +351,9 @@ below it from starting.
 oracle (healthy)
    │
    ├─► flyway-migrate (one-shot)
-   │      │  Applies metrics V1 (workerMetric partitions + helpers)
-   │      │  + globalrun V1 (run, runFleetMember)
-   │      │  + globalrun V2 (pod registry table)
+   │      │  Applies V1 (the hosted metrics layout)
+   │      │  + V2 (the ORCH_* control plane)
+   │      │  + R__group_<id> (each group's fact tables)
    │      │
    │      ├─► metrics-consumer
    │      └─► global-orchestrator

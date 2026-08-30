@@ -54,7 +54,7 @@ class MetricsTimeseriesRepositoryTest {
                 .contains("FROM CPS_METRICS WHERE RUN_ID = ? AND WINDOW_SECOND BETWEEN ? AND ?").contains("UNION ALL")
                 .doesNotContainIgnoringCase("UPPER(").doesNotContainIgnoringCase("TRUNC(");
         assertThat(RunMetricsRepository.rollupByLabelSql(CPS, true))
-                .contains("WHERE l.LABEL_KEY LIKE ? ESCAPE '\\'").contains("ORDER BY \"totalThroughput\" DESC");
+                .contains("WHERE l.LABEL_KEY LIKE ? ESCAPE '\\'").contains("ORDER BY TOTAL_THROUGHPUT DESC");
         assertThat(RunMetricsRepository.args(CPS, new RunWindow(10, 20), "TG1%")).hasSize(7).endsWith("TG1%");
         assertThat(RunMetricsRepository.rollupByLabelSql(CPS, false, true)).endsWith("FETCH FIRST ? ROWS ONLY");
         assertThat(RunMetricsRepository.rollupByLabelSql(CPS, false, false)).doesNotContain("FETCH FIRST");

@@ -36,15 +36,16 @@ private cloud it must ONLY exist as the `anthropicApiKey` key of
 
 ## 2. Rotate the four initdb `localdev` passwords (execute during cutover)
 
-`oracle/initdb/01_createSchemasAndUsers.sql` creates the owners `CARDZATE_DB_GRAF` (metrics) and `"globalOrchestrator"`,
-`metricsReader`, `metricsPurger`, `globalOrchestratorWriter` with
+`oracle/initdb/01_createSchemasAndUsers.sql` creates the owner `CARDZATE_DB_GRAF` and the
+users `METRICS_READER`, `METRICS_PURGER`, `GLOBAL_ORCHESTRATOR_WRITER` with
 password `localdev` (public in this repo). On the private cluster,
 immediately after first boot:
 
 ```sql
-ALTER USER "jmetercloud"              WITH PASSWORD '<new>';
-ALTER USER "metricsReader"            WITH PASSWORD '<new>';
-ALTER USER "globalOrchestratorWriter" WITH PASSWORD '<new>';
+ALTER USER CARDZATE_DB_GRAF            IDENTIFIED BY "<new>";
+ALTER USER METRICS_READER              IDENTIFIED BY "<new>";
+ALTER USER METRICS_PURGER              IDENTIFIED BY "<new>";
+ALTER USER GLOBAL_ORCHESTRATOR_WRITER  IDENTIFIED BY "<new>";
 ```
 
 Then update the consuming Secrets and restart in this order (each pod
@@ -52,10 +53,10 @@ only reads credentials at boot):
 
 | Role | Secret (key) | Restart |
 |------|--------------|---------|
-| `CARDZATE_DB_GRAF`, `"globalOrchestrator"` (schema owners) | `oracle-credentials` (metricsOwnerPassword/globalrunOwnerPassword) | the Flyway Job connects as each owner |
+| `CARDZATE_DB_GRAF` (the schema owner) | `oracle-credentials` (metricsOwnerPassword) | the Flyway Job connects as the owner |
 | `CARDZATE_DB_GRAF` (the consumer connects as the owner) | `metrics-consumer-credentials` | `deployment/metrics-consumer` |
-| `metricsReader` | `global-orchestrator-credentials` (metricsReader*) | `deployment/global-orchestrator` |
-| `globalOrchestratorWriter` | `global-orchestrator-credentials` (globalrunWriter*) | `deployment/global-orchestrator` |
+| `METRICS_READER`, `METRICS_PURGER` | `global-orchestrator-credentials` (metricsReader*, metricsPurger*) | `deployment/global-orchestrator` |
+| `GLOBAL_ORCHESTRATOR_WRITER` | `global-orchestrator-credentials` (globalrunWriter*) | `deployment/global-orchestrator` |
 
 ## 3. NetworkPolicies (manifest ready — enable when the CNI enforces)
 
@@ -129,7 +130,7 @@ thresholds from the services' JSON logs, plus scrape-free health:
 |--------|-------------------------------------|
 | Rate-limit rejections | global-orchestrator throttled `RATE_LIMITED` WARN |
 | Client-error rate | every service's `AccessLogFilter` line (`status` field, 4xx ratio per service) + metrics-consumer `INGEST_BAD_JSON` / `INGEST_TOO_LARGE` WARNs |
-| Concurrent runs | queryable from the `"globalOrchestrator"` schema (`SELECT COUNT(*) FROM "globalOrchestrator"."run" WHERE "state"='RUNNING'`) — schedule it |
+| Concurrent runs | queryable from the control-plane tables (`SELECT COUNT(*) FROM CARDZATE_DB_GRAF.ORCH_RUN WHERE STATE = 'RUNNING'`) — schedule it |
 | Upload byte rate | document-service INFO line with `sizeBytes` |
 | Health / restarts | kubelet is the prober — alert on `kube_pod_container_status_restarts_total`-equivalent from the cluster's own monitoring, pod NotReady >5 min, and Flyway Job failures. Do NOT re-add app metrics endpoints for this. |
 

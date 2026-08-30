@@ -11,8 +11,8 @@ import java.util.Optional;
 
 /**
  * AI-1 / AI-2 — durable cache for Claude responses, backed
- * by {@code "globalOrchestrator"."aiResponse"}. Writes go through the
- * least-privilege {@code globalOrchestratorWriter} role (the run-state
+ * by {@code ORCH_AI_RESPONSE}. Writes go through the
+ * least-privilege {@code GLOBAL_ORCHESTRATOR_WRITER} role (the run-state
  * datasource); the metrics datasource is read-only.
  *
  * <p>The 30-day TTL is enforced on read: {@link #find} only returns rows newer
@@ -34,15 +34,15 @@ public class AiResponseRepository {
      */
     public Optional<CachedAiResponse> find(String kind, String cacheKey, String promptVersion, Duration ttl) {
         List<CachedAiResponse> rows = jdbc.query(
-                "SELECT \"response\" AS responseJson, \"model\", \"tokensIn\", \"tokensOut\", \"createdAt\" "
-                        + "FROM \"globalOrchestrator\".\"aiResponse\" "
-                        + "WHERE \"kind\" = ? AND \"cacheKey\" = ? AND \"promptVersion\" = ? AND \"createdAt\" > ?",
+                "SELECT RESPONSE AS responseJson, MODEL, TOKENS_IN, TOKENS_OUT, CREATED_AT "
+                        + "FROM ORCH_AI_RESPONSE "
+                        + "WHERE KIND = ? AND CACHE_KEY = ? AND PROMPT_VERSION = ? AND CREATED_AT > ?",
                 (rs, n) -> new CachedAiResponse(
-                        rs.getString("responseJson"),
-                        rs.getString("model"),
-                        rs.getInt("tokensIn"),
-                        rs.getInt("tokensOut"),
-                        OracleBind.instant(rs, "createdAt")),
+                        rs.getString("RESPONSE_JSON"),
+                        rs.getString("MODEL"),
+                        rs.getInt("TOKENS_IN"),
+                        rs.getInt("TOKENS_OUT"),
+                        OracleBind.instant(rs, "CREATED_AT")),
                 kind, cacheKey, promptVersion, OracleBind.ts(Instant.now().minus(ttl)));
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
@@ -54,14 +54,14 @@ public class AiResponseRepository {
     public void upsert(String kind, String cacheKey, String promptVersion,
                        String responseJson, String model, int tokensIn, int tokensOut) {
         jdbc.update(
-                "MERGE INTO \"globalOrchestrator\".\"aiResponse\" t "
-                        + "USING (SELECT ? AS \"kind\", ? AS \"cacheKey\", ? AS \"promptVersion\" FROM dual) s "
-                        + "ON (t.\"kind\" = s.\"kind\" AND t.\"cacheKey\" = s.\"cacheKey\" AND t.\"promptVersion\" = s.\"promptVersion\") "
+                "MERGE INTO ORCH_AI_RESPONSE t "
+                        + "USING (SELECT ? AS KIND, ? AS CACHE_KEY, ? AS PROMPT_VERSION FROM dual) s "
+                        + "ON (t.KIND = s.KIND AND t.CACHE_KEY = s.CACHE_KEY AND t.PROMPT_VERSION = s.PROMPT_VERSION) "
                         + "WHEN MATCHED THEN UPDATE SET "
-                        + "  t.\"response\" = ?, t.\"model\" = ?, t.\"tokensIn\" = ?, t.\"tokensOut\" = ?, t.\"createdAt\" = SYSTIMESTAMP "
+                        + "  t.RESPONSE = ?, t.MODEL = ?, t.TOKENS_IN = ?, t.TOKENS_OUT = ?, t.CREATED_AT = SYSTIMESTAMP "
                         + "WHEN NOT MATCHED THEN INSERT "
-                        + "(\"kind\", \"cacheKey\", \"promptVersion\", \"response\", \"model\", \"tokensIn\", \"tokensOut\", \"createdAt\") "
-                        + "VALUES (s.\"kind\", s.\"cacheKey\", s.\"promptVersion\", ?, ?, ?, ?, SYSTIMESTAMP)",
+                        + "(KIND, CACHE_KEY, PROMPT_VERSION, RESPONSE, MODEL, TOKENS_IN, TOKENS_OUT, CREATED_AT) "
+                        + "VALUES (s.KIND, s.CACHE_KEY, s.PROMPT_VERSION, ?, ?, ?, ?, SYSTIMESTAMP)",
                 kind, cacheKey, promptVersion,
                 OracleBind.clob(responseJson), model, tokensIn, tokensOut,
                 OracleBind.clob(responseJson), model, tokensIn, tokensOut);
@@ -77,15 +77,15 @@ public class AiResponseRepository {
      */
     public int deleteForRun(String runId) {
         return jdbc.update(
-                "DELETE FROM \"globalOrchestrator\".\"aiResponse\" "
-                        + "WHERE \"cacheKey\" = ? OR \"cacheKey\" LIKE ? OR \"cacheKey\" LIKE ?",
+                "DELETE FROM ORCH_AI_RESPONSE "
+                        + "WHERE CACHE_KEY = ? OR CACHE_KEY LIKE ? OR CACHE_KEY LIKE ?",
                 runId, runId + "|%", "%|" + runId);
     }
 
     /** Housekeeping: drop entries past the TTL. Returns the row count removed. */
     public int pruneOlderThan(Duration ttl) {
         return jdbc.update(
-                "DELETE FROM \"globalOrchestrator\".\"aiResponse\" WHERE \"createdAt\" <= ?",
+                "DELETE FROM ORCH_AI_RESPONSE WHERE CREATED_AT <= ?",
                 OracleBind.ts(Instant.now().minus(ttl)));
     }
 

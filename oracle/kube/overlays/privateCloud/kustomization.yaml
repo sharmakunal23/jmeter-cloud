@@ -3,13 +3,12 @@
 # in-cluster.
 #
 # ONCE, BY A DBA: run oracle/initdb/01_createSchemasAndUsers.sql against
-# the platform's PDB with real passwords (it creates the two schema owners
-# and the four application users; nothing else needs instance privileges).
+# the platform's PDB with real passwords (it creates the schema owner and
+# the three application users; nothing else needs instance privileges).
 #
 # CREDENTIALS (required before first apply — never committed):
 #   kubectl -n jmeter-cloud create secret generic oracle-credentials \
-#     --from-literal=metricsOwnerPassword=<owner-password> \
-#     --from-literal=globalrunOwnerPassword=<owner-password>
+#     --from-literal=metricsOwnerPassword=<owner-password>
 # (Or via external-secrets/sealed-secrets.) The application users' secrets
 # are per service: metrics-consumer-credentials, global-orchestrator-credentials.
 apiVersion: kustomize.config.k8s.io/v1beta1

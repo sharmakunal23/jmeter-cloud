@@ -14,7 +14,7 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Persistence for {@code "globalOrchestrator"."applicationGroup"} — the group's
+ * Persistence for {@code ORCH_APPLICATION_GROUP} — the group's
  * identity, dashboards and the pool's recycle policy. Groups are hard-deleted;
  * the {@code application.metricsGroupId} and {@code pod.groupId} FKs (no ON
  * DELETE action) refuse the delete while an application — visible or
@@ -26,17 +26,17 @@ import java.util.Optional;
 public class ApplicationGroupRepository {
 
     private static final RowMapper<ApplicationGroup> ROW = (rs, n) -> new ApplicationGroup(
-            rs.getString("groupId"),
-            rs.getString("name"),
-            rs.getString("description"),
-            rs.getString("grafanaLiveUrl"),
-            rs.getString("grafanaHistoryUrl"),
-            rs.getInt("hotDays"),
-            RecyclePolicy.valueOf(rs.getString("recyclePolicy")),
-            nullableInt(rs, "maxRunsPerPod"),
-            nullableInt(rs, "podMaxAgeHours"),
-            rs.getInt("alwaysOn") == 1,
-            OracleBind.instant(rs, "createdAt"),
+            rs.getString("GROUP_ID"),
+            rs.getString("NAME"),
+            rs.getString("DESCRIPTION"),
+            rs.getString("GRAFANA_LIVE_URL"),
+            rs.getString("GRAFANA_HISTORY_URL"),
+            rs.getInt("HOT_DAYS"),
+            RecyclePolicy.valueOf(rs.getString("RECYCLE_POLICY")),
+            nullableInt(rs, "MAX_RUNS_PER_POD"),
+            nullableInt(rs, "POD_MAX_AGE_HOURS"),
+            rs.getInt("ALWAYS_ON") == 1,
+            OracleBind.instant(rs, "CREATED_AT"),
             null,
             null);
 
@@ -53,9 +53,9 @@ public class ApplicationGroupRepository {
 
     public ApplicationGroup insert(ApplicationGroup group) {
         jdbc.update(
-                "INSERT INTO \"globalOrchestrator\".\"applicationGroup\" "
-                + "(\"groupId\",\"name\",\"description\",\"grafanaLiveUrl\",\"grafanaHistoryUrl\",\"hotDays\","
-                + " \"recyclePolicy\",\"maxRunsPerPod\",\"podMaxAgeHours\",\"alwaysOn\",\"createdAt\") "
+                "INSERT INTO ORCH_APPLICATION_GROUP "
+                + "(GROUP_ID,NAME,DESCRIPTION,GRAFANA_LIVE_URL,GRAFANA_HISTORY_URL,HOT_DAYS,"
+                + " RECYCLE_POLICY,MAX_RUNS_PER_POD,POD_MAX_AGE_HOURS,ALWAYS_ON,CREATED_AT) "
                 + "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 group.groupId(), group.name(), group.description(), group.grafanaLiveUrl(), group.grafanaHistoryUrl(),
                 group.hotDays() == null ? ApplicationGroup.DEFAULT_HOT_DAYS : group.hotDays(),
@@ -67,7 +67,7 @@ public class ApplicationGroupRepository {
     public Optional<ApplicationGroup> findById(String groupId) {
         try {
             return Optional.of(jdbc.queryForObject(
-                    "SELECT * FROM \"globalOrchestrator\".\"applicationGroup\" WHERE \"groupId\"=?",
+                    "SELECT * FROM ORCH_APPLICATION_GROUP WHERE GROUP_ID=?",
                     ROW, groupId));
         } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
@@ -76,7 +76,7 @@ public class ApplicationGroupRepository {
 
     public List<ApplicationGroup> findAll() {
         return jdbc.query(
-                "SELECT * FROM \"globalOrchestrator\".\"applicationGroup\" ORDER BY \"name\"", ROW);
+                "SELECT * FROM ORCH_APPLICATION_GROUP ORDER BY NAME", ROW);
     }
 
     public ApplicationGroup update(String groupId, String name, String description,
@@ -84,10 +84,10 @@ public class ApplicationGroupRepository {
                                    RecyclePolicy recyclePolicy, Integer maxRunsPerPod, Integer podMaxAgeHours,
                                    boolean alwaysOn) {
         int updated = jdbc.update(
-                "UPDATE \"globalOrchestrator\".\"applicationGroup\" "
-                + "SET \"name\"=?, \"description\"=?, \"grafanaLiveUrl\"=?, \"grafanaHistoryUrl\"=?, \"hotDays\"=?, "
-                + "    \"recyclePolicy\"=?, \"maxRunsPerPod\"=?, \"podMaxAgeHours\"=?, \"alwaysOn\"=? "
-                + "WHERE \"groupId\"=?",
+                "UPDATE ORCH_APPLICATION_GROUP "
+                + "SET NAME=?, DESCRIPTION=?, GRAFANA_LIVE_URL=?, GRAFANA_HISTORY_URL=?, HOT_DAYS=?, "
+                + "    RECYCLE_POLICY=?, MAX_RUNS_PER_POD=?, POD_MAX_AGE_HOURS=?, ALWAYS_ON=? "
+                + "WHERE GROUP_ID=?",
                 name, description, grafanaLiveUrl, grafanaHistoryUrl, hotDays,
                 (recyclePolicy == null ? RecyclePolicy.REUSE : recyclePolicy).name(), maxRunsPerPod, podMaxAgeHours,
                 alwaysOn ? 1 : 0, groupId);
@@ -100,13 +100,13 @@ public class ApplicationGroupRepository {
     /** Hard delete. {@code true} when a row was removed; the FK raises when applications remain. */
     public boolean delete(String groupId) {
         return jdbc.update(
-                "DELETE FROM \"globalOrchestrator\".\"applicationGroup\" WHERE \"groupId\"=?", groupId) > 0;
+                "DELETE FROM ORCH_APPLICATION_GROUP WHERE GROUP_ID=?", groupId) > 0;
     }
 
     /** Workers in the group's pool — a group with pods (any state) cannot be deleted. */
     public int countPods(String groupId) {
         Integer n = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM \"globalOrchestrator\".\"pod\" WHERE \"groupId\"=?",
+                "SELECT COUNT(*) FROM ORCH_POD WHERE GROUP_ID=?",
                 Integer.class, groupId);
         return n == null ? 0 : n;
     }
@@ -114,7 +114,7 @@ public class ApplicationGroupRepository {
     /** Applications in the group, archived ones included — they hold the FK too. */
     public int countApplications(String groupId) {
         Integer n = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM \"globalOrchestrator\".\"application\" WHERE \"metricsGroupId\"=?",
+                "SELECT COUNT(*) FROM ORCH_APPLICATION WHERE METRICS_GROUP_ID=?",
                 Integer.class, groupId);
         return n == null ? 0 : n;
     }
@@ -123,9 +123,9 @@ public class ApplicationGroupRepository {
     public Map<String, Integer> applicationCounts() {
         Map<String, Integer> out = new HashMap<>();
         jdbc.query(
-                "SELECT \"metricsGroupId\", COUNT(*) AS n FROM \"globalOrchestrator\".\"application\" "
-                + "GROUP BY \"metricsGroupId\"",
-                rs -> { out.put(rs.getString("metricsGroupId"), rs.getInt("n")); });
+                "SELECT METRICS_GROUP_ID, COUNT(*) AS n FROM ORCH_APPLICATION "
+                + "GROUP BY METRICS_GROUP_ID",
+                rs -> { out.put(rs.getString("METRICS_GROUP_ID"), rs.getInt("N")); });
         return out;
     }
 }

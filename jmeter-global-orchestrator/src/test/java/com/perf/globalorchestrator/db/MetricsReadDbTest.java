@@ -49,7 +49,7 @@ class MetricsReadDbTest extends OracleDbTestSupport {
     @Autowired RunMetricsRepository runMetrics;
     @Autowired MetricsPurgeRepository purge;
 
-    private final JdbcTemplate metrics = metricsOwner();
+    private final JdbcTemplate metrics = owner();
 
     private static final long T0 = 1_780_000_020L - (1_780_000_020L % 15);   // a 15 s-aligned window start
 

@@ -4,7 +4,7 @@ import java.time.Instant;
 
 /**
  * A frozen aggregate snapshot of one COMPLETED run.
- * Mirrors the {@code globalOrchestrator.runTrend} row (Flyway V24). Written
+ * Mirrors the {@code ORCH_RUN_TREND} row (Flyway V24). Written
  * exactly once when global-orch observes a run reach COMPLETED; read back as
  * the cheap 7-day baseline for the daily perf-test report (Phase D).
  *

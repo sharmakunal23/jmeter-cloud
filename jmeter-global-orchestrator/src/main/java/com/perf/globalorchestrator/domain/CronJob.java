@@ -4,7 +4,7 @@ import java.time.Instant;
 
 /**
  * One persistent CRON schedule. Mirrors the
- * {@code globalOrchestrator.cronJob} row (Flyway V20) and the UI contract in
+ * {@code ORCH_CRON_JOB} row (Flyway V20) and the UI contract in
  * {@code jmeter-cloud-ui/src/api/automation.ts} ({@code CronJobSummary}) —
  * keep the field names aligned across all three so the wire shape stays the
  * one-line-swap the UI stub promised.

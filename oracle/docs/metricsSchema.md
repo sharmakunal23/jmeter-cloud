@@ -93,7 +93,7 @@ exception.
 
 ```bash
 $EDITOR oracle/groups/<groupId>.json            # id, name, applications + label prefixes, hotDays, historyDays, readers
-node oracle/groups/renderGroup.mjs --all         # → oracle/migrations/metrics/R__group_<groupId>.sql
+node oracle/groups/renderGroup.mjs --all         # → oracle/migrations/R__group_<groupId>.sql
 docker compose up flyway-migrate                 # locally; the DBA runs the same file on the hosted database
 ```
 
@@ -112,4 +112,4 @@ the applications in it; their workers send `?groupId=<groupId>`.
 | `EXPLAIN PLAN` of the reader shape | `PARTITION RANGE` (not `ALL`), `CPS_METRICS_RUN_LBL_IDX`, no full scan |
 | `CPS_ARCHIVE_TO_H(7)` on a 2024 day with 2 workers | 2 history rows with `WORKER_COUNT 2`, throughput 40, weighted `AVG_MS 175`; source partition dropped; audit `COMPLETE`; the current day untouched |
 | `CPS_PRUNE_H(30)`, `CPS_MAINTAIN` | history partition dropped; stats gathered |
-| Grants on `CPS_METRICS` | `metricsReader:SELECT`, `metricsPurger:SELECT, DELETE` — nobody else |
+| Grants on `CPS_METRICS` | `METRICS_READER:SELECT`, `METRICS_PURGER:SELECT, DELETE` — nobody else |

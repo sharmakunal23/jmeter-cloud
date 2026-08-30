@@ -1,7 +1,7 @@
 # oracle/groups — application-group descriptors
 
 One JSON descriptor per application group; `renderGroup.mjs` turns it into
-the group's SQL bundle `../migrations/metrics/R__group_<groupId>.sql` — the
+the group's SQL bundle `../migrations/R__group_<groupId>.sql` — the
 hosted environment's per-group steps with every object named from
 `UPPER(groupId)` (`cps` → `CPS_METRICS`, `CPS_METRICS_H`, `CPS_CLASSIFY_LABEL`,
 `CPS_ARCHIVE_TO_H`, `CPS_PRUNE_H`, `CPS_MAINTAIN`, job `CPS_NIGHTLY_MAINT`).
@@ -21,7 +21,7 @@ docker compose up flyway-migrate                   # apply locally (repeatables 
 | `applications[]` | `name` (the `LABEL.APPLICATION` value, e.g. `CPS-PCI`) + `labelPrefixes[]`; first matching prefix wins, in list order |
 | `unclassified` | the application a label with no matching prefix gets (default `OTHER`) |
 | `hotDays` / `historyDays` | days a day's partition stays in `<P>_METRICS` before it is collapsed into `<P>_METRICS_H` / days it stays there |
-| `readers[]` / `purgers[]` | database users granted `SELECT` / `SELECT, DELETE` on the group's tables (Grafana users go in `readers`) |
+| `readers[]` / `purgers[]` | database users (UPPER_SNAKE, unquoted) granted `SELECT` / `SELECT, DELETE` on the group's tables (Grafana users go in `readers`) |
 | `maintenance` | `timeZone`, `fromHour`, `toHour` — the nightly job picks a random minute in that window at deploy time |
 
 Onboarding a group is three commands: write the descriptor, render, apply —

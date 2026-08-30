@@ -3,6 +3,7 @@ package com.perf.globalorchestrator.repo;
 import com.perf.globalorchestrator.domain.RunSummary;
 import com.perf.globalorchestrator.domain.RunSummary.Stats;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.jdbc.core.ColumnMapRowMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -79,32 +80,43 @@ public class RunMetricsRepository {
         if (bounded) {
             a.add(Math.min(limit, MetricsTimeseriesRepository.LABELS_MAX));
         }
-        return jdbc.queryForList(rollupByLabelSql(t, likePattern != null, bounded), a.toArray());
+        return jdbc.query(rollupByLabelSql(t, likePattern != null, bounded), CAMEL_KEYS, a.toArray());
     }
+
+    /**
+     * Column labels are UPPER_SNAKE like every identifier; the rollup's keys are
+     * the API's camelCase ({@code TOTAL_THROUGHPUT} → {@code totalThroughput}).
+     */
+    static final ColumnMapRowMapper CAMEL_KEYS = new ColumnMapRowMapper() {
+        @Override
+        protected String getColumnKey(String columnName) {
+            return OracleBind.camel(columnName);
+        }
+    };
 
     static String rollupByLabelSql(MetricsTarget t, boolean withPrefix) {
         return rollupByLabelSql(t, withPrefix, false);
     }
 
     static String rollupByLabelSql(MetricsTarget t, boolean withPrefix, boolean bounded) {
-        return "SELECT l.LABEL_KEY AS \"label\", l.APPLICATION AS \"application\", "
-                + "       SUM(x.THROUGHPUT) AS \"totalThroughput\", SUM(x.ERROR_COUNT) AS \"totalErrors\", "
-                + "       CASE WHEN SUM(x.THROUGHPUT) > 0 THEN SUM(x.ERROR_COUNT) / SUM(x.THROUGHPUT) ELSE 0 END AS \"errorRate\", "
-                + "       SUM(x.HTTP_4XX + x.HTTP_5XX) AS \"httpErrors\", "
-                + "       CASE WHEN SUM(x.THROUGHPUT) > 0 THEN SUM(x.HTTP_4XX + x.HTTP_5XX) / SUM(x.THROUGHPUT) ELSE 0 END AS \"httpErrorRate\", "
+        return "SELECT l.LABEL_KEY AS LABEL, l.APPLICATION AS APPLICATION, "
+                + "       SUM(x.THROUGHPUT) AS TOTAL_THROUGHPUT, SUM(x.ERROR_COUNT) AS TOTAL_ERRORS, "
+                + "       CASE WHEN SUM(x.THROUGHPUT) > 0 THEN SUM(x.ERROR_COUNT) / SUM(x.THROUGHPUT) ELSE 0 END AS ERROR_RATE, "
+                + "       SUM(x.HTTP_4XX + x.HTTP_5XX) AS HTTP_ERRORS, "
+                + "       CASE WHEN SUM(x.THROUGHPUT) > 0 THEN SUM(x.HTTP_4XX + x.HTTP_5XX) / SUM(x.THROUGHPUT) ELSE 0 END AS HTTP_ERROR_RATE, "
                 + "       SUM(x.THROUGHPUT) / NULLIF(MAX(x.WINDOW_SECOND) - MIN(x.WINDOW_SECOND) + "
-                + MetricsTimeseriesRepository.WINDOW_SECONDS + ", 0) AS \"throughputRps\", "
-                + "       SUM(x.AVG_MS * x.THROUGHPUT) / NULLIF(SUM(x.THROUGHPUT), 0) AS \"avgMs\", "
-                + "       SUM(x.P50_MS * x.THROUGHPUT) / NULLIF(SUM(x.THROUGHPUT), 0) AS \"avgP50Ms\", "
-                + "       SUM(x.P90_MS * x.THROUGHPUT) / NULLIF(SUM(x.THROUGHPUT), 0) AS \"avgP90Ms\", "
-                + "       SUM(x.P95_MS * x.THROUGHPUT) / NULLIF(SUM(x.THROUGHPUT), 0) AS \"avgP95Ms\", "
-                + "       SUM(x.P99_MS * x.THROUGHPUT) / NULLIF(SUM(x.THROUGHPUT), 0) AS \"avgP99Ms\", "
-                + "       MAX(x.MAX_MS) AS \"maxMs\", MAX(x.ACTIVE_THREADS) AS \"maxActiveThreads\", "
-                + "       MIN(x.WINDOW_SECOND) AS \"firstSecond\", MAX(x.WINDOW_SECOND) AS \"lastSecond\", "
-                + "       COUNT(*) AS \"rowCount\" "
+                + MetricsTimeseriesRepository.WINDOW_SECONDS + ", 0) AS THROUGHPUT_RPS, "
+                + "       SUM(x.AVG_MS * x.THROUGHPUT) / NULLIF(SUM(x.THROUGHPUT), 0) AS AVG_MS, "
+                + "       SUM(x.P50_MS * x.THROUGHPUT) / NULLIF(SUM(x.THROUGHPUT), 0) AS AVG_P50_MS, "
+                + "       SUM(x.P90_MS * x.THROUGHPUT) / NULLIF(SUM(x.THROUGHPUT), 0) AS AVG_P90_MS, "
+                + "       SUM(x.P95_MS * x.THROUGHPUT) / NULLIF(SUM(x.THROUGHPUT), 0) AS AVG_P95_MS, "
+                + "       SUM(x.P99_MS * x.THROUGHPUT) / NULLIF(SUM(x.THROUGHPUT), 0) AS AVG_P99_MS, "
+                + "       MAX(x.MAX_MS) AS MAX_MS, MAX(x.ACTIVE_THREADS) AS MAX_ACTIVE_THREADS, "
+                + "       MIN(x.WINDOW_SECOND) AS FIRST_SECOND, MAX(x.WINDOW_SECOND) AS LAST_SECOND, "
+                + "       COUNT(*) AS ROW_COUNT "
                 + "FROM (" + factRows(t) + ") x JOIN LABEL l ON l.LABEL_ID = x.LABEL_ID "
                 + (withPrefix ? "WHERE l.LABEL_KEY LIKE ? ESCAPE '\\' " : "")
-                + "GROUP BY l.LABEL_KEY, l.APPLICATION ORDER BY \"totalThroughput\" DESC, l.LABEL_KEY"
+                + "GROUP BY l.LABEL_KEY, l.APPLICATION ORDER BY TOTAL_THROUGHPUT DESC, l.LABEL_KEY"
                 + (bounded ? " FETCH FIRST ? ROWS ONLY" : "");
     }
 
@@ -139,20 +151,20 @@ public class RunMetricsRepository {
     /** One {@code ROLLUP} row: the grand total ({@code GROUPING = 1}) or one application. */
     record SummaryRow(boolean total, Stats stats, long firstSecond, long lastSecond) {
         static SummaryRow of(ResultSet rs) throws SQLException {
-            boolean total = rs.getInt("is_total") == 1;
-            Stats stats = readStats(rs, total ? null : rs.getString("application"));
-            return new SummaryRow(total, stats, rs.getLong("first_sec"), rs.getLong("last_sec"));
+            boolean total = rs.getInt("IS_TOTAL") == 1;
+            Stats stats = readStats(rs, total ? null : rs.getString("APPLICATION"));
+            return new SummaryRow(total, stats, rs.getLong("FIRST_SEC"), rs.getLong("LAST_SEC"));
         }
     }
 
     /** Reads the {@link #STATS} columns; {@code NUMBER} nulls (an empty group) read as zero. */
     static Stats readStats(ResultSet rs, String application) throws SQLException {
-        long samples = rs.getLong("samples");
-        long errors = rs.getLong("errors");
-        return new Stats(application, samples, errors, rs.getDouble("tps"),
+        long samples = rs.getLong("SAMPLES");
+        long errors = rs.getLong("ERRORS");
+        return new Stats(application, samples, errors, rs.getDouble("TPS"),
                 samples > 0 ? 100.0 * errors / samples : 0.0,
-                rs.getDouble("avg_ms"), rs.getDouble("p90_ms"), rs.getDouble("p95_ms"), rs.getDouble("p99_ms"),
-                rs.getDouble("max_ms"), rs.getLong("max_threads"));
+                rs.getDouble("AVG_MS"), rs.getDouble("P90_MS"), rs.getDouble("P95_MS"), rs.getDouble("P99_MS"),
+                rs.getDouble("MAX_MS"), rs.getLong("MAX_THREADS"));
     }
 
     /** Always one row; {@code rowCount} 0 when the run has no rows in its range yet. */
@@ -165,11 +177,11 @@ public class RunMetricsRepository {
                 + "       COALESCE(SUM(x.P99_MS * x.THROUGHPUT) / NULLIF(SUM(x.THROUGHPUT), 0), 0) AS p99 "
                 + "FROM (" + factRows(t) + ") x",
                 (rs, n) -> {
-                    long rowCount = rs.getLong("n");
-                    long samples = rs.getLong("samples");
-                    long errors = rs.getLong("errors");
-                    long span = Math.max(1, rs.getLong("last_sec") - rs.getLong("first_sec") + MetricsTimeseriesRepository.WINDOW_SECONDS);
-                    return new RunAggregate(rowCount, rs.getDouble("p50"), rs.getDouble("p95"), rs.getDouble("p99"),
+                    long rowCount = rs.getLong("N");
+                    long samples = rs.getLong("SAMPLES");
+                    long errors = rs.getLong("ERRORS");
+                    long span = Math.max(1, rs.getLong("LAST_SEC") - rs.getLong("FIRST_SEC") + MetricsTimeseriesRepository.WINDOW_SECONDS);
+                    return new RunAggregate(rowCount, rs.getDouble("P50"), rs.getDouble("P95"), rs.getDouble("P99"),
                             samples > 0 ? (double) errors / samples : 0.0, (double) samples / span);
                 },
                 args(t, w));

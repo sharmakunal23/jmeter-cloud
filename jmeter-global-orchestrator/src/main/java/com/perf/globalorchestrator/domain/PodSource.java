@@ -2,7 +2,7 @@ package com.perf.globalorchestrator.domain;
 
 /**
  * Who owns a worker's lifecycle. Persisted as
- * {@code globalOrchestrator.pod."source"} (V29).
+ * {@code ORCH_POD.SOURCE} (V29).
  */
 public enum PodSource {
 

@@ -16,9 +16,9 @@ import java.time.Duration;
 
 /**
  * One Oracle Free container per test JVM, initialised exactly like the local
- * stack: {@code oracle/initdb} creates the owners and users on first boot, and
- * Flyway applies {@code oracle/migrations/metrics} — the shared V1 and every
- * rendered {@code R__group_*.sql} — as the {@code CARDZATE_DB_GRAF} owner.
+ * stack: {@code oracle/initdb} creates the owner and users on first boot, and
+ * Flyway applies {@code oracle/migrations} — the shared V1, the control plane's
+ * V2 and every rendered {@code R__group_*.sql} — as the {@code CARDZATE_DB_GRAF} owner.
  * Subclasses are {@code @Tag("db")} and run only under {@code -PdbTests}.
  */
 @Tag("db")
@@ -37,7 +37,7 @@ public abstract class OracleDbTestSupport {
 
     static {
         ORACLE.start();
-        migrate(OWNER, "oracle/migrations/metrics");
+        migrate(OWNER, "oracle/migrations");
     }
 
     static String jdbcUrl() {

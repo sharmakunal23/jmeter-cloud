@@ -2,9 +2,9 @@
 
 The control plane on **port 8082**: owns the application registry (applications
 and the application groups that route their metrics and own their worker pools —
-`/api/v1/applicationGroups`), per-(group, region) capacity, run state and the pod registry in the Oracle
-`"globalOrchestrator"` schema, claims IDLE pods one row at a time with
-`FOR UPDATE SKIP LOCKED` (the `claims` package), and fans a run out to many
+`/api/v1/applicationGroups`), per-(group, region) capacity, run state and the pod registry in the
+`ORCH_*` tables of the one Oracle schema `CARDZATE_DB_GRAF`, claims IDLE pods one row at a time with
+`FOR UPDATE SKIP LOCKED` (the `ORCH_CLAIMS` package), and fans a run out to many
 workers. It holds no cluster credential: under `PROVISIONING_MODE=DYNAMIC`
 it creates and reaches workers through each region's
 `jmeter-regional-orchestrator` (`REGIONS`), and directly by `baseUrl` in a

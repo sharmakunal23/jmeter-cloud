@@ -92,6 +92,18 @@ final class OracleBind {
      * — a 5,000-character exception message must not fail the state change it
      * explains. Null passes through.
      */
+    /** {@code TOTAL_THROUGHPUT} → {@code totalThroughput}: a column label as an API key. */
+    static String camel(String upperSnake) {
+        StringBuilder out = new StringBuilder(upperSnake.length());
+        boolean up = false;
+        for (char c : upperSnake.toCharArray()) {
+            if (c == '_') { up = true; continue; }
+            out.append(up ? Character.toUpperCase(c) : Character.toLowerCase(c));
+            up = false;
+        }
+        return out.toString();
+    }
+
     static String text(String value, int maxChars) {
         if (value == null || value.length() <= maxChars) return value;
         return value.substring(0, maxChars - 1) + "…";

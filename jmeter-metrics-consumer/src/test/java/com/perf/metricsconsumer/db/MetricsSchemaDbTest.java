@@ -173,12 +173,12 @@ class MetricsSchemaDbTest extends OracleDbTestSupport {
         assertThat(db.queryForObject("SELECT COUNT(*) FROM DEMO_METRICS WHERE RUN_ID = ?", Integer.class, runId)).isZero();
         assertThat(db.queryForObject("SELECT COUNT(*) FROM GROUP_REGISTRY", Integer.class)).isEqualTo(2);
         // Re-applying the rendered bundle changes nothing (Flyway does this on every checksum change).
-        migrate("CARDZATE_DB_GRAF", "oracle/migrations/metrics");
+        migrate("CARDZATE_DB_GRAF", "oracle/migrations");
         assertThat(db.queryForObject("SELECT COUNT(*) FROM user_objects WHERE status <> 'VALID'", Integer.class)).isZero();
         assertThat(db.queryForObject("SELECT COUNT(*) FROM CPS_METRICS WHERE RUN_ID = ?", Integer.class, runId)).isEqualTo(3);
         // Readers see the tables, purgers may delete facts, nobody else exists.
         assertThat(db.queryForList("SELECT grantee || ':' || privilege FROM user_tab_privs WHERE table_name = 'CPS_METRICS' ORDER BY 1", String.class))
-                .containsExactly("metricsPurger:DELETE", "metricsPurger:SELECT", "metricsReader:SELECT");
+                .containsExactly("METRICS_PURGER:DELETE", "METRICS_PURGER:SELECT", "METRICS_READER:SELECT");
     }
 
     @Test

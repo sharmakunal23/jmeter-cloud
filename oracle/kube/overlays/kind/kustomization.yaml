@@ -15,7 +15,6 @@ secretGenerator:
     literals:
       - adminPassword=localdev
       - metricsOwnerPassword=localdev
-      - globalrunOwnerPassword=localdev
     options:
       # Fixed name — a hash suffix would change the flyway Job spec on
       # every credential edit and trip Job immutability on re-apply.

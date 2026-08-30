@@ -6,7 +6,7 @@ import org.springframework.stereotype.Repository;
 
 /**
  * The one path that deletes from the metrics schema, on the dedicated
- * {@code metricsPurger} pool: a run's rows in its group's hot and archived-day
+ * {@code METRICS_PURGER} pool: a run's rows in its group's hot and archived-day
  * tables — each {@code DELETE} bounded by {@code RUN_ID} and the run's
  * {@code WINDOW_SECOND} range so it prunes to the run's own daily partitions —
  * then its run-scoped dimensions ({@code WORKER}, {@code RUN}). {@code LABEL}

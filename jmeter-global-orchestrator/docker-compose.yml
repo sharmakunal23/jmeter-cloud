@@ -28,17 +28,16 @@ services:
     environment:
       HTTP_PORT:                "8082"
       HTTP_BIND_ADDRESS:        0.0.0.0
-      # ORACLE-MIGRATION (2026-08-28): one PDB, three role identities —
-      # metrics reader (rollups), metrics purger (DELETE only), run-state
-      # writer. Wired by config/DataSourceConfig.java, which quotes the
-      # bare camelCase usernames for Oracle.
+      # One PDB, one schema (CARDZATE_DB_GRAF), three role identities —
+      # metrics reader (SELECT), metrics purger (DELETE only), run-state
+      # writer (the ORCH_* tables). Wired by config/DataSourceConfig.java.
       ORACLE_METRICS_URL:              jdbc:oracle:thin:@//oracle:1521/FREEPDB1
-      ORACLE_METRICS_READER_USER:      ${ORACLE_METRICS_READER_USER:-metricsReader}
+      ORACLE_METRICS_READER_USER:      ${ORACLE_METRICS_READER_USER:-METRICS_READER}
       ORACLE_METRICS_READER_PASSWORD:  ${ORACLE_METRICS_READER_PASSWORD:-localdev}
-      ORACLE_METRICS_PURGER_USER:      ${ORACLE_METRICS_PURGER_USER:-metricsPurger}
+      ORACLE_METRICS_PURGER_USER:      ${ORACLE_METRICS_PURGER_USER:-METRICS_PURGER}
       ORACLE_METRICS_PURGER_PASSWORD:  ${ORACLE_METRICS_PURGER_PASSWORD:-localdev}
       ORACLE_GLOBALRUN_URL:            jdbc:oracle:thin:@//oracle:1521/FREEPDB1
-      ORACLE_GLOBALRUN_WRITER_USER:    ${ORACLE_GLOBALRUN_WRITER_USER:-globalOrchestratorWriter}
+      ORACLE_GLOBALRUN_WRITER_USER:    ${ORACLE_GLOBALRUN_WRITER_USER:-GLOBAL_ORCHESTRATOR_WRITER}
       ORACLE_GLOBALRUN_WRITER_PASSWORD: ${ORACLE_GLOBALRUN_WRITER_PASSWORD:-localdev}
       TZ:                          UTC
       # Phase 6: LOCAL_ORCHESTRATOR_URLS removed. Worker discovery is

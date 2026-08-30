@@ -12,7 +12,7 @@ import java.util.Optional;
  * The {@link PodProvisioner} for deployments where the operator deploys and
  * owns the workers ({@code PROVISIONING_MODE=STATIC}).
  *
- * <p>Reads answer from {@code globalOrchestrator.pod}, because there is no
+ * <p>Reads answer from {@code ORCH_POD}, because there is no
  * daemon or cluster API to ask — the registry is the only thing this control
  * plane knows. Liveness there comes from heartbeats and from
  * {@link com.perf.globalorchestrator.sweep.StaticPodProbe}, and

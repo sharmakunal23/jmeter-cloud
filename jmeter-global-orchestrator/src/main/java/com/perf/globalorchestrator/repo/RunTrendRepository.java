@@ -12,7 +12,7 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * JDBC access for {@code globalOrchestrator.runTrend}. Uses the run-state (writer) JdbcTemplate: global-orch both
+ * JDBC access for {@code ORCH_RUN_TREND}. Uses the run-state (writer) JdbcTemplate: global-orch both
  * writes the snapshot (on a run-terminal transition) and reads the 7-day
  * baseline (for the daily perf-test report). The metrics datasource can't be
  * used — it's read-only — and the metrics-consumer can't write it (it never
@@ -30,14 +30,14 @@ public class RunTrendRepository {
 
     private static RunTrend mapRow(ResultSet rs, int n) throws SQLException {
         return new RunTrend(
-                rs.getString("runId"),
-                rs.getString("applicationName"),
-                rs.getDouble("p50Ms"),
-                rs.getDouble("p95Ms"),
-                rs.getDouble("p99Ms"),
-                rs.getDouble("errorRate"),
-                rs.getDouble("throughputRps"),
-                OracleBind.instant(rs, "completedAt"));
+                rs.getString("RUN_ID"),
+                rs.getString("APPLICATION_NAME"),
+                rs.getDouble("P50_MS"),
+                rs.getDouble("P95_MS"),
+                rs.getDouble("P99_MS"),
+                rs.getDouble("ERROR_RATE"),
+                rs.getDouble("THROUGHPUT_RPS"),
+                OracleBind.instant(rs, "COMPLETED_AT"));
     }
 
     /**
@@ -47,12 +47,12 @@ public class RunTrendRepository {
      */
     public void insert(RunTrend t) {
         jdbc.update(
-                "MERGE INTO \"globalOrchestrator\".\"runTrend\" t "
-                + "USING (SELECT ? AS \"runId\" FROM dual) s ON (t.\"runId\" = s.\"runId\") "
+                "MERGE INTO ORCH_RUN_TREND t "
+                + "USING (SELECT ? AS RUN_ID FROM dual) s ON (t.RUN_ID = s.RUN_ID) "
                 + "WHEN NOT MATCHED THEN INSERT "
-                + "(\"runId\",\"applicationName\",\"p50Ms\",\"p95Ms\",\"p99Ms\","
-                + " \"errorRate\",\"throughputRps\",\"completedAt\") "
-                + "VALUES (s.\"runId\",?,?,?,?,?,?,?)",
+                + "(RUN_ID,APPLICATION_NAME,P50_MS,P95_MS,P99_MS,"
+                + " ERROR_RATE,THROUGHPUT_RPS,COMPLETED_AT) "
+                + "VALUES (s.RUN_ID,?,?,?,?,?,?,?)",
                 t.runId(), t.applicationName(), t.p50Ms(), t.p95Ms(), t.p99Ms(),
                 t.errorRate(), t.throughputRps(), OracleBind.ts(t.completedAt()));
     }
@@ -64,18 +64,18 @@ public class RunTrendRepository {
      */
     public int deleteByRunId(String runId) {
         return jdbc.update(
-                "DELETE FROM \"globalOrchestrator\".\"runTrend\" WHERE \"runId\"=?",
+                "DELETE FROM ORCH_RUN_TREND WHERE RUN_ID=?",
                 runId);
     }
 
     /** This application's snapshots completed at or after {@code since}, newest first. */
     public List<RunTrend> findByApplicationSince(String applicationName, Instant since) {
         return jdbc.query(
-                "SELECT \"runId\",\"applicationName\",\"p50Ms\",\"p95Ms\",\"p99Ms\","
-                + " \"errorRate\",\"throughputRps\",\"completedAt\" "
-                + "FROM \"globalOrchestrator\".\"runTrend\" "
-                + "WHERE \"applicationName\"=? AND \"completedAt\" >= ? "
-                + "ORDER BY \"completedAt\" DESC",
+                "SELECT RUN_ID,APPLICATION_NAME,P50_MS,P95_MS,P99_MS,"
+                + " ERROR_RATE,THROUGHPUT_RPS,COMPLETED_AT "
+                + "FROM ORCH_RUN_TREND "
+                + "WHERE APPLICATION_NAME=? AND COMPLETED_AT >= ? "
+                + "ORDER BY COMPLETED_AT DESC",
                 rowMapper, applicationName, OracleBind.ts(since));
     }
 }
