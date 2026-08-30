@@ -422,7 +422,8 @@ public class CronFireService {
                 null,                    // initiatedBy — derived from the actor
                 Boolean.FALSE,           // spinShortfall — schedules never auto-spin
                 t.saveResults(),
-                t.pluginIds());
+                t.pluginIds(),
+                null);                   // refreshDataFiles — never forced from a schedule
     }
 
     private static String truncate(String s) {

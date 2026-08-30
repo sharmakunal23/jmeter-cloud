@@ -73,7 +73,7 @@ class RunServicePluginTest {
         when(plugins.findById(UNKNOWN_ID)).thenReturn(Optional.empty());
         StartRunRequest request = new StartRunRequest(
                 "plan-blob", null, null, 1, List.of(), List.of(),
-                null, null, null, List.of(UNKNOWN_ID));
+                null, null, null, List.of(UNKNOWN_ID), null);
         assertThatThrownBy(() -> service.startRun(request, false, Actor.ANONYMOUS_ACTOR))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("unknown pluginId")

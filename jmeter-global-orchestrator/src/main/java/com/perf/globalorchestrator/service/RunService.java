@@ -218,7 +218,8 @@ public class RunService {
         Map<String, FanoutOutcome> outcomes = fanOut(
                 started.runId(), started.members(),
                 request.testPlanBlobId(), request.dataFilesBlobId(),
-                request.application(), request.isSaveResults(), started.plugins());
+                request.application(), request.isSaveResults(), started.plugins(),
+                request.isRefreshDataFiles());
 
         long accepted = outcomes.values().stream().filter(o -> o.state() == MemberState.ACCEPTED).count();
         if (accepted == started.members().size()) {
@@ -514,10 +515,12 @@ public class RunService {
 
             // Fan-out — same machinery as initial start, sourced from the
             // run row's persisted blob IDs.
+            // refreshDataFiles deliberately false: a joiner reusing the fleet's
+            // already-staged bundle is exactly where the cache pays.
             Map<String, FanoutOutcome> outcomes = fanOut(
                     runId, opened.members(),
                     run.testPlanBlobId(), run.dataFilesBlobId(),
-                    run.application(), run.saveResults(), run.plugins());
+                    run.application(), run.saveResults(), run.plugins(), false);
 
             long accepted = outcomes.values().stream().filter(o -> o.state() == MemberState.ACCEPTED).count();
             // Append a one-line scale-up note to stateReason so the run-detail
@@ -1580,7 +1583,7 @@ public class RunService {
     private Map<String, FanoutOutcome> fanOut(String runId, List<RunFleetMember> members,
                                               String testPlanBlobId, String dataFilesBlobId,
                                               String application, boolean saveResults,
-                                              List<PluginRef> plugins) {
+                                              List<PluginRef> plugins, boolean refreshDataFiles) {
         // Metrics routing: every worker POSTs straight to the metrics-consumer
         // (its METRICS_INGEST_URL env) and appends the run's application group
         // as ?groupId= — the consumer routes the rows to <GROUP>_METRICS. Every
@@ -1614,6 +1617,9 @@ public class RunService {
             }
             // UX-DYNAMICS T3 — the run's plugin snapshot; the worker stages
             // each blob under ${BASE_DIR}/plugins and adds it to search_paths.
+            if (refreshDataFiles && dataFilesBlobId != null) {
+                body.put("refreshDataFiles", true);
+            }
             if (plugins != null && !plugins.isEmpty()) {
                 body.put("plugins", pluginWireRefs(plugins));
             }

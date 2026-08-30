@@ -76,6 +76,8 @@ class MetadataCodec {
         manifest.files().forEach(files::add);
         node.put("sha256",     manifest.sha256());
         node.put("uploadedAt", manifest.uploadedAt().toString());
+        // Absent for direct uploads and legacy manifests (reads back null).
+        if (manifest.blobId() != null) node.put("blobId", manifest.blobId());
         return MAPPER.writerWithDefaultPrettyPrinter().writeValueAsBytes(node);
     }
 
@@ -89,7 +91,8 @@ class MetadataCodec {
                 n.path("fileCount").asInt(0),
                 files,
                 n.path("sha256").asText(""),
-                Instant.parse(n.path("uploadedAt").asText()));
+                Instant.parse(n.path("uploadedAt").asText()),
+                n.path("blobId").asText(null));
     }
 
     private static void writeAtomically(Path target, byte[] payload) throws IOException {

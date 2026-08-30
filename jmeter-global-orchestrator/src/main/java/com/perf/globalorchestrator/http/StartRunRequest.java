@@ -58,7 +58,15 @@ public record StartRunRequest(
          * (unknown id → 400) and snapshotted onto the run row, so later
          * registry deletes never affect this run or its scale-up joiners.
          */
-        List<String> pluginIds) {
+        List<String> pluginIds,
+        /**
+         * UX-DYNAMICS T4 — when true, every worker re-downloads
+         * {@code dataFilesBlobId} even if it already holds an intact staged
+         * copy of the same blob. One-shot launch flag: not persisted on the
+         * run and never set for scale-up joiners (reuse is exactly where a
+         * joiner wins). Default false.
+         */
+        Boolean refreshDataFiles) {
 
     public StartRunRequest {
         regions         = regions         == null ? List.of() : List.copyOf(regions);
@@ -74,5 +82,10 @@ public record StartRunRequest(
     /** Null-safe accessor — null in the wire body is treated as false. */
     public boolean isSaveResults() {
         return Boolean.TRUE.equals(saveResults);
+    }
+
+    /** Null-safe accessor — null in the wire body is treated as false. */
+    public boolean isRefreshDataFiles() {
+        return Boolean.TRUE.equals(refreshDataFiles);
     }
 }

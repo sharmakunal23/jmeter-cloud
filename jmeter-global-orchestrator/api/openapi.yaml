@@ -2568,6 +2568,15 @@ components:
             resolved set is snapshotted onto the run, so a later registry
             delete never affects this run or its scale-up joiners.
           items: { type: string }
+        refreshDataFiles:
+          type: boolean
+          default: false
+          description: |
+            When true, every worker re-downloads `dataFilesBlobId` even if it
+            already holds an intact staged copy of the same blob. One-shot
+            launch flag — not persisted on the run, never applied to scale-up
+            joiners (their reuse of the fleet's bundle is the point). Default
+            false: unchanged data files are reused for a faster start.
         initiatedBy:
           type: string
           description: Free-form initiator identity (UI user, CI job, etc.). Auth model TBD.

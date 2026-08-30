@@ -110,7 +110,15 @@ public record StartTestRequest(
          * passed to the JMeter child via {@code -Jsearch_paths}. The JMeter
          * install itself is never mutated. Null/empty = no library plugins.
          */
-        List<PluginSpec> plugins) {
+        List<PluginSpec> plugins,
+
+        /**
+         * UX-DYNAMICS T4 — when true, the worker bypasses its staged-copy
+         * reuse check and re-downloads {@code dataFilesBlobId} even when the
+         * manifest says the same blob is already extracted and intact.
+         * Null/absent = false (reuse allowed).
+         */
+        Boolean refreshDataFiles) {
 
     private static final Pattern KEY_PATTERN  = Pattern.compile("[A-Za-z_][A-Za-z0-9_.]{0,63}");
     private static final Pattern GROUP_ID_PATTERN = Pattern.compile("[a-z][a-z0-9_]{0,29}");

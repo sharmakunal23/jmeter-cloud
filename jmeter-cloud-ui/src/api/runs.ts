@@ -344,6 +344,12 @@ export interface ScaleDownRunResponse {
 export interface StartRunRequest {
   testPlanBlobId: string;
   dataFilesBlobId?: string;
+  /**
+   * UX-DYNAMICS T4 — when true, workers re-download the data files even if
+   * they already hold an intact staged copy of the same blob. Default
+   * false: unchanged data files are reused for a faster start.
+   */
+  refreshDataFiles?: boolean;
   /** UI-D3 — application this run is launched against. */
   application?: string;
   /** Track F multi-region shape — wins over fleetSize/regions when present. */

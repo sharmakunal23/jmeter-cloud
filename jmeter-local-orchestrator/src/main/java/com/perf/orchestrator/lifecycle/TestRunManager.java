@@ -283,20 +283,41 @@ public class TestRunManager implements TestRunGate {
             }
         }
         if (request.dataFilesBlobId() != null && !request.dataFilesBlobId().isBlank()) {
-            try {
-                java.util.Optional<java.io.InputStream> body = artifactSource.fetch(
-                        com.perf.orchestrator.storage.ArtifactSource.KIND_DATA_FILES,
-                        new com.perf.orchestrator.storage.FetchSpec(runId,
-                                java.util.Map.of("blobId", request.dataFilesBlobId())));
-                if (body.isPresent()) {
-                    try (java.io.InputStream in = body.get()) {
-                        stager.storeDataFiles(in);
+            String blobId = request.dataFilesBlobId();
+            boolean reused = false;
+            // UX-DYNAMICS T4 — reuse the staged copy when this exact blob is
+            // already extracted and intact; refreshDataFiles bypasses. A
+            // failed reuse check falls back to a fresh download — reuse may
+            // never fail a run.
+            if (!Boolean.TRUE.equals(request.refreshDataFiles())) {
+                try {
+                    java.util.Optional<DataFilesManifest> m = stager.getDataFilesManifest();
+                    if (m.isPresent() && blobId.equals(m.get().blobId())
+                            && stager.dataFilesIntact(m.get())) {
+                        LOG.info("Reusing staged dataFiles blobId={} ({} files, {} bytes) — download skipped",
+                                blobId, m.get().fileCount(), m.get().extractedBytes());
+                        reused = true;
                     }
+                } catch (RuntimeException | IOException e) {
+                    LOG.warn("dataFiles reuse check failed — falling back to download: {}", e.toString());
                 }
-            } catch (IOException io) {
-                throw new StartRejection("ARTIFACT_FETCH_FAILED", 502,
-                        "Could not fetch dataFiles blob "
-                        + request.dataFilesBlobId() + ": " + io.getMessage());
+            }
+            if (!reused) {
+                try {
+                    java.util.Optional<java.io.InputStream> body = artifactSource.fetch(
+                            com.perf.orchestrator.storage.ArtifactSource.KIND_DATA_FILES,
+                            new com.perf.orchestrator.storage.FetchSpec(runId,
+                                    java.util.Map.of("blobId", blobId)));
+                    if (body.isPresent()) {
+                        try (java.io.InputStream in = body.get()) {
+                            stager.storeDataFiles(in, blobId);
+                        }
+                    }
+                } catch (IOException io) {
+                    throw new StartRejection("ARTIFACT_FETCH_FAILED", 502,
+                            "Could not fetch dataFiles blob "
+                            + blobId + ": " + io.getMessage());
+                }
             }
         }
         // UX-DYNAMICS T3 — stage the run's library plugin jars (content-

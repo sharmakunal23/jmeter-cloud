@@ -253,3 +253,36 @@ describe("NewRunPage — template hydration (UX-DYNAMICS T2)", () => {
     expect(screen.getByText(/no longer in the library — excluded/)).toBeInTheDocument();
   });
 });
+
+describe("NewRunPage — update data files checkbox (UX-DYNAMICS T4)", () => {
+  beforeEach(() => {
+    blobsList.mockReset();
+    blobsMetadata.mockReset();
+    tplLoad.mockReset();
+  });
+
+  it("sends refreshDataFiles only when data files are selected and the box is checked", async () => {
+    mockApp();
+    blobsList.mockImplementation((opts: { type: string }) =>
+      Promise.resolve({ items: opts.type === "testPlan" ? [PLAN_META] : [DATA_META], total: 1 }));
+    tplLoad.mockResolvedValue(tplBody());
+    renderWithTemplate("checkout-svc", "tpl1");
+    await waitFor(() => expect(screen.getByLabelText(/Test plan/i)).toHaveValue("plan-1"));
+
+    const box = screen.getByLabelText(/Update data files on workers/i);
+    expect(box).toBeEnabled(); // data files selected via the template
+    fireEvent.click(box);
+    fireEvent.click(screen.getByRole("button", { name: /Start run/i }));
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        (c: unknown[]) => String(c[0]).includes("/api/v1/runs") && (c[1] as RequestInit)?.method === "POST",
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(String((call![1] as RequestInit).body));
+      expect(body.refreshDataFiles).toBe(true);
+      expect(body.dataFilesBlobId).toBe("data-1");
+    });
+  });
+});

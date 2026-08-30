@@ -53,12 +53,12 @@ class PluginSpecTest {
     @DisplayName("StartTestRequest tolerates a null plugins list and copies a supplied one")
     void startTestRequestPlugins() {
         StartTestRequest none = new StartTestRequest("r1", null, null, null, null,
-                List.of(), List.of(), Map.of(), null, null, null, null, null, null, null, null, null);
+                List.of(), List.of(), Map.of(), null, null, null, null, null, null, null, null, null, null);
         assertThat(none.plugins()).isEmpty();
 
         StartTestRequest some = new StartTestRequest("r1", null, null, null, null,
                 List.of(), List.of(), Map.of(), null, null, null, null, null, null, null, null,
-                List.of(new PluginSpec(ULID, "a.jar")));
+                List.of(new PluginSpec(ULID, "a.jar")), null);
         assertThat(some.plugins()).hasSize(1);
         assertThat(some.plugins().get(0).blobId()).isEqualTo(ULID);
     }

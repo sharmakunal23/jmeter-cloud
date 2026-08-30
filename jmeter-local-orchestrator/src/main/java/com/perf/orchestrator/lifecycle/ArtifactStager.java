@@ -212,6 +212,17 @@ public final class ArtifactStager {
      * @return the manifest that {@link #getDataFilesManifest()} will subsequently return
      */
     public DataFilesManifest storeDataFiles(InputStream body) throws IOException {
+        return storeDataFiles(body, null);
+    }
+
+    /**
+     * Same as {@link #storeDataFiles(InputStream)} but records the source
+     * document-service {@code blobId} in the manifest — the anchor of the
+     * reuse check (UX-DYNAMICS T4): a later run carrying the same
+     * {@code dataFilesBlobId} skips the download when the staged copy is
+     * intact.
+     */
+    public DataFilesManifest storeDataFiles(InputStream body, String blobId) throws IOException {
         Files.createDirectories(dataDir.getParent() == null ? Path.of(".") : dataDir.getParent());
 
         // Phase 1 — save the raw zip to a tmp sibling, hashing as we go.
@@ -259,7 +270,8 @@ public final class ArtifactStager {
                 summary.entries.size(),
                 summary.entries,
                 zipCopy.hexDigest(),
-                Instant.now(clock));
+                Instant.now(clock),
+                blobId);
 
         // Phase 3a — drop the new manifest into a staging file alongside the
         // canonical path. No swap visible yet. A failure here aborts before
@@ -324,6 +336,20 @@ public final class ArtifactStager {
     public Optional<DataFilesManifest> getDataFilesManifest() throws IOException {
         if (!Files.exists(dataManifestFile)) return Optional.empty();
         return Optional.of(metadataCodec.readDataFilesManifest(dataManifestFile));
+    }
+
+    /**
+     * True when every manifest entry still exists under the extracted
+     * directory — the reuse gate (UX-DYNAMICS T4). Deliberately NOT a
+     * file-count equality: {@code buildLaunchSpec} copies {@code plan.jmx}
+     * INTO the directory on every launch, so extra files are expected.
+     */
+    public boolean dataFilesIntact(DataFilesManifest manifest) {
+        if (!Files.isDirectory(dataDir)) return false;
+        for (String f : manifest.files()) {
+            if (!Files.exists(dataDir.resolve(f))) return false;
+        }
+        return true;
     }
 
     public Optional<Path> getDataFilesZip() {

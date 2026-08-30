@@ -104,6 +104,9 @@ export function NewRunPage() {
     | { status: "error"; message: string }
   >({ status: "loading" });
   const [saveResults, setSaveResults] = useState(false);
+  // UX-DYNAMICS T4 — force workers to re-download the data files instead of
+  // reusing their staged copy of the same blob. One-shot launch flag.
+  const [refreshDataFiles, setRefreshDataFiles] = useState(false);
   const [submit, setSubmit] = useState<SubmitState>({ status: "idle" });
   // Multi-stage progress modal shown while a run starts. Null
   // means the modal is closed.
@@ -477,7 +480,10 @@ export function NewRunPage() {
       // initiatedBy is no longer collected here — the global-orchestrator
       // derives it from the X-Actor header (the cached operator name).
     };
-    if (dataFilesBlobId) body.dataFilesBlobId = dataFilesBlobId;
+    if (dataFilesBlobId) {
+      body.dataFilesBlobId = dataFilesBlobId;
+      if (refreshDataFiles) body.refreshDataFiles = true;
+    }
     return body;
   }
 
@@ -938,6 +944,21 @@ export function NewRunPage() {
               }}
             />
           </div>
+          <label htmlFor="refreshDataFiles" className="checkboxRow" style={{ marginTop: "0.35rem" }}>
+            <input
+              id="refreshDataFiles"
+              type="checkbox"
+              checked={refreshDataFiles}
+              onChange={(e) => setRefreshDataFiles(e.target.checked)}
+              disabled={!dataFilesBlobId}
+            />
+            <span>Update data files on workers</span>
+          </label>
+          <small>
+            Off (default) — workers reuse the copy they already downloaded when
+            the file is unchanged, for a faster start. On — force a fresh
+            download on every worker.
+          </small>
           {dataFilesWarning && (
             <p className="text--error" role="alert">{dataFilesWarning}</p>
           )}

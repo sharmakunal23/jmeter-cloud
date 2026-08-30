@@ -98,7 +98,7 @@ class TestRunManagerTest {
                     null, null, List.of("-Gduration=30"), List.of(),
                     java.util.Map.of("USER_OFFSET", "0"),
                     null, null, null, null, null, null, null, null,
-                    List.of(new PluginSpec(ULID, "casutg.jar")));
+                    List.of(new PluginSpec(ULID, "casutg.jar")), null);
         }
 
         @Test
@@ -601,14 +601,15 @@ class TestRunManagerTest {
                 null,                 // application — untagged in these legacy tests
                 null,                 // gracePeriodSeconds — null = use the orchestrator default
                 null, null,           // metricsGroupId, windowSeconds — orchestrator defaults
-                List.of());           // plugins — none in these legacy tests
+                List.of(),            // plugins — none in these legacy tests
+                null);                // refreshDataFiles — default (reuse allowed)
     }
 
     private static StartTestRequest reqWithGrace(String runId, Integer gracePeriodSeconds) {
         return new StartTestRequest(runId, "us-east-1", null,
                 null, null, List.of(), List.of(), java.util.Map.of(),
                 null, null, null, null, null,
-                gracePeriodSeconds, null, null, List.of());
+                gracePeriodSeconds, null, null, List.of(), null);
     }
 
     private static OrchestratorConfig configIn(Path base) {

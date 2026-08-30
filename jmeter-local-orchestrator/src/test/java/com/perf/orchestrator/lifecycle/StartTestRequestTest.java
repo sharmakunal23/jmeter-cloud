@@ -14,7 +14,7 @@ class StartTestRequestTest {
 
     private static StartTestRequest req(String groupId, Integer windowSeconds) {
         return new StartTestRequest("01J0RUN", "na-east", null, null, null, List.of(), List.of(), Map.of(),
-                null, null, null, null, null, null, groupId, windowSeconds, List.of());
+                null, null, null, null, null, null, groupId, windowSeconds, List.of(), null);
     }
 
     @Test

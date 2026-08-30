@@ -598,6 +598,13 @@ components:
           example: ["users.csv", "products.csv"]
         sha256:      { type: string }
         uploadedAt:  { type: string, format: date-time }
+        blobId:
+          type: string
+          nullable: true
+          description: |
+            Document-service blob this bundle was fetched from — the anchor of
+            the worker's reuse check. Null for direct uploads and legacy
+            manifests (never matches, so those are always re-downloaded).
 
     # ──────────────────────────────────────────────────────────────────────
     # Test
@@ -727,6 +734,15 @@ components:
           type: string
           nullable: true
           description: Same contract as `testPlanBlobId`, for the data-files zip.
+        refreshDataFiles:
+          type: boolean
+          default: false
+          description: |
+            When true, bypasses the staged-copy reuse check and re-downloads
+            `dataFilesBlobId` even if the manifest says the same blob is
+            already extracted and intact. Default false — an unchanged bundle
+            is reused for a faster start (the reuse gate never fails a run;
+            any check failure falls back to a fresh download).
         plugins:
           type: array
           description: |
