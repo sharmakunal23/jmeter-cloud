@@ -127,3 +127,35 @@ describe("GlobalPropertiesEditor — accessibility", () => {
         expect(results).toHaveNoViolations();
     });
 });
+
+describe("GlobalPropertiesEditor — external re-sync (template hydration)", () => {
+    it("a late value change (template resolving after mount) populates the rows", () => {
+        const onChange = vi.fn();
+        const { rerender } = render(<GlobalPropertiesEditor value={{}} onChange={onChange} />);
+        expect(screen.getByText(/No global properties/i)).toBeInTheDocument();
+        rerender(<GlobalPropertiesEditor value={{ USER_OFFSET: "100" }} onChange={onChange} />);
+        expect(screen.getByDisplayValue("USER_OFFSET")).toBeInTheDocument();
+        expect(screen.getByDisplayValue("100")).toBeInTheDocument();
+    });
+
+    it("an equal value round-trip does not clobber an in-progress blank row", () => {
+        const onChange = vi.fn();
+        const { rerender } = render(<GlobalPropertiesEditor value={{ K: "v" }} onChange={onChange} />);
+        fireEvent.click(screen.getByRole("button", { name: /\+ Add property/i }));
+        // Parent re-renders with the committed-equal map (its state update from
+        // our own onChange). The blank in-progress row must survive.
+        rerender(<GlobalPropertiesEditor value={{ K: "v" }} onChange={onChange} />);
+        expect(screen.getByLabelText("global property 2 key")).toBeInTheDocument();
+    });
+
+    it("editing after hydration emits the hydrated entries too (no wipe)", async () => {
+        const onChange = vi.fn();
+        const { rerender } = render(<GlobalPropertiesEditor value={{}} onChange={onChange} />);
+        rerender(<GlobalPropertiesEditor value={{ A: "1" }} onChange={onChange} />);
+        fireEvent.click(screen.getByRole("button", { name: /\+ Add property/i }));
+        fireEvent.change(screen.getByLabelText("global property 2 key"), { target: { value: "B" } });
+        fireEvent.change(screen.getByLabelText("global property 2 value"), { target: { value: "2" } });
+        await flush();
+        expect(onChange).toHaveBeenLastCalledWith({ A: "1", B: "2" });
+    });
+});

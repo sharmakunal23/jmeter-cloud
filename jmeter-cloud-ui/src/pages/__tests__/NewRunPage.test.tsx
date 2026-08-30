@@ -21,11 +21,11 @@ vi.mock("../../components/FleetAllocationFormView", () => ({
     <div data-testid="fleetForm" data-max={JSON.stringify(props.maxByRegion ?? null)} />
   ),
 }));
-vi.mock("../../api/blobs", () => ({ blobsApi: { list: vi.fn().mockResolvedValue({ items: [], total: 0 }), upload: vi.fn() } }));
+vi.mock("../../api/blobs", () => ({ blobsApi: { list: vi.fn().mockResolvedValue({ items: [], total: 0 }), upload: vi.fn(), metadata: vi.fn() } }));
 vi.mock("../../api/regions", () => ({ regionsApi: { list: vi.fn().mockResolvedValue([]) } }));
 vi.mock("../../api/templates", async () => {
   const actual = await vi.importActual<typeof import("../../api/templates")>("../../api/templates");
-  return { ...actual, templatesApi: { ...actual.templatesApi, load: vi.fn(), list: vi.fn().mockResolvedValue([]) } };
+  return { ...actual, templatesApi: { ...actual.templatesApi, load: vi.fn(), list: vi.fn().mockResolvedValue([]), save: vi.fn() } };
 });
 vi.mock("../../api/applications", () => ({ applicationsApi: { list: vi.fn() } }));
 vi.mock("../../api/applicationGroups", () => ({ applicationGroupsApi: { get: vi.fn() } }));
@@ -77,5 +77,125 @@ describe("NewRunPage — the per-region ceiling is the group's", () => {
     await waitFor(() => expect(appsList).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByTestId("fleetForm").getAttribute("data-max")).toBe("{}"));
     expect(groupGet).not.toHaveBeenCalled();
+  });
+});
+
+// ── UX-DYNAMICS T2 — template hydration fidelity ──────────────────────
+import { fireEvent, within } from "@testing-library/react";
+import { blobsApi } from "../../api/blobs";
+import { templatesApi } from "../../api/templates";
+
+const blobsList = blobsApi.list as unknown as ReturnType<typeof vi.fn>;
+const blobsMetadata = blobsApi.metadata as unknown as ReturnType<typeof vi.fn>;
+const tplLoad = templatesApi.load as unknown as ReturnType<typeof vi.fn>;
+const tplSave = templatesApi.save as unknown as ReturnType<typeof vi.fn>;
+
+function renderWithTemplate(appName: string, templateId: string) {
+  return render(
+    <MemoryRouter initialEntries={[`/applications/${appName}/runs/new?template=${templateId}`]}>
+      <Routes>
+        <Route path="applications/:appName/runs/new" element={<NewRunPage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+function mockApp() {
+  appsList.mockResolvedValue([
+    { applicationId: "01APP", name: "checkout-svc", healthEndpoints: [], metricsGroupId: "cps", createdAt: "2026-05-15T12:00:00Z" },
+  ]);
+  groupGet.mockResolvedValue({
+    groupId: "cps", name: "Servicing MQ", createdAt: "2026-05-15T12:00:00Z",
+    capacity: [{ region: "us-east", maxAvailable: 8 }],
+  });
+}
+
+const PLAN_META = { blobId: "plan-1", name: "plan.jmx", sizeBytes: 100, sha256: "x", uploadedAt: "2026-08-30T00:00:00Z" };
+const DATA_META = { blobId: "data-1", name: "data.zip", sizeBytes: 200, sha256: "y", uploadedAt: "2026-08-30T00:00:00Z" };
+
+function tplBody(overrides: Record<string, unknown> = {}) {
+  return {
+    v: 1, application: "checkout-svc", testPlanBlobId: "plan-1", dataFilesBlobId: "data-1",
+    fleetAllocation: [{ region: "us-east", count: 2, perNodeProperties: [{ threads: "10" }, {}] }],
+    globalProperties: { USER_OFFSET: "100" }, saveResults: true, ...overrides,
+  };
+}
+
+describe("NewRunPage — template hydration (UX-DYNAMICS T2)", () => {
+  beforeEach(() => {
+    blobsList.mockReset();
+    blobsMetadata.mockReset();
+    tplLoad.mockReset();
+    tplSave.mockReset().mockResolvedValue("tpl-blob-9");
+  });
+
+  it("restores plan, data files, save-results and global properties from the template", async () => {
+    mockApp();
+    blobsList.mockImplementation((opts: { type: string }) =>
+      Promise.resolve({ items: opts.type === "testPlan" ? [PLAN_META] : [DATA_META], total: 1 }));
+    tplLoad.mockResolvedValue(tplBody());
+    renderWithTemplate("checkout-svc", "tpl1");
+    await waitFor(() => expect(screen.getByLabelText(/Test plan/i)).toHaveValue("plan-1"));
+    expect(screen.getByLabelText(/^Data files$/i)).toHaveValue("data-1");
+    expect(screen.getByLabelText(/Save results/i)).toBeChecked();
+    await waitFor(() => expect(screen.getByDisplayValue("USER_OFFSET")).toBeInTheDocument());
+    expect(blobsMetadata).not.toHaveBeenCalled();
+  });
+
+  it("a plan the list doesn't contain but metadata finds renders '(from template)' and stays launchable", async () => {
+    mockApp();
+    blobsList.mockResolvedValue({ items: [], total: 0 });
+    blobsMetadata.mockResolvedValue(PLAN_META);
+    tplLoad.mockResolvedValue(tplBody({ dataFilesBlobId: undefined }));
+    renderWithTemplate("checkout-svc", "tpl1");
+    await waitFor(() => expect(screen.getByText("plan.jmx (from template)")).toBeInTheDocument());
+    expect(screen.getByLabelText(/Test plan/i)).toHaveValue("plan-1");
+    await waitFor(() => expect(screen.getByRole("button", { name: /Start run/i })).toBeEnabled());
+  });
+
+  it("a 404 plan blocks submit with a visible alert", async () => {
+    mockApp();
+    blobsList.mockResolvedValue({ items: [], total: 0 });
+    blobsMetadata.mockRejectedValue({ httpStatus: 404 });
+    tplLoad.mockResolvedValue(tplBody({ dataFilesBlobId: undefined }));
+    renderWithTemplate("checkout-svc", "tpl1");
+    await waitFor(() => expect(screen.getByText(/test plan no longer exists/i)).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /Start run/i })).toBeDisabled();
+  });
+
+  it("a 404 data-files blob warns and clears the selection (non-blocking)", async () => {
+    mockApp();
+    blobsList.mockImplementation((opts: { type: string }) =>
+      Promise.resolve({ items: opts.type === "testPlan" ? [PLAN_META] : [], total: 1 }));
+    blobsMetadata.mockRejectedValue({ httpStatus: 404 });
+    tplLoad.mockResolvedValue(tplBody());
+    renderWithTemplate("checkout-svc", "tpl1");
+    await waitFor(() => expect(screen.getByText(/data files no longer exist/i)).toBeInTheDocument());
+    expect(screen.getByLabelText(/^Data files$/i)).toHaveValue("");
+    await waitFor(() => expect(screen.getByRole("button", { name: /Start run/i })).toBeEnabled());
+  });
+
+  it("hydration failure shows the persistent banner", async () => {
+    mockApp();
+    blobsList.mockResolvedValue({ items: [], total: 0 });
+    tplLoad.mockRejectedValue(new Error("410 gone"));
+    renderWithTemplate("checkout-svc", "tpl1");
+    await waitFor(() => expect(screen.getByText(/Couldn't load the template/i)).toBeInTheDocument());
+  });
+
+  it("Save template captures the launch-identical (trimmed) allocation", async () => {
+    mockApp();
+    blobsList.mockImplementation((opts: { type: string }) =>
+      Promise.resolve({ items: opts.type === "testPlan" ? [PLAN_META] : [DATA_META], total: 1 }));
+    tplLoad.mockResolvedValue(tplBody());
+    renderWithTemplate("checkout-svc", "tpl1");
+    await waitFor(() => expect(screen.getByLabelText(/Test plan/i)).toHaveValue("plan-1"));
+    fireEvent.click(screen.getByRole("button", { name: /Save template/i }));
+    const dlg = within(screen.getByRole("dialog"));
+    fireEvent.change(dlg.getByLabelText(/Template name/i), { target: { value: "t2" } });
+    fireEvent.click(dlg.getByRole("button", { name: /Save template/i }));
+    await waitFor(() => expect(tplSave).toHaveBeenCalled());
+    const body = tplSave.mock.calls[0][0] as { fleetAllocation: Array<{ perNodeProperties?: unknown }> };
+    expect(body.fleetAllocation[0].perNodeProperties).toEqual([{ threads: "10" }]);
   });
 });

@@ -3090,6 +3090,22 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
   color: var(--ink-soft);
 }
 
+/* Per-worker override badge on fleet pod tiles + the launcher's summary
+   line (UX-DYNAMICS T2 — per-worker properties must be visible). */
+.fleetFlow__podTileOverride {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--primary);
+  pointer-events: none;
+}
+.runForm__overrideSummary {
+  margin: -0.4rem 0 0;
+  font-size: 0.82rem;
+}
+
 /* ── ScheduleBuilder (Automation create dialogs) ─────────────────── */
 .scheduleBuilder {
   display: flex;

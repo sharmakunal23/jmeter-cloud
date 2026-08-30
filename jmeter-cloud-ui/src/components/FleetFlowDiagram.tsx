@@ -75,6 +75,13 @@ export interface FleetFlowDiagramProps {
      */
     workerStatuses?: Record<string, WorkerStatus[]>;
     /**
+     * UX-DYNAMICS T2 — per-region "snapshot ≠ current globals" flags;
+     * index `i` marks worker `i`. A flagged tile renders a corner badge
+     * so per-worker property overrides are visible without opening the
+     * drawer. Missing → no badges.
+     */
+    overrideFlags?: Record<string, boolean[]>;
+    /**
      * When set, the diagram
      * renders a per-worker click target but does NOT expose any inline
      * +/- controls — those moved to the sibling allocation form so
@@ -108,6 +115,7 @@ function FleetFlowDiagramInner({
     applicationName,
     value,
     workerStatuses,
+    overrideFlags,
     onWorkerClick,
     maxByRegion,
     shortfall,
@@ -132,10 +140,11 @@ function FleetFlowDiagramInner({
         () => buildGraph({
             regions, countsByRegion, shortfallByRegion,
             workerStatuses: workerStatuses ?? {},
+            overrideFlags: overrideFlags ?? {},
             appLabel, onWorkerClick, maxByRegion,
         }),
         [regions, countsByRegion, shortfallByRegion, workerStatuses,
-            appLabel, onWorkerClick, maxByRegion],
+            overrideFlags, appLabel, onWorkerClick, maxByRegion],
     );
 
     // Auto-refit whenever the node count or region count changes.
@@ -231,6 +240,7 @@ interface BuildGraphArgs {
     countsByRegion: Map<string, number>;
     shortfallByRegion: Map<string, RegionShortfall>;
     workerStatuses: Record<string, WorkerStatus[]>;
+    overrideFlags: Record<string, boolean[]>;
     appLabel: string;
     onWorkerClick?: (region: string, nodeIndex: number) => void;
     maxByRegion?: Record<string, number>;
@@ -242,7 +252,7 @@ interface BuildGraphArgs {
  * than {@link REGIONS_PER_ROW} regions, wraps to additional rows.
  */
 function buildGraph({
-    regions, countsByRegion, shortfallByRegion, workerStatuses,
+    regions, countsByRegion, shortfallByRegion, workerStatuses, overrideFlags,
     appLabel, onWorkerClick, maxByRegion,
 }: BuildGraphArgs): { nodes: Node[]; edges: Edge[] } {
     const sortedRegions = [...regions].sort((a, b) => a.region.localeCompare(b.region));
@@ -365,6 +375,7 @@ function buildGraph({
                             appLabel,
                             workerLabel: `worker-${i + 1}`,
                             status: statuses[i] ?? "READY",
+                            override: (overrideFlags[r.region] ?? [])[i] === true,
                             onWorkerClick,
                         },
                         draggable: false,
@@ -484,6 +495,7 @@ interface PodNodeData {
     appLabel: string;
     workerLabel: string;
     status: WorkerStatus;
+    override: boolean;
     onWorkerClick?: (region: string, nodeIndex: number) => void;
 }
 
@@ -497,7 +509,7 @@ function PodNode({ data }: NodeProps) {
             data-node-index={d.nodeIndex}
             data-pod-name={d.fullName}
             data-status={d.status}
-            aria-label={`${d.fullName}, status ${d.status} — click to set per-worker properties`}
+            aria-label={`${d.fullName}, status ${d.status}${d.override ? ", has per-worker properties" : ""} — click to set per-worker properties`}
             title={`${d.fullName} · ${d.status}`}
             onClick={() => d.onWorkerClick?.(d.region, d.nodeIndex)}
             style={{ width: POD_NODE_WIDTH, height: POD_NODE_HEIGHT }}
@@ -509,6 +521,9 @@ function PodNode({ data }: NodeProps) {
                 style={{ opacity: 0, pointerEvents: "none" }}
                 isConnectable={false}
             />
+            {d.override && (
+                <span className="fleetFlow__podTileOverride" title="has per-worker properties" aria-hidden="true">≡</span>
+            )}
             <WorkerStatusIcon status={d.status} />
             <span className="fleetFlow__podTileApp">{d.appLabel}</span>
             <span className="fleetFlow__podTileWorker">{d.workerLabel}</span>

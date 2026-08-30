@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 /**
  * Fleet-wide JMeter property defaults.
@@ -8,6 +8,11 @@ import { useMemo, useState } from "react";
  * snapshot — the operator can rely on each worker's properties being
  * immutable from the moment of creation. The per-worker drawer
  * provides further per-instance overrides on top of the snapshot.
+ *
+ * <p>Rows re-sync from {@code value} only when it diverges from what the
+ * rows already commit — so a late external hydration (a template resolving
+ * after mount) populates the table, while the editor's own onChange
+ * round-trips are no-ops and never clobber an in-progress row.
  *
  * <p>Validation mirrors the drawer (and the local-orchestrator's
  * server-side rules): keys match {@code [A-Za-z_][A-Za-z0-9_.]{0,63}};
@@ -24,6 +29,10 @@ export interface GlobalPropertiesEditorProps {
    *  globals (older workers + drawer-edited workers). Surfaces as a
    *  reminder that changing globals here only affects future workers. */
   divergedCount?: number;
+  /** Section title — defaults to the launcher's "Global properties". */
+  title?: string;
+  /** Section hint under the title — defaults to the snapshot explainer. */
+  hint?: string;
 }
 
 interface Row {
@@ -31,45 +40,67 @@ interface Row {
   value: string;
 }
 
+function rowError(r: Row, seen: Set<string>): string | null {
+  if (!r.key.trim() && !r.value) return null; // blank row in progress
+  if (!r.key.trim()) return "key is required";
+  if (!KEY_PATTERN.test(r.key)) return "key must match [A-Za-z_][A-Za-z0-9_.]{0,63}";
+  if (seen.has(r.key)) return `duplicate key: ${r.key}`;
+  seen.add(r.key);
+  if (r.value.length > MAX_VALUE_LENGTH) return `value > ${MAX_VALUE_LENGTH} chars`;
+  for (let i = 0; i < r.value.length; i++) {
+    const code = r.value.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return "value contains control character";
+  }
+  return null;
+}
+
+/** The map the rows commit upward: valid, complete, first-of-duplicate rows only. */
+function committedMap(rows: Row[]): Record<string, string> {
+  const props: Record<string, string> = {};
+  const seen = new Set<string>();
+  for (const r of rows) {
+    if (!r.key.trim()) continue;
+    if (rowError(r, new Set(Object.keys(props))) != null) continue;
+    if (seen.has(r.key)) continue;
+    seen.add(r.key);
+    props[r.key] = r.value;
+  }
+  return props;
+}
+
+/** Canonical, key-order-independent serialisation of a property map. */
+function canonical(props: Record<string, string>): string {
+  return JSON.stringify(Object.keys(props).sort().map((k) => [k, props[k]]));
+}
+
 export function GlobalPropertiesEditor({
   value, onChange, divergedCount = 0,
+  title = "Global properties",
+  hint = "Snapshotted into each new worker — existing workers keep their original values.",
 }: GlobalPropertiesEditorProps) {
   // Local row state — keeps an entry for an in-flight blank row that
   // the operator hasn't filled in yet. We sync upward only when the
   // row is valid + complete.
-  const initialRows: Row[] = useMemo(
+  const [rows, setRows] = useState<Row[]>(
     () => Object.entries(value).map(([k, v]) => ({ key: k, value: v })),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
   );
-  const [rows, setRows] = useState<Row[]>(initialRows);
+
+  // Re-sync from a genuinely external value change (template hydration
+  // landing after mount). Self-originated updates round-trip a value equal
+  // to committedMap(rows), so they never reset in-progress rows.
+  useEffect(() => {
+    setRows((prev) => (
+      canonical(value) === canonical(committedMap(prev))
+        ? prev
+        : Object.entries(value).map(([k, v]) => ({ key: k, value: v }))
+    ));
+  }, [value]);
 
   const seen = new Set<string>();
-  const rowErrors = rows.map((r) => {
-    if (!r.key.trim() && !r.value) return null; // blank row in progress
-    if (!r.key.trim()) return "key is required";
-    if (!KEY_PATTERN.test(r.key)) return "key must match [A-Za-z_][A-Za-z0-9_.]{0,63}";
-    if (seen.has(r.key)) return `duplicate key: ${r.key}`;
-    seen.add(r.key);
-    if (r.value.length > MAX_VALUE_LENGTH) return `value > ${MAX_VALUE_LENGTH} chars`;
-    for (let i = 0; i < r.value.length; i++) {
-      const code = r.value.charCodeAt(i);
-      if (code < 0x20 || code === 0x7f) return "value contains control character";
-    }
-    return null;
-  });
+  const rowErrors = rows.map((r) => rowError(r, seen));
 
   function syncUp(nextRows: Row[]) {
-    const props: Record<string, string> = {};
-    const seenKeys = new Set<string>();
-    for (let i = 0; i < nextRows.length; i++) {
-      const r = nextRows[i];
-      if (!r.key.trim() || rowErrors[i] != null) continue;
-      if (seenKeys.has(r.key)) continue;
-      seenKeys.add(r.key);
-      props[r.key] = r.value;
-    }
-    onChange(props);
+    onChange(committedMap(nextRows));
   }
 
   function setKey(idx: number, key: string) {
@@ -98,7 +129,7 @@ export function GlobalPropertiesEditor({
   }
 
   return (
-    <section className="globalProps" aria-label="Global properties">
+    <section className="globalProps" aria-label={title}>
       {/* UX22 — "+ Add property" moved from below the table to the right
           side of the header so the section's primary action lives at
           the top-right where operators expect it. Title-left, action-
@@ -106,10 +137,8 @@ export function GlobalPropertiesEditor({
           rest of the app. */}
       <header className="globalProps__head">
         <div className="globalProps__headText">
-          <h3 className="globalProps__title">Global properties</h3>
-          <small className="ink-soft">
-            Snapshotted into each new worker — existing workers keep their original values.
-          </small>
+          <h3 className="globalProps__title">{title}</h3>
+          <small className="ink-soft">{hint}</small>
         </div>
         <button
           type="button"

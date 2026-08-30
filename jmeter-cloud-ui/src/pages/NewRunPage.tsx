@@ -170,6 +170,16 @@ export function NewRunPage() {
     return () => ctl.abort();
   }, [application]);
 
+  // UX-DYNAMICS T2 — template-hydration surfacing: a persistent banner on
+  // load failure, plus metadata probes for hydrated blob ids that are not in
+  // the type+application-filtered 200-item list (deleted, mis-tagged, or past
+  // the page). Probe found → synthetic "(from template)" option; 404 → hard
+  // error for the plan (submit blocked), soft warn + clear for data files.
+  const [hydrationError, setHydrationError] = useState<string | null>(null);
+  const [planProbe, setPlanProbe] = useState<{ blobId: string; meta: BlobMetadata | null } | null>(null);
+  const [dataProbe, setDataProbe] = useState<{ blobId: string; meta: BlobMetadata | null } | null>(null);
+  const [dataFilesWarning, setDataFilesWarning] = useState<string | null>(null);
+
   // D5 — hydrate the form from a saved template when ?template=<blobId>
   // is in the URL. Runs once per page-load; the template's `application`
   // is expected to match the URL's :appName but isn't enforced (the
@@ -200,12 +210,50 @@ export function NewRunPage() {
       .catch((err: unknown) => {
         if (ctl.signal.aborted) return;
         // Soft-fail: leave the form in its blank default; the operator
-        // can still launch a run from scratch. Log so it's visible.
-        // eslint-disable-next-line no-console
-        console.warn("template hydration failed:", err);
+        // can still launch a run from scratch — but say so, persistently.
+        setHydrationError(err instanceof Error ? err.message : String(err));
       });
     return () => ctl.abort();
   }, [templateBlobId]);
+
+  // UX-DYNAMICS T2 — probe hydrated blob ids the loaded list doesn't
+  // contain. Ref-guarded so StrictMode's double-mount probes once per id;
+  // an aborted probe releases its key so a later pass can retry.
+  const probedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (blobs.status !== "ok") return;
+    const ctl = new AbortController();
+    const probe = (
+      kind: "plan" | "data",
+      blobId: string,
+      onDone: (r: { blobId: string; meta: BlobMetadata | null }) => void,
+      onGone: () => void,
+    ) => {
+      const key = `${kind}:${blobId}`;
+      if (probedRef.current.has(key)) return;
+      probedRef.current.add(key);
+      blobsApi.metadata(blobId, ctl.signal)
+        .then((meta) => onDone({ blobId, meta }))
+        .catch((err: unknown) => {
+          if (ctl.signal.aborted) { probedRef.current.delete(key); return; }
+          if (is404(err)) { onDone({ blobId, meta: null }); onGone(); return; }
+          // Transient failure — release the key; stay silent (the list
+          // itself already surfaced its own error state if any).
+          probedRef.current.delete(key);
+        });
+    };
+    if (testPlanBlobId && !blobs.testPlans.some((b) => b.blobId === testPlanBlobId)) {
+      probe("plan", testPlanBlobId, setPlanProbe, () => {});
+    }
+    if (dataFilesBlobId && !blobs.dataFiles.some((b) => b.blobId === dataFilesBlobId)) {
+      const staleId = dataFilesBlobId;
+      probe("data", staleId, setDataProbe, () => {
+        setDataFilesWarning("This template's data files no longer exist — selection cleared; pick or upload a new bundle if needed.");
+        setDataFilesBlobId((cur) => (cur === staleId ? "" : cur));
+      });
+    }
+    return () => ctl.abort();
+  }, [blobs, testPlanBlobId, dataFilesBlobId]);
 
   // Initial regions load + 5 s refresh while the page is open.
   async function refreshRegions() {
@@ -376,23 +424,20 @@ export function NewRunPage() {
   const totalPods = allocation.reduce((acc, e) => acc + e.count, 0);
   const appError = !application ? "pick an application first" : null;
   const planError = !testPlanBlobId ? "test plan is required" : null;
+  // A hydrated plan id confirmed 404 — the template references a deleted
+  // blob. Launching would fan out a plan no worker can fetch, so block.
+  const planMissing = !!testPlanBlobId
+    && planProbe?.blobId === testPlanBlobId && planProbe.meta === null;
   const allocError = totalPods < 1 ? "allocate at least 1 worker" : null;
   const dupError = hasDuplicates(allocation) ? "duplicate region in allocation" : null;
-  const canSubmit = !appError && !planError && !allocError && !dupError && submit.status !== "submitting";
+  const canSubmit = !appError && !planError && !planMissing && !allocError && !dupError && submit.status !== "submitting";
   const appGateOpen = !!application;
 
   function buildRequest(): StartRunRequest {
     const labels = labelFilter.split(",").map((s) => s.trim()).filter(Boolean);
     // No merge: each worker's perNodeProperties[i] is already a complete
     // snapshot (taken when the worker was added, plus any drawer edits).
-    // Trim trailing empty maps so the wire stays compact.
-    const cleanAllocation: FleetAllocationEntry[] = allocation.map((e) => {
-      const props = (e.perNodeProperties ?? []).slice();
-      while (props.length > 0 && Object.keys(props[props.length - 1] ?? {}).length === 0) {
-        props.pop();
-      }
-      return { ...e, perNodeProperties: props.length > 0 ? props : undefined };
-    });
+    const cleanAllocation: FleetAllocationEntry[] = buildCleanAllocation(allocation);
     const body: StartRunRequest = {
       testPlanBlobId,
       // Persist the selected application on the run record so
@@ -422,6 +467,23 @@ export function NewRunPage() {
       }
     }
     return n;
+  }, [allocation, globalProperties]);
+
+  /**
+   * UX-DYNAMICS T2 — per-worker "has overrides" flags for the fleet
+   * diagram's tile badges. Same predicate as {@link divergedCount}:
+   * a snapshot that differs from the current globals.
+   */
+  const overrideFlags = useMemo(() => {
+    const globalsKey = JSON.stringify(globalProperties);
+    const flags: Record<string, boolean[]> = {};
+    for (const e of allocation) {
+      flags[e.region] = Array.from({ length: e.count }, (_, i) => {
+        const snap = e.perNodeProperties?.[i];
+        return snap != null && JSON.stringify(snap) !== globalsKey;
+      });
+    }
+    return flags;
   }, [allocation, globalProperties]);
 
   /** UX25 — initial five-stage state for the progress modal. */
@@ -767,6 +829,12 @@ export function NewRunPage() {
             inspects the form. */}
         <input type="hidden" name="application" value={application} readOnly />
 
+        {hydrationError && (
+          <div className="formError" role="alert">
+            Couldn't load the template — starting from a blank form. ({hydrationError})
+          </div>
+        )}
+
         <div className="formField">
           <label htmlFor="testPlanBlobId">Test plan *</label>
           <div className="blobPickerRow">
@@ -780,6 +848,11 @@ export function NewRunPage() {
               error={blobs.status === "error" ? blobs.message : null}
               disabled={!appGateOpen}
               required
+              extraOption={
+                planProbe?.blobId === testPlanBlobId && planProbe.meta
+                  ? { blobId: planProbe.blobId, label: `${planProbe.meta.name ?? planProbe.blobId} (from template)` }
+                  : undefined
+              }
             />
             {/* UX13 — inline upload, no Documents-page round-trip. */}
             <InlineBlobUpload
@@ -795,6 +868,11 @@ export function NewRunPage() {
           </div>
           {!appGateOpen && (
             <small className="ink-soft">Pick an application above to unlock this dropdown.</small>
+          )}
+          {planMissing && (
+            <p className="text--error" role="alert">
+              This template's test plan no longer exists — pick another plan or re-upload it.
+            </p>
           )}
           {planError && submit.status === "error" && (
             <p className="text--error" role="alert">{planError}</p>
@@ -814,6 +892,11 @@ export function NewRunPage() {
               loading={blobs.status === "loading"}
               error={blobs.status === "error" ? blobs.message : null}
               disabled={!appGateOpen}
+              extraOption={
+                dataProbe?.blobId === dataFilesBlobId && dataProbe.meta
+                  ? { blobId: dataProbe.blobId, label: `${dataProbe.meta.name ?? dataProbe.blobId} (from template)` }
+                  : undefined
+              }
             />
             <InlineBlobUpload
               accept=".zip,.csv,application/zip,text/csv"
@@ -822,10 +905,14 @@ export function NewRunPage() {
               disabled={!appGateOpen}
               onUploaded={async (b) => {
                 setDataFilesBlobId(b.blobId);
+                setDataFilesWarning(null);
                 await refreshBlobs();
               }}
             />
           </div>
+          {dataFilesWarning && (
+            <p className="text--error" role="alert">{dataFilesWarning}</p>
+          )}
         </div>
 
         <div className="formField formField--checkbox">
@@ -857,6 +944,13 @@ export function NewRunPage() {
           loading={regions.status === "loading"}
           error={regions.status === "error" ? regions.message : null}
         />
+
+        {divergedCount > 0 && (
+          <p className="ink-soft runForm__overrideSummary">
+            {divergedCount} worker{divergedCount === 1 ? "" : "s"} with per-worker
+            property overrides — click a tile in the diagram to inspect.
+          </p>
+        )}
 
         {allocError && submit.status === "error" && (
           <p className="text--error" role="alert">{allocError}</p>
@@ -912,6 +1006,7 @@ export function NewRunPage() {
           applicationName={application}
           value={allocation}
           workerStatuses={workerStatuses}
+          overrideFlags={overrideFlags}
           onWorkerClick={openDrawer}
           maxByRegion={groupCapacityMap ?? undefined}
           shortfall={submit.status === "error" ? submit.shortfall : undefined}
@@ -972,7 +1067,7 @@ export function NewRunPage() {
             application,
             testPlanBlobId,
             dataFilesBlobId: dataFilesBlobId || undefined,
-            fleetAllocation: allocation,
+            fleetAllocation: buildCleanAllocation(allocation),
             globalProperties:
               Object.keys(globalProperties).length > 0 ? globalProperties : undefined,
             labelFilter: labelFilter || undefined,
@@ -1029,9 +1124,16 @@ interface BlobSelectProps {
   required?: boolean;
   /** Step 28 — closed when no application is selected. */
   disabled?: boolean;
+  /**
+   * UX-DYNAMICS T2 — a hydrated blob id that exists but is absent from
+   * the fetched list (past the 200-item page, or tagged to another
+   * application). Rendered as a synthetic option so the template's
+   * selection stays visible and launchable.
+   */
+  extraOption?: { blobId: string; label: string };
 }
 
-function BlobSelect({ id, value, onChange, blobs, placeholder, loading, error, required, disabled }: BlobSelectProps) {
+function BlobSelect({ id, value, onChange, blobs, placeholder, loading, error, required, disabled, extraOption }: BlobSelectProps) {
   return (
     <select
       id={id}
@@ -1041,6 +1143,9 @@ function BlobSelect({ id, value, onChange, blobs, placeholder, loading, error, r
       required={required}
     >
       <option value="">{loading ? "loading…" : error ? `error: ${error}` : placeholder}</option>
+      {extraOption && !blobs.some((b) => b.blobId === extraOption.blobId) && (
+        <option value={extraOption.blobId}>{extraOption.label}</option>
+      )}
       {blobs.map((b) => (
         <option key={b.blobId} value={b.blobId}>
           {b.name ?? b.blobId} ({formatBytes(b.sizeBytes)}) — {b.blobId.slice(0, 8)}…
@@ -1052,6 +1157,23 @@ function BlobSelect({ id, value, onChange, blobs, placeholder, loading, error, r
 
 // (D-RunLauncher rework — ApplicationPicker removed; the launcher's
 //  app comes from the URL path `/applications/:appName/runs/new`.)
+
+/** Trim trailing empty per-worker maps so the wire and saved templates stay compact. */
+function buildCleanAllocation(allocation: FleetAllocationEntry[]): FleetAllocationEntry[] {
+  return allocation.map((e) => {
+    const props = (e.perNodeProperties ?? []).slice();
+    while (props.length > 0 && Object.keys(props[props.length - 1] ?? {}).length === 0) {
+      props.pop();
+    }
+    return { ...e, perNodeProperties: props.length > 0 ? props : undefined };
+  });
+}
+
+/** True for a DocumentServiceError-shaped rejection with HTTP 404. */
+function is404(err: unknown): boolean {
+  return typeof err === "object" && err !== null
+    && (err as { httpStatus?: unknown }).httpStatus === 404;
+}
 
 /**
  * Inline file upload alongside the BlobSelect dropdowns.
