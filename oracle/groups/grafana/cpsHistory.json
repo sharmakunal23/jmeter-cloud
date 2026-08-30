@@ -1,0 +1,950 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_ORACLE",
+      "label": "Oracle (metrics)",
+      "description": "The Oracle datasource that reads the metrics schema",
+      "type": "datasource",
+      "pluginId": "grafana-oracle-datasource",
+      "pluginName": "Oracle"
+    }
+  ],
+  "title": "Servicing MQ - History",
+  "uid": "cpsProductMetricsHistory",
+  "description": "Worker-aggregated historical metrics for group CPS (approximately 7 to 30 days old).",
+  "tags": [
+    "cps",
+    "zate",
+    "ccb-card-performance",
+    "history"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "",
+  "time": {
+    "from": "now-9d",
+    "to": "now-8d"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "application",
+        "type": "custom",
+        "label": "Application",
+        "query": "CPP-PCI,CPS-PCI,CPP,CPS",
+        "includeAll": true,
+        "allValue": "__all__",
+        "multi": false,
+        "current": {
+          "text": "All",
+          "value": "__all__"
+        },
+        "options": [
+          {
+            "text": "All",
+            "value": "__all__",
+            "selected": true
+          },
+          {
+            "text": "CPP-PCI",
+            "value": "CPP-PCI",
+            "selected": false
+          },
+          {
+            "text": "CPS-PCI",
+            "value": "CPS-PCI",
+            "selected": false
+          },
+          {
+            "text": "CPP",
+            "value": "CPP",
+            "selected": false
+          },
+          {
+            "text": "CPS",
+            "value": "CPS",
+            "selected": false
+          }
+        ]
+      },
+      {
+        "name": "granularity",
+        "type": "custom",
+        "label": "Granularity",
+        "description": "Time-bucket size for the trend graphs.",
+        "query": "15s : 15,30s : 30,60s : 60",
+        "multi": false,
+        "current": {
+          "text": "15s",
+          "value": "15"
+        },
+        "options": [
+          {
+            "text": "15s",
+            "value": "15",
+            "selected": true
+          },
+          {
+            "text": "30s",
+            "value": "30",
+            "selected": false
+          },
+          {
+            "text": "60s",
+            "value": "60",
+            "selected": false
+          }
+        ]
+      },
+      {
+        "name": "label",
+        "type": "textbox",
+        "label": "Label filter",
+        "description": "Filters the label panels by label prefix. Leave empty for all.",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Key Metrics",
+      "description": "Selected-range metrics. Percentiles are samples-weighted estimates from the 15-second windows.",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 5
+      },
+      "datasource": {
+        "type": "grafana-oracle-datasource",
+        "uid": "${DS_ORACLE}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT SUM(f.THROUGHPUT) / NULLIF(MAX(f.WINDOW_SECOND) - MIN(f.WINDOW_SECOND) + 15, 0) AS \"TPS\", SUM(f.AVG_MS * f.THROUGHPUT) / NULLIF(SUM(f.THROUGHPUT), 0) AS \"Avg\", SUM(f.P90_MS * f.THROUGHPUT) / NULLIF(SUM(f.THROUGHPUT), 0) AS \"P90\", SUM(f.P95_MS * f.THROUGHPUT) / NULLIF(SUM(f.THROUGHPUT), 0) AS \"P95\", SUM(f.P99_MS * f.THROUGHPUT) / NULLIF(SUM(f.THROUGHPUT), 0) AS \"P99\", 100 * SUM(f.ERROR_COUNT) / NULLIF(SUM(f.THROUGHPUT), 0) AS \"Error %\" FROM CARDZATE_DB_GRAF.CPS_METRICS_H f JOIN CARDZATE_DB_GRAF.LABEL l ON l.LABEL_ID = f.LABEL_ID WHERE l.GROUP_ID = 'CPS' AND ('${application:raw}' = '__all__' OR l.APPLICATION = '${application:raw}') AND f.WINDOW_SECOND BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "TPS"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "suffix:req/s"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Avg"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    },
+                    {
+                      "value": 500,
+                      "color": "red"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "P90"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    },
+                    {
+                      "value": 500,
+                      "color": "red"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "P95"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    },
+                    {
+                      "value": 500,
+                      "color": "red"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "P99"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    },
+                    {
+                      "value": 500,
+                      "color": "red"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Error %"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    },
+                    {
+                      "value": 1,
+                      "color": "yellow"
+                    },
+                    {
+                      "value": 5,
+                      "color": "red"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": false,
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 23,
+          "valueSize": 50
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "Summary by Application",
+      "description": "Per-application totals over the selected range. Samples-weighted percentiles.",
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "grafana-oracle-datasource",
+        "uid": "${DS_ORACLE}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT l.APPLICATION AS \"Application\", SUM(f.THROUGHPUT) / NULLIF(MAX(f.WINDOW_SECOND) - MIN(f.WINDOW_SECOND) + 15, 0) AS \"Throughput\", SUM(f.AVG_MS * f.THROUGHPUT) / NULLIF(SUM(f.THROUGHPUT), 0) AS \"Avg\", SUM(f.P90_MS * f.THROUGHPUT) / NULLIF(SUM(f.THROUGHPUT), 0) AS \"P90\", SUM(f.P95_MS * f.THROUGHPUT) / NULLIF(SUM(f.THROUGHPUT), 0) AS \"P95\", SUM(f.P99_MS * f.THROUGHPUT) / NULLIF(SUM(f.THROUGHPUT), 0) AS \"P99\", 100 * SUM(f.ERROR_COUNT) / NULLIF(SUM(f.THROUGHPUT), 0) AS \"Error %\" FROM CARDZATE_DB_GRAF.CPS_METRICS_H f JOIN CARDZATE_DB_GRAF.LABEL l ON l.LABEL_ID = f.LABEL_ID WHERE l.GROUP_ID = 'CPS' AND ('${application:raw}' = '__all__' OR l.APPLICATION = '${application:raw}') AND f.WINDOW_SECOND BETWEEN ${__from:date:seconds} AND ${__to:date:seconds} GROUP BY l.APPLICATION ORDER BY \"Throughput\" DESC",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Throughput"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "suffix:req/s"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Avg"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "P90"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "P95"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "P99"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Error %"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Throughput",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Throughput by Application",
+      "description": "Throughput summed per application, bucketed by the selected granularity.",
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 12
+      },
+      "datasource": {
+        "type": "grafana-oracle-datasource",
+        "uid": "${DS_ORACLE}"
+      },
+      "maxDataPoints": 100000,
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT (TO_DATE('1970-01-01','YYYY-MM-DD') + (FLOOR(f.WINDOW_SECOND / ${granularity}) * ${granularity}) / 86400) AS \"time\", l.APPLICATION AS metric, SUM(f.THROUGHPUT) / ${granularity} AS value FROM CARDZATE_DB_GRAF.CPS_METRICS_H f JOIN CARDZATE_DB_GRAF.LABEL l ON l.LABEL_ID = f.LABEL_ID WHERE l.GROUP_ID = 'CPS' AND ('${application:raw}' = '__all__' OR l.APPLICATION = '${application:raw}') AND f.WINDOW_SECOND BETWEEN ${__from:date:seconds} AND ${__to:date:seconds} GROUP BY FLOOR(f.WINDOW_SECOND / ${granularity}) * ${granularity}, l.APPLICATION ORDER BY 1",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "displayName": "${__field.labels.METRIC}",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "always",
+            "axisGridShow": false
+          }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Response Time",
+      "description": "Samples-weighted Avg / P90 / P95 / P99, bucketed by the selected granularity.",
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 12
+      },
+      "datasource": {
+        "type": "grafana-oracle-datasource",
+        "uid": "${DS_ORACLE}"
+      },
+      "maxDataPoints": 100000,
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT run_ts AS \"time\", metric, val AS value FROM ( SELECT (TO_DATE('1970-01-01','YYYY-MM-DD') + (FLOOR(f.WINDOW_SECOND / ${granularity}) * ${granularity}) / 86400) AS run_ts, SUM(f.AVG_MS * f.THROUGHPUT) / NULLIF(SUM(f.THROUGHPUT), 0) AS AVG_MS, SUM(f.P90_MS * f.THROUGHPUT) / NULLIF(SUM(f.THROUGHPUT), 0) AS P90_MS, SUM(f.P95_MS * f.THROUGHPUT) / NULLIF(SUM(f.THROUGHPUT), 0) AS P95_MS, SUM(f.P99_MS * f.THROUGHPUT) / NULLIF(SUM(f.THROUGHPUT), 0) AS P99_MS FROM CARDZATE_DB_GRAF.CPS_METRICS_H f JOIN CARDZATE_DB_GRAF.LABEL l ON l.LABEL_ID = f.LABEL_ID WHERE l.GROUP_ID = 'CPS' AND ('${application:raw}' = '__all__' OR l.APPLICATION = '${application:raw}') AND f.WINDOW_SECOND BETWEEN ${__from:date:seconds} AND ${__to:date:seconds} GROUP BY FLOOR(f.WINDOW_SECOND / ${granularity}) * ${granularity} ) UNPIVOT (val FOR metric IN (AVG_MS AS 'Avg', P90_MS AS 'P90', P95_MS AS 'P95', P99_MS AS 'P99')) ORDER BY 1",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "displayName": "${__field.labels.METRIC}",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "always",
+            "axisGridShow": false
+          }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      }
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Metrics / label",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "id": 21,
+          "type": "timeseries",
+          "title": "Throughput per label",
+          "gridPos": {
+            "x": 0,
+            "y": 25,
+            "w": 12,
+            "h": 14
+          },
+          "datasource": {
+            "type": "grafana-oracle-datasource",
+            "uid": "${DS_ORACLE}"
+          },
+          "maxDataPoints": 100000,
+          "targets": [
+            {
+              "refId": "A",
+              "rawSql": "SELECT (TO_DATE('1970-01-01','YYYY-MM-DD') + (FLOOR(f.WINDOW_SECOND / ${granularity}) * ${granularity}) / 86400) AS \"time\", l.LABEL_KEY AS metric, SUM(f.THROUGHPUT) / ${granularity} AS value FROM CARDZATE_DB_GRAF.CPS_METRICS_H f JOIN CARDZATE_DB_GRAF.LABEL l ON l.LABEL_ID = f.LABEL_ID WHERE l.GROUP_ID = 'CPS' AND ('${application:raw}' = '__all__' OR l.APPLICATION = '${application:raw}') AND ('${label}' IS NULL OR l.LABEL_KEY LIKE TRIM('${label}') || '%') AND f.WINDOW_SECOND BETWEEN ${__from:date:seconds} AND ${__to:date:seconds} GROUP BY FLOOR(f.WINDOW_SECOND / ${granularity}) * ${granularity}, l.LABEL_KEY ORDER BY 1",
+              "format": "time_series"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "displayName": "${__field.labels.METRIC}",
+              "custom": {
+                "fillOpacity": 8,
+                "showPoints": "always",
+                "axisGridShow": false
+              }
+            }
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            }
+          }
+        },
+        {
+          "id": 22,
+          "type": "timeseries",
+          "title": "Response time per label (Avg)",
+          "gridPos": {
+            "x": 12,
+            "y": 25,
+            "w": 12,
+            "h": 14
+          },
+          "datasource": {
+            "type": "grafana-oracle-datasource",
+            "uid": "${DS_ORACLE}"
+          },
+          "maxDataPoints": 100000,
+          "targets": [
+            {
+              "refId": "A",
+              "rawSql": "SELECT (TO_DATE('1970-01-01','YYYY-MM-DD') + (FLOOR(f.WINDOW_SECOND / ${granularity}) * ${granularity}) / 86400) AS \"time\", l.LABEL_KEY AS metric, SUM(f.AVG_MS * f.THROUGHPUT) / NULLIF(SUM(f.THROUGHPUT), 0) AS value FROM CARDZATE_DB_GRAF.CPS_METRICS_H f JOIN CARDZATE_DB_GRAF.LABEL l ON l.LABEL_ID = f.LABEL_ID WHERE l.GROUP_ID = 'CPS' AND ('${application:raw}' = '__all__' OR l.APPLICATION = '${application:raw}') AND ('${label}' IS NULL OR l.LABEL_KEY LIKE TRIM('${label}') || '%') AND f.WINDOW_SECOND BETWEEN ${__from:date:seconds} AND ${__to:date:seconds} GROUP BY FLOOR(f.WINDOW_SECOND / ${granularity}) * ${granularity}, l.LABEL_KEY ORDER BY 1",
+              "format": "time_series"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "displayName": "${__field.labels.METRIC}",
+              "custom": {
+                "fillOpacity": 8,
+                "showPoints": "always",
+                "axisGridShow": false
+              }
+            }
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Error % by Application",
+      "gridPos": {
+        "x": 0,
+        "y": 25,
+        "w": 12,
+        "h": 12
+      },
+      "datasource": {
+        "type": "grafana-oracle-datasource",
+        "uid": "${DS_ORACLE}"
+      },
+      "maxDataPoints": 100000,
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT (TO_DATE('1970-01-01','YYYY-MM-DD') + (FLOOR(f.WINDOW_SECOND / ${granularity}) * ${granularity}) / 86400) AS \"time\", l.APPLICATION AS metric, 100 * SUM(f.HTTP_4XX + f.HTTP_5XX) / NULLIF(SUM(f.THROUGHPUT), 0) AS value FROM CARDZATE_DB_GRAF.CPS_METRICS_H f JOIN CARDZATE_DB_GRAF.LABEL l ON l.LABEL_ID = f.LABEL_ID WHERE l.GROUP_ID = 'CPS' AND ('${application:raw}' = '__all__' OR l.APPLICATION = '${application:raw}') AND f.WINDOW_SECOND BETWEEN ${__from:date:seconds} AND ${__to:date:seconds} GROUP BY FLOOR(f.WINDOW_SECOND / ${granularity}) * ${granularity}, l.APPLICATION ORDER BY 1",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "displayName": "${__field.labels.METRIC}",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "always",
+            "axisGridShow": false
+          }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Error Codes",
+      "description": "Client (4xx) and server (5xx) errors as % of samples, bucketed by the selected granularity.",
+      "gridPos": {
+        "x": 12,
+        "y": 25,
+        "w": 12,
+        "h": 12
+      },
+      "datasource": {
+        "type": "grafana-oracle-datasource",
+        "uid": "${DS_ORACLE}"
+      },
+      "maxDataPoints": 100000,
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT run_ts AS \"time\", metric, val AS value FROM ( SELECT (TO_DATE('1970-01-01','YYYY-MM-DD') + (FLOOR(f.WINDOW_SECOND / ${granularity}) * ${granularity}) / 86400) AS run_ts, 100 * SUM(f.HTTP_4XX) / NULLIF(SUM(f.THROUGHPUT), 0) AS HTTP_4XX, 100 * SUM(f.HTTP_5XX) / NULLIF(SUM(f.THROUGHPUT), 0) AS HTTP_5XX FROM CARDZATE_DB_GRAF.CPS_METRICS_H f JOIN CARDZATE_DB_GRAF.LABEL l ON l.LABEL_ID = f.LABEL_ID WHERE l.GROUP_ID = 'CPS' AND ('${application:raw}' = '__all__' OR l.APPLICATION = '${application:raw}') AND f.WINDOW_SECOND BETWEEN ${__from:date:seconds} AND ${__to:date:seconds} GROUP BY FLOOR(f.WINDOW_SECOND / ${granularity}) * ${granularity} ) UNPIVOT (val FOR metric IN (HTTP_4XX AS '4xx (Client-side Errors)', HTTP_5XX AS '5xx (Server-side Errors)')) ORDER BY 1",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "displayName": "${__field.labels.METRIC}",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "always",
+            "axisGridShow": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "4xx (Client-side Errors)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "5xx (Server-side Errors)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      }
+    },
+    {
+      "id": 23,
+      "type": "row",
+      "title": "Aggregate Report",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 37,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "id": 24,
+          "type": "table",
+          "title": "Aggregate Report",
+          "description": "Per-label summary over the selected range. Samples-weighted percentiles.",
+          "gridPos": {
+            "x": 0,
+            "y": 38,
+            "w": 24,
+            "h": 20
+          },
+          "datasource": {
+            "type": "grafana-oracle-datasource",
+            "uid": "${DS_ORACLE}"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "rawSql": "SELECT l.LABEL_KEY AS \"Label\", l.APPLICATION AS \"Application\", SUM(f.THROUGHPUT) AS \"Samples\", SUM(f.AVG_MS * f.THROUGHPUT) / NULLIF(SUM(f.THROUGHPUT), 0) AS \"Avg\", SUM(f.P90_MS * f.THROUGHPUT) / NULLIF(SUM(f.THROUGHPUT), 0) AS \"P90\", SUM(f.P95_MS * f.THROUGHPUT) / NULLIF(SUM(f.THROUGHPUT), 0) AS \"P95\", SUM(f.P99_MS * f.THROUGHPUT) / NULLIF(SUM(f.THROUGHPUT), 0) AS \"P99\", 100 * SUM(f.ERROR_COUNT) / NULLIF(SUM(f.THROUGHPUT), 0) AS \"Error%\", SUM(f.THROUGHPUT) / NULLIF(MAX(f.WINDOW_SECOND) - MIN(f.WINDOW_SECOND) + 15, 0) AS \"Throughput\" FROM CARDZATE_DB_GRAF.CPS_METRICS_H f JOIN CARDZATE_DB_GRAF.LABEL l ON l.LABEL_ID = f.LABEL_ID WHERE l.GROUP_ID = 'CPS' AND ('${application:raw}' = '__all__' OR l.APPLICATION = '${application:raw}') AND ('${label}' IS NULL OR l.LABEL_KEY LIKE TRIM('${label}') || '%') AND f.WINDOW_SECOND BETWEEN ${__from:date:seconds} AND ${__to:date:seconds} GROUP BY l.LABEL_KEY, l.APPLICATION ORDER BY \"Samples\" DESC",
+              "format": "table"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Label"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 650
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Avg"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "ms"
+                  },
+                  {
+                    "id": "decimals",
+                    "value": 0
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "P90"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "ms"
+                  },
+                  {
+                    "id": "decimals",
+                    "value": 0
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "P95"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "ms"
+                  },
+                  {
+                    "id": "decimals",
+                    "value": 0
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "P99"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "ms"
+                  },
+                  {
+                    "id": "decimals",
+                    "value": 0
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Error%"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "percent"
+                  },
+                  {
+                    "id": "decimals",
+                    "value": 2
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Throughput"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "suffix:req/s"
+                  },
+                  {
+                    "id": "decimals",
+                    "value": 0
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "enablePagination": true,
+            "cellHeight": "sm",
+            "sortBy": [
+              {
+                "displayName": "Samples",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

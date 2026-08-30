@@ -44,15 +44,15 @@ services:
       - >-
         flyway
         -url=jdbc:oracle:thin:@//oracle:1521/FREEPDB1
-        -user=metrics
-        -password=${DB_METRICS_OWNER_PASSWORD:-localdev}
+        -user=CARDZATE_DB_GRAF
+        -password=${ORACLE_METRICS_OWNER_PASSWORD:-localdev}
         -locations=filesystem:/flyway/sql/metrics
         -connectRetries=30
         migrate &&
         flyway
         -url=jdbc:oracle:thin:@//oracle:1521/FREEPDB1
         '-user="globalOrchestrator"'
-        -password=${DB_GLOBALRUN_OWNER_PASSWORD:-localdev}
+        -password=${ORACLE_GLOBALRUN_OWNER_PASSWORD:-localdev}
         -locations=filesystem:/flyway/sql/globalrun
         -connectRetries=30
         migrate
@@ -67,11 +67,11 @@ services:
     # named volume, and every service stalls until the database is back.
     restart: unless-stopped
     ports:
-      - "${DB_PORT:-1521}:1521"
+      - "${ORACLE_PORT:-1521}:1521"
     environment:
       # SYS / SYSTEM password — local-only. The target infra supplies its
       # own instance; this container never leaves a developer machine.
-      ORACLE_PASSWORD: ${DB_ADMIN_PASSWORD:-localdev}
+      ORACLE_PASSWORD: ${ORACLE_ADMIN_PASSWORD:-localdev}
       # Session time zone must be UTC on every service and on the database
       # (SYSTIMESTAMP carries the server offset; all comparisons are absolute).
       TZ: UTC

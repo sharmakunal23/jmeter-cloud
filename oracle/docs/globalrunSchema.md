@@ -1,9 +1,9 @@
 # The control-plane schema on Oracle
 
 What `oracle/migrations/globalrun/V1__globalOrchestratorSchema.sql` builds —
-the 12 `"globalOrchestrator"` tables in the shape 29 Postgres migrations had
-evolved them to — and the one place a plain translation would have been
-wrong: the two claim queries. For anyone porting the global orchestrator's
+the 13 `"globalOrchestrator"` tables (the 12 the Postgres migrations had
+evolved, in their as-built shape, plus `applicationGroup`) — and the one place
+a plain translation would have been wrong: the two claim queries. For anyone porting the global orchestrator's
 repositories (OM-5) or adding a table.
 
 ## Tables
@@ -12,7 +12,8 @@ repositories (OM-5) or adding a table.
 |---|---|---|
 | `"run"` | `runId` | `saveResults NUMBER(1)`; `hiddenAt` = soft delete; indexes on `createdAt`, `(application, createdAt)`, `(state, createdAt)` — the Postgres partial indexes have no Oracle form and the table is small |
 | `"runFleetMember"` | `(runId, workerId)` | FK → run `ON DELETE CASCADE`; `properties CLOB IS JSON`; `(workerId, state, createdAt)` index serves the claim's `NOT EXISTS` |
-| `"application"` | `applicationId`, unique `name` | recycle policy CHECKs as last stated (V17); `healthEndpoints`/`lastHealthDetails` CLOB `IS JSON`; `alwaysOn NUMBER(1)` |
+| `"applicationGroup"` | `groupId`, unique `name` | a team's applications; `groupId` (`[a-z][a-z0-9_]{0,29}`) = the metrics schema's `GROUP_REGISTRY.GROUP_ID`, what workers send as `?groupId=`; `UPPER(groupId)` prefixes the group's `_METRICS` / `_METRICS_H` tables |
+| `"application"` | `applicationId`, unique `name` | `metricsGroupId` FK → applicationGroup (no ON DELETE: a group with applications cannot be deleted; indexed) + `metricsApplication` (the group classifier's `LABEL.APPLICATION` value); recycle policy CHECKs as last stated (V17); `healthEndpoints`/`lastHealthDetails` CLOB `IS JSON`; `alwaysOn NUMBER(1)` |
 | `"applicationCapacity"` | `(applicationId, region)` | FK cascade; `maxAvailable BETWEEN 0 AND 1000` |
 | `"pod"` | `podId` | FK → application (no action); `source IN (DYNAMIC, STATIC)`; `(applicationId, region, state, lastHeartbeat)` is the claim's candidate index **and** the FK index — without one, deleting an application takes a table lock on `pod` |
 | `"runEvent"` | `eventId` | FK → run cascade; `payload CLOB IS JSON`; append-only |
@@ -58,12 +59,12 @@ Both are called from a `BEGIN … END;` block with a `REF CURSOR` out parameter
 | 5 IDLE workers (one held by a RUNNING member, one in another region); session A claims 2 and holds; session B claims 5 while `v$locked_object` shows A's locks | A: `w3, w2` (freshest first); B: `w1` only |
 | 5 schedules: two due, one not due, one disabled, one platform-level future | claim returns the two due, earliest first |
 | Duplicate platform job name, `MAX_RUNS` without a threshold, pod for an unknown app, non-JSON `properties` | ORA-00001, ORA-02290, ORA-02291, ORA-02290 |
-| V1 applied twice from an empty schema | 61 objects `VALID` both times |
+| V1 applied twice from an empty schema | 61 objects `VALID` both times (before `applicationGroup`; the db contract test asserts 13 tables, every object VALID) |
 
 ## Roles
 
 `"globalOrchestratorWriter"` — the service's only user: full DML on `run`,
-`runFleetMember`, `pod`, `application`, `applicationCapacity`, `cronJob`,
+`runFleetMember`, `pod`, `applicationGroup`, `application`, `applicationCapacity`, `cronJob`,
 `aiResponse`; `SELECT, INSERT` on the append-only tables (plus `DELETE` where a
 purge path exists: `runTrend`, `applicationHealthHistory`); `EXECUTE` on
 `"claims"` and the `"idTable"` type. The owner keeps DDL.

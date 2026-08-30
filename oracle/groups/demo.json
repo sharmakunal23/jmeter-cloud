@@ -1,0 +1,14 @@
+{
+  "groupId": "demo",
+  "name": "Demo",
+  "applications": [
+    { "name": "CHECKOUT", "labelPrefixes": ["checkout", "cart"] },
+    { "name": "SEARCH",   "labelPrefixes": ["search"] }
+  ],
+  "unclassified": "OTHER",
+  "hotDays": 7,
+  "historyDays": 30,
+  "readers": ["metricsReader"],
+  "purgers": ["metricsPurger"],
+  "maintenance": { "timeZone": "UTC", "fromHour": 4, "toHour": 7 }
+}

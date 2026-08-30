@@ -1,0 +1,16 @@
+{
+  "groupId": "cps",
+  "name": "Servicing MQ",
+  "applications": [
+    { "name": "CPP-PCI", "labelPrefixes": ["TG6"] },
+    { "name": "CPS-PCI", "labelPrefixes": ["TG5"] },
+    { "name": "CPP",     "labelPrefixes": ["TG4"] },
+    { "name": "CPS",     "labelPrefixes": ["TG1", "TG2", "TG3"] }
+  ],
+  "unclassified": "OTHER",
+  "hotDays": 7,
+  "historyDays": 30,
+  "readers": ["metricsReader"],
+  "purgers": ["metricsPurger"],
+  "maintenance": { "timeZone": "America/New_York", "fromHour": 4, "toHour": 7 }
+}

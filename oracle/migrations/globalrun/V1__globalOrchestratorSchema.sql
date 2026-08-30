@@ -28,6 +28,7 @@ CREATE TABLE "globalOrchestrator"."run" (
     "state"            VARCHAR2(32 CHAR)   NOT NULL,
     "stateReason"      VARCHAR2(4000 CHAR),
     "application"      VARCHAR2(255 CHAR),                         -- application name; NULL on legacy rows
+    "metricsGroupId"   VARCHAR2(30 CHAR),                          -- the application's group AT LAUNCH: the run's rows live in <UPPER(id)>_METRICS forever, even if the app moves group
     "saveResults"      NUMBER(1)           DEFAULT 0 NOT NULL,     -- workers upload their JTL on COMPLETE
     "createdAt"        TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     "startedAt"        TIMESTAMP(3) WITH TIME ZONE,
@@ -72,14 +73,37 @@ COMMENT ON TABLE "globalOrchestrator"."runFleetMember" IS
     'Per-worker child rows of a run. Joins to metrics."workerMetric" on (runId, workerId).';
 
 -- ═══════════════════════════════════════════════════════════════════════
--- Applications, capacity, workers
+-- Application groups, applications, capacity, workers
 -- ═══════════════════════════════════════════════════════════════════════
+
+-- A team's set of applications. "groupId" is the value workers send as
+-- ?groupId= on every metrics POST; upper-cased it prefixes the group's fact
+-- tables in the metrics schema (cps -> CPS_METRICS, CPS_METRICS_H), and it
+-- must name a row of GROUP_REGISTRY there.
+CREATE TABLE "globalOrchestrator"."applicationGroup" (
+    "groupId"      VARCHAR2(30 CHAR)   NOT NULL,   -- [a-z][a-z0-9_]{0,29}; = metrics GROUP_REGISTRY.GROUP_ID (e.g. cps)
+    "name"         VARCHAR2(255 CHAR)  NOT NULL,   -- display name (e.g. Servicing MQ)
+    "description"  VARCHAR2(4000 CHAR),
+    "grafanaLiveUrl"    VARCHAR2(2000 CHAR),                    -- the group's live dashboard (reads <P>_METRICS); the UI's "Open in Grafana" default
+    "grafanaHistoryUrl" VARCHAR2(2000 CHAR),                    -- the history dashboard (reads <P>_METRICS_H); optional, falls back to live
+    "hotDays"      NUMBER(5)           DEFAULT 7 NOT NULL,      -- days the live dashboard covers (= the group's hot retention); older runs open history
+    "createdAt"    TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT "applicationGroup_pk" PRIMARY KEY ("groupId"),
+    CONSTRAINT "applicationGroup_hotDays_ck" CHECK ("hotDays" > 0),
+    CONSTRAINT "applicationGroup_name_uq" UNIQUE ("name")
+);
+COMMENT ON TABLE "globalOrchestrator"."applicationGroup" IS
+    'A team''s applications share one group: its groupId routes their metrics to the group''s own fact tables.';
 
 CREATE TABLE "globalOrchestrator"."application" (
     "applicationId"       VARCHAR2(64 CHAR)   NOT NULL,
     "name"                VARCHAR2(255 CHAR)  NOT NULL,
     "sealId"              VARCHAR2(128 CHAR),
     "description"         VARCHAR2(4000 CHAR),
+    "metricsGroupId"      VARCHAR2(30 CHAR),                                 -- FK applicationGroup; NULL = ungrouped, metrics not routed
+    "metricsApplication"  VARCHAR2(64 CHAR),                                 -- the group classifier's value for this app's labels (LABEL.APPLICATION)
+    "grafanaLiveUrl"      VARCHAR2(2000 CHAR),                               -- per-app override of the group's live dashboard URL
+    "grafanaHistoryUrl"   VARCHAR2(2000 CHAR),                               -- per-app override of the group's history dashboard URL
     "healthEndpoints"     CLOB                DEFAULT '[]' NOT NULL,  -- JSON array of URLs polled by ApplicationHealthPoller
     "recyclePolicy"       VARCHAR2(32 CHAR)   DEFAULT 'REUSE' NOT NULL,
     "maxRunsPerPod"       NUMBER(10),
@@ -104,10 +128,16 @@ CREATE TABLE "globalOrchestrator"."application" (
         OR ("recyclePolicy" = 'MAX_AGE'                                 AND "maxRunsPerPod" IS NULL     AND "podMaxAgeHours" IS NOT NULL)
         OR ("recyclePolicy" = 'BOTH'                                    AND "maxRunsPerPod" IS NOT NULL AND "podMaxAgeHours" IS NOT NULL)),
     CONSTRAINT "application_maxRunsPerPod_chk"  CHECK ("maxRunsPerPod"  IS NULL OR "maxRunsPerPod"  BETWEEN 1 AND 10000),
-    CONSTRAINT "application_podMaxAgeHours_chk" CHECK ("podMaxAgeHours" IS NULL OR "podMaxAgeHours" BETWEEN 1 AND 720)
+    CONSTRAINT "application_podMaxAgeHours_chk" CHECK ("podMaxAgeHours" IS NULL OR "podMaxAgeHours" BETWEEN 1 AND 720),
+    -- No ON DELETE action: a group with applications (visible or archived) cannot be deleted.
+    CONSTRAINT "application_metricsGroup_fk" FOREIGN KEY ("metricsGroupId")
+        REFERENCES "globalOrchestrator"."applicationGroup" ("groupId")
 );
+-- FK index: without it a group delete takes a table lock on application.
+CREATE INDEX "globalOrchestrator"."application_metricsGroupId_idx"
+    ON "globalOrchestrator"."application" ("metricsGroupId");
 COMMENT ON TABLE "globalOrchestrator"."application" IS
-    'Registered application: operator metadata, worker recycle policy, last health snapshot.';
+    'Registered application: operator metadata, metrics group, worker recycle policy, last health snapshot.';
 
 CREATE TABLE "globalOrchestrator"."applicationCapacity" (
     "applicationId"  VARCHAR2(64 CHAR)  NOT NULL,
@@ -407,6 +437,7 @@ END "claims";
 GRANT SELECT, INSERT, UPDATE, DELETE ON "globalOrchestrator"."run"                 TO "globalOrchestratorWriter";
 GRANT SELECT, INSERT, UPDATE, DELETE ON "globalOrchestrator"."runFleetMember"      TO "globalOrchestratorWriter";
 GRANT SELECT, INSERT, UPDATE, DELETE ON "globalOrchestrator"."pod"                 TO "globalOrchestratorWriter";
+GRANT SELECT, INSERT, UPDATE, DELETE ON "globalOrchestrator"."applicationGroup"    TO "globalOrchestratorWriter";
 GRANT SELECT, INSERT, UPDATE, DELETE ON "globalOrchestrator"."application"         TO "globalOrchestratorWriter";
 GRANT SELECT, INSERT, UPDATE, DELETE ON "globalOrchestrator"."applicationCapacity" TO "globalOrchestratorWriter";
 GRANT SELECT, INSERT, UPDATE, DELETE ON "globalOrchestrator"."cronJob"             TO "globalOrchestratorWriter";
