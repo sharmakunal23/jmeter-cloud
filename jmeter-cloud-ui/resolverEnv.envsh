@@ -30,3 +30,10 @@ if [ -z "${SVC_SUFFIX+set}" ]; then
   fi
 fi
 export SVC_SUFFIX
+
+# API_UPSTREAM / BLOB_UPSTREAM — whole URLs for the two proxied services.
+# Default: the Service names, in-cluster or on the compose network. On a
+# platform with one namespace per service (hosted D10) set them to the
+# services' ingress FQDNs, e.g. https://global-orchestrator.<platform domain>.
+export API_UPSTREAM="${API_UPSTREAM:-http://global-orchestrator${SVC_SUFFIX}:8082}"
+export BLOB_UPSTREAM="${BLOB_UPSTREAM:-http://document-service${SVC_SUFFIX}:8084}"

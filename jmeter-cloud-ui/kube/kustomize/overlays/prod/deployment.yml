@@ -1,0 +1,25 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# Strategic-merge patch over the base Deployment for the `prod` tier.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jmeter-cloud-ui
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+        - name: jmeter-cloud-ui
+          image: ${containerImageUri}
+          env:
+            - name: API_UPSTREAM
+              value: "https://global-orchestrator.REPLACE_ME_PLATFORM_DOMAIN"
+            - name: BLOB_UPSTREAM
+              value: "https://document-service.REPLACE_ME_PLATFORM_DOMAIN"
+          resources:
+            requests:
+              memory: 128Mi
+              ephemeral-storage: 10Gi
+            limits:
+              memory: 128Mi
+              ephemeral-storage: 10Gi

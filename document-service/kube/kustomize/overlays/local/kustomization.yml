@@ -1,0 +1,17 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Token-free: a concrete namespace and local image tags, so `kubectl apply -k`
+# works without a pipeline (kind loads the :dev images). The umbrella
+# infra/deploy/k8s/kind composes every service's local overlay.
+resources:
+  - ../../base/
+  - network-policy-custom.yml
+  - storage.yml
+patches:
+  - path: deployment.yml
+namespace: jmeter-cloud
+configMapGenerator:
+  - name: app-runtime-document-service
+    literals:
+      - SPRING_PROFILES_ACTIVE=local

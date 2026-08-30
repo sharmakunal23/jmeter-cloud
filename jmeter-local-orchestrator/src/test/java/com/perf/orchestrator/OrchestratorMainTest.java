@@ -232,7 +232,7 @@ class OrchestratorMainTest {
             // Tomcat property defaults (mirror OrchestratorMain.bootSpringContext).
             props.put("server.port", 0);
             props.put("server.address", "127.0.0.1");
-            props.put("management.endpoints.web.exposure.include", "health,info");
+            props.put("management.endpoints.web.exposure.include", "keepalive,health,info");
             props.put("management.endpoint.health.show-details", "always");
             return props;
         }

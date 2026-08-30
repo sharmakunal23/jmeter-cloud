@@ -1,0 +1,31 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# Strategic-merge patch over the base Deployment for the `test` tier.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics-consumer
+spec:
+  replicas: 1
+  template:
+    spec:
+      securityContext:
+        runAsUser: 214818            # MUST equal the PV label UID (test/prod storage) and the image's least-privilege user
+        fsGroup: 99                 # MUST equal the PV label GID
+      containers:
+        - name: metrics-consumer
+          image: ${containerImageUri}
+          env:
+            - name: ORACLE_METRICS_URL
+              value: "jdbc:oracle:thin:@//REPLACE_ME_ORACLE_HOST:1521/REPLACE_ME_SERVICE"
+            - name: METRICS_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: metrics-consumer-credentials
+                  key: authToken
+          resources:
+            requests:
+              memory: 1200Mi
+              ephemeral-storage: 10Gi
+            limits:
+              memory: 1200Mi
+              ephemeral-storage: 10Gi

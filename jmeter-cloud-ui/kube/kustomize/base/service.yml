@@ -1,0 +1,15 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+apiVersion: v1
+kind: Service
+metadata:
+  name: jmeter-cloud-ui
+  labels:
+    app: jmeter-cloud-ui
+spec:
+  ports:
+    - name: http
+      port: 80            # what the ingress controller talks to
+      targetPort: http    # the container's named port
+      protocol: TCP
+  selector:
+    app: jmeter-cloud-ui

@@ -1,0 +1,41 @@
+# jules.yml — CI/CD source of truth for jmeter-local-orchestrator (PRIVATE-CLOUD-ALIGNMENT Track 7).
+# Placeholders: <sealId> (6-digit app id), <appId> (instance id), <devCluster*>,
+# <testCluster*>, <prodCluster*> (cluster ids), <platform-domain>,
+# <klogin-domain-suffix>, <teamEmail>. Branch map: develop → dev (SANDBOX repo),
+# main → test + prod (RELEASE repo). One namespace per service and tier
+# (<sealId>d<appId>-jmeter-local-orchestrator-<env>); inter-service URLs are the other services'
+# ingress FQDNs (the overlays' env).
+sealId: <sealId>
+node: java-21 && maven-3
+baseVersion: 1.0.0
+featureBranchPipelineTrigger: false
+buildConfig:
+  env:
+    variables:
+      - IDENTITY_SOURCE_AIM: JET
+      - IDENTITY_SOURCE_GKP: JET
+      - IDENTITY_SOURCE_ARTIFACTORY: JET
+publisher:
+  type: email
+  to: <teamEmail>
+container:
+  buildType: buildi
+  buildi:
+    targetRegistry: REPLACE_ME_REGISTRY
+    images:
+      - image: c<sealId>/jmeter-local-orchestrator
+        dockerfile: docker/Dockerfile.privateCloud
+imageScan:
+  forceScan: false
+  domainPrefix: AD\
+# The worker image is only BUILT here (the regional creates the Pods at run time
+# from PODPROVISIONER_IMAGE); the deploy map is empty on purpose.
+mapping:
+  - name: develop
+    container:
+      buildi:
+        containerRepo: SANDBOX
+  - name: main
+    container:
+      buildi:
+        containerRepo: RELEASE

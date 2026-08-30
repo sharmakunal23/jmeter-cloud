@@ -1,0 +1,9 @@
+// Jenkins shim for jmeter-cloud-ui (PRIVATE-CLOUD-ALIGNMENT Track 7): the shared
+// pipeline library reads jules.yml — build, image, scan and the branch → env
+// → cluster deploy map all live there. Replace the library name with the
+// platform's; nothing else belongs in this file.
+@Library('jules') _
+
+julesPipeline {
+    configFile = 'jules.yml'
+}

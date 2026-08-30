@@ -1,0 +1,44 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# Tier-specific policies for jmeter-regional-orchestrator.
+# local (kind): there is no ingress controller — the hub dials the regional's
+# NodePort from OUTSIDE the cluster and operators port-forward — so ingress on
+# the app port is allowed from anywhere. kind's kindnet DOES enforce
+# NetworkPolicy (kube-network-policies, kind ≥ 0.23): the base's
+# ingress-controller-only rule alone made the region unreachable (2026-08-30).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: jmeter-regional-orchestrator.allow-any-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: jmeter-regional-orchestrator
+  policyTypes: [Ingress]
+  ingress:
+    - ports:                    # any source (in-cluster, the NodePort, port-forwards)
+        - protocol: TCP
+          port: 8088
+---
+# The worker Pods the regional creates (label com.perf.jmeterCloud.managedBy):
+# reachable only from the regional (the relay) on 8080; their egress is open —
+# the system under test is per-run operator input (SECURITY S-5/S-11 tightens
+# this later).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: workers
+spec:
+  podSelector:
+    matchLabels:
+      com.perf.jmeterCloud.managedBy: regional-orchestrator
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: jmeter-regional-orchestrator
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - {}

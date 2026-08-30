@@ -1,0 +1,18 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# `prod` tier: ${…} tokens are resolved by the jules deploy step (namespace,
+# cluster-host, containerImageUri); nothing here is environment-specific by hand.
+resources:
+  - ../../base/
+  - ingress.yml
+  - network-policy-custom.yml
+patches:
+  - path: deployment.yml
+namespace: ${namespace}
+configMapGenerator:
+  - name: app-runtime-metrics-consumer
+    literals:
+      - SPRING_PROFILES_ACTIVE=prod
+# Secrets are created out of band before the first apply (never committed):
+#   kubectl -n <namespace> create secret generic metrics-consumer-credentials --from-literal=… (dbUser, dbPassword, authToken (the bearer the workers present))

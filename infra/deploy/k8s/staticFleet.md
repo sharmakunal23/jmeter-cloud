@@ -17,6 +17,10 @@ fan out to them, collect per-second metrics, and save results.
 
 ---
 
+> Before choosing STATIC because "the namespace can't create Pods": the
+> regional's capacity guard (Track 8) reads the namespace quota and refuses
+> only what cannot fit — a quota that admits N workers runs DYNAMIC up to N.
+
 ## What changes when you flip it
 
 | | `DYNAMIC` | `STATIC` (default) |
@@ -53,7 +57,7 @@ select `DYNAMIC`:
 
 Compose: set them in `.env` (both are already plumbed through
 `jmeter-global-orchestrator/docker-compose.yml`).
-Kubernetes: patch `jmeter-global-orchestrator/kube/base/deployment.yaml` in
+Kubernetes: patch `jmeter-global-orchestrator/kube/kustomize/base/deployment.yml` in
 your overlay.
 
 Confirm the control plane agrees with you before going further:

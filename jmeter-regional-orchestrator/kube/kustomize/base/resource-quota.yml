@@ -1,0 +1,18 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# Documented namespace quota — NOT applied by kustomize (the namespace's
+# `default` ResourceQuota is immutable on the platform; jules.yml's preDeploy
+# patches its hard limits). Keep these numbers and the jules.yml patch in sync.
+# Every container in the namespace must declare cpu AND memory limits or the
+# quota rejects it (limits.cpu is counted).
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: default
+spec:
+  hard:
+    requests.cpu: "32"
+    limits.cpu: "32"
+    requests.memory: 160Gi
+    limits.memory: 160Gi
+    requests.ephemeral-storage: 200Gi
+    limits.ephemeral-storage: 200Gi

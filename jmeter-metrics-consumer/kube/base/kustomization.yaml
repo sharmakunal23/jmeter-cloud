@@ -1,9 +1,0 @@
-# KUBE-2 — metrics-consumer base. The `metrics-consumer-credentials`
-# Secret (keys: dbUser, dbPassword — the metricsWriter role)
-# is NOT defined here: kind generates it with dev values; privateCloud
-# creates it out-of-band (see that overlay).
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-resources:
-  - deployment.yaml
-  - service.yaml

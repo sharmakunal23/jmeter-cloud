@@ -1,0 +1,17 @@
+# Dockerfile.privateCloud — the hosted platform's image pattern for the UI
+# (PRIVATE-CLOUD-ALIGNMENT Track 7): the static bundle is built by the pipeline
+# (`npm ci && npm run build` → dist/) and copied onto the managed nginx base;
+# the same nginx.conf template + resolverEnv.envsh as ./Dockerfile, so
+# API_UPSTREAM / BLOB_UPSTREAM (the other services' ingress FQDNs on a
+# one-namespace-per-service platform) are plain env on the Deployment.
+ARG BASE_IMAGE=REPLACE_ME_REGISTRY/container-base/managedbaseimages/nginx:stable
+FROM ${BASE_IMAGE}
+
+LABEL org.opencontainers.image.source="https://${REPO_HOSTNAME}/projects/${PROJECT}/repos/${REPO}/browse?at=${COMMIT_HASH}"
+LABEL org.opencontainers.image.revision="${COMMIT_HASH}"
+LABEL org.opencontainers.image.title="<sealId> jmeter-cloud-ui"
+
+COPY nginx.conf /etc/nginx/templates/default.conf.template
+COPY --chmod=0755 resolverEnv.envsh /docker-entrypoint.d/05-resolverEnv.envsh
+COPY dist /usr/share/nginx/html
+EXPOSE 80

@@ -1,0 +1,43 @@
+# Dockerfile.privateCloud — the hosted platform's image pattern for the worker
+# (PRIVATE-CLOUD-ALIGNMENT Track 7): one stage on the managed JDK base, JMeter
+# unpacked from an artifact URL the platform can reach (an internal mirror of
+# the Apache distribution + the plugins-manager jars), the orchestrator jar
+# copied from target/ after `mvn package`. Build context = the REPO ROOT (it
+# copies jmeter/user.properties), like ./Dockerfile:
+#   docker build -f jmeter-local-orchestrator/docker/Dockerfile.privateCloud \
+#     --build-arg BASE_IMAGE=… --build-arg JMETER_DIST_URL=… .
+ARG BASE_IMAGE=REPLACE_ME_REGISTRY/container-base/managedbaseimages/oracle-jdk:21-stable
+FROM ${BASE_IMAGE}
+
+LABEL org.opencontainers.image.source="https://${REPO_HOSTNAME}/projects/${PROJECT}/repos/${REPO}/browse?at=${COMMIT_HASH}"
+LABEL org.opencontainers.image.revision="${COMMIT_HASH}"
+LABEL org.opencontainers.image.title="<sealId> jmeter-local-orchestrator"
+
+ARG JMETER_VERSION=5.6.3
+ARG JMETER_DIST_URL=https://downloads.apache.org/jmeter/binaries/apache-jmeter-${JMETER_VERSION}.tgz
+ARG PLUGINS_MANAGER_URL=https://repo1.maven.org/maven2/kg/apc/jmeter-plugins-manager/1.10/jmeter-plugins-manager-1.10.jar
+ARG CMDRUNNER_URL=https://repo1.maven.org/maven2/kg/apc/cmdrunner/2.3/cmdrunner-2.3.jar
+ARG gavVersion=1.1.0-SNAPSHOT
+ENV gavVersion=${gavVersion}
+ARG APP_USER=nobody
+
+USER root
+RUN curl -sSL "${JMETER_DIST_URL}" | tar -xz -C /opt/ \
+    && ln -sfn /opt/apache-jmeter-${JMETER_VERSION} /opt/jmeter \
+    && curl -sSL "${PLUGINS_MANAGER_URL}" -o /opt/jmeter/lib/ext/jmeter-plugins-manager.jar \
+    && curl -sSL "${CMDRUNNER_URL}" -o /opt/jmeter/lib/cmdrunner.jar \
+    && java -cp /opt/jmeter/lib/ext/jmeter-plugins-manager.jar org.jmeterplugins.repository.PluginManagerCMDInstaller
+COPY jmeter/user.properties /opt/jmeter/bin/user.properties
+ENV JMETER_HOME=/opt/jmeter
+ENV PATH=/opt/jmeter/bin:$PATH
+
+COPY jmeter-local-orchestrator/target/jmeter-local-orchestrator-${gavVersion}.jar /app/
+RUN mkdir -p /var/lib/jmeter-orchestrator \
+    && chown -R ${APP_USER}:${APP_USER} /app/ /opt/jmeter /var/lib/jmeter-orchestrator \
+    && chmod 444 /app/jmeter-local-orchestrator-${gavVersion}.jar
+USER ${APP_USER}
+
+ENV BASE_DIR=/var/lib/jmeter-orchestrator
+# JAVA_OPTS = the orchestrator JVM's flags (the Deployment / the regional's
+# PodProvisioner sets them); JMETER_JVM_ARGS sizes the JMeter child separately.
+CMD java $JAVA_OPTS -jar /app/jmeter-local-orchestrator-${gavVersion}.jar

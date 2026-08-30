@@ -1,0 +1,20 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# Strategic-merge patch over the base Deployment for the `local` tier.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: document-service
+spec:
+  replicas: 1
+  template:
+    spec:
+      securityContext:
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: document-service
+          image: document-service:dev
+      volumes:
+        - name: blobs
+          persistentVolumeClaim:
+            claimName: document-service-data

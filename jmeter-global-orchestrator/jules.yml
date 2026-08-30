@@ -1,0 +1,145 @@
+# jules.yml — CI/CD source of truth for jmeter-global-orchestrator (PRIVATE-CLOUD-ALIGNMENT Track 7).
+# Placeholders: <sealId> (6-digit app id), <appId> (instance id), <devCluster*>,
+# <testCluster*>, <prodCluster*> (cluster ids), <platform-domain>,
+# <klogin-domain-suffix>, <teamEmail>. Branch map: develop → dev (SANDBOX repo),
+# main → test + prod (RELEASE repo). One namespace per service and tier
+# (<sealId>d<appId>-jmeter-global-orchestrator-<env>); inter-service URLs are the other services'
+# ingress FQDNs (the overlays' env).
+sealId: <sealId>
+node: java-21 && maven-3
+baseVersion: 1.0.0
+featureBranchPipelineTrigger: false
+buildConfig:
+  env:
+    variables:
+      - IDENTITY_SOURCE_AIM: JET
+      - IDENTITY_SOURCE_GKP: JET
+      - IDENTITY_SOURCE_ARTIFACTORY: JET
+publisher:
+  type: email
+  to: <teamEmail>
+container:
+  buildType: buildi
+  buildi:
+    targetRegistry: REPLACE_ME_REGISTRY
+    images:
+      - image: c<sealId>/jmeter-global-orchestrator
+        dockerfile: Dockerfile.privateCloud
+imageScan:
+  forceScan: false
+  domainPrefix: AD\
+kubernetes:
+  deploymentType: k8s
+mapping:
+  - name: develop
+    container:
+      buildi:
+        containerRepo: SANDBOX
+    k8sDeployment:
+      - environment: dev
+        namespace: <sealId>d<appId>-jmeter-global-orchestrator-dev
+        tasks:
+          preDeploy:
+            - script: "kubectl create namespace <sealId>d<appId>-jmeter-global-orchestrator-dev || true"
+            # The namespace's `default` ResourceQuota is immutable — patch its hard
+            # limits (numbers == kube/kustomize/base/resource-quota.yml).
+            - script: "kubectl patch resourcequota default -n <sealId>d<appId>-jmeter-global-orchestrator-dev --type merge -p '{\"spec\":{\"hard\":{\"requests.cpu\":\"4\",\"requests.memory\":\"8Gi\",\"limits.cpu\":\"4\",\"limits.memory\":\"8Gi\",\"requests.ephemeral-storage\":\"20Gi\",\"limits.ephemeral-storage\":\"20Gi\"}}}' || true"
+        kustomize:
+          - location: kube/kustomize/overlays/dev
+        collect: proceed
+        klogin:
+          domainSuffix: '<klogin-domain-suffix>'
+          endpoint: https://api.<devCluster1>.<platform-domain>:6443
+        config:
+          cluster: <devCluster1>
+          cluster-host: jmeter-global-orchestrator.apps.<devCluster1>.<platform-domain>
+      - environment: dev
+        namespace: <sealId>d<appId>-jmeter-global-orchestrator-dev
+        tasks:
+          preDeploy:
+            - script: "kubectl create namespace <sealId>d<appId>-jmeter-global-orchestrator-dev || true"
+            # The namespace's `default` ResourceQuota is immutable — patch its hard
+            # limits (numbers == kube/kustomize/base/resource-quota.yml).
+            - script: "kubectl patch resourcequota default -n <sealId>d<appId>-jmeter-global-orchestrator-dev --type merge -p '{\"spec\":{\"hard\":{\"requests.cpu\":\"4\",\"requests.memory\":\"8Gi\",\"limits.cpu\":\"4\",\"limits.memory\":\"8Gi\",\"requests.ephemeral-storage\":\"20Gi\",\"limits.ephemeral-storage\":\"20Gi\"}}}' || true"
+        kustomize:
+          - location: kube/kustomize/overlays/dev
+        collect: proceed
+        klogin:
+          domainSuffix: '<klogin-domain-suffix>'
+          endpoint: https://api.<devCluster2>.<platform-domain>:6443
+        config:
+          cluster: <devCluster2>
+          cluster-host: jmeter-global-orchestrator.apps.<devCluster2>.<platform-domain>
+  - name: main
+    container:
+      buildi:
+        containerRepo: RELEASE
+    k8sDeployment:
+      - environment: test
+        namespace: <sealId>d<appId>-jmeter-global-orchestrator-test
+        tasks:
+          preDeploy:
+            - script: "kubectl create namespace <sealId>d<appId>-jmeter-global-orchestrator-test || true"
+            # The namespace's `default` ResourceQuota is immutable — patch its hard
+            # limits (numbers == kube/kustomize/base/resource-quota.yml).
+            - script: "kubectl patch resourcequota default -n <sealId>d<appId>-jmeter-global-orchestrator-test --type merge -p '{\"spec\":{\"hard\":{\"requests.cpu\":\"4\",\"requests.memory\":\"8Gi\",\"limits.cpu\":\"4\",\"limits.memory\":\"8Gi\",\"requests.ephemeral-storage\":\"20Gi\",\"limits.ephemeral-storage\":\"20Gi\"}}}' || true"
+        kustomize:
+          - location: kube/kustomize/overlays/test
+        collect: proceed
+        klogin:
+          domainSuffix: '<klogin-domain-suffix>'
+          endpoint: https://api.<testCluster1>.<platform-domain>:6443
+        config:
+          cluster: <testCluster1>
+          cluster-host: jmeter-global-orchestrator.apps.<testCluster1>.<platform-domain>
+      - environment: test
+        namespace: <sealId>d<appId>-jmeter-global-orchestrator-test
+        tasks:
+          preDeploy:
+            - script: "kubectl create namespace <sealId>d<appId>-jmeter-global-orchestrator-test || true"
+            # The namespace's `default` ResourceQuota is immutable — patch its hard
+            # limits (numbers == kube/kustomize/base/resource-quota.yml).
+            - script: "kubectl patch resourcequota default -n <sealId>d<appId>-jmeter-global-orchestrator-test --type merge -p '{\"spec\":{\"hard\":{\"requests.cpu\":\"4\",\"requests.memory\":\"8Gi\",\"limits.cpu\":\"4\",\"limits.memory\":\"8Gi\",\"requests.ephemeral-storage\":\"20Gi\",\"limits.ephemeral-storage\":\"20Gi\"}}}' || true"
+        kustomize:
+          - location: kube/kustomize/overlays/test
+        collect: proceed
+        klogin:
+          domainSuffix: '<klogin-domain-suffix>'
+          endpoint: https://api.<testCluster2>.<platform-domain>:6443
+        config:
+          cluster: <testCluster2>
+          cluster-host: jmeter-global-orchestrator.apps.<testCluster2>.<platform-domain>
+      - environment: prod
+        namespace: <sealId>d<appId>-jmeter-global-orchestrator-prod
+        tasks:
+          preDeploy:
+            - script: "kubectl create namespace <sealId>d<appId>-jmeter-global-orchestrator-prod || true"
+            # The namespace's `default` ResourceQuota is immutable — patch its hard
+            # limits (numbers == kube/kustomize/base/resource-quota.yml).
+            - script: "kubectl patch resourcequota default -n <sealId>d<appId>-jmeter-global-orchestrator-prod --type merge -p '{\"spec\":{\"hard\":{\"requests.cpu\":\"4\",\"requests.memory\":\"8Gi\",\"limits.cpu\":\"4\",\"limits.memory\":\"8Gi\",\"requests.ephemeral-storage\":\"20Gi\",\"limits.ephemeral-storage\":\"20Gi\"}}}' || true"
+        kustomize:
+          - location: kube/kustomize/overlays/prod
+        collect: proceed
+        klogin:
+          domainSuffix: '<klogin-domain-suffix>'
+          endpoint: https://api.<prodCluster1>.<platform-domain>:6443
+        config:
+          cluster: <prodCluster1>
+          cluster-host: jmeter-global-orchestrator.apps.<prodCluster1>.<platform-domain>
+      - environment: prod
+        namespace: <sealId>d<appId>-jmeter-global-orchestrator-prod
+        tasks:
+          preDeploy:
+            - script: "kubectl create namespace <sealId>d<appId>-jmeter-global-orchestrator-prod || true"
+            # The namespace's `default` ResourceQuota is immutable — patch its hard
+            # limits (numbers == kube/kustomize/base/resource-quota.yml).
+            - script: "kubectl patch resourcequota default -n <sealId>d<appId>-jmeter-global-orchestrator-prod --type merge -p '{\"spec\":{\"hard\":{\"requests.cpu\":\"4\",\"requests.memory\":\"8Gi\",\"limits.cpu\":\"4\",\"limits.memory\":\"8Gi\",\"requests.ephemeral-storage\":\"20Gi\",\"limits.ephemeral-storage\":\"20Gi\"}}}' || true"
+        kustomize:
+          - location: kube/kustomize/overlays/prod
+        collect: proceed
+        klogin:
+          domainSuffix: '<klogin-domain-suffix>'
+          endpoint: https://api.<prodCluster2>.<platform-domain>:6443
+        config:
+          cluster: <prodCluster2>
+          cluster-host: jmeter-global-orchestrator.apps.<prodCluster2>.<platform-domain>

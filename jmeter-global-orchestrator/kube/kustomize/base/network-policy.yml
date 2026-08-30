@@ -1,0 +1,22 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# Ingress allow-list: only the platform's ingress controller reaches the pod.
+# Same-namespace and worker traffic is added per tier in
+# overlays/<env>/network-policy-custom.yml. Egress by FQDN is a Calico
+# policy (a plain NetworkPolicy cannot express DNS names) — also there.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: global-orchestrator.allow-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: global-orchestrator
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              gkp_namespace: ingress-contour     # the ingress controller's namespace label
+      ports:
+        - protocol: TCP
+          port: 8082

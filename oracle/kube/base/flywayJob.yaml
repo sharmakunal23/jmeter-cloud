@@ -40,12 +40,12 @@ spec:
             # One PDB; privateCloud patches this to the operator's service.
             - name: DB_URL
               value: jdbc:oracle:thin:@//oracle:1521/FREEPDB1
-            - name: DB_METRICS_OWNER_PASSWORD
+            - name: ORACLE_METRICS_OWNER_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: oracle-credentials
                   key: metricsOwnerPassword
-            - name: DB_GLOBALRUN_OWNER_PASSWORD
+            - name: ORACLE_GLOBALRUN_OWNER_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: oracle-credentials
@@ -57,15 +57,15 @@ spec:
             - >-
               flyway
               -url="$DB_URL"
-              -user=metrics
-              -password="$DB_METRICS_OWNER_PASSWORD"
+              -user=CARDZATE_DB_GRAF
+              -password="$ORACLE_METRICS_OWNER_PASSWORD"
               -locations=filesystem:/flyway/sql/metrics
               -connectRetries=60
               migrate &&
               flyway
               -url="$DB_URL"
               '-user="globalOrchestrator"'
-              -password="$DB_GLOBALRUN_OWNER_PASSWORD"
+              -password="$ORACLE_GLOBALRUN_OWNER_PASSWORD"
               -locations=filesystem:/flyway/sql/globalrun
               -connectRetries=60
               migrate

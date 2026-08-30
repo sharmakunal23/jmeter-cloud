@@ -1,0 +1,6 @@
+# The hosted test tier — same posture as dev with the test overlay's sizing.
+springdoc:
+  swagger-ui:
+    enabled: true
+  api-docs:
+    enabled: true

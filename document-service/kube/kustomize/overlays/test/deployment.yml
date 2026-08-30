@@ -1,0 +1,27 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# Strategic-merge patch over the base Deployment for the `test` tier.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: document-service
+spec:
+  replicas: 1
+  template:
+    spec:
+      securityContext:
+        runAsUser: 214818            # MUST equal the PV label UID (test/prod storage) and the image's least-privilege user
+        fsGroup: 99                 # MUST equal the PV label GID
+      containers:
+        - name: document-service
+          image: ${containerImageUri}
+          resources:
+            requests:
+              memory: 640Mi
+              ephemeral-storage: 10Gi
+            limits:
+              memory: 640Mi
+              ephemeral-storage: 10Gi
+      volumes:
+        - name: blobs
+          persistentVolumeClaim:
+            claimName: <sealId>d<appId>-naspvc-test

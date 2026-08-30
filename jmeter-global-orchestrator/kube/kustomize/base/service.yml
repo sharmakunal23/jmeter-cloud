@@ -1,0 +1,21 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+apiVersion: v1
+kind: Service
+metadata:
+  name: global-orchestrator
+  labels:
+    app: global-orchestrator
+spec:
+  ports:
+    - name: http
+      port: 80            # what the ingress controller talks to
+      targetPort: http    # the container's named port
+      protocol: TCP
+    # Service-name parity: in-cluster callers keep using global-orchestrator:8082
+    # (compose URL defaults) — the same Service also answers on the app port.
+    - name: app
+      port: 8082
+      targetPort: http
+      protocol: TCP
+  selector:
+    app: global-orchestrator

@@ -1,0 +1,28 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# Strategic-merge patch over the base Deployment for the `local` tier.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jmeter-regional-orchestrator
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: regional-orchestrator
+          image: jmeter-regional-orchestrator:dev
+          env:
+            - name: REGION
+              value: local
+            - name: PODPROVISIONER_NAMESPACE
+              value: jmeter-cloud
+            - name: PODPROVISIONER_IMAGE
+              value: "jmeter-local-orchestrator:dev"
+            - name: PODPROVISIONER_METRICS_INGEST_URL
+              value: "http://metrics-consumer:8083/api/v1/ingest"
+            - name: DOCUMENT_SERVICE_URL
+              value: "http://document-service:8084"
+            - name: PODPROVISIONER_WORKER_MEMORY_MB
+              value: "1536"
+            - name: PODPROVISIONER_JMETER_JVM_ARGS
+              value: "-Xms256m -Xmx512m"

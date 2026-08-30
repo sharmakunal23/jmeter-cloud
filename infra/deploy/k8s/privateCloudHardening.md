@@ -1,8 +1,9 @@
 # privateCloudHardening — the KUBE-11 checklist
 
-What must be decided and executed when `infra/deploy/k8s/privateCloud`
-moves from "builds clean" to "hosts the platform on a real private
-cluster." Each section states the decision, the default recommendation,
+What must be decided and executed when the services' `kube/kustomize/overlays/{dev,test,prod}`
+(deployed one namespace per service by each `jules.yml` pipeline —
+PRIVATE-CLOUD-ALIGNMENT Track 7) move from "builds clean" to "hosts the
+platform on the real clusters." Each section states the decision, the default recommendation,
 and the concrete steps. Execute top to bottom at migration; nothing here
 blocks local kind work.
 
@@ -16,7 +17,7 @@ the SECURITY track (S-0/D-6, S-2/S-9, S-5/S-11, S-15).
 Three Secrets exist, all consumed by name (`oracle-credentials`,
 `metrics-consumer-credentials`, `global-orchestrator-credentials`,
 exact keys documented in each service's
-`kube/overlays/privateCloud/kustomization.yaml` header).
+`kube/kustomize/overlays/<env>/kustomization.yml` header).
 
 | Option | When it's the right call |
 |--------|--------------------------|
@@ -35,14 +36,13 @@ private cloud it must ONLY exist as the `anthropicApiKey` key of
 
 ## 2. Rotate the four initdb `localdev` passwords (execute during cutover)
 
-`oracle/initdb/01_createSchemasAndUsers.sql` creates the owners `metrics` and `"globalOrchestrator"`,
-`metricsWriter`, `metricsReader`, `globalOrchestratorWriter` with
+`oracle/initdb/01_createSchemasAndUsers.sql` creates the owners `CARDZATE_DB_GRAF` (metrics) and `"globalOrchestrator"`,
+`metricsReader`, `metricsPurger`, `globalOrchestratorWriter` with
 password `localdev` (public in this repo). On the private cluster,
 immediately after first boot:
 
 ```sql
 ALTER USER "jmetercloud"              WITH PASSWORD '<new>';
-ALTER USER "metricsWriter"            WITH PASSWORD '<new>';
 ALTER USER "metricsReader"            WITH PASSWORD '<new>';
 ALTER USER "globalOrchestratorWriter" WITH PASSWORD '<new>';
 ```
@@ -52,12 +52,18 @@ only reads credentials at boot):
 
 | Role | Secret (key) | Restart |
 |------|--------------|---------|
-| `metrics`, `"globalOrchestrator"` (schema owners) | `oracle-credentials` (metricsOwnerPassword/globalrunOwnerPassword) | the Flyway Job connects as each owner |
-| `metricsWriter` | `metrics-consumer-credentials` | `deployment/metrics-consumer` |
+| `CARDZATE_DB_GRAF`, `"globalOrchestrator"` (schema owners) | `oracle-credentials` (metricsOwnerPassword/globalrunOwnerPassword) | the Flyway Job connects as each owner |
+| `CARDZATE_DB_GRAF` (the consumer connects as the owner) | `metrics-consumer-credentials` | `deployment/metrics-consumer` |
 | `metricsReader` | `global-orchestrator-credentials` (metricsReader*) | `deployment/global-orchestrator` |
 | `globalOrchestratorWriter` | `global-orchestrator-credentials` (globalrunWriter*) | `deployment/global-orchestrator` |
 
 ## 3. NetworkPolicies (manifest ready — enable when the CNI enforces)
+
+The rows to encode are `networkAccessMatrix.md` — every connection the code
+opens, by source, destination, port and purpose. The Calico templates in each
+`overlays/<env>/network-policy-custom.yml` already follow it; fill the
+`REPLACE_ME_*` placeholders (API-server endpoint IPs, the Oracle host, the SMTP
+relay, the SUT domains, the applications' health-endpoint hosts).
 
 `privateCloud/networkPolicies.yaml` ships the full default-deny set plus
 one allow per seam:
@@ -83,8 +89,11 @@ probes pass under default-deny on your CNI.
 
 ## 4. TLS at the Ingress (SECURITY S-15 lands here)
 
-`jmeter-cloud-ui/kube/overlays/privateCloud/ingress.yaml` carries the
-commented `tls:` block. At migration:
+Every hosted overlay carries a Contour `HTTPProxy` (`overlays/<env>/ingress.yml`)
+terminating TLS with the platform's wildcard cert
+(`ingress-contour/ingress-contour-default-ssl-cert`); the pod speaks plain
+HTTP behind `SERVER_FORWARD_HEADERS_STRATEGY=NATIVE`. On a cluster without
+Contour:
 
 1. Set the real hostname + `ingressClassName`.
 2. Certificate: **cert-manager** with the org's internal CA issuer
@@ -151,3 +160,32 @@ the private registry via the overlays' `images:` transformers, and
 - **S-5/S-6/S-11** (JMX safety scan, SSRF/target-host allowlist) —
   deferred while internal-only; the workers' open-egress policy in §3 is
   the visible reminder.
+
+## 10. Provisioning workers in the hosted cluster (Track 8 — the regional's namespace)
+
+The regional creates worker Pods in its own namespace; everything the platform
+injects there shapes them. Work through this before the first `POST /runs`:
+
+```
+[ ] Namespace name follows <sealId>d<appId>-jmeter-regional-orchestrator-<env> (jules preDeploy creates it)
+[ ] `kubectl get resourcequota,limitrange -n <ns>` read; PODPROVISIONER_* shape set accordingly
+    (hard-zero quota → CPU_MEMORY_RESOURCES=false; limits.cpu counted → WORKER_CPU_LIMIT;
+     LimitRange ratio 1 → WORKER_EPHEMERAL_STORAGE == its max)
+[ ] The quota admits the fleet: pods ≥ workers + 1, memory ≥ workers × PODPROVISIONER_WORKER_MEMORY_MB
+    (jules.yml's quota patch == kube/kustomize/base/resource-quota.yml; the capacity guard refuses the rest)
+[ ] ServiceAccount + namespaced Role (pods, pods/log, resourcequotas) + RoleBinding applied; Deployment sets serviceAccountName
+[ ] Calico egress applied BEFORE the workload: DNS, the cluster API by control-plane ENDPOINT IPs on 6443
+    (`kubectl get endpoints kubernetes -n default`, per cluster), workers on 8080; workers → consumer/document-service FQDNs + the SUT domains
+[ ] In-pod check: curl -sS -m 15 -o /dev/null -w 'HTTP=%{http_code} connect=%{time_connect}' --cacert …/ca.crt
+    -H "Authorization: Bearer $(cat …/token)" https://kubernetes.default.svc/api/v1/namespaces/<ns>/pods → HTTP=200
+    (connect=0.000000 = the egress policy; a fast 403 = RBAC)
+[ ] image-pull-secret created; on the regional's SA (its image) and PODPROVISIONER_IMAGE_PULL_SECRET (the workers')
+[ ] PODPROVISIONER_IMAGE pinned by digest; PODPROVISIONER_METRICS_INGEST_AUTH from the metrics-ingest-auth Secret
+[ ] `GET /api/v1/capabilities` through the ingress shows region, image and capacity.workersFree ≥ the planned fleet
+[ ] One-worker run from the hub; then teardown (the run purge deletes the Pods)
+```
+
+Traps recorded on the reference deployment: `klogin -a` rewrites the whole
+kubeconfig (back it up); a `SocksSocketImpl` frame in a fabric8 stack trace is
+the JDK default, not a proxy; `ImagePullBackOff` is a pull-secret problem, never
+a NetworkPolicy one (the kubelet pulls).

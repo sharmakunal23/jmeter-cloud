@@ -1,0 +1,40 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# The regional's only credential: create/delete/list worker Pods and read
+# their logs in ITS OWN namespace. Nothing cluster-scoped.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jmeter-regional-orchestrator
+# The regional's own image pull; worker Pods get theirs from
+# PODPROVISIONER_IMAGE_PULL_SECRET (pod-level — they never use this SA).
+imagePullSecrets:
+  - name: image-pull-secret
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: worker-pod-manager
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "delete", "get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # The capacity guard (Track 8): read the namespace quotas to refuse a spin
+  # that cannot fit, and publish the headroom on /api/v1/capabilities.
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jmeter-regional-orchestrator-worker-pod-manager
+subjects:
+  - kind: ServiceAccount
+    name: jmeter-regional-orchestrator
+roleRef:
+  kind: Role
+  name: worker-pod-manager
+  apiGroup: rbac.authorization.k8s.io

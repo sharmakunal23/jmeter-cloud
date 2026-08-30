@@ -1,0 +1,7 @@
+# The hosted prod tier: no Swagger UI / OpenAPI introspection on the public
+# ingress; the curated api/openapi.yaml stays in the repo.
+springdoc:
+  swagger-ui:
+    enabled: false
+  api-docs:
+    enabled: false

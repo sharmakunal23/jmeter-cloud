@@ -1,0 +1,12 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# `prod` tier: ${…} tokens are resolved by the jules deploy step (namespace,
+# cluster-host, containerImageUri); nothing here is environment-specific by hand.
+resources:
+  - ../../base/
+  - ingress.yml
+  - network-policy-custom.yml
+patches:
+  - path: deployment.yml
+namespace: ${namespace}

@@ -1,3 +1,5 @@
+# The runtime base is overridable (a managed base image on the hosted platform).
+ARG BASE_IMAGE=eclipse-temurin:21-jre@sha256:010e0a06bd4e0184dec58626afb3ba727b42c56c91b977e2f0a9e0837e0fa3fb
 # jmeter-local-orchestrator — production image.
 #
 # Bakes JMeter into the same image as the orchestrator's fat JAR so the
@@ -82,7 +84,7 @@ COPY jmeter/user.properties ${JMETER_HOME}/bin/user.properties
 
 # ── Runtime stage — JRE + JMeter + orchestrator ──────────────────────
 # eclipse-temurin:21-jre is multi-arch (amd64 + arm64).
-FROM eclipse-temurin:21-jre@sha256:010e0a06bd4e0184dec58626afb3ba727b42c56c91b977e2f0a9e0837e0fa3fb
+FROM ${BASE_IMAGE}
 
 LABEL org.opencontainers.image.title="jmeter-local-orchestrator" \
       org.opencontainers.image.description="HTTP-driven orchestrator: launches JMeter as a child process, tails the JTL, and POSTs per-second JSON metrics to the metrics-consumer" \
@@ -114,13 +116,14 @@ ENV PATH=/opt/jmeter/bin:$PATH
 # pods with anonymous volumes (or none), so the dir must be writable
 # out-of-the-box. The static compose orchestrator-1 used to mask this
 # because its bind mount provisioned the dir at runtime.
-RUN groupadd --system orchestrator \
-    && useradd --system --gid orchestrator --no-create-home --shell /sbin/nologin orchestrator \
+RUN groupadd --system --gid 10001 orchestrator \
+    && useradd --system --uid 10001 --gid orchestrator --no-create-home --shell /sbin/nologin orchestrator \
     && chown -R orchestrator:orchestrator /opt/apache-jmeter-${JMETER_VERSION} \
     && mkdir -p /var/lib/jmeter-orchestrator \
     && chown -R orchestrator:orchestrator /var/lib/jmeter-orchestrator
 
-USER orchestrator
+# Numeric so Kubernetes runAsNonRoot can verify it (a USER line takes no inline comment).
+USER 10001:10001
 WORKDIR /app
 
 COPY --from=build /build/target/jmeter-local-orchestrator-*.jar /app/jmeter-local-orchestrator.jar
@@ -154,11 +157,7 @@ COPY --from=build /build/target/jmeter-local-orchestrator-*.jar /app/jmeter-loca
 #                             The child is also made the preferred OOM victim via
 #                             oom_score_adj so this PID-1 orchestrator survives.)
 #   UseContainerSupport       honour cgroup CPU/memory limits (default in JDK 11+)
-ENTRYPOINT ["java", \
-  "-Xms1g", \
-  "-Xmx1g", \
-  "-XX:+UseG1GC", \
-  "-XX:MaxGCPauseMillis=100", \
-  "-XX:+ExitOnOutOfMemoryError", \
-  "-XX:+UseContainerSupport", \
-  "-jar", "/app/jmeter-local-orchestrator.jar"]
+# JAVA_OPTS is the whole JVM flag list (the hosted convention): the
+# Deployment tunes the heap, the image only carries the measured default.
+ENV JAVA_OPTS="-Xms1g -Xmx1g -XX:+UseG1GC -XX:MaxGCPauseMillis=100 -XX:+ExitOnOutOfMemoryError -XX:+UseContainerSupport"
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/jmeter-local-orchestrator.jar"]

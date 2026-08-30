@@ -1,0 +1,7 @@
+# The hosted dev tier. Swagger UI open; secrets and URLs come from the
+# Deployment env (kube/kustomize/overlays/dev).
+springdoc:
+  swagger-ui:
+    enabled: true
+  api-docs:
+    enabled: true

@@ -154,7 +154,8 @@ public final class OrchestratorMain {
         // design (the hosting infra provides observability); the export
         // flag keeps the default in-memory registry from pretending
         // otherwise.
-        props.put("management.endpoints.web.exposure.include", "health,info");
+        props.put("management.endpoints.web.exposure.include", "keepalive,health,info");
+        props.put("management.endpoint.health.probes.enabled", true);
         props.put("management.endpoint.health.show-details", "always");
         props.put("management.defaults.metrics.export.enabled", false);
         // Springdoc / Swagger UI — point the bundled UI at the

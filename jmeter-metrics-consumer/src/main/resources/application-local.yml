@@ -1,0 +1,6 @@
+# Workstation / compose / kind. No auth, Swagger UI open.
+springdoc:
+  swagger-ui:
+    enabled: true
+  api-docs:
+    enabled: true

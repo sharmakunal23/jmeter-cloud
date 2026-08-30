@@ -1,0 +1,20 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# Tier-specific policies for metrics-consumer.
+# local (kind): there is no ingress controller — the hub dials the regional's
+# NodePort from OUTSIDE the cluster and operators port-forward — so ingress on
+# the app port is allowed from anywhere. kind's kindnet DOES enforce
+# NetworkPolicy (kube-network-policies, kind ≥ 0.23): the base's
+# ingress-controller-only rule alone made the region unreachable (2026-08-30).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: metrics-consumer.allow-any-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: metrics-consumer
+  policyTypes: [Ingress]
+  ingress:
+    - ports:                    # any source (in-cluster, the NodePort, port-forwards)
+        - protocol: TCP
+          port: 8083

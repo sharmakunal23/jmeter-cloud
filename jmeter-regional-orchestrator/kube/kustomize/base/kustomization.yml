@@ -1,0 +1,10 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# No namespace, no generators, no quota here — those belong to the overlays / pipeline.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yml
+  - service.yml
+  - network-policy.yml
+  - rbac.yml
+  - workers-service.yml

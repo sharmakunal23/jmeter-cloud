@@ -1,0 +1,59 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# Strategic-merge patch over the base Deployment for the `prod` tier.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jmeter-regional-orchestrator
+spec:
+  replicas: 1
+  template:
+    spec:
+      securityContext:
+        runAsUser: 214818            # MUST equal the PV label UID (test/prod storage) and the image's least-privilege user
+        fsGroup: 99                 # MUST equal the PV label GID
+      containers:
+        - name: regional-orchestrator
+          image: ${containerImageUri}
+          env:
+            - name: REGION
+              value: "${cluster}"
+            - name: PODPROVISIONER_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: PODPROVISIONER_IMAGE
+              value: "REPLACE_ME_REGISTRY/c<sealId>/jmeter-local-orchestrator@sha256:REPLACE_ME_WORKER_DIGEST"
+            - name: PODPROVISIONER_METRICS_INGEST_URL
+              value: "https://metrics-consumer.REPLACE_ME_PLATFORM_DOMAIN/api/v1/ingest"
+            - name: DOCUMENT_SERVICE_URL
+              value: "https://document-service.REPLACE_ME_PLATFORM_DOMAIN"
+            - name: PODPROVISIONER_METRICS_INGEST_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: metrics-ingest-auth
+                  key: authorization
+            # Worker Pod shape on this platform (Track 8) — read the namespace's
+            # ResourceQuota + LimitRange first (`kubectl get resourcequota,limitrange -n <ns>`).
+            - name: PODPROVISIONER_WORKER_CPU_LIMIT
+              value: "2"                     # the quota counts limits.cpu
+            - name: PODPROVISIONER_WORKER_EPHEMERAL_STORAGE
+              value: 10Gi                    # == the LimitRange max; request == limit (ratio 1); the JTL lives here
+            - name: PODPROVISIONER_IMAGE_PULL_SECRET
+              value: image-pull-secret
+            - name: PODPROVISIONER_RUN_AS_USER
+              value: "214818"                # the worker image's least-privilege user
+            - name: PODPROVISIONER_RUN_AS_GROUP
+              value: "99"
+            - name: PODPROVISIONER_EXTRA_LABELS
+              value: app=jmeter-worker
+            - name: PODPROVISIONER_WORKER_JAVA_OPTS
+              value: -Xms1g -Xmx1g -XX:+UseG1GC -XX:MaxGCPauseMillis=100 -XX:+ExitOnOutOfMemoryError -XX:+UseContainerSupport
+            - name: PODPROVISIONER_JMETER_JVM_ARGS
+              value: -Xms2g -Xmx2g
+          resources:
+            requests:
+              memory: 768Mi
+              ephemeral-storage: 10Gi
+            limits:
+              memory: 768Mi
+              ephemeral-storage: 10Gi

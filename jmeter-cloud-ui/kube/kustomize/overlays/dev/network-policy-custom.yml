@@ -1,0 +1,20 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# Tier-specific policies for jmeter-cloud-ui.
+# Calico policy — egress by FQDN (the other services' ingress hostnames; a
+# plain NetworkPolicy cannot express DNS names). `default.` is the tier prefix.
+apiVersion: projectcalico.org/v3
+kind: NetworkPolicy
+metadata:
+  name: default.permit-jmeter-cloud-ui-egress-by-url
+spec:
+  order: 301
+  selector: app == "jmeter-cloud-ui"
+  types: [Egress]
+  egress:
+    - action: Allow
+      protocol: TCP
+      destination:
+        domains:
+          - global-orchestrator.REPLACE_ME_PLATFORM_DOMAIN
+          - document-service.REPLACE_ME_PLATFORM_DOMAIN
+        ports: [443]

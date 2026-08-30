@@ -1,0 +1,16 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# Strategic-merge patch over the base Deployment for the `local` tier.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics-consumer
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: metrics-consumer
+          image: jmeter-metrics-consumer:dev
+          env:
+            - name: ORACLE_METRICS_URL
+              value: "jdbc:oracle:thin:@//oracle:1521/FREEPDB1"

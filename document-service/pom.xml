@@ -84,7 +84,7 @@
     </dependencies>
 
     <build>
-        <finalName>${project.artifactId}</finalName>
+        <finalName>${project.artifactId}-${project.version}</finalName>
         <!-- Bundle api/openapi.yaml into the JAR at static/openapi.yaml so
              Spring Boot's static-resource handler serves it at the URL
              /openapi.yaml (which Swagger UI is configured to load). -->

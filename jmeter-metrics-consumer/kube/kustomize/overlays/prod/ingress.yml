@@ -1,0 +1,20 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# Contour HTTPProxy — TLS terminates at the platform's wildcard cert; the pod
+# speaks plain HTTP (hence forward-headers-strategy NATIVE).
+apiVersion: projectcontour.io/v1
+kind: HTTPProxy
+metadata:
+  name: metrics-consumer
+spec:
+  virtualhost:
+    fqdn: ${cluster-host}
+    tls:
+      secretName: ingress-contour/ingress-contour-default-ssl-cert
+  routes:
+    - conditions:
+        - prefix: /
+      timeoutPolicy:
+        response: 600s          # blob uploads / long polls
+      services:
+        - name: metrics-consumer
+          port: 80

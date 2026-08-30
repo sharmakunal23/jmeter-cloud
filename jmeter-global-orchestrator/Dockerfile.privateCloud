@@ -1,0 +1,27 @@
+# Dockerfile.privateCloud — the hosted platform's image pattern for jmeter-global-orchestrator
+# (PRIVATE-CLOUD-ALIGNMENT Track 7). Built by the jules pipeline AFTER
+# `mvn package`: the jar is copied from target/, not built in-image. Local
+# and kind builds keep ./Dockerfile (multi-stage, public base images).
+#
+# BASE_IMAGE must be the platform's managed JDK 21 base — the image scanner
+# expects it; APP_USER is that base's least-privilege user.
+ARG BASE_IMAGE=REPLACE_ME_REGISTRY/container-base/managedbaseimages/oracle-jdk:21-stable
+FROM ${BASE_IMAGE}
+
+# OCI labels — the pipeline fills the ${…} placeholders; leave them in place.
+LABEL org.opencontainers.image.source="https://${REPO_HOSTNAME}/projects/${PROJECT}/repos/${REPO}/browse?at=${COMMIT_HASH}"
+LABEL org.opencontainers.image.revision="${COMMIT_HASH}"
+LABEL org.opencontainers.image.title="<sealId> jmeter-global-orchestrator"
+
+# CI passes the Maven version so the COPY matches the produced jar
+# (pom finalName = artifactId-version).
+ARG gavVersion=0.1.0-SNAPSHOT
+ENV gavVersion=${gavVersion}
+ARG APP_USER=nobody
+
+COPY target/jmeter-global-orchestrator-${gavVersion}.jar /app/
+RUN chown -R ${APP_USER}:${APP_USER} /app/ && chmod 444 /app/jmeter-global-orchestrator-${gavVersion}.jar
+
+# JAVA_OPTS comes from the Deployment (kube/kustomize): heap is tuned in
+# Kubernetes, never baked into the image.
+CMD java $JAVA_OPTS -jar /app/jmeter-global-orchestrator-${gavVersion}.jar

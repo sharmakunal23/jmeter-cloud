@@ -1,0 +1,14 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# kind: the hub runs in compose and dials the regional through the node's
+# published port (bootstrapRegions.sh maps it) — a NodePort only exists locally.
+apiVersion: v1
+kind: Service
+metadata:
+  name: jmeter-regional-orchestrator
+spec:
+  type: NodePort
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      nodePort: 30088

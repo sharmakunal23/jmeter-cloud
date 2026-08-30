@@ -1,0 +1,80 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# `prod` policies for the regional AND the worker Pods it creates (Track 8).
+#
+# The namespace inherits a platform Calico tier that default-denies egress and
+# is invisible to us — every egress below is REQUIRED. Calico evaluates egress
+# AFTER kube-proxy's DNAT, so the cluster API must be allowed by its
+# control-plane ENDPOINT IPs on 6443, never the kubernetes.default ClusterIP:
+#   kubectl get endpoints kubernetes -n default     # one entry per cluster — fill in per environment
+apiVersion: projectcalico.org/v3
+kind: NetworkPolicy
+metadata:
+  name: default.permit-jmeter-regional-orchestrator-egress
+spec:
+  order: 300
+  selector: app == "jmeter-regional-orchestrator"
+  types: [Egress]
+  egress:
+    - action: Allow
+      protocol: UDP
+      destination:
+        ports: [53]
+    - action: Allow
+      protocol: TCP
+      destination:
+        ports: [53]
+    - action: Allow                # the cluster API — endpoint IPs, post-DNAT
+      protocol: TCP
+      destination:
+        nets:
+          - REPLACE_ME_APISERVER_ENDPOINT_IP_1/32
+          - REPLACE_ME_APISERVER_ENDPOINT_IP_2/32
+          - REPLACE_ME_APISERVER_ENDPOINT_IP_3/32
+        ports: [6443]
+    - action: Allow                # workers, by pod IP (the relay)
+      protocol: TCP
+      destination:
+        selector: com.perf.jmeterCloud.managedBy == "regional-orchestrator"
+        ports: [8080]
+---
+# Worker Pods: reached only by the regional (the relay); egress to the hub's
+# data plane by FQDN, DNS, and the systems under test (fill the domains in —
+# SECURITY S-5/S-11 makes this an allow-list the hub validates against).
+apiVersion: projectcalico.org/v3
+kind: NetworkPolicy
+metadata:
+  name: default.permit-jmeter-workers
+spec:
+  order: 310
+  selector: com.perf.jmeterCloud.managedBy == "regional-orchestrator"
+  types: [Ingress, Egress]
+  ingress:
+    - action: Allow
+      protocol: TCP
+      source:
+        selector: app == "jmeter-regional-orchestrator"
+      destination:
+        ports: [8080]
+  egress:
+    - action: Allow
+      protocol: UDP
+      destination:
+        ports: [53]
+    - action: Allow
+      protocol: TCP
+      destination:
+        ports: [53]
+    - action: Allow                # metrics ingest + artifacts (the hub's data plane)
+      protocol: TCP
+      destination:
+        domains:
+          - metrics-consumer.REPLACE_ME_PLATFORM_DOMAIN
+          - document-service.REPLACE_ME_PLATFORM_DOMAIN
+        ports: [443]
+    - action: Allow                # the systems under test
+      protocol: TCP
+      destination:
+        domains:
+          - REPLACE_ME_SUT_DOMAIN_1
+          - REPLACE_ME_SUT_DOMAIN_2
+        ports: [80, 443]

@@ -1,0 +1,34 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# RWX NFS volume for the blob store on `test` — shared by every replica.
+# Invariants (check on every change): PV capacity == PVC request; PV labels
+# UID/GID == the Deployment's runAsUser/fsGroup; claimRef pre-binds the PV;
+# Retain keeps the data if the PVC is deleted; mountPath == the app's root path.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: <sealId>d<appId>-naspv-test
+  labels:
+    UID: "214818"
+    GID: "99"
+    filepermission: "775"
+spec:
+  capacity:
+    storage: 1Ti
+  accessModes: [ReadWriteMany]
+  persistentVolumeReclaimPolicy: Retain
+  nfs:
+    server: REPLACE_ME_NAS_FQDN
+    path: /REPLACE_ME/document-service-test
+  claimRef:
+    namespace: ${namespace}
+    name: <sealId>d<appId>-naspvc-test
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: <sealId>d<appId>-naspvc-test
+spec:
+  accessModes: [ReadWriteMany]
+  resources:
+    requests:
+      storage: 1Ti

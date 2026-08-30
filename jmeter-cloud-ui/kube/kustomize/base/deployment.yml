@@ -1,0 +1,71 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# jmeter-cloud-ui — the control-plane SPA behind nginx (proxies /api/* to the hub and /api/v1/blob to document-service).
+# Environment-neutral shape: probes, security context, resources, the env the
+# service needs in every tier. Everything that differs per tier (image, URLs,
+# replicas, memory, volumes, profile) is patched by kube/kustomize/overlays/<env>.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jmeter-cloud-ui
+  labels:
+    app: jmeter-cloud-ui
+spec:
+  replicas: 1
+  revisionHistoryLimit: 4
+  selector:
+    matchLabels:
+      app: jmeter-cloud-ui
+  template:
+    metadata:
+      labels:
+        app: jmeter-cloud-ui
+    spec:
+      enableServiceLinks: false        # kubelet's REDIS_PORT=tcp://… would collide with ${REDIS_PORT:6379}-style bindings
+      # Holds no cluster credential — no token mounted (the regional does that work).
+      automountServiceAccountToken: false
+      # No runAsNonRoot here: the nginx image's master process runs as root to
+      # bind :80 (an unprivileged nginx base on 8080 is the hosted alternative).
+      imagePullSecrets:
+        - name: image-pull-secret
+      containers:
+        - name: jmeter-cloud-ui
+          image: ${containerImageUri}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 80
+          # Three-probe pattern: startup + liveness follow the PROCESS (never a
+          # dependency — a database or storage blip must not restart every
+          # replica); readiness follows the dependencies and only gates traffic.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            timeoutSeconds: 5
+            periodSeconds: 5
+            failureThreshold: 30       # 150 s boot budget
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            timeoutSeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            timeoutSeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            # requests == limits for memory (Guaranteed QoS: the JVM's heap is
+            # fixed, so the node's OOM killer never picks this pod first). The
+            # CPU limit exists because the platform's namespace quota counts
+            # limits.cpu; it is generous enough not to throttle at steady state.
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "200m"
+              memory: 128Mi

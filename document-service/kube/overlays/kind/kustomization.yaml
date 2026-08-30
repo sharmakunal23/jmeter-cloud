@@ -1,9 +1,0 @@
-# KUBE-3 — kind overlay. Nothing to add over the base (no credentials;
-# local-path provisioner satisfies the PVC). Side-load the image first
-# (BuildKit attestations break `kind load` — "ctr: content digest not found"):
-#   docker build --provenance=false -t document-service:dev document-service/
-#   kind load docker-image document-service:dev --name jmeter-cloud
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-resources:
-  - ../../base

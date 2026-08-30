@@ -5,38 +5,33 @@ kind). Built by the **KUBE track** — live status and per-phase
 checklists in the KUBE track. Compose remains the
 primary local dev environment; everything here is additive.
 
-## Layout
+## Layout (PRIVATE-CLOUD-ALIGNMENT Track 7 — the hosted blueprint)
 
-Each service owns its manifests, mirroring how each owns its compose
-fragment:
-
-```
-<service>/kube/
-  base/            # kustomization.yaml + manifests, environment-neutral
-  overlays/
-    kind/          # local validation cluster
-    privateCloud/  # the real hosting target
-```
-
-This directory holds only what no single service can own:
+Each service owns its manifests, in the hosted platform's layout:
 
 ```
-infra/deploy/k8s/
-  namespace/           # the shared jmeter-cloud Namespace (a kustomize base)
-  kind/                # umbrella: composes every service's kind overlay
-  privateCloud/        # umbrella: composes every service's privateCloud overlay
+<service>/
+  Dockerfile               # local + kind: multi-stage, public base images, JAVA_OPTS honoured
+  Dockerfile.privateCloud  # hosted: managed base image, COPY target/<svc>-${gavVersion}.jar, CMD java $JAVA_OPTS
+  Jenkinsfile              # shim → jules.yml
+  jules.yml                # build + image + branch → env → cluster deploy map (placeholders)
+  kube/kustomize/
+    base/                  # deployment.yml service.yml network-policy.yml resource-quota.yml (documented, not applied)
+    overlays/
+      local/               # token-free: today's kind shape (namespace jmeter-cloud, :dev images)
+      dev/ test/ prod/     # ${namespace} ${containerImageUri} ${cluster-host} ${environment} ${cluster} — resolved by the pipeline
 ```
 
-The umbrellas are the `kubectl apply -k` analog of the top-level
-`docker-compose.yml` `include:` list:
+Two deployment shapes, and only the first has an umbrella:
 
-```sh
-kubectl apply -k infra/deploy/k8s/kind          # local kind cluster
-kubectl apply -k infra/deploy/k8s/privateCloud  # private cloud
-```
+| Shape | Namespaces | Inter-service URLs | Apply |
+|---|---|---|---|
+| **local (kind)** | one, `jmeter-cloud` | Service names (`metrics-consumer:8083`) | `kubectl apply -k infra/deploy/k8s/kind` — composes every service's `local` overlay + the local Oracle |
+| **hosted (D10)** | one per service and tier: `<sealId>d<appId>-<service>-<env>` | the other services' ingress FQDNs (`https://metrics-consumer.<platform-domain>`), set in each overlay's env | each service's `jules.yml` pipeline (`kustomize build overlays/<env> \| kubectl apply`), never an umbrella |
 
-Service entries inside the umbrella `kustomization.yaml`s are commented
-in as each KUBE phase lands, so the umbrellas always build clean.
+The old `overlays/{kind,privateCloud}` and the `privateCloud` umbrella are gone
+(2026-08-30). Filenames under `kube/kustomize/` mirror the blueprint verbatim
+(`.yml`, `network-policy.yml`) — the repo's camelCase rule exempts that tree.
 
 ## Conventions (locked in KUBE-0 — full rationale in the tracker)
 
@@ -47,25 +42,31 @@ in as each KUBE phase lands, so the umbrellas always build clean.
    `document-service`, `global-orchestrator`, `mailhog`) so
    every existing URL default works unchanged. This is the migration
    contract — breaking parity means hunting config in every consumer.
-3. **One namespace: `jmeter-cloud`** for services and the dynamically
-   provisioned worker Pods.
-4. **Naming.** Directory `kube/`; manifest filenames camelCase
-   (`configMap.yaml`, `flywayJob.yaml`); `kustomization.yaml` is
-   tool-hardcoded (exempt). Resource names inside manifests are DNS-1123
-   lowercase-with-hyphens (the one exemption from the repo's camelCase rule).
+3. **Namespaces.** Local: one, `jmeter-cloud`, for services and the worker
+   Pods. Hosted: one per service and tier (D10); the regional's namespace
+   also holds the worker Pods it creates, so its quota is sized for them.
+4. **Naming.** `kube/kustomize/` mirrors the hosted blueprint (`.yml`,
+   `network-policy.yml`, `resource-quota.yml`); resource names are DNS-1123
+   lowercase-with-hyphens. `oracle/kube` keeps the older camelCase tree.
 5. **`enableServiceLinks: false` on every pod spec.** Kubelet's legacy
    docker-link env injection (`REDIS_PORT=tcp://…`) collides with our
    `${REDIS_PORT:6379}`-style Spring bindings.
-6. **Probes from `/actuator/health` — never drop health.** Where a
-   service splits probe groups (metrics-consumer), liveness →
-   `/actuator/health/liveness`, readiness → `/actuator/health/readiness`;
-   a liveness probe on its aggregate health would restart-loop the idle
-   consumer (`ingestProgress` flips DOWN after 5 quiet minutes).
-7. **Resources from measured compose limits**, requests = limits for JVM
-   pods (predictable heap, no overcommit surprises).
+6. **Three probes, never on aggregate health.** Startup + liveness →
+   `/actuator/keepalive` (process only — a database or storage blip must
+   not restart every replica); readiness → `/actuator/health/readiness`
+   (the service's dependencies: `db` on the hub and consumer, `storage`
+   on document-service). The UI probes `/healthz`. Probes send
+   `x-forwarded-proto: https` because the apps run with
+   `SERVER_FORWARD_HEADERS_STRATEGY=NATIVE` behind the TLS-terminating
+   ingress.
+7. **Resources: memory requests = limits** (Guaranteed QoS, the JVM heap is
+   fixed by `JAVA_OPTS` on the Deployment — heap ≈ half the limit); every
+   container also declares a CPU limit because the platform's namespace
+   quota counts `limits.cpu`.
 8. **Secrets never in manifests.** Bases reference Secrets by name; the
-   privateCloud overlay uses a `secretGenerator` reading a git-ignored
-   env file (same posture as the repo-root `.env`).
+   `local` overlay generates the compose dev credentials, the hosted tiers
+   create them out of band (each overlay's `kustomization.yml` lists the
+   keys).
 9. **No static worker manifests.** Workers are bare Pods created by the
    provisioner at runtime (headless `workers` Service for DNS); only
    their image needs a registry story.
@@ -73,29 +74,13 @@ in as each KUBE phase lands, so the umbrellas always build clean.
     by the umbrella (`labels:` transformer, `includeSelectors: false` so
     selectors stay untouched).
 
-## Images & registry (KUBE-8)
+## Images & registry
 
-Bases reference plain local tags (`jmeter-metrics-consumer:dev`). Each
-overlay owns the rewrite via the kustomize `images:` transformer:
-
-```yaml
-# overlays/kind — keep local tags, never pull
-images:
-  - name: jmeter-metrics-consumer
-    newTag: dev
-
-# overlays/privateCloud — private registry
-images:
-  - name: jmeter-metrics-consumer
-    newName: registry.internal.example.com/jmeter-cloud/jmeter-metrics-consumer
-    newTag: "1.0.0"
-```
-
-kind additionally needs local-only images side-loaded (`kind load
-docker-image <image>:dev`) since there is no registry to pull from —
-build them with `--provenance=false` (BuildKit attestation manifests
-break the containerd import) and let public multi-arch images
-(gvenzl/oracle-free, mailhog) pull from their registries instead.
+Bases reference `${containerImageUri}` — the digest the pipeline's image
+build injects. The `local` overlay patches the plain local tag
+(`jmeter-metrics-consumer:dev`) instead; kind side-loads it (`kind load
+docker-image <image>:dev`, built with `--provenance=false` because BuildKit
+attestation manifests break the containerd import).
 
 ### The full image inventory (build + push)
 
@@ -114,16 +99,15 @@ the repo root:
 | `jmeter-regional-orchestrator` | `docker build --provenance=false -t jmeter-regional-orchestrator:dev jmeter-regional-orchestrator/` | `jmeter-regional-orchestrator/kube` (in the umbrella as `REGION=local`; one per data-center cluster via `local/bootstrapRegions.sh` or its privateCloud overlay) |
 | `jmeter` (base) | `jmeter/buildImage.sh` | not deployed by any manifest — the worker image bakes its own JMeter; this base serves standalone/tooling use |
 
-Push pattern (per image): `docker tag <image>:dev
-registry.internal.example.com/jmeter-cloud/<image>:<version>` →
-`docker push …` → set the same reference in the privateCloud overlay's
-`images:` block.
+On the hosted platform each service's `jules.yml` builds
+`Dockerfile.privateCloud` and injects the digest as `${containerImageUri}`;
+nothing is pushed by hand.
 
 ### The worker image is NOT in any manifest
 
 Worker Pods are created at runtime by the orchestrators; the image comes
-from **`PODPROVISIONER_IMAGE`**, not a kustomize transformer. In
-privateCloud, patch that env var to a registry reference — and pin it as
+from **`PODPROVISIONER_IMAGE`**, not a kustomize transformer. The hosted
+overlays set it to the worker image the worker's own `jules.yml` built — pin it as
 `repo:tag@sha256:<digest>`: `currentImageDigest()` returns the
 CONFIGURED reference, so IMAGE_MISMATCH recycling fires on a *config*
 change (deliberate rollout), and a floating tag that someone re-pushes
@@ -132,16 +116,24 @@ config* mid-run triggers PodRecycler drains exactly like a local rebuild
 does on compose. Never roll `PODPROVISIONER_IMAGE` while runs are
 active.
 
+## Who talks to whom
+
+`networkAccessMatrix.md` is the verified source → destination table (ports,
+purpose, direction) the hosted network policies are written from, and states
+the datastore rule: **only the global orchestrator and the metrics-consumer
+open a database connection; everything else is stateless.**
+
 ## Private-cloud hardening (KUBE-11)
 
-Everything that must be decided/executed when the privateCloud overlay
-meets a real cluster lives in **`privateCloudHardening.md`**: secrets
-sourcing options, the four `localdev` password rotations, the
-default-deny NetworkPolicy set (`privateCloud/networkPolicies.yaml`,
-shipped commented — kind's CNI doesn't enforce policies), Ingress TLS
-(S-15), storageClass + backup posture, the D-6 log-based alerting
-obligation (HARD — the platform emits no metrics), and the auth
-exposure gate (profile `local` only while the cluster is private).
+Everything that must be decided/executed when the `dev`/`test`/`prod`
+overlays meet the hosted clusters lives in **`privateCloudHardening.md`**:
+secrets sourcing, the `localdev` password rotations, the per-service
+NetworkPolicies (ingress from the ingress controller in every base,
+tier egress + the Calico FQDN policies in `network-policy-custom.yml`),
+TLS (Contour `HTTPProxy` with the platform wildcard cert), the RWX NFS
+storage tiers, the D-6 log-based alerting obligation (HARD — the platform
+emits no metrics), and the auth exposure gate (`local` is the only
+profile without auth).
 
 ## Boot expectations
 
@@ -234,7 +226,7 @@ choice, matching the accepted `ApplicationHealthPoller` deviation.
 
 Worker Pods are created by `jmeter-regional-orchestrator`, one per cluster,
 under a ServiceAccount with a namespace-scoped pods-only Role
-(`jmeter-regional-orchestrator/kube/base/rbac.yaml`) — the only cluster
+(`jmeter-regional-orchestrator/kube/kustomize/base/rbac.yml`) — the only cluster
 credential in the platform. The global-orchestrator holds none: it names its
 regions in `REGIONS=id=url,…` and forwards pod creation and worker calls to
 each region's regional. The `workers` headless Service lives with the

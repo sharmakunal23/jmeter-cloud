@@ -1,0 +1,62 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# Tier-specific policies for global-orchestrator.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: global-orchestrator.allow-egress
+spec:
+  podSelector:
+    matchLabels:
+      app: global-orchestrator
+  policyTypes: [Egress]
+  egress:
+    - to:                             # DNS
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: REPLACE_ME_ORACLE_HOST_IP/32          # the Oracle listener
+      ports:
+        - protocol: TCP
+          port: 1521
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+---
+# Calico policy — egress by FQDN (the other services' ingress hostnames; a
+# plain NetworkPolicy cannot express DNS names). `default.` is the tier prefix.
+apiVersion: projectcalico.org/v3
+kind: NetworkPolicy
+metadata:
+  name: default.permit-global-orchestrator-egress-by-url
+spec:
+  order: 301
+  selector: app == "global-orchestrator"
+  types: [Egress]
+  egress:
+    - action: Allow
+      protocol: TCP
+      destination:
+        domains:
+          - jmeter-regional-orchestrator.REPLACE_ME_PLATFORM_DOMAIN
+          - document-service.REPLACE_ME_PLATFORM_DOMAIN
+          - metrics-consumer.REPLACE_ME_PLATFORM_DOMAIN   # the platform-health probe only
+          - api.anthropic.com                              # AI run analysis — only when ANTHROPIC_API_KEY is set
+        ports: [443]
+    - action: Allow                # notifications (run reports, alerts) — the corporate relay
+      protocol: TCP
+      destination:
+        domains:
+          - REPLACE_ME_SMTP_RELAY
+        ports: [25, 587]
+    # ApplicationHealthPoller also calls every registered application's
+    # healthEndpoints (operator-configured URLs, every minute) — add a domains
+    # rule per application here, or leave them unregistered on this tier.

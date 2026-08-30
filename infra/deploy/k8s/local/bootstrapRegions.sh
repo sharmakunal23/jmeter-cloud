@@ -83,7 +83,7 @@ for c in "${regions[@]}"; do
   # through it, and the hub reaches this node's NodePort by container name.
   docker network connect "$network" "$c-control-plane" 2>/dev/null || echo "  node already on $network"
   kind load docker-image --name "$c" jmeter-regional-orchestrator:dev jmeter-local-orchestrator:dev
-  k "$c" apply -k "$repoRoot/jmeter-regional-orchestrator/kube/overlays/kind"
+  k "$c" apply -k "$repoRoot/jmeter-regional-orchestrator/kube/kustomize/overlays/local"
   # The overlay ships REGION=local; this cluster IS a region.
   k "$c" -n "$namespace" set env deployment/jmeter-regional-orchestrator REGION="$c" >/dev/null
   bridge "$c"

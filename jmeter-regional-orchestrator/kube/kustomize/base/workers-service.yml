@@ -1,0 +1,16 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# Headless Service giving every worker Pod a stable {podName}.workers DNS
+# name — the regional relays to it. Selector == ProvisionerProperties.MANAGED_BY.
+apiVersion: v1
+kind: Service
+metadata:
+  name: workers
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    com.perf.jmeterCloud.managedBy: regional-orchestrator
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

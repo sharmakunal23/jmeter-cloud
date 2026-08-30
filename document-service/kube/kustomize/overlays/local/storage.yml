@@ -1,0 +1,14 @@
+# Generated once by the Track 7 layout (2026-08-30); hand-maintained since.
+# local (kind): a RWO PVC on the cluster's default storageClass so blobs
+# survive pod restarts; Recreate strategy avoids two pods holding it.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: document-service-data
+  labels:
+    app: document-service
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi

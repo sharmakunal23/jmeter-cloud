@@ -14,10 +14,26 @@ management:
       exposure:
         # SLIMDOWN (2026-07-21) — health,info ONLY. Never drop health:
         # the compose healthcheck and the UI Home checklist depend on it.
-        include: health,info
+        include: keepalive,health,info
   endpoint:
     health:
       show-details: always
+      # Three-probe pattern (PRIVATE-CLOUD-ALIGNMENT Track 7): startup +
+      # liveness → /actuator/keepalive; readiness → readinessState + the
+      # blob-mount check (StorageHealthIndicator), so a broken or full mount
+      # takes the pod out of rotation WITHOUT restarting it.
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState,storage
+  health:
+    # Replaced by StorageHealthIndicator: Spring's diskspace check inspects
+    # the container root, not the mounted blob volume.
+    diskspace:
+      enabled: false
   # SLIMDOWN (2026-07-21) — the tracing/otlp blocks are gone with the
   # Micrometer/OTel stack; belt-and-braces so the default in-memory
   # registry doesn't pretend to export anything.
@@ -42,7 +58,14 @@ documentService:
   # s3:    S3BlobStore (compiled only under -Pcloud profile — see pom.xml).
   backend: ${DOCUMENT_SERVICE_BACKEND:local}
   localFs:
+    # The hosted env name DOCUMENTSERVICE_LOCALFS_ROOTPATH binds to this key
+    # directly (Spring relaxed binding) and wins over the placeholder; the
+    # compose stack keeps DOCUMENT_SERVICE_LOCAL_FS_ROOT. Must equal the
+    # volume mountPath in the manifests.
     rootPath: ${DOCUMENT_SERVICE_LOCAL_FS_ROOT:/var/lib/document-service/blobs}
+    # Readiness flips DOWN once the blob volume's usable space drops below
+    # this floor (1 GiB) — the pod leaves rotation before writes fail.
+    minFreeBytes: ${DOCUMENT_SERVICE_MIN_FREE_BYTES:1073741824}
   s3:
     bucket:    ${DOCUMENT_SERVICE_S3_BUCKET:}
     region:    ${DOCUMENT_SERVICE_S3_REGION:}
