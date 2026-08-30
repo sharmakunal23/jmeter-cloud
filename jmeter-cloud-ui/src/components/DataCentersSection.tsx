@@ -262,33 +262,35 @@ function DeclareWorkerForm({
       className="dataCenters__declareForm"
       onSubmit={(e) => { e.preventDefault(); if (canSubmit) void submit(false); }}
     >
-      <label>
-        <span>Worker name</span>
+      <div className="formField">
+        <label htmlFor="declareWorkerName">Worker name</label>
         <input
+          id="declareWorkerName"
           className="mono"
           value={podName}
           onChange={(e) => { setPodName(e.target.value); setOfferForce(false); }}
           placeholder="payments-na-east-worker-1"
           autoFocus
         />
-        <small className="ink-soft">
+        <small>
           Must match the pod name exactly — it is also the id the worker stamps on its
           metrics.
         </small>
-      </label>
-      <label>
-        <span>Address</span>
+      </div>
+      <div className="formField">
+        <label htmlFor="declareWorkerAddress">Address</label>
         <input
+          id="declareWorkerAddress"
           className="mono"
           value={baseUrl}
           onChange={(e) => { setBaseUrl(e.target.value); setOfferForce(false); }}
           placeholder="http://payments-na-east-worker-1.workers:8080"
         />
-        <small className="ink-soft">
+        <small>
           The address this platform can reach the worker at — not necessarily the one
           the worker sees itself as.
         </small>
-      </label>
+      </div>
 
       {error && <div className="formError" role="alert">{error}</div>}
 

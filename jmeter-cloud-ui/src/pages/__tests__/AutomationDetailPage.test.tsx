@@ -133,7 +133,7 @@ describe("AutomationDetailPage", () => {
     await screen.findByRole("button", { name: /\+ New schedule/ });
     fireEvent.click(screen.getByRole("button", { name: /\+ New schedule/ }));
 
-    expect(await screen.findByRole("dialog", { name: /New schedule for checkout/i })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: /New schedule/i })).toBeInTheDocument();
     await waitFor(() => expect(templates.list).toHaveBeenCalled());
   });
 
@@ -226,7 +226,7 @@ describe("AutomationDetailPage", () => {
     await screen.findByText("checkout-nightly");
     fireEvent.click(screen.getByRole("button", { name: /^Edit$/ }));
 
-    const dialog = await screen.findByRole("dialog", { name: /Edit schedule checkout-nightly/i });
+    const dialog = await screen.findByRole("dialog", { name: /Edit schedule/i });
     // Name is prefilled from the existing schedule.
     expect(within(dialog).getByLabelText(/Name/)).toHaveValue("checkout-nightly");
     fireEvent.click(within(dialog).getByRole("button", { name: /Save changes/ }));

@@ -99,7 +99,7 @@ export function FleetAllocationFormView({
                         title={controlsHidden ? "Show form pane (keyboard: [)" : "Hide form pane (keyboard: [)"}
                         aria-pressed={controlsHidden ?? false}
                     >
-                        {controlsHidden ? "▸ Show Controls" : "◂ Hide Controls"}
+                        {controlsHidden ? "▸ Show controls" : "◂ Hide controls"}
                     </button>
                 </div>
             )}

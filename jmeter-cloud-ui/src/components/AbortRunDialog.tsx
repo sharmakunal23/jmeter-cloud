@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import {
   GlobalOrchestratorError,
   runsApi,
   type Run,
 } from "../api/runs";
+import { Modal } from "./Modal";
 
 /**
  * Run-abort confirmation dialog (SAVERESULTS BUG-3 UI). Force-terminates a run
@@ -39,13 +40,6 @@ export function AbortRunDialog({
   const [submit, setSubmit] = useState<SubmitState>({ status: "idle" });
   const [reason, setReason] = useState("");
 
-  // ESC closes — same dismiss UX as the rest of the modal family.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   async function handleConfirm() {
     setSubmit({ status: "submitting" });
     try {
@@ -71,63 +65,14 @@ export function AbortRunDialog({
   const submitting = submit.status === "submitting";
 
   return (
-    <div className="modal__overlay" role="presentation" onClick={onClose}>
-      <div
-        className="modal modal--application"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="abortRunDialogTitle"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="modal__header">
-          <div>
-            <h3 id="abortRunDialogTitle">Abort run?</h3>
-            <small className="ink-soft">
-              {activeWorkerCount} active worker{activeWorkerCount === 1 ? "" : "s"}
-            </small>
-          </div>
-          <button
-            type="button"
-            className="btn btn--ghost"
-            onClick={onClose}
-            aria-label="Close"
-          >×</button>
-        </header>
-
-        <div className="modal__body">
-          <p>
-            Force-terminates the whole run. Each worker is hard-killed
-            (<span className="mono">SIGKILL</span>) and the run rolls to{" "}
-            <span className="badge badge--err">ABORTED</span> immediately —
-            in-flight samplers do <strong>not</strong> complete. The run's
-            workers are released so their pods free up for re-use.
-          </p>
-          <p className="ink-soft" style={{ fontSize: "0.85rem" }}>
-            This is the hard stop. For a graceful end that lets in-flight
-            requests finish, use <strong>Stop test</strong> on the Worker Fleet
-            tab instead. Abort still works when workers are stuck or
-            unreachable (a graceful drain can't end those).
-          </p>
-          <div className="formField">
-            <label htmlFor="abortReason">Reason (optional)</label>
-            <input
-              id="abortReason"
-              type="text"
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              placeholder="optional — e.g. misconfigured test plan"
-              maxLength={500}
-              disabled={submitting}
-            />
-          </div>
-          {submit.status === "error" && (
-            <div className="formError" role="alert">
-              <strong>{submit.code}</strong>: {submit.message}
-            </div>
-          )}
-        </div>
-
-        <footer className="modal__footer">
+    <Modal
+      title="Abort run?"
+      infoTip="Force-stops every worker immediately and marks the run ABORTED — in-flight samplers are lost."
+      width="confirm"
+      onClose={onClose}
+      closeDisabled={submitting}
+      footer={
+        <>
           <button
             type="button"
             className="btn"
@@ -140,11 +85,40 @@ export function AbortRunDialog({
             onClick={() => { void handleConfirm(); }}
             disabled={submitting}
             aria-busy={submitting}
+            autoFocus
           >
             {submitting ? "Aborting…" : "Abort run"}
           </button>
-        </footer>
+        </>
+      }
+    >
+      <p>
+        <strong>{activeWorkerCount} active worker{activeWorkerCount === 1 ? "" : "s"}</strong>{" "}
+        will be hard-killed and released so their pods free up for re-use.
+      </p>
+      <p className="ink-soft" style={{ fontSize: "0.85rem" }}>
+        This is the hard stop. For a graceful end that lets in-flight
+        requests finish, use <strong>Stop test</strong> on the Worker Fleet
+        tab instead. Abort still works when workers are stuck or
+        unreachable (a graceful drain can't end those).
+      </p>
+      <div className="formField">
+        <label htmlFor="abortReason">Reason (optional)</label>
+        <input
+          id="abortReason"
+          type="text"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="optional — e.g. misconfigured test plan"
+          maxLength={500}
+          disabled={submitting}
+        />
       </div>
-    </div>
+      {submit.status === "error" && (
+        <div className="formError" role="alert">
+          <strong>{submit.code}</strong>: {submit.message}
+        </div>
+      )}
+    </Modal>
   );
 }

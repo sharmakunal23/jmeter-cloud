@@ -8,6 +8,7 @@ import {
 } from "../api/applicationGroups";
 import { ApplicationApiError } from "../api/applications";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { Modal } from "./Modal";
 import { PodPolicyFields, pickerPolicyOf, policySummary, type PodPolicyValue } from "./RecyclePolicyEditor";
 import { useToast, ToastView } from "./Toast";
 
@@ -66,12 +67,6 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
   // Delete confirm
   const [deleteTarget, setDeleteTarget] = useState<ApplicationGroup | null>(null);
   const [deleting, setDeleting] = useState(false);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !deleteTarget) onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, deleteTarget]);
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -192,262 +187,262 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
   }
 
   return (
-    <div className="modal__overlay" onClick={onClose}>
-      <div
-        className="modal modal--application"
-        role="dialog"
-        aria-label="Manage application groups"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="modal__header">
-          <div>
-            <h3>Application groups</h3>
-            <small className="ink-soft">
-              A group's id is what its workers send as <code>?groupId=</code> with every
-              metrics batch; upper-cased it names the group's own tables
-              (<code>CPS_METRICS</code>), so it must exist in the metrics database's group registry.
-              The group also owns the worker pool its applications run on — its capacity per
-              region is on the Capacity tab, its lifecycle policy is here.
-            </small>
-          </div>
-          <button type="button" className="btn btn--ghost" onClick={onClose} aria-label="Close">×</button>
-        </header>
-
-        <div className="modal__body">
-          {list.status === "loading" && <p className="ink-soft">Loading groups…</p>}
-          {list.status === "error" && <p className="text--error">{list.message}</p>}
-          {list.status === "ok" && list.groups.length === 0 && (
-            <p className="ink-soft">No groups yet.</p>
-          )}
-          {list.status === "ok" && list.groups.length > 0 && (
-            <table className="runsTable applicationListTable" aria-label="application groups">
-              <thead>
-                <tr>
-                  <th>Group</th>
-                  <th>Id</th>
-                  <th>Apps</th>
-                  <th aria-label="actions"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {list.groups.map((g) => (
-                  <tr key={g.groupId}>
-                    {editingId === g.groupId ? (
-                      <>
-                        <td>
+    <Modal
+      title="Application groups"
+      infoTip="A group owns the worker pool its applications run on and names the metrics tables its workers write to."
+      infoTipExample="group id cps → tables CPS_METRICS"
+      width="form"
+      onClose={onClose}
+      // While the delete confirmation is stacked on top, Esc must close only
+      // that dialog — its own Modal handles it; this one stands down.
+      closeDisabled={deleteTarget !== null}
+    >
+      <div className="modal__body">
+        {list.status === "loading" && <p className="ink-soft">Loading groups…</p>}
+        {list.status === "error" && <p className="text--error">{list.message}</p>}
+        {list.status === "ok" && list.groups.length === 0 && (
+          <p className="ink-soft">No groups yet.</p>
+        )}
+        {list.status === "ok" && list.groups.length > 0 && (
+          <table className="runsTable applicationListTable" aria-label="application groups">
+            <thead>
+              <tr>
+                <th>Group</th>
+                <th>Id</th>
+                <th>Apps</th>
+                <th aria-label="actions"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.groups.map((g) => (
+                <tr key={g.groupId}>
+                  {editingId === g.groupId ? (
+                    <>
+                      <td>
+                        <div className="formField">
+                          <label htmlFor={`editGroupName_${g.groupId}`}>Name *</label>
                           <input
+                            id={`editGroupName_${g.groupId}`}
                             type="text"
                             value={editName}
                             onChange={(e) => setEditName(e.target.value)}
-                            aria-label={`name of group ${g.groupId}`}
                             maxLength={MAX_NAME_LEN}
                           />
+                        </div>
+                        <div className="formField" style={{ marginTop: "0.3rem" }}>
+                          <label htmlFor={`editGroupDescription_${g.groupId}`}>Description</label>
                           <input
+                            id={`editGroupDescription_${g.groupId}`}
                             type="text"
                             value={editDescription}
                             onChange={(e) => setEditDescription(e.target.value)}
-                            aria-label={`description of group ${g.groupId}`}
-                            placeholder="description (optional)"
+                            placeholder="optional"
                             maxLength={MAX_DESCRIPTION_LEN}
-                            style={{ marginTop: "0.3rem" }}
                           />
+                        </div>
+                        <div className="formField" style={{ marginTop: "0.3rem" }}>
+                          <label htmlFor={`editGroupGrafanaLive_${g.groupId}`}>Grafana live URL</label>
                           <input
+                            id={`editGroupGrafanaLive_${g.groupId}`}
                             type="url"
                             value={editGrafanaLiveUrl}
                             onChange={(e) => setEditGrafanaLiveUrl(e.target.value)}
-                            aria-label={`Grafana live dashboard URL of group ${g.groupId}`}
                             aria-invalid={urlError(editGrafanaLiveUrl) != null}
-                            placeholder="Grafana live dashboard URL (optional)"
+                            placeholder="optional"
                             maxLength={2000}
-                            style={{ marginTop: "0.3rem" }}
                           />
+                        </div>
+                        <div className="formField" style={{ marginTop: "0.3rem" }}>
+                          <label htmlFor={`editGroupGrafanaHistory_${g.groupId}`}>Grafana history URL</label>
                           <input
+                            id={`editGroupGrafanaHistory_${g.groupId}`}
                             type="url"
                             value={editGrafanaHistoryUrl}
                             onChange={(e) => setEditGrafanaHistoryUrl(e.target.value)}
-                            aria-label={`Grafana history dashboard URL of group ${g.groupId}`}
                             aria-invalid={urlError(editGrafanaHistoryUrl) != null}
-                            placeholder="Grafana history dashboard URL (optional)"
+                            placeholder="optional"
                             maxLength={2000}
-                            style={{ marginTop: "0.3rem" }}
                           />
+                        </div>
+                        <div className="formField" style={{ marginTop: "0.3rem" }}>
+                          <label htmlFor={`editGroupHotDays_${g.groupId}`}>Hot days</label>
                           <input
+                            id={`editGroupHotDays_${g.groupId}`}
                             type="number"
                             value={editHotDays}
                             onChange={(e) => setEditHotDays(e.target.value)}
-                            aria-label={`hot days of group ${g.groupId}`}
                             aria-invalid={hotDaysError(editHotDays) != null}
                             min={1}
                             max={3650}
-                            style={{ marginTop: "0.3rem", width: "6rem" }}
+                            style={{ width: "6rem" }}
                             title="Days the live dashboard covers; older runs open the history dashboard"
                           />
-                          <PodPolicyFields idPrefix={`edit-${g.groupId}`} value={editPolicy} onChange={setEditPolicy} disabled={saving} />
-                        </td>
-                        <td className="mono ink-soft">{g.groupId}</td>
-                        <td className="mono">{g.applicationCount ?? 0}</td>
-                        <td className="runsTable__actions">
-                          <button type="button" className="btn btn--sm btn--primary"
-                                  onClick={() => void handleSave(g)}
-                                  disabled={saving || editName.trim() === "" || urlError(editGrafanaLiveUrl) != null
-                                    || urlError(editGrafanaHistoryUrl) != null || hotDaysError(editHotDays) != null}>
-                            Save
-                          </button>{" "}
-                          <button type="button" className="btn btn--sm btn--ghost"
-                                  onClick={() => setEditingId(null)} disabled={saving}>
-                            Cancel
-                          </button>
-                        </td>
-                      </>
-                    ) : (
-                      <>
-                        <td>
-                          <strong>{g.name}</strong>
-                          {g.description && <div className="ink-soft appListTable__desc">{g.description}</div>}
-                          {g.grafanaLiveUrl && (
-                            <div className="ink-soft appListTable__desc">
-                              Grafana: live{g.grafanaHistoryUrl ? " + history" : ""} · {g.hotDays ?? 7} hot days
-                            </div>
-                          )}
+                        </div>
+                        <PodPolicyFields idPrefix={`edit-${g.groupId}`} value={editPolicy} onChange={setEditPolicy} disabled={saving} />
+                      </td>
+                      <td className="mono ink-soft">{g.groupId}</td>
+                      <td className="mono">{g.applicationCount ?? 0}</td>
+                      <td className="runsTable__actions">
+                        <button type="button" className="btn btn--sm btn--primary"
+                                onClick={() => void handleSave(g)}
+                                disabled={saving || editName.trim() === "" || urlError(editGrafanaLiveUrl) != null
+                                  || urlError(editGrafanaHistoryUrl) != null || hotDaysError(editHotDays) != null}>
+                          Save
+                        </button>{" "}
+                        <button type="button" className="btn btn--sm btn--ghost"
+                                onClick={() => setEditingId(null)} disabled={saving}>
+                          Cancel
+                        </button>
+                      </td>
+                    </>
+                  ) : (
+                    <>
+                      <td>
+                        <strong>{g.name}</strong>
+                        {g.description && <div className="ink-soft appListTable__desc">{g.description}</div>}
+                        {g.grafanaLiveUrl && (
                           <div className="ink-soft appListTable__desc">
-                            Workers: {policySummary(g.recyclePolicy, g.maxRunsPerPod, g.podMaxAgeHours)}
-                            {g.alwaysOn ? " Always on." : ""}
+                            Grafana: live{g.grafanaHistoryUrl ? " + history" : ""} · {g.hotDays ?? 7} hot days
                           </div>
-                        </td>
-                        <td className="mono ink-soft">{g.groupId}</td>
-                        <td className="mono">{g.applicationCount ?? 0}</td>
-                        <td className="runsTable__actions">
-                          <button type="button" className="btn btn--sm btn--ghost"
-                                  onClick={() => startEdit(g)} aria-label={`edit group ${g.groupId}`}>
-                            Edit
-                          </button>{" "}
-                          <button type="button" className="btn btn--sm btn--ghost text--error"
-                                  onClick={() => setDeleteTarget(g)} aria-label={`delete group ${g.groupId}`}
-                                  title={(g.applicationCount ?? 0) > 0 ? "Move or purge its applications first" : "Delete this group (it must have no workers or capacity)"}>
-                            Delete
-                          </button>
-                        </td>
-                      </>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-
-          <form onSubmit={handleCreate} className="createApp" noValidate style={{ marginTop: "1rem" }}>
-            <fieldset className="createApp__endpoints">
-              <legend>Add a group</legend>
-              <div className="formField">
-                <label htmlFor="groupIdInput">Id *</label>
-                <input
-                  id="groupIdInput"
-                  type="text"
-                  value={groupId}
-                  onChange={(e) => setGroupId(e.target.value)}
-                  placeholder="cps"
-                  maxLength={30}
-                  aria-invalid={idError != null && groupId !== ""}
-                />
-                <small>Lowercase, letter first, max 30. Names the group's tables (<code>{trimmedId ? trimmedId.toUpperCase() : "CPS"}_METRICS</code>) and is sent by workers as <code>?groupId=</code>; can't be changed later.</small>
-                {idError && groupId && (
-                  <p className="text--error" role="alert" style={{ fontSize: "0.78rem" }}>{idError}</p>
-                )}
-              </div>
-              <div className="formField">
-                <label htmlFor="groupNameInput">Name *</label>
-                <input
-                  id="groupNameInput"
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Servicing MQ"
-                  maxLength={MAX_NAME_LEN}
-                />
-              </div>
-              <div className="formField">
-                <label htmlFor="groupDescriptionInput">Description</label>
-                <input
-                  id="groupDescriptionInput"
-                  type="text"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="optional"
-                  maxLength={MAX_DESCRIPTION_LEN}
-                />
-              </div>
-              <div className="formField">
-                <label htmlFor="groupGrafanaLiveInput">Grafana live dashboard URL</label>
-                <input
-                  id="groupGrafanaLiveInput"
-                  type="url"
-                  value={grafanaLiveUrl}
-                  onChange={(e) => setGrafanaLiveUrl(e.target.value)}
-                  placeholder="https://grafana…/d/cpsProductMetrics/servicing-mq?orgId=1"
-                  maxLength={2000}
-                  aria-invalid={urlError(grafanaLiveUrl) != null}
-                />
-                <small>The group's dashboard over <code>{trimmedId ? trimmedId.toUpperCase() : "CPS"}_METRICS</code>; the run page's "Open in Grafana" adds the run's time range and <code>var-application</code>.</small>
-              </div>
-              <div className="formField">
-                <label htmlFor="groupGrafanaHistoryInput">Grafana history dashboard URL</label>
-                <input
-                  id="groupGrafanaHistoryInput"
-                  type="url"
-                  value={grafanaHistoryUrl}
-                  onChange={(e) => setGrafanaHistoryUrl(e.target.value)}
-                  placeholder="optional — opened for runs older than the hot days"
-                  maxLength={2000}
-                  aria-invalid={urlError(grafanaHistoryUrl) != null}
-                />
-              </div>
-              <div className="formField">
-                <label htmlFor="groupHotDaysInput">Hot days</label>
-                <input
-                  id="groupHotDaysInput"
-                  type="number"
-                  value={hotDays}
-                  onChange={(e) => setHotDays(e.target.value)}
-                  min={1}
-                  max={3650}
-                  aria-invalid={hotDaysError(hotDays) != null}
-                  style={{ width: "6rem" }}
-                />
-                <small>Days the live dashboard covers (the group's hot retention); older runs open the history dashboard.</small>
-              </div>
-              <PodPolicyFields idPrefix="new" value={policy} onChange={setPolicy} disabled={creating} />
-              {createUrlError && grafanaLiveUrl + grafanaHistoryUrl !== "" && (
-                <p className="text--error" role="alert" style={{ fontSize: "0.78rem" }}>Dashboard URL {createUrlError}.</p>
-              )}
-              {createError && <div className="formError" role="alert">{createError}</div>}
-              <button type="submit" className="btn btn--primary btn--sm" disabled={!canCreate} aria-busy={creating}>
-                {creating ? "Adding…" : "+ Add group"}
-              </button>
-            </fieldset>
-          </form>
-        </div>
-
-        {deleteTarget && (
-          <ConfirmDialog
-            title={`Delete group "${deleteTarget.name}"?`}
-            body={
-              <p>
-                Removes the group <span className="mono">{deleteTarget.groupId}</span> from the
-                registry. Its metrics tables are not touched; a group that still has applications,
-                workers or capacity rows cannot be deleted.
-              </p>
-            }
-            confirmLabel="Delete group"
-            danger
-            busy={deleting}
-            onConfirm={() => void handleDelete()}
-            onCancel={() => setDeleteTarget(null)}
-          />
+                        )}
+                        <div className="ink-soft appListTable__desc">
+                          Workers: {policySummary(g.recyclePolicy, g.maxRunsPerPod, g.podMaxAgeHours)}
+                          {g.alwaysOn ? " Always on." : ""}
+                        </div>
+                      </td>
+                      <td className="mono ink-soft">{g.groupId}</td>
+                      <td className="mono">{g.applicationCount ?? 0}</td>
+                      <td className="runsTable__actions">
+                        <button type="button" className="btn btn--sm btn--ghost"
+                                onClick={() => startEdit(g)} aria-label={`edit group ${g.groupId}`}>
+                          Edit
+                        </button>{" "}
+                        <button type="button" className="btn btn--sm btn--ghost text--error"
+                                onClick={() => setDeleteTarget(g)} aria-label={`delete group ${g.groupId}`}
+                                title={(g.applicationCount ?? 0) > 0 ? "Move or purge its applications first" : "Delete this group (it must have no workers or capacity)"}>
+                          Delete
+                        </button>
+                      </td>
+                    </>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
 
-        <ToastView toast={toast} onDismiss={dismiss} />
+        <form onSubmit={handleCreate} className="createApp" noValidate style={{ marginTop: "1rem" }}>
+          <fieldset className="createApp__endpoints">
+            <legend>Add a group</legend>
+            <div className="formField">
+              <label htmlFor="groupIdInput">Id *</label>
+              <input
+                id="groupIdInput"
+                type="text"
+                value={groupId}
+                onChange={(e) => setGroupId(e.target.value)}
+                placeholder="cps"
+                maxLength={30}
+                aria-invalid={idError != null && groupId !== ""}
+              />
+              <small>Lowercase, letter first, max 30. Names the group's tables (<code>{trimmedId ? trimmedId.toUpperCase() : "CPS"}_METRICS</code>) and is sent by workers as <code>?groupId=</code>; can't be changed later.</small>
+              {idError && groupId && (
+                <p className="text--error" role="alert" style={{ fontSize: "0.78rem" }}>{idError}</p>
+              )}
+            </div>
+            <div className="formField">
+              <label htmlFor="groupNameInput">Name *</label>
+              <input
+                id="groupNameInput"
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Servicing MQ"
+                maxLength={MAX_NAME_LEN}
+              />
+            </div>
+            <div className="formField">
+              <label htmlFor="groupDescriptionInput">Description</label>
+              <input
+                id="groupDescriptionInput"
+                type="text"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="optional"
+                maxLength={MAX_DESCRIPTION_LEN}
+              />
+            </div>
+            <div className="formField">
+              <label htmlFor="groupGrafanaLiveInput">Grafana live dashboard URL</label>
+              <input
+                id="groupGrafanaLiveInput"
+                type="url"
+                value={grafanaLiveUrl}
+                onChange={(e) => setGrafanaLiveUrl(e.target.value)}
+                placeholder="https://grafana…/d/cpsProductMetrics/servicing-mq?orgId=1"
+                maxLength={2000}
+                aria-invalid={urlError(grafanaLiveUrl) != null}
+              />
+              <small>The group's dashboard over <code>{trimmedId ? trimmedId.toUpperCase() : "CPS"}_METRICS</code>; the run page's "Open in Grafana" adds the run's time range and <code>var-application</code>.</small>
+            </div>
+            <div className="formField">
+              <label htmlFor="groupGrafanaHistoryInput">Grafana history dashboard URL</label>
+              <input
+                id="groupGrafanaHistoryInput"
+                type="url"
+                value={grafanaHistoryUrl}
+                onChange={(e) => setGrafanaHistoryUrl(e.target.value)}
+                placeholder="optional — opened for runs older than the hot days"
+                maxLength={2000}
+                aria-invalid={urlError(grafanaHistoryUrl) != null}
+              />
+            </div>
+            <div className="formField">
+              <label htmlFor="groupHotDaysInput">Hot days</label>
+              <input
+                id="groupHotDaysInput"
+                type="number"
+                value={hotDays}
+                onChange={(e) => setHotDays(e.target.value)}
+                min={1}
+                max={3650}
+                aria-invalid={hotDaysError(hotDays) != null}
+                style={{ width: "6rem" }}
+              />
+              <small>Days the live dashboard covers (the group's hot retention); older runs open the history dashboard.</small>
+            </div>
+            <PodPolicyFields idPrefix="new" value={policy} onChange={setPolicy} disabled={creating} />
+            {createUrlError && grafanaLiveUrl + grafanaHistoryUrl !== "" && (
+              <p className="text--error" role="alert" style={{ fontSize: "0.78rem" }}>Dashboard URL {createUrlError}.</p>
+            )}
+            {createError && <div className="formError" role="alert">{createError}</div>}
+            <button type="submit" className="btn btn--primary btn--sm" disabled={!canCreate} aria-busy={creating}>
+              {creating ? "Adding…" : "+ Add group"}
+            </button>
+          </fieldset>
+        </form>
       </div>
-    </div>
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title={`Delete group "${deleteTarget.name}"?`}
+          body={
+            <p>
+              Removes the group <span className="mono">{deleteTarget.groupId}</span> from the
+              registry. Its metrics tables are not touched; a group that still has applications,
+              workers or capacity rows cannot be deleted.
+            </p>
+          }
+          confirmLabel="Delete group"
+          danger
+          busy={deleting}
+          onConfirm={() => void handleDelete()}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+
+      <ToastView toast={toast} onDismiss={dismiss} />
+    </Modal>
   );
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { InfoTip } from "./InfoTip";
 import {
   browserTimeZone,
   buildCron,
@@ -66,7 +67,6 @@ export function ScheduleBuilder({ value, onChange, idPrefix = "sched", defaultTi
   const [simple, setSimple] = useState<SimpleSchedule>(seededSimple ?? { ...DEFAULT_SIMPLE, time: defaultTime });
   const [rawCron, setRawCron] = useState(value.cronExpression || buildCron({ ...DEFAULT_SIMPLE, time: defaultTime }));
   const [timeZone, setTimeZone] = useState(value.timeZone || browserTimeZone());
-  const [showExamples, setShowExamples] = useState(false);
 
   const cronExpression = mode === "simple" ? buildCron(simple) : rawCron.trim();
 
@@ -183,34 +183,26 @@ export function ScheduleBuilder({ value, onChange, idPrefix = "sched", defaultTi
         <div className="formField">
           <div className="scheduleBuilder__cronLabel">
             <label htmlFor={ids.cron}>CRON expression</label>
-            <button
-              type="button"
-              className="infoIcon"
-              aria-label="Show cron examples"
-              aria-expanded={showExamples}
-              onClick={() => setShowExamples((v) => !v)}
-              title="Cron examples"
-            >
-              ⓘ
-            </button>
+            <InfoTip label="Show cron examples">
+              {(close) => (
+                <ul className="cronExamples" aria-label="Cron examples">
+                  {CRON_EXAMPLES.map((ex) => (
+                    <li key={ex.expr}>
+                      <button type="button" className="cronExamples__pick" onClick={() => { setRawCron(ex.expr); close(); }}>
+                        <code>{ex.expr}</code>
+                        <span className="ink-soft">{ex.label}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </InfoTip>
           </div>
           <input
             id={ids.cron} type="text" className="mono" value={rawCron}
             onChange={(e) => setRawCron(e.target.value)} placeholder="0 2 * * *"
           />
           <small><code>min hour day month weekday</code> (5-field). Validated on save.</small>
-          {showExamples && (
-            <ul className="cronExamples" aria-label="Cron examples">
-              {CRON_EXAMPLES.map((ex) => (
-                <li key={ex.expr}>
-                  <button type="button" className="cronExamples__pick" onClick={() => { setRawCron(ex.expr); setShowExamples(false); }}>
-                    <code>{ex.expr}</code>
-                    <span className="ink-soft">{ex.label}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
         </div>
       )}
 

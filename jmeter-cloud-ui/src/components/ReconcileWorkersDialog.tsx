@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import {
   capacityApi,
   CapacityApiError,
   type ReconcileWorkersResult,
 } from "../api/capacity";
+import { Modal } from "./Modal";
 
 /**
  * Registry-wide "Reconcile workers" confirmation dialog (SAVERESULTS
@@ -33,13 +34,6 @@ interface SubmitState {
 export function ReconcileWorkersDialog({ onClose, onSuccess }: ReconcileWorkersDialogProps) {
   const [submit, setSubmit] = useState<SubmitState>({ status: "idle" });
 
-  // ESC closes — same dismiss UX as the rest of the modal family.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   async function handleConfirm() {
     setSubmit({ status: "submitting" });
     try {
@@ -62,50 +56,14 @@ export function ReconcileWorkersDialog({ onClose, onSuccess }: ReconcileWorkersD
   const submitting = submit.status === "submitting";
 
   return (
-    <div className="modal__overlay" role="presentation" onClick={onClose}>
-      <div
-        className="modal modal--application"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="reconcileWorkersTitle"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="modal__header">
-          <div>
-            <h3 id="reconcileWorkersTitle">Reconcile workers?</h3>
-            <small className="ink-soft">registry-wide — all applications &amp; regions</small>
-          </div>
-          <button
-            type="button"
-            className="btn btn--ghost"
-            onClick={onClose}
-            aria-label="Close"
-          >×</button>
-        </header>
-
-        <div className="modal__body">
-          <p>Reconciles the worker registry against the actual containers:</p>
-          <ul className="ink-soft" style={{ fontSize: "0.85rem", margin: "0.4rem 0 0 1.1rem", padding: 0 }}>
-            <li>
-              removes registry rows whose container is gone — the usual fix for a
-              worker stuck after its container died;
-            </li>
-            <li>adopts managed containers that have no registry row;</li>
-            <li>starts managed containers found stopped.</li>
-          </ul>
-          <p className="ink-soft" style={{ fontSize: "0.85rem", marginTop: "0.6rem" }}>
-            Safe &amp; idempotent — a healthy, heart-beating worker is never
-            touched. This sweep runs automatically in the background; this button
-            just forces it now.
-          </p>
-          {submit.status === "error" && (
-            <div className="formError" role="alert">
-              <strong>{submit.code}</strong>: {submit.message}
-            </div>
-          )}
-        </div>
-
-        <footer className="modal__footer">
+    <Modal
+      title="Reconcile workers?"
+      infoTip="Probes every registered worker, registry-wide, and updates each one's availability."
+      width="confirm"
+      onClose={onClose}
+      closeDisabled={submitting}
+      footer={
+        <>
           <button
             type="button"
             className="btn"
@@ -118,11 +76,35 @@ export function ReconcileWorkersDialog({ onClose, onSuccess }: ReconcileWorkersD
             onClick={() => { void handleConfirm(); }}
             disabled={submitting}
             aria-busy={submitting}
+            autoFocus
           >
             {submitting ? "Reconciling…" : "Reconcile workers"}
           </button>
-        </footer>
-      </div>
-    </div>
+        </>
+      }
+    >
+      <p>
+        Reconciles the worker registry against the actual containers,
+        registry-wide (all applications and regions):
+      </p>
+      <ul className="ink-soft" style={{ fontSize: "0.85rem", margin: "0.4rem 0 0 1.1rem", padding: 0 }}>
+        <li>
+          removes registry rows whose container is gone — the usual fix for a
+          worker stuck after its container died;
+        </li>
+        <li>adopts managed containers that have no registry row;</li>
+        <li>starts managed containers found stopped.</li>
+      </ul>
+      <p className="ink-soft" style={{ fontSize: "0.85rem", marginTop: "0.6rem" }}>
+        Safe &amp; idempotent — a healthy, heart-beating worker is never
+        touched. This sweep runs automatically in the background; this button
+        just forces it now.
+      </p>
+      {submit.status === "error" && (
+        <div className="formError" role="alert">
+          <strong>{submit.code}</strong>: {submit.message}
+        </div>
+      )}
+    </Modal>
   );
 }

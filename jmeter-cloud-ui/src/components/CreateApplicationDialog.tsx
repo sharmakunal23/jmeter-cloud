@@ -7,6 +7,8 @@ import {
   type CreateApplicationRequest,
 } from "../api/applications";
 import { applicationGroupsApi, type ApplicationGroup } from "../api/applicationGroups";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { Modal } from "./Modal";
 
 /* Capacity and the worker lifecycle policy are the application GROUP's
  * (GROUP-CAPACITY, 2026-08-30) — this form only picks the group. */
@@ -73,13 +75,6 @@ export function CreateApplicationDialog({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-
-  // ESC closes; mirrors the per-pod drawer's dismiss UX.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -184,82 +179,44 @@ export function CreateApplicationDialog({
   // ── Soft-delete confirmation (edit mode) ───────────────────────────
   if (isEdit && confirmingDelete) {
     return (
-      <div className="modal__overlay" onClick={onClose}>
-        <div
-          className="modal modal--application"
-          role="dialog"
-          aria-label={`Delete application ${initial!.name}`}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <header className="modal__header">
-            <div>
-              <h3>Delete application</h3>
-              <small className="ink-soft">
-                Soft-delete — <span className="mono">{initial!.name}</span> will be hidden, not erased.
-              </small>
-            </div>
-            <button type="button" className="btn btn--ghost" onClick={onClose} aria-label="Close">×</button>
-          </header>
-
-          <div className="modal__body">
+      <ConfirmDialog
+        title="Delete application?"
+        infoTip="Soft-delete — the application is hidden from lists; its runs, files, and group are kept."
+        danger
+        busy={deleting}
+        confirmLabel="Soft-delete application"
+        onConfirm={() => { void handleDelete(); }}
+        onCancel={() => { setConfirmingDelete(false); setDeleteError(null); }}
+        body={
+          <>
             <p>Soft-deleting <span className="mono">{initial!.name}</span> will remove it from
               the applications list and the launcher. Its group's workers and capacity are untouched.</p>
             <p className="ink-soft" style={{ margin: "0.5rem 0" }}>
               <strong>Retained:</strong> this app's run history, metrics, and uploaded files
               (test plans, data files, results). A future cleanup job will purge them.
             </p>
-
-            {deleteError && (
-              <div className="formError" role="alert">{deleteError}</div>
-            )}
-
-            <footer className="modal__footer">
-              <button
-                type="button"
-                className="btn"
-                onClick={() => { setConfirmingDelete(false); setDeleteError(null); }}
-                disabled={deleting}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn btn--danger"
-                onClick={handleDelete}
-                disabled={deleting}
-                aria-busy={deleting}
-              >
-                {deleting ? "Deleting…" : "Soft Delete Application"}
-              </button>
-            </footer>
-          </div>
-        </div>
-      </div>
+          </>
+        }
+      >
+        {deleteError && (
+          <div className="formError" role="alert">{deleteError}</div>
+        )}
+      </ConfirmDialog>
     );
   }
 
   return (
-    <div className="modal__overlay" onClick={onClose}>
-      <div
-        className="modal modal--application"
-        role="dialog"
-        aria-label={isEdit ? `Edit application ${initial!.name}` : "Register a new application"}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="modal__header">
-          <div>
-            <h3>{isEdit ? "Edit application" : "Register application"}</h3>
-            <small className="ink-soft">
-              {isEdit
-                ? <>Updating <span className="mono">{initial!.name}</span>. The health snapshot is
-                   owned by the poller and isn't touched.</>
-                : "Persisted in the global registry. Health endpoints, when supplied, are polled every minute."}
-            </small>
-          </div>
-          <button type="button" className="btn btn--ghost" onClick={onClose} aria-label="Close">×</button>
-        </header>
-
-        <form onSubmit={handleSubmit} className="modal__body createApp" noValidate>
+    <Modal
+      title={isEdit ? "Edit application" : "Register application"}
+      infoTip={isEdit
+        ? "Updates the registration — the live health snapshot is owned by the poller and isn't touched."
+        : "Registers the application in the global registry so runs, documents, and templates can be tagged to it."}
+      infoTipExample={isEdit ? undefined : "Health endpoints, when supplied, are polled every minute."}
+      width="form"
+      onClose={onClose}
+      closeDisabled={submitting}
+    >
+      <form onSubmit={handleSubmit} className="modal__body createApp" noValidate>
           <div className="formField">
             <label htmlFor="appName">Name *</label>
             <input
@@ -409,7 +366,7 @@ export function CreateApplicationDialog({
             <div className="formError" role="alert">{serverError}</div>
           )}
 
-          <footer className="modal__footer">
+          <Modal.Footer>
             {isEdit && (
               <button
                 type="button"
@@ -431,9 +388,8 @@ export function CreateApplicationDialog({
                 ? (isEdit ? "Saving…" : "Registering…")
                 : (isEdit ? "Save changes" : "Register")}
             </button>
-          </footer>
-        </form>
-      </div>
-    </div>
+          </Modal.Footer>
+      </form>
+    </Modal>
   );
 }

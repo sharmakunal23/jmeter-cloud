@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { runsApi, GlobalOrchestratorError, type Run } from "../api/runs";
+import { Modal } from "./Modal";
 
 /**
  * Confirmation modal for hiding ("deleting") one or more runs so they drop out
@@ -33,12 +34,6 @@ export function DeleteRunsConfirmDialog({ selected, onDeleted, onClose }: Delete
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState<{ runId: string; message: string }[]>([]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, busy]);
 
   const willHide = selected.filter((r) => TERMINAL_STATES.has(r.state));
   const willSkip = selected.filter((r) => !TERMINAL_STATES.has(r.state));
@@ -76,103 +71,14 @@ export function DeleteRunsConfirmDialog({ selected, onDeleted, onClose }: Delete
   }
 
   return (
-    <div className="modal__overlay" role="presentation" onClick={() => { if (!busy) onClose(); }}>
-      <div
-        className="modal modal--bulk"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="deleteRunsTitle"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="modal__header">
-          <div>
-            <h3 id="deleteRunsTitle">
-              Delete {selected.length} run{selected.length === 1 ? "" : "s"}?
-            </h3>
-            <small className="ink-soft">
-              {willHide.length} will be hidden; {willSkip.length} skipped (still active).
-            </small>
-          </div>
-          <button type="button" className="btn btn--ghost" onClick={onClose} aria-label="Close" disabled={busy}>×</button>
-        </header>
-
-        <div className="modal__body">
-          {willHide.length > 0 && (
-            <section className="bulkActionList">
-              <h4 className="bulkActionList__title">Will hide ({willHide.length})</h4>
-              <ul className="bulkActionList__items">
-                {willHide.map((r) => (
-                  <li key={r.runId}>
-                    <span className="mono">{r.runId}</span>
-                    <span className={`chip chip--${r.state === "COMPLETED" ? "ok" : "err"}`}>
-                      {r.state}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-
-          {willSkip.length > 0 && (
-            <section className="bulkActionList bulkActionList--skip">
-              <h4 className="bulkActionList__title">Skipped ({willSkip.length})</h4>
-              <ul className="bulkActionList__items">
-                {willSkip.map((r) => (
-                  <li key={r.runId}>
-                    <span className="mono">{r.runId}</span>
-                    <span className="chip chip--warn">{r.state}</span>
-                  </li>
-                ))}
-              </ul>
-              <small className="ink-soft" style={{ display: "block", marginTop: "0.4rem" }}>
-                Active runs can't be hidden — abort or let them finish first.
-              </small>
-            </section>
-          )}
-
-          {willHide.length === 0 && (
-            <p className="text--error" role="alert" style={{ marginTop: "0.6rem" }}>
-              All selected runs are still active. Nothing to hide.
-            </p>
-          )}
-
-          {willHide.length > 0 && (
-            <>
-              <div className="formField" style={{ marginTop: "0.8rem" }}>
-                <label htmlFor="deleteRunsReason">Reason (optional)</label>
-                <input
-                  id="deleteRunsReason"
-                  type="text"
-                  value={reason}
-                  onChange={(e) => setReason(e.target.value)}
-                  placeholder="e.g. failed smoke runs, no longer needed"
-                  maxLength={256}
-                  disabled={busy}
-                />
-              </div>
-              <small className="ink-soft">
-                Hidden runs drop out of your lists but are retained — their data,
-                fleet members, audit trail, and saved results are kept (this is a
-                soft delete, not a permanent erase).
-              </small>
-            </>
-          )}
-
-          {errors.length > 0 && (
-            <div className="formError" role="alert" style={{ marginTop: "0.6rem" }}>
-              <strong>{errors.length} run{errors.length === 1 ? "" : "s"} could not be hidden:</strong>
-              <ul style={{ margin: "0.3rem 0 0", paddingLeft: "1.2rem" }}>
-                {errors.map((e) => (
-                  <li key={e.runId}>
-                    <span className="mono">{e.runId.slice(0, 12)}…</span> — {e.message}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-
-        <footer className="modal__footer">
+    <Modal
+      title={`Delete ${selected.length} run${selected.length === 1 ? "" : "s"}?`}
+      infoTip="Soft-delete — the runs disappear from every list, but their results and metrics are kept."
+      width="confirm"
+      onClose={onClose}
+      closeDisabled={busy}
+      footer={
+        <>
           <button type="button" className="btn" onClick={onClose} disabled={busy}>
             {errors.length > 0 ? "Close" : "Cancel"}
           </button>
@@ -185,8 +91,82 @@ export function DeleteRunsConfirmDialog({ selected, onDeleted, onClose }: Delete
           >
             {busy ? "Hiding…" : `Hide ${willHide.length}`}
           </button>
-        </footer>
-      </div>
-    </div>
+        </>
+      }
+    >
+      {willHide.length > 0 && (
+        <section className="bulkActionList">
+          <h4 className="bulkActionList__title">Will hide ({willHide.length})</h4>
+          <ul className="bulkActionList__items">
+            {willHide.map((r) => (
+              <li key={r.runId}>
+                <span className="mono">{r.runId}</span>
+                <span className={`chip chip--${r.state === "COMPLETED" ? "ok" : "err"}`}>
+                  {r.state}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {willSkip.length > 0 && (
+        <section className="bulkActionList bulkActionList--skip">
+          <h4 className="bulkActionList__title">Skipped ({willSkip.length})</h4>
+          <ul className="bulkActionList__items">
+            {willSkip.map((r) => (
+              <li key={r.runId}>
+                <span className="mono">{r.runId}</span>
+                <span className="chip chip--warn">{r.state}</span>
+              </li>
+            ))}
+          </ul>
+          <small className="ink-soft" style={{ display: "block", marginTop: "0.4rem" }}>
+            Active runs can't be hidden — abort or let them finish first.
+          </small>
+        </section>
+      )}
+
+      {willHide.length === 0 && (
+        <p className="text--error" role="alert" style={{ marginTop: "0.6rem" }}>
+          All selected runs are still active. Nothing to hide.
+        </p>
+      )}
+
+      {willHide.length > 0 && (
+        <>
+          <div className="formField" style={{ marginTop: "0.8rem" }}>
+            <label htmlFor="deleteRunsReason">Reason (optional)</label>
+            <input
+              id="deleteRunsReason"
+              type="text"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="e.g. failed smoke runs, no longer needed"
+              maxLength={256}
+              disabled={busy}
+            />
+          </div>
+          <small className="ink-soft">
+            Hidden runs drop out of your lists but are retained — their data,
+            fleet members, audit trail, and saved results are kept (this is a
+            soft delete, not a permanent erase).
+          </small>
+        </>
+      )}
+
+      {errors.length > 0 && (
+        <div className="formError" role="alert" style={{ marginTop: "0.6rem" }}>
+          <strong>{errors.length} run{errors.length === 1 ? "" : "s"} could not be hidden:</strong>
+          <ul style={{ margin: "0.3rem 0 0", paddingLeft: "1.2rem" }}>
+            {errors.map((e) => (
+              <li key={e.runId}>
+                <span className="mono">{e.runId.slice(0, 12)}…</span> — {e.message}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Modal>
   );
 }

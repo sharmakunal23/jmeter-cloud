@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { ApplicationGroupsDialog } from "../ApplicationGroupsDialog";
 
@@ -76,7 +76,7 @@ describe("ApplicationGroupsDialog", () => {
     render(<ApplicationGroupsDialog onClose={vi.fn()} />);
     await waitFor(() => expect(screen.getByText("Servicing MQ")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "edit group cps" }));
-    fireEvent.change(screen.getByLabelText("name of group cps"), { target: { value: "Servicing MQ (Card)" } });
+    fireEvent.change(within(screen.getByRole("table", { name: "application groups" })).getByLabelText(/^Name \*/i), { target: { value: "Servicing MQ (Card)" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(api.update).toHaveBeenCalledWith("cps", {
       name: "Servicing MQ (Card)", description: "MQ apps", grafanaLiveUrl: undefined, grafanaHistoryUrl: undefined, hotDays: 7,

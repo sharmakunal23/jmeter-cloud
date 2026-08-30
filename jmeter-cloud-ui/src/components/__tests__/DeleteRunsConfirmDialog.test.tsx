@@ -48,8 +48,9 @@ describe("DeleteRunsConfirmDialog", () => {
     );
 
     expect(screen.getByRole("heading", { name: /Delete 3 runs\?/ })).toBeInTheDocument();
-    // 2 terminal will hide, 1 active is skipped.
-    expect(screen.getByText(/2 will be hidden; 1 skipped/)).toBeInTheDocument();
+    // 2 terminal will hide, 1 active is skipped — shown as the two list sections.
+    expect(screen.getByRole("heading", { name: /Will hide \(2\)/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Skipped \(1\)/ })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /^Hide 2$/ }));
     await waitFor(() => expect(deleteMock).toHaveBeenCalledTimes(2));

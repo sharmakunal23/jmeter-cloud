@@ -174,7 +174,7 @@ describe("ApplicationsListPage — Create dialog", () => {
     renderPage();
     await waitFor(() => expect(screen.getByRole("button", { name: /Register application/i })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: /Register application/i }));
-    expect(screen.getByRole("dialog", { name: /Register a new application/i })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: /Register application/i })).toBeInTheDocument();
   });
 
   it("submitting the dialog calls applicationsApi.create + closes on success", async () => {
@@ -244,6 +244,6 @@ describe("ApplicationsListPage — application groups", () => {
     renderPage();
     await waitFor(() => expect(screen.getByRole("button", { name: "Manage groups" })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Manage groups" }));
-    expect(screen.getByRole("dialog", { name: "Manage application groups" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Application groups" })).toBeInTheDocument();
   });
 });

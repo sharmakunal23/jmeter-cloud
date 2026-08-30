@@ -2734,15 +2734,18 @@ button.appDetailChip:disabled {
   to   { opacity: 1; transform: translateY(0)     scale(1);    }
 }
 
-/* One comfortable width for every modal (operator preference — the schedule
-   modal's 42rem, applied across the board). The variant classes are kept as
-   styling hooks but all share the same width; the regions picker stays wider
-   for its interactive US-map. */
-.modal--wide,
-.modal--bulk,
-.modal--application,
-.modal--schedule,
+/* Two width tiers (UX-DYNAMICS): confirms and notices stay compact; form
+   dialogs get room for two-column content. The regions picker (interactive
+   map) and the chart modal keep their own sizes further down. */
 .modal--confirm { max-width: 42rem; }
+.modal--form    { max-width: 56rem; }
+
+.modal__titleRow {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 
 .modal__header {
   display: flex;
@@ -3041,6 +3044,50 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
 .formField small {
   color: var(--ink-soft);
   font-size: 0.8rem;
+}
+
+/* Checkbox fields — box + label text on one line, whole label clickable. */
+.formField--checkbox { flex-direction: row; align-items: center; }
+.checkboxRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.checkboxRow input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+/* InfoTip — the ⓘ icon's popover (content lives in the DOM even when closed,
+   visually hidden, so aria-describedby stays valid). */
+.infoTip { position: relative; display: inline-flex; }
+.infoTip__pop {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  left: 0;
+  z-index: 110;
+  min-width: 16rem;
+  max-width: 26rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  padding: 0.6rem 0.75rem;
+  font-size: 0.82rem;
+  font-weight: 400;
+  color: var(--ink);
+}
+.infoTip__example {
+  display: block;
+  margin-top: 0.35rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--ink-soft);
 }
 
 /* ── ScheduleBuilder (Automation create dialogs) ─────────────────── */

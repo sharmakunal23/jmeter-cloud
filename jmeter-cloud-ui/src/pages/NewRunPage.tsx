@@ -734,7 +734,7 @@ export function NewRunPage() {
             title={controlsHidden ? "Show form pane (keyboard: [)" : "Hide form pane (keyboard: [)"}
             aria-pressed={controlsHidden}
           >
-            {controlsHidden ? "▸ Show Controls" : "◂ Hide Controls"}
+            {controlsHidden ? "▸ Show controls" : "◂ Hide controls"}
           </button>
           <button
             type="button"
@@ -743,7 +743,7 @@ export function NewRunPage() {
             title="Save the current launcher state for reuse later"
             disabled={!testPlanBlobId}
           >
-            Save Template
+            Save template
           </button>
           <button
             type="submit"

@@ -199,7 +199,7 @@ describe("CreateApplicationDialog — soft-delete (edit mode)", () => {
     renderEdit();
     fireEvent.click(screen.getByRole("button", { name: /^Delete application$/i }));
 
-    expect(screen.getByRole("button", { name: /Soft Delete Application/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Soft-delete application/i })).toBeInTheDocument();
     expect(screen.getByText(/remove it from the applications list/i)).toBeInTheDocument();
     expect(screen.getByText(/run history, metrics, and uploaded files/i)).toBeInTheDocument();
     // No implementation-detail / behavior-detail copy the operator doesn't need.
@@ -214,7 +214,7 @@ describe("CreateApplicationDialog — soft-delete (edit mode)", () => {
     const { onDeleted } = renderEdit();
 
     fireEvent.click(screen.getByRole("button", { name: /^Delete application$/i }));
-    fireEvent.click(screen.getByRole("button", { name: /Soft Delete Application/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Soft-delete application/i }));
 
     await waitFor(() => expect(apiMocks.delete).toHaveBeenCalledWith("01J0CHECKOUTAAAAAAAAAAAAAA"));
     await waitFor(() => expect(onDeleted).toHaveBeenCalled());
@@ -227,12 +227,12 @@ describe("CreateApplicationDialog — soft-delete (edit mode)", () => {
     const { onDeleted } = renderEdit();
 
     fireEvent.click(screen.getByRole("button", { name: /^Delete application$/i }));
-    fireEvent.click(screen.getByRole("button", { name: /Soft Delete Application/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Soft-delete application/i }));
 
     expect(await screen.findByText(/has active runs — abort/i)).toBeInTheDocument();
     expect(onDeleted).not.toHaveBeenCalled();
     // Still on the confirmation (the operator can Cancel back).
-    expect(screen.getByRole("button", { name: /Soft Delete Application/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Soft-delete application/i })).toBeInTheDocument();
   });
 });
 

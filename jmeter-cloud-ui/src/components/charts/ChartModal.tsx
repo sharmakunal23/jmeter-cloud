@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { Modal } from "../Modal";
 import { TimeseriesChart, type TimeseriesChartProps } from "./TimeseriesChart";
 
 /**
@@ -22,36 +23,19 @@ export function ChartModal({ chart, onClose }: ChartModalProps) {
 
   useEffect(() => {
     if (!chart) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     const onResize = () => setHeight(modalHeight());
-    window.addEventListener("keydown", onKey);
     window.addEventListener("resize", onResize);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("resize", onResize);
-    };
-  }, [chart, onClose]);
+    return () => window.removeEventListener("resize", onResize);
+  }, [chart]);
 
   if (!chart) return null;
 
   return (
-    <div className="modal__overlay" onClick={onClose}>
-      <div
-        className="modal modal--chart"
-        role="dialog"
-        aria-modal="true"
-        aria-label={`${chart.title} — enlarged`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="modal__header">
-          <h3>{chart.title}</h3>
-          <button type="button" className="btn btn--ghost" onClick={onClose} aria-label="Close" autoFocus>×</button>
-        </header>
-        <div className="modal__body modal__body--chart">
-          <TimeseriesChart {...chart} showTitle={false} height={height} />
-        </div>
+    <Modal title={chart.title} width="chart" onClose={onClose}>
+      <div className="modal__body modal__body--chart">
+        <TimeseriesChart {...chart} showTitle={false} height={height} />
       </div>
-    </div>
+    </Modal>
   );
 }
 

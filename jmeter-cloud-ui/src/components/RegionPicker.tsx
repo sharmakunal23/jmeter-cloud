@@ -7,6 +7,7 @@ import {
   resolveRegionOptions,
 } from "../regions";
 import { usePlatformCapabilities } from "../hooks/usePlatformCapabilities";
+import { Modal } from "./Modal";
 
 /**
  * Placement picker — lets an operator choose which regions (or, on a
@@ -108,156 +109,150 @@ export function RegionPicker({
   }
 
   return (
-    <div className="modal__overlay" role="presentation" onClick={onCancel}>
-      <div
-        className="modal modal--regions"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="regionPickerTitle"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="modal__header">
-          <h3 id="regionPickerTitle">
-            Manage {regionNoun({ plural: true })}{" "}
-            <span className="modal__titleApp mono">{groupName}</span>
-          </h3>
-          <button type="button" className="btn btn--ghost" onClick={onCancel} aria-label="Close">×</button>
-        </header>
-
-        <div className="modal__body regionPicker">
-          {/* US map — clickable pins. Rendered only when every option has a
-              real place on it (see resolveRegionOptions). */}
-          {showMap && (
-            <svg
-              className="regionMap"
-              viewBox="0 0 960 600"
-              role="group"
-              aria-label="USA region map"
-            >
-              <path className="regionMap__land" d={US_MAP_PATH} />
-              {listOptions.map((r) => {
-                const isSel = selected.has(r.id);
-                const isLocked = lockedRegions.has(r.id) && isSel;
-                return (
-                  <g
-                    key={r.id}
-                    className={`regionPin ${isSel ? "regionPin--on" : ""} ${isLocked ? "regionPin--locked" : ""}`}
-                    transform={`translate(${r.x} ${r.y})`}
-                    role="checkbox"
-                    aria-checked={isSel}
-                    aria-label={`${r.label} (${r.id})${isLocked ? " — locked, has workers" : ""}`}
-                    tabIndex={0}
-                    onClick={() => toggle(r.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(r.id); }
-                    }}
-                  >
-                    <circle className="regionPin__halo" r={26} />
-                    <circle className="regionPin__dot" r={13} />
-                    {isLocked && <text className="regionPin__lock" y={5}>🔒</text>}
-                    <text className="regionPin__label" y={-30}>{r.label}</text>
-                    <text className="regionPin__id" y={44}>{r.id}</text>
-                  </g>
-                );
-              })}
-            </svg>
-          )}
-
-          {/* Checklist (form view) — synced with the map when there is one,
-              and the sole control when there isn't. */}
-          <ul className="regionChecklist" aria-label={`${regionNoun()} checklist`}>
+    <Modal
+      title={
+        <>
+          Manage {regionNoun({ plural: true })}{" "}
+          <span className="modal__titleApp mono">{groupName}</span>
+        </>
+      }
+      infoTip={`Pick the ${regionNoun({ plural: true })} this group's worker pool uses — one that still has workers is locked until drained.`}
+      width="regions"
+      onClose={onCancel}
+      closeDisabled={saving}
+    >
+      <div className="modal__body regionPicker">
+        {/* US map — clickable pins. Rendered only when every option has a
+            real place on it (see resolveRegionOptions). */}
+        {showMap && (
+          <svg
+            className="regionMap"
+            viewBox="0 0 960 600"
+            role="group"
+            aria-label="USA region map"
+          >
+            <path className="regionMap__land" d={US_MAP_PATH} />
             {listOptions.map((r) => {
               const isSel = selected.has(r.id);
               const isLocked = lockedRegions.has(r.id) && isSel;
               return (
-                <li key={r.id} className={`regionChecklist__row ${isSel ? "is-selected" : ""}`}>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={isSel}
-                      disabled={isLocked}
-                      onChange={() => toggle(r.id)}
-                    />
-                    <span className="regionChecklist__label">{r.label}</span>
-                    <span className="regionChecklist__id mono ink-soft">{r.id}</span>
-                  </label>
-                  {isLocked && (
-                    <span className="chip chip--warn" title="Has provisioned workers — drain them to remove">
-                      has workers
-                    </span>
-                  )}
-                </li>
+                <g
+                  key={r.id}
+                  className={`regionPin ${isSel ? "regionPin--on" : ""} ${isLocked ? "regionPin--locked" : ""}`}
+                  transform={`translate(${r.x} ${r.y})`}
+                  role="checkbox"
+                  aria-checked={isSel}
+                  aria-label={`${r.label} (${r.id})${isLocked ? " — locked, has workers" : ""}`}
+                  tabIndex={0}
+                  onClick={() => toggle(r.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(r.id); }
+                  }}
+                >
+                  <circle className="regionPin__halo" r={26} />
+                  <circle className="regionPin__dot" r={13} />
+                  {isLocked && <text className="regionPin__lock" y={5}>🔒</text>}
+                  <text className="regionPin__label" y={-30}>{r.label}</text>
+                  <text className="regionPin__id" y={44}>{r.id}</text>
+                </g>
               );
             })}
-          </ul>
+          </svg>
+        )}
 
-          {legacyRegions.length > 0 && (
-            <div className="regionPicker__legacy">
-              <small className="ink-soft">
-                Not offered by this deployment — toggle off to remove:
-              </small>
-              <div className="regionPicker__legacyChips">
-                {legacyRegions.map((r) => {
-                  const isSel = selected.has(r);
-                  const isLocked = lockedRegions.has(r) && isSel;
-                  return (
-                    <button
-                      key={r}
-                      type="button"
-                      className={`chip ${isSel ? "chip--warn" : ""}`}
-                      disabled={isLocked}
-                      onClick={() => toggle(r)}
-                      title={isLocked ? "Has workers — drain to remove" : (isSel ? "Click to remove" : "Removed")}
-                      style={!isSel ? { textDecoration: "line-through", opacity: 0.55 } : undefined}
-                    >
-                      {regionLabel(r)} {isSel ? "×" : ""}
-                    </button>
-                  );
-                })}
-              </div>
+        {/* Checklist (form view) — synced with the map when there is one,
+            and the sole control when there isn't. */}
+        <ul className="regionChecklist" aria-label={`${regionNoun()} checklist`}>
+          {listOptions.map((r) => {
+            const isSel = selected.has(r.id);
+            const isLocked = lockedRegions.has(r.id) && isSel;
+            return (
+              <li key={r.id} className={`regionChecklist__row ${isSel ? "is-selected" : ""}`}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={isSel}
+                    disabled={isLocked}
+                    onChange={() => toggle(r.id)}
+                  />
+                  <span className="regionChecklist__label">{r.label}</span>
+                  <span className="regionChecklist__id mono ink-soft">{r.id}</span>
+                </label>
+                {isLocked && (
+                  <span className="chip chip--warn" title="Has provisioned workers — drain them to remove">
+                    has workers
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+
+        {legacyRegions.length > 0 && (
+          <div className="regionPicker__legacy">
+            <small className="ink-soft">
+              Not offered by this deployment — toggle off to remove:
+            </small>
+            <div className="regionPicker__legacyChips">
+              {legacyRegions.map((r) => {
+                const isSel = selected.has(r);
+                const isLocked = lockedRegions.has(r) && isSel;
+                return (
+                  <button
+                    key={r}
+                    type="button"
+                    className={`chip ${isSel ? "chip--warn" : ""}`}
+                    disabled={isLocked}
+                    onClick={() => toggle(r)}
+                    title={isLocked ? "Has workers — drain to remove" : (isSel ? "Click to remove" : "Removed")}
+                    style={!isSel ? { textDecoration: "line-through", opacity: 0.55 } : undefined}
+                  >
+                    {regionLabel(r)} {isSel ? "×" : ""}
+                  </button>
+                );
+              })}
             </div>
-          )}
-
-          {/* Change summary. */}
-          <div className="regionPicker__summary" aria-live="polite">
-            {!changed ? (
-              <span className="ink-soft">No changes.</span>
-            ) : (
-              <>
-                {added.length > 0 && (
-                  <span className="chip chip--ok">+ {added.length} added</span>
-                )}
-                {removed.length > 0 && (
-                  <span className="chip chip--err">− {removed.length} removed</span>
-                )}
-                <span className="ink-soft">
-                  {[...added.map((r) => `+${regionLabel(r)}`), ...removed.map((r) => `−${regionLabel(r)}`)].join(", ")}
-                </span>
-              </>
-            )}
-            {tooFew && (
-              <p className="text--error" style={{ fontSize: "0.78rem", margin: "0.3rem 0 0" }}>
-                Keep at least one {regionNoun()}.
-              </p>
-            )}
           </div>
+        )}
 
-          {error && <div className="formError" role="alert">{error}</div>}
+        {/* Change summary. */}
+        <div className="regionPicker__summary" aria-live="polite">
+          {!changed ? (
+            <span className="ink-soft">No changes.</span>
+          ) : (
+            <>
+              {added.length > 0 && (
+                <span className="chip chip--ok">+ {added.length} added</span>
+              )}
+              {removed.length > 0 && (
+                <span className="chip chip--err">− {removed.length} removed</span>
+              )}
+              <span className="ink-soft">
+                {[...added.map((r) => `+${regionLabel(r)}`), ...removed.map((r) => `−${regionLabel(r)}`)].join(", ")}
+              </span>
+            </>
+          )}
+          {tooFew && (
+            <p className="text--error" style={{ fontSize: "0.78rem", margin: "0.3rem 0 0" }}>
+              Keep at least one {regionNoun()}.
+            </p>
+          )}
         </div>
 
-        <footer className="modal__footer">
-          <button type="button" className="btn" onClick={onCancel} disabled={saving}>Cancel</button>
-          <button
-            type="button"
-            className="btn btn--primary"
-            onClick={handleSave}
-            disabled={!canSave}
-            aria-busy={saving}
-          >
-            {saving ? "Saving…" : `Save ${regionNoun({ plural: true })}`}
-          </button>
-        </footer>
+        {error && <div className="formError" role="alert">{error}</div>}
       </div>
-    </div>
+      <Modal.Footer>
+        <button type="button" className="btn" onClick={onCancel} disabled={saving}>Cancel</button>
+        <button
+          type="button"
+          className="btn btn--primary"
+          onClick={handleSave}
+          disabled={!canSave}
+          aria-busy={saving}
+        >
+          {saving ? "Saving…" : `Save ${regionNoun({ plural: true })}`}
+        </button>
+      </Modal.Footer>
+    </Modal>
   );
 }

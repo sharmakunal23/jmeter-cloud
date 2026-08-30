@@ -384,7 +384,7 @@ describe("MetricsTabPanel — enlarge a chart", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Enlarge Response time" }));
-    const dialog = screen.getByRole("dialog", { name: /response time — enlarged/i });
+    const dialog = screen.getByRole("dialog", { name: /^response time$/i });
     const modalChart = within(dialog).getByTestId("chartMock");
     expect(modalChart).toHaveAttribute("data-title", "Response time");
     expect(modalChart).toHaveAttribute("data-labels", "Avg,P90,P95,P99");

@@ -15,6 +15,7 @@ import { applicationsApi } from "../api/applications";
 import { applicationGroupsApi } from "../api/applicationGroups";
 import { FleetAllocationFormView } from "./FleetAllocationFormView";
 import { GlobalPropertiesEditor } from "./GlobalPropertiesEditor";
+import { Modal } from "./Modal";
 import { RunStartProgress, type Stage } from "./RunStartProgress";
 
 /**
@@ -517,32 +518,15 @@ export function ScaleUpRunModal({ run, onClose, onSuccess }: ScaleUpRunModalProp
   }
 
   return (
-    <div className="modal__overlay" onClick={onClose}>
-      <div
-        className="modal modal--wide"
-        role="dialog"
-        aria-label="Add workers to run"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="modal__header">
-          <div>
-            <h3>Add workers</h3>
-            <small className="ink-soft">
-              Claims additional pods from this run's per-application pool and
-              fans out the same test plan + data files. New workers join with
-              their counters at zero — surfaced on the row as a{" "}
-              <span className="mono">joined +Xs</span> chip.
-            </small>
-          </div>
-          <button
-            type="button"
-            className="btn btn--ghost"
-            onClick={onClose}
-            aria-label="Close"
-          >×</button>
-        </header>
-
-        <form onSubmit={handleSubmit} className="modal__body" noValidate>
+    <Modal
+      title="Add workers"
+      infoTip="Claims more pods from this run's pool and fans out the same plan and data files — new workers join with their counters at zero."
+      infoTipExample={<>fleet rows show a <span className="mono">joined +Xs</span> chip</>}
+      width="form"
+      onClose={onClose}
+      closeDisabled={submitting}
+    >
+      <form onSubmit={handleSubmit} className="modal__body" noValidate>
           <FleetAllocationFormView
             regions={mergedRegions}
             value={allocation}
@@ -572,7 +556,7 @@ export function ScaleUpRunModal({ run, onClose, onSuccess }: ScaleUpRunModalProp
             </span>
           </p>
 
-          <footer className="modal__footer">
+          <Modal.Footer>
             <button type="button" className="btn" onClick={onClose}>Cancel</button>
             <button
               type="submit"
@@ -586,9 +570,8 @@ export function ScaleUpRunModal({ run, onClose, onSuccess }: ScaleUpRunModalProp
                 ? `Add ${totalToAdd} worker${totalToAdd === 1 ? "" : "s"}`
                 : "Add workers"}
             </button>
-          </footer>
+          </Modal.Footer>
         </form>
-      </div>
-    </div>
+    </Modal>
   );
 }

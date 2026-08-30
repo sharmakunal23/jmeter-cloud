@@ -1,4 +1,6 @@
-import { useEffect, type ReactNode } from "react";
+import { type ReactNode } from "react";
+
+import { Modal } from "./Modal";
 
 /**
  * Generic confirmation modal for critical / irreversible actions (delete, skip,
@@ -6,11 +8,14 @@ import { useEffect, type ReactNode } from "react";
  * across the app and can carry extra controls (e.g. an "also skip next" checkbox)
  * via `children`. `danger` styles the confirm button as destructive.
  *
- * Esc + the overlay cancel; the confirm button auto-focuses so Enter confirms.
+ * Esc + the overlay cancel (blocked while `busy` — a purge in flight must not
+ * be dismissed); the confirm button auto-focuses so Enter confirms.
  */
 export interface ConfirmDialogProps {
   title: string;
   body?: ReactNode;
+  /** Optional ≤1-sentence description behind the ⓘ icon beside the title. */
+  infoTip?: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   danger?: boolean;
@@ -24,33 +29,18 @@ export interface ConfirmDialogProps {
 }
 
 export function ConfirmDialog({
-  title, body, confirmLabel = "Confirm", cancelLabel = "Cancel",
+  title, body, infoTip, confirmLabel = "Confirm", cancelLabel = "Cancel",
   danger = false, busy = false, confirmDisabled = false, onConfirm, onCancel, children,
 }: ConfirmDialogProps) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onCancel]);
-
   return (
-    <div className="modal__overlay" onClick={onCancel}>
-      <div
-        className="modal modal--confirm"
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="modal__header">
-          <h3>{title}</h3>
-          <button type="button" className="btn btn--ghost" onClick={onCancel} aria-label="Close">×</button>
-        </header>
-        <div className="modal__body">
-          {body && <div className="confirmDialog__body">{body}</div>}
-          {children}
-        </div>
-        <footer className="modal__footer">
+    <Modal
+      title={title}
+      infoTip={infoTip}
+      width="confirm"
+      onClose={onCancel}
+      closeDisabled={busy}
+      footer={
+        <>
           <button type="button" className="btn" onClick={onCancel} disabled={busy}>{cancelLabel}</button>
           <button
             type="button"
@@ -62,8 +52,11 @@ export function ConfirmDialog({
           >
             {busy ? "Working…" : confirmLabel}
           </button>
-        </footer>
-      </div>
-    </div>
+        </>
+      }
+    >
+      {body && <div className="confirmDialog__body">{body}</div>}
+      {children}
+    </Modal>
   );
 }

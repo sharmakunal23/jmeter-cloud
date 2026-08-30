@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import {
   GlobalOrchestratorError,
@@ -6,6 +6,7 @@ import {
   type Run,
   type ScaleDownRunResponse,
 } from "../api/runs";
+import { Modal } from "./Modal";
 
 /**
  * The single drain confirmation dialog, scaling from one worker to N selected
@@ -46,13 +47,6 @@ export function DrainDialog({
   runId, workerIds, mode, liveWorkerCount, onClose, onSuccess,
 }: DrainDialogProps) {
   const [submit, setSubmit] = useState<SubmitState>({ status: "idle" });
-
-  // ESC closes — same dismiss UX as the rest of the modal family.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   async function handleConfirm() {
     setSubmit({ status: "submitting" });
@@ -109,10 +103,10 @@ export function DrainDialog({
     : targetCount === 1 ? "Drain worker?"
     : `Drain ${targetCount} workers?`;
 
-  const subtitle =
-    mode === "stopTest" ? `${targetCount} live worker${targetCount === 1 ? "" : "s"}`
+  const target =
+    mode === "stopTest" ? <strong>{targetCount} live worker{targetCount === 1 ? "" : "s"}</strong>
     : targetCount === 1 ? <span className="mono">{workerIds[0]}</span>
-    : `${targetCount} selected`;
+    : <strong>{targetCount} selected workers</strong>;
 
   const buttonLabel =
     submitting ? (mode === "stopTest" ? "Stopping…" : "Draining…")
@@ -121,75 +115,14 @@ export function DrainDialog({
     : `Drain ${targetCount} workers`;
 
   return (
-    <div className="modal__overlay" role="presentation" onClick={onClose}>
-      <div
-        className="modal modal--application"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="drainDialogTitle"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="modal__header">
-          <div>
-            <h3 id="drainDialogTitle">{title}</h3>
-            <small className="ink-soft">{subtitle}</small>
-          </div>
-          <button
-            type="button"
-            className="btn btn--ghost"
-            onClick={onClose}
-            aria-label="Close"
-          >×</button>
-        </header>
-
-        <div className="modal__body">
-          <p>
-            Sends a graceful drain to JMeter's shutdown port on{" "}
-            {mode === "stopTest" || targetCount > 1
-              ? <>each of the <strong>{targetCount}</strong> targeted workers</>
-              : "the worker"}.
-            In-flight samplers complete; no new ones start.
-            {targetCount === 1
-              ? <> The worker lands in <span className="badge badge--ok" style={{ marginLeft: "0.3rem" }}>DRAINED</span> on clean exit (or <span className="badge badge--err">ABORTED</span> with reason <span className="mono">drainTimeoutExpired</span> if the drain budget elapses, default 60 s).</>
-              : <> Each worker lands in <span className="badge badge--ok" style={{ marginLeft: "0.3rem" }}>DRAINED</span> on clean exit (or <span className="badge badge--err">ABORTED</span> on drain-timeout).</>
-            }
-          </p>
-          {mode === "stopTest" ? (
-            <p className="ink-soft" style={{ fontSize: "0.85rem" }}>
-              The run will roll up to{" "}
-              <span className="badge badge--ok">COMPLETED</span> once every
-              member terminates. DRAINED counts as a successful end.
-            </p>
-          ) : (
-            <p className="ink-soft" style={{ fontSize: "0.85rem" }}>
-              The run continues with{" "}
-              <strong>{remaining} worker{remaining === 1 ? "" : "s"}</strong>{" "}
-              and stays <span className="badge badge--info">RUNNING</span> —
-              it terminates only when every member terminates.
-            </p>
-          )}
-          {submit.status === "error" && (
-            <div className="formError" role="alert">
-              <strong>{submit.code}</strong>: {submit.message}
-              {submit.skipped && submit.skipped.length > 0 && (
-                <details style={{ marginTop: "0.5rem" }}>
-                  <summary style={{ cursor: "pointer" }}>
-                    Per-worker rejections ({submit.skipped.length})
-                  </summary>
-                  <ul style={{ margin: "0.4rem 0 0 1rem", padding: 0, fontSize: "0.82rem" }}>
-                    {submit.skipped.map((s) => (
-                      <li key={s.workerId}>
-                        <span className="mono">{s.workerId}</span>: {s.reason}
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-            </div>
-          )}
-        </div>
-
-        <footer className="modal__footer">
+    <Modal
+      title={title}
+      infoTip="Gracefully drains the selected workers — in-flight samplers finish, then each worker exits and the run continues without them."
+      width="confirm"
+      onClose={onClose}
+      closeDisabled={submitting}
+      footer={
+        <>
           <button
             type="button"
             className="btn"
@@ -202,11 +135,54 @@ export function DrainDialog({
             onClick={() => { void handleConfirm(); }}
             disabled={submitting || targetCount === 0}
             aria-busy={submitting}
+            autoFocus
           >
             {buttonLabel}
           </button>
-        </footer>
-      </div>
-    </div>
+        </>
+      }
+    >
+      <p>
+        {target} — a graceful drain goes to JMeter's shutdown port; in-flight
+        samplers complete, no new ones start. Each worker lands in{" "}
+        <span className="badge badge--ok">DRAINED</span> on clean exit (or{" "}
+        <span className="badge badge--err">ABORTED</span> with reason{" "}
+        <span className="mono">drainTimeoutExpired</span> if the drain budget
+        elapses, default 60 s).
+      </p>
+      {mode === "stopTest" ? (
+        <p className="ink-soft" style={{ fontSize: "0.85rem" }}>
+          The run will roll up to{" "}
+          <span className="badge badge--ok">COMPLETED</span> once every
+          member terminates. DRAINED counts as a successful end.
+        </p>
+      ) : (
+        <p className="ink-soft" style={{ fontSize: "0.85rem" }}>
+          The run continues with{" "}
+          <strong>{remaining} worker{remaining === 1 ? "" : "s"}</strong>{" "}
+          and stays <span className="badge badge--info">RUNNING</span> —
+          it terminates only when every member terminates.
+        </p>
+      )}
+      {submit.status === "error" && (
+        <div className="formError" role="alert">
+          <strong>{submit.code}</strong>: {submit.message}
+          {submit.skipped && submit.skipped.length > 0 && (
+            <details style={{ marginTop: "0.5rem" }}>
+              <summary style={{ cursor: "pointer" }}>
+                Per-worker rejections ({submit.skipped.length})
+              </summary>
+              <ul style={{ margin: "0.4rem 0 0 1rem", padding: 0, fontSize: "0.82rem" }}>
+                {submit.skipped.map((s) => (
+                  <li key={s.workerId}>
+                    <span className="mono">{s.workerId}</span>: {s.reason}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
+    </Modal>
   );
 }

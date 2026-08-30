@@ -9,6 +9,7 @@ import {
 } from "../api/automation";
 import { templatesApi, type TemplateSummary } from "../api/templates";
 import { browserTimeZone } from "../lib/cron";
+import { Modal } from "./Modal";
 import { ScheduleBuilder, type ScheduleValue } from "./ScheduleBuilder";
 
 /**
@@ -58,12 +59,6 @@ export function CreateScheduleDialog({ application, groupId, regions, editing, o
   const [templatesError, setTemplatesError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   // Templates only matter for LAUNCH_RUN — load them lazily either way; cheap.
   useEffect(() => {
@@ -124,111 +119,103 @@ export function CreateScheduleDialog({ application, groupId, regions, editing, o
   }
 
   return (
-    <div className="modal__overlay" onClick={onClose}>
-      <div
-        className="modal modal--schedule"
-        role="dialog"
-        aria-label={isEdit ? `Edit schedule ${editing.name}` : `New schedule for ${application}`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="modal__header">
-          <div>
-            <h3>{isEdit ? "Edit schedule" : "New schedule"}</h3>
-            <small className="ink-soft">
-              For <span className="mono">{application}</span>, on a cron schedule.
-            </small>
-          </div>
-          <button type="button" className="btn btn--ghost" onClick={onClose} aria-label="Close">×</button>
-        </header>
+    <Modal
+      title={isEdit ? "Edit schedule" : "New schedule"}
+      infoTip="Runs the chosen action for this application on a cron schedule — launch a saved template, drain a region overnight, or provision it back up."
+      width="form"
+      onClose={onClose}
+      closeDisabled={submitting}
+    >
+      <form onSubmit={handleSubmit} className="modal__body createApp" noValidate>
+        <p style={{ margin: 0 }}>
+          For <span className="mono">{application}</span>
+        </p>
+        <div className="formField">
+          <label htmlFor="schedName">Name *</label>
+          <input
+            id="schedName"
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={isLaunch ? "nightly-baseline" : "overnight-drain"}
+            maxLength={128}
+            autoFocus
+            required
+          />
+          <small>Unique within {application}.</small>
+        </div>
 
-        <form onSubmit={handleSubmit} className="modal__body createApp" noValidate>
+        <div className="formField">
+          <label htmlFor="schedKind">Action *</label>
+          <select id="schedKind" value={kind} onChange={(e) => setKind(e.target.value as CronJobKind)}>
+            {PER_APP_KINDS.map((k) => (
+              <option key={k.kind} value={k.kind}>{k.label}</option>
+            ))}
+          </select>
+          <small>
+            {isLaunch
+              ? "Fires a saved test template."
+              : kind === "DRAIN_REGION"
+                ? "Drains every idle worker in the region (no replacement) — skipped if the app is always-on."
+                : "Spins workers back up to the region's configured maximum."}
+          </small>
+        </div>
+
+        {isLaunch ? (
           <div className="formField">
-            <label htmlFor="schedName">Name *</label>
-            <input
-              id="schedName"
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={isLaunch ? "nightly-baseline" : "overnight-drain"}
-              maxLength={128}
-              autoFocus
-              required
-            />
-            <small>Unique within {application}.</small>
+            <label htmlFor="schedTemplate">Template *</label>
+            {templatesError ? (
+              <p className="text--error" style={{ fontSize: "0.8rem" }}>{templatesError}</p>
+            ) : templates === null ? (
+              <p className="ink-soft" style={{ fontSize: "0.82rem" }}>Loading templates…</p>
+            ) : templates.length === 0 ? (
+              <p className="ink-soft" style={{ fontSize: "0.82rem" }}>
+                No saved templates for <span className="mono">{application}</span>. Save one from the{" "}
+                <Link to={`/applications/${encodeURIComponent(application)}/runs/new`}>run launcher</Link> first.
+              </p>
+            ) : (
+              <select
+                id="schedTemplate"
+                value={templateBlobId}
+                onChange={(e) => setTemplateBlobId(e.target.value)}
+                required
+              >
+                <option value="" disabled>Select a template…</option>
+                {templates.map((t) => (
+                  <option key={t.blobId} value={t.blobId}>{t.name}</option>
+                ))}
+              </select>
+            )}
           </div>
-
+        ) : (
           <div className="formField">
-            <label htmlFor="schedKind">Action *</label>
-            <select id="schedKind" value={kind} onChange={(e) => setKind(e.target.value as CronJobKind)}>
-              {PER_APP_KINDS.map((k) => (
-                <option key={k.kind} value={k.kind}>{k.label}</option>
-              ))}
-            </select>
-            <small>
-              {isLaunch
-                ? "Fires a saved test template."
-                : kind === "DRAIN_REGION"
-                  ? "Drains every idle worker in the region (no replacement) — skipped if the app is always-on."
-                  : "Spins workers back up to the region's configured maximum."}
-            </small>
+            <label htmlFor="schedRegion">Region *</label>
+            {regions.length === 0 ? (
+              <p className="ink-soft" style={{ fontSize: "0.82rem" }}>
+                No regions configured for <span className="mono">{application}</span>'s group. Add capacity on the{" "}
+                {groupId
+                  ? <Link to={`/capacity/${encodeURIComponent(groupId)}`}>group's Capacity page</Link>
+                  : <Link to="/capacity">Capacity tab</Link>} first.
+              </p>
+            ) : (
+              <select id="schedRegion" value={region} onChange={(e) => setRegion(e.target.value)} required>
+                {regions.map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
+            )}
           </div>
+        )}
 
-          {isLaunch ? (
-            <div className="formField">
-              <label htmlFor="schedTemplate">Template *</label>
-              {templatesError ? (
-                <p className="text--error" style={{ fontSize: "0.8rem" }}>{templatesError}</p>
-              ) : templates === null ? (
-                <p className="ink-soft" style={{ fontSize: "0.82rem" }}>Loading templates…</p>
-              ) : templates.length === 0 ? (
-                <p className="ink-soft" style={{ fontSize: "0.82rem" }}>
-                  No saved templates for <span className="mono">{application}</span>. Save one from the{" "}
-                  <Link to={`/applications/${encodeURIComponent(application)}/runs/new`}>run launcher</Link> first.
-                </p>
-              ) : (
-                <select
-                  id="schedTemplate"
-                  value={templateBlobId}
-                  onChange={(e) => setTemplateBlobId(e.target.value)}
-                  required
-                >
-                  <option value="" disabled>Select a template…</option>
-                  {templates.map((t) => (
-                    <option key={t.blobId} value={t.blobId}>{t.name}</option>
-                  ))}
-                </select>
-              )}
-            </div>
-          ) : (
-            <div className="formField">
-              <label htmlFor="schedRegion">Region *</label>
-              {regions.length === 0 ? (
-                <p className="ink-soft" style={{ fontSize: "0.82rem" }}>
-                  No regions configured for <span className="mono">{application}</span>'s group. Add capacity on the{" "}
-                  {groupId
-                    ? <Link to={`/capacity/${encodeURIComponent(groupId)}`}>group's Capacity page</Link>
-                    : <Link to="/capacity">Capacity tab</Link>} first.
-                </p>
-              ) : (
-                <select id="schedRegion" value={region} onChange={(e) => setRegion(e.target.value)} required>
-                  {regions.map((r) => <option key={r} value={r}>{r}</option>)}
-                </select>
-              )}
-            </div>
-          )}
+        <ScheduleBuilder value={schedule} onChange={setSchedule} idPrefix="sched" defaultTime="02:00" />
 
-          <ScheduleBuilder value={schedule} onChange={setSchedule} idPrefix="sched" defaultTime="02:00" />
+        {serverError && <div className="formError" role="alert">{serverError}</div>}
 
-          {serverError && <div className="formError" role="alert">{serverError}</div>}
-
-          <footer className="modal__footer">
-            <button type="button" className="btn" onClick={onClose}>Cancel</button>
-            <button type="submit" className="btn btn--primary" disabled={!canSubmit} aria-busy={submitting}>
-              {submitting ? (isEdit ? "Saving…" : "Creating…") : (isEdit ? "Save changes" : "Create schedule")}
-            </button>
-          </footer>
-        </form>
-      </div>
-    </div>
+        <Modal.Footer>
+          <button type="button" className="btn" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn btn--primary" disabled={!canSubmit} aria-busy={submitting}>
+            {submitting ? (isEdit ? "Saving…" : "Creating…") : (isEdit ? "Save changes" : "Create schedule")}
+          </button>
+        </Modal.Footer>
+      </form>
+    </Modal>
   );
 }

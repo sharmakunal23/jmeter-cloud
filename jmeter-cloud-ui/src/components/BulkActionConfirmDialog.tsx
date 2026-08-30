@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import type { PodView } from "../api/capacity";
+import { Modal } from "./Modal";
 
 /**
  * Phase 5b — confirmation modal for bulk Restart / Drain on selected
@@ -48,76 +49,14 @@ export function BulkActionConfirmDialog({
   }
 
   return (
-    <div className="modal__overlay" role="presentation" onClick={onCancel}>
-      <div
-        className="modal modal--bulk"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="bulkActionTitle"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="modal__header">
-          <div>
-            <h3 id="bulkActionTitle">{verb} {selected.length} worker{selected.length === 1 ? "" : "s"}?</h3>
-            <small className="ink-soft">
-              {willProceed.length} will {action}; {willSkip.length} will be skipped
-              (held by an active run).
-            </small>
-          </div>
-          <button type="button" className="btn btn--ghost" onClick={onCancel} aria-label="Close">×</button>
-        </header>
-
-        <div className="modal__body">
-          {willProceed.length > 0 && (
-            <section className="bulkActionList">
-              <h4 className="bulkActionList__title">
-                Will {action} ({willProceed.length})
-              </h4>
-              <ul className="bulkActionList__items">
-                {willProceed.map((p) => (
-                  <li key={p.podName}>
-                    <span className="mono">{p.podName}</span>
-                    <span className={`chip chip--${p.state === "LOST" ? "err" : "ok"}`}>
-                      {p.state}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-
-          {willSkip.length > 0 && (
-            <section className="bulkActionList bulkActionList--skip">
-              <h4 className="bulkActionList__title">
-                Skipped ({willSkip.length})
-              </h4>
-              <ul className="bulkActionList__items">
-                {willSkip.map((p) => (
-                  <li key={p.podName}>
-                    <span className="mono">{p.podName}</span>
-                    <span className="chip chip--warn">IN_USE</span>
-                    {p.blockedBy && (
-                      <small className="ink-soft mono">
-                        run {p.blockedBy.runId.slice(0, 12)}… ({p.blockedBy.state})
-                      </small>
-                    )}
-                  </li>
-                ))}
-              </ul>
-              <small className="ink-soft" style={{ display: "block", marginTop: "0.4rem" }}>
-                Abort these runs first if you really need to {action} their workers.
-              </small>
-            </section>
-          )}
-
-          {willProceed.length === 0 && (
-            <p className="text--error" role="alert" style={{ marginTop: "0.6rem" }}>
-              All selected workers are in use. Nothing to {action}.
-            </p>
-          )}
-        </div>
-
-        <footer className="modal__footer">
+    <Modal
+      title={`${verb} ${selected.length} worker${selected.length === 1 ? "" : "s"}?`}
+      infoTip="Workers held by an active run are skipped automatically — only idle workers are acted on."
+      width="confirm"
+      onClose={onCancel}
+      closeDisabled={busy}
+      footer={
+        <>
           <button type="button" className="btn" onClick={onCancel} disabled={busy && confirmed}>
             Cancel
           </button>
@@ -127,11 +66,60 @@ export function BulkActionConfirmDialog({
             onClick={handleConfirm}
             disabled={busy || willProceed.length === 0}
             aria-busy={busy}
+            autoFocus
           >
             {busy ? `${verbing}…` : `${verb} ${willProceed.length}`}
           </button>
-        </footer>
-      </div>
-    </div>
+        </>
+      }
+    >
+      {willProceed.length > 0 && (
+        <section className="bulkActionList">
+          <h4 className="bulkActionList__title">
+            Will {action} ({willProceed.length})
+          </h4>
+          <ul className="bulkActionList__items">
+            {willProceed.map((p) => (
+              <li key={p.podName}>
+                <span className="mono">{p.podName}</span>
+                <span className={`chip chip--${p.state === "LOST" ? "err" : "ok"}`}>
+                  {p.state}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {willSkip.length > 0 && (
+        <section className="bulkActionList bulkActionList--skip">
+          <h4 className="bulkActionList__title">
+            Skipped ({willSkip.length})
+          </h4>
+          <ul className="bulkActionList__items">
+            {willSkip.map((p) => (
+              <li key={p.podName}>
+                <span className="mono">{p.podName}</span>
+                <span className="chip chip--warn">IN_USE</span>
+                {p.blockedBy && (
+                  <small className="ink-soft mono">
+                    run {p.blockedBy.runId.slice(0, 12)}… ({p.blockedBy.state})
+                  </small>
+                )}
+              </li>
+            ))}
+          </ul>
+          <small className="ink-soft" style={{ display: "block", marginTop: "0.4rem" }}>
+            Abort these runs first if you really need to {action} their workers.
+          </small>
+        </section>
+      )}
+
+      {willProceed.length === 0 && (
+        <p className="text--error" role="alert" style={{ marginTop: "0.6rem" }}>
+          All selected workers are in use. Nothing to {action}.
+        </p>
+      )}
+    </Modal>
   );
 }

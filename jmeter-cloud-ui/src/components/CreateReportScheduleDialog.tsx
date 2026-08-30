@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { cronJobsApi, CronJobApiError, type CronJobKind, type CronJobSummary } from "../api/automation";
 import { browserTimeZone } from "../lib/cron";
 import { EmailPreviewModal } from "./EmailPreviewModal";
+import { Modal } from "./Modal";
 import { ScheduleBuilder, type ScheduleValue } from "./ScheduleBuilder";
 
 /**
@@ -46,12 +47,6 @@ export function CreateReportScheduleDialog({ editing, onCreated, onClose }: Crea
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   const trimmedName = name.trim();
   const canSubmit = !submitting && trimmedName !== "" && schedule.cronExpression.trim() !== "";
 
@@ -93,105 +88,96 @@ export function CreateReportScheduleDialog({ editing, onCreated, onClose }: Crea
   }
 
   return (
-    <div className="modal__overlay" onClick={onClose}>
-      <div
-        className="modal modal--schedule"
-        role="dialog"
-        aria-label={isEdit ? `Edit report schedule ${editing.name}` : "New report schedule"}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="modal__header">
-          <div>
-            <h3>{isEdit ? "Edit report schedule" : "New report schedule"}</h3>
-            <small className="ink-soft">
-              {REPORT_KINDS.find((k) => k.value === kind)?.blurb}
-            </small>
-          </div>
-          <button type="button" className="btn btn--ghost" onClick={onClose} aria-label="Close">×</button>
-        </header>
+    <Modal
+      title={isEdit ? "Edit report schedule" : "New report schedule"}
+      infoTip="Emails the selected platform-wide report on a cron schedule — recipients default to the server's configured list."
+      width="form"
+      onClose={onClose}
+      // While the email-preview modal is stacked on top, Esc must close only
+      // the preview — its own Modal handles that; this one stands down.
+      closeDisabled={submitting || showPreview}
+    >
+      <form onSubmit={handleSubmit} className="modal__body createApp" noValidate>
+        <div className="formField">
+          <label htmlFor="reportKind">Report *</label>
+          <select
+            id="reportKind"
+            value={kind}
+            onChange={(e) => setKind(e.target.value as CronJobKind)}
+          >
+            {REPORT_KINDS.map((k) => (
+              <option key={k.value} value={k.value}>{k.label}</option>
+            ))}
+          </select>
+          <small>{REPORT_KINDS.find((k) => k.value === kind)?.blurb}</small>
+        </div>
 
-        <form onSubmit={handleSubmit} className="modal__body createApp" noValidate>
-          <div className="formField">
-            <label htmlFor="reportKind">Report *</label>
-            <select
-              id="reportKind"
-              value={kind}
-              onChange={(e) => setKind(e.target.value as CronJobKind)}
-            >
-              {REPORT_KINDS.map((k) => (
-                <option key={k.value} value={k.value}>{k.label}</option>
-              ))}
-            </select>
-            <small>{REPORT_KINDS.find((k) => k.value === kind)?.blurb}</small>
-          </div>
+        <div className="formField">
+          <label htmlFor="reportName">Name *</label>
+          <input
+            id="reportName"
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="daily-infra-readiness"
+            maxLength={128}
+            autoFocus
+            required
+          />
+          <small>Unique across platform schedules.</small>
+        </div>
 
-          <div className="formField">
-            <label htmlFor="reportName">Name *</label>
-            <input
-              id="reportName"
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="daily-infra-readiness"
-              maxLength={128}
-              autoFocus
-              required
-            />
-            <small>Unique across platform schedules.</small>
-          </div>
+        <ScheduleBuilder value={schedule} onChange={setSchedule} idPrefix="report" defaultTime="07:00" />
 
-          <ScheduleBuilder value={schedule} onChange={setSchedule} idPrefix="report" defaultTime="07:00" />
+        <div className="formField">
+          <label htmlFor="reportRecipients">Recipients</label>
+          <input
+            id="reportRecipients"
+            type="text"
+            value={recipients}
+            onChange={(e) => setRecipients(e.target.value)}
+            placeholder="ops@example.com, sre@example.com"
+          />
+          <small>Comma-separated. Leave blank to use the server's <code>AUTOMATION_REPORT_RECIPIENTS</code> default.</small>
+        </div>
 
-          <div className="formField">
-            <label htmlFor="reportRecipients">Recipients</label>
-            <input
-              id="reportRecipients"
-              type="text"
-              value={recipients}
-              onChange={(e) => setRecipients(e.target.value)}
-              placeholder="ops@example.com, sre@example.com"
-            />
-            <small>Comma-separated. Leave blank to use the server's <code>AUTOMATION_REPORT_RECIPIENTS</code> default.</small>
-          </div>
+        <div className="formField">
+          <label htmlFor="reportSubject">Subject (optional)</label>
+          <input
+            id="reportSubject"
+            type="text"
+            value={customSubject}
+            onChange={(e) => setCustomSubject(e.target.value)}
+            placeholder="Leave blank for the default subject"
+            maxLength={200}
+          />
+        </div>
 
-          <div className="formField">
-            <label htmlFor="reportSubject">Subject (optional)</label>
-            <input
-              id="reportSubject"
-              type="text"
-              value={customSubject}
-              onChange={(e) => setCustomSubject(e.target.value)}
-              placeholder="Leave blank for the default subject"
-              maxLength={200}
-            />
-          </div>
+        <div className="formField">
+          <label htmlFor="reportIntro">Intro note (optional)</label>
+          <textarea
+            id="reportIntro"
+            value={customIntro}
+            onChange={(e) => setCustomIntro(e.target.value)}
+            placeholder="A short note shown at the top of the email."
+            rows={2}
+            maxLength={1000}
+          />
+          <small>Shown above the report. Use <strong>Preview email</strong> to see exactly what recipients get.</small>
+        </div>
 
-          <div className="formField">
-            <label htmlFor="reportIntro">Intro note (optional)</label>
-            <textarea
-              id="reportIntro"
-              value={customIntro}
-              onChange={(e) => setCustomIntro(e.target.value)}
-              placeholder="A short note shown at the top of the email."
-              rows={2}
-              maxLength={1000}
-            />
-            <small>Shown above the report. Use <strong>Preview email</strong> to see exactly what recipients get.</small>
-          </div>
+        {serverError && <div className="formError" role="alert">{serverError}</div>}
 
-          {serverError && <div className="formError" role="alert">{serverError}</div>}
-
-          <footer className="modal__footer">
-            <button type="button" className="btn" onClick={onClose}>Cancel</button>
-            <button type="button" className="btn btn--ghost" onClick={() => setShowPreview(true)}>
-              Preview email
-            </button>
-            <button type="submit" className="btn btn--primary" disabled={!canSubmit} aria-busy={submitting}>
-              {submitting ? (isEdit ? "Saving…" : "Creating…") : (isEdit ? "Save changes" : "Create schedule")}
-            </button>
-          </footer>
-        </form>
-      </div>
+        <Modal.Footer>
+          <button type="button" className="btn" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn btn--ghost" onClick={() => setShowPreview(true)}>
+            Preview email
+          </button>
+          <button type="submit" className="btn btn--primary" disabled={!canSubmit} aria-busy={submitting}>
+            {submitting ? (isEdit ? "Saving…" : "Creating…") : (isEdit ? "Save changes" : "Create schedule")}
+          </button>
+        </Modal.Footer>
+      </form>
 
       {showPreview && (
         <EmailPreviewModal
@@ -201,6 +187,6 @@ export function CreateReportScheduleDialog({ editing, onCreated, onClose }: Crea
           onClose={() => setShowPreview(false)}
         />
       )}
-    </div>
+    </Modal>
   );
 }

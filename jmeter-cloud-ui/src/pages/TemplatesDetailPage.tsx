@@ -4,6 +4,7 @@ import { formatRelative } from "../lib/time";
 
 import { applicationsApi, type Application } from "../api/applications";
 import { templatesApi, type TemplateSummary } from "../api/templates";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 
 /**
  * Phase IA-Templates (2026-05-13) — per-application templates drill-in.
@@ -295,49 +296,26 @@ function DeleteTemplateDialog({
   onConfirm: () => void;
 }) {
   return (
-    <div className="modal__overlay" role="presentation" onClick={onCancel}>
-      <div
-        className="modal modal--application"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="deleteTemplateTitle"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="modal__header">
-          <div>
-            <h3 id="deleteTemplateTitle">Delete template?</h3>
-            <small className="ink-soft">
-              <span className="mono">{template.name}</span>
-            </small>
-          </div>
-          <button type="button" className="btn btn--ghost" onClick={onCancel} aria-label="Close">×</button>
-        </header>
-
-        <div className="modal__body">
-          <p>
-            Deleting a template removes the saved launcher snapshot. Any URL
-            currently pointing at <span className="mono">?template={template.blobId.slice(0, 8)}…</span>{" "}
-            will fall back to an empty form.
-          </p>
-          {errorMessage && (
-            <p className="text--error" role="alert">{errorMessage}</p>
-          )}
-        </div>
-
-        <footer className="modal__footer">
-          <button type="button" className="btn" onClick={onCancel} disabled={busy}>Cancel</button>
-          <button
-            type="button"
-            className="btn btn--danger"
-            onClick={onConfirm}
-            disabled={busy}
-            aria-busy={busy}
-          >
-            {busy ? "Deleting…" : "Delete"}
-          </button>
-        </footer>
-      </div>
-    </div>
+    <ConfirmDialog
+      title="Delete template?"
+      danger
+      busy={busy}
+      confirmLabel="Delete"
+      onConfirm={onConfirm}
+      onCancel={onCancel}
+      body={
+        <p>
+          Deleting <span className="mono">{template.name}</span> removes the saved
+          launcher snapshot. Any URL currently pointing at{" "}
+          <span className="mono">?template={template.blobId.slice(0, 8)}…</span>{" "}
+          will fall back to an empty form.
+        </p>
+      }
+    >
+      {errorMessage && (
+        <p className="text--error" role="alert">{errorMessage}</p>
+      )}
+    </ConfirmDialog>
   );
 }
 

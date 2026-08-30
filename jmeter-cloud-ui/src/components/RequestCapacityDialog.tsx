@@ -1,5 +1,7 @@
 import { useState } from "react";
 
+import { Modal } from "./Modal";
+
 /**
  * Phase 5b — "Request Capacity" modal. Replaces the old sponsor-gate
  * "Request more" stub flow (deleted in Phase 3 of the capacity rework).
@@ -57,70 +59,62 @@ export function RequestCapacityDialog({
   }
 
   return (
-    <div className="modal__overlay" role="presentation" onClick={onCancel}>
-      <div
-        className="modal modal--application"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="reqCapTitle"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="modal__header">
-          <div>
-            <h3 id="reqCapTitle">Request capacity</h3>
-            <small className="ink-soft">
-              <span className="mono">{groupName}</span> ·{" "}
-              <span className="mono">{region}</span> · current cap{" "}
-              <span className="mono">{current}</span>
-            </small>
-          </div>
-          <button type="button" className="btn btn--ghost" onClick={onCancel} aria-label="Close">×</button>
-        </header>
-        <form onSubmit={handleSubmit} className="modal__body createApp" noValidate>
-          <div className="formField">
-            <label htmlFor="reqCapMax">New maximum</label>
-            <input
-              id="reqCapMax"
-              type="number"
-              min={0}
-              max={MAX_BUDGET}
-              value={draftMax}
-              onChange={(e) => setDraftMax(e.target.value)}
-              autoFocus
-              required
-            />
-            {inputError && (
-              <p className="text--error" role="alert" style={{ fontSize: "0.78rem" }}>
-                {inputError}
-              </p>
-            )}
-            {!inputError && parsed < current && (
-              <p className="ink-soft" style={{ fontSize: "0.78rem" }}>
-                Shrinking — will be refused if {current - parsed} or more pod
-                {current - parsed === 1 ? " is" : "s are"} provisioned. Drain first.
-              </p>
-            )}
-          </div>
-          <div className="formField">
-            <label htmlFor="reqCapReason">Reason (optional, for your own records)</label>
-            <textarea
-              id="reqCapReason"
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              placeholder="e.g. black-friday load test, expected 5x baseline"
-              rows={3}
-              maxLength={512}
-            />
-          </div>
-          {error && <div className="formError" role="alert">{error}</div>}
-          <footer className="modal__footer">
-            <button type="button" className="btn" onClick={onCancel}>Cancel</button>
-            <button type="submit" className="btn btn--primary" disabled={!canSubmit} aria-busy={busy}>
-              {busy ? "Saving…" : `Set max to ${Number.isNaN(parsed) ? "?" : parsed}`}
-            </button>
-          </footer>
-        </form>
-      </div>
-    </div>
+    <Modal
+      title="Request capacity"
+      infoTip="Raises this group's per-region worker ceiling — the pool grows the next time provisioning reconciles."
+      width="form"
+      onClose={onCancel}
+      closeDisabled={busy}
+    >
+      <form onSubmit={handleSubmit} className="modal__body createApp" noValidate>
+        <p style={{ margin: 0 }}>
+          <span className="mono">{groupName}</span> ·{" "}
+          <span className="mono">{region}</span> · current cap{" "}
+          <span className="mono">{current}</span>
+        </p>
+        <div className="formField">
+          <label htmlFor="reqCapMax">New maximum</label>
+          <input
+            id="reqCapMax"
+            type="number"
+            min={0}
+            max={MAX_BUDGET}
+            value={draftMax}
+            onChange={(e) => setDraftMax(e.target.value)}
+            autoFocus
+            required
+          />
+          {inputError && (
+            <p className="text--error" role="alert" style={{ fontSize: "0.78rem" }}>
+              {inputError}
+            </p>
+          )}
+          {!inputError && parsed < current && (
+            <p className="ink-soft" style={{ fontSize: "0.78rem" }}>
+              Shrinking — will be refused if {current - parsed} or more pod
+              {current - parsed === 1 ? " is" : "s are"} provisioned. Drain first.
+            </p>
+          )}
+        </div>
+        <div className="formField">
+          <label htmlFor="reqCapReason">Reason (optional, for your own records)</label>
+          <textarea
+            id="reqCapReason"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g. black-friday load test, expected 5x baseline"
+            rows={3}
+            maxLength={512}
+          />
+        </div>
+        {error && <div className="formError" role="alert">{error}</div>}
+        <Modal.Footer>
+          <button type="button" className="btn" onClick={onCancel}>Cancel</button>
+          <button type="submit" className="btn btn--primary" disabled={!canSubmit} aria-busy={busy}>
+            {busy ? "Saving…" : `Set max to ${Number.isNaN(parsed) ? "?" : parsed}`}
+          </button>
+        </Modal.Footer>
+      </form>
+    </Modal>
   );
 }
