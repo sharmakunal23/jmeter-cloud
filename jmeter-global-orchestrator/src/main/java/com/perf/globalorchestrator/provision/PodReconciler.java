@@ -89,8 +89,11 @@ public class PodReconciler {
         // exposes labels on the containers themselves — we read the label and
         // adopt without needing the registry.
         List<ProvisionedPod> allManaged;
+        java.util.Set<String> unlistedRegions;
         try {
-            allManaged = listAllManaged();
+            Listing listing = listAllManaged();
+            allManaged = listing.pods();
+            unlistedRegions = listing.unlistedRegions();
         } catch (Exception e) {
             LOG.warn("PodReconciler: failed to list managed containers: {}", e.toString());
             summary.errors.add("list-managed: " + e.getMessage());
@@ -144,6 +147,14 @@ public class PodReconciler {
         // Walk every pod row; if no container matches, the row is an orphan.
         for (Pod row : pods.findAll()) {
             if (row.groupId() == null) continue;
+            // A region whose list call failed proves nothing about its pods —
+            // deleting its rows here would wipe a live fleet just because the
+            // regional restarted with the hub. Keep them; the liveness probe
+            // and the next reconcile settle the truth.
+            if (unlistedRegions.contains(row.region())) {
+                summary.errors.add(row.podId() + ": region " + row.region() + " unlisted, row kept");
+                continue;
+            }
             if (containerByPodId.containsKey(row.podId())) continue;
             try {
                 int n = pods.deleteByPodId(row.podId());
@@ -165,9 +176,10 @@ public class PodReconciler {
      * registry knows, plus each routed region's whole Pod list — which is what
      * lets a wiped registry adopt its fleet back.
      */
-    private List<ProvisionedPod> listAllManaged() {
+    private Listing listAllManaged() {
         Map<String, ProvisionedPod> merged = new LinkedHashMap<>();
         java.util.Set<String> pairs = new java.util.HashSet<>();
+        java.util.Set<String> unlisted = new java.util.HashSet<>();
         for (Pod row : pods.findAll()) {
             if (row.groupId() == null || !pairs.add(row.groupId() + "|" + row.region())) continue;
             try {
@@ -175,6 +187,7 @@ public class PodReconciler {
                     if (c.podName() != null) merged.put(c.podName(), c);
                 }
             } catch (Exception e) {
+                unlisted.add(row.region());
                 LOG.warn("PodReconciler: listFor({},{}) failed: {}",
                         row.groupId(), row.region(), e.toString());
             }
@@ -185,11 +198,15 @@ public class PodReconciler {
                     if (c.podName() != null) merged.putIfAbsent(c.podName(), c);
                 }
             } catch (Exception e) {
+                unlisted.add(region);
                 LOG.warn("PodReconciler: listAll({}) failed: {}", region, e.toString());
             }
         }
-        return new ArrayList<>(merged.values());
+        return new Listing(new ArrayList<>(merged.values()), unlisted);
     }
+
+    /** What the provisioners answered, and the regions whose list call failed. */
+    private record Listing(List<ProvisionedPod> pods, java.util.Set<String> unlistedRegions) { }
 
     /**
      * Default {@code baseUrl} used when adopting an orphan container — the

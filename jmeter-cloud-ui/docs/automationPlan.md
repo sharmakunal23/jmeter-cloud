@@ -7,7 +7,7 @@ explains the shape.
 
 ## Status (last updated 2026-05-27)
 
-- **D6-A (backend — `cronJob` table + REST CRUD + scheduler + IT):** ✅ **SHIPPED 2026-05-27.** Flyway V20 (`cronJob` + `cronJobFireHistory`), `CronJobController` (8 endpoints), `CronFireService` (launch via `RunService.startRun`), `CronJobScheduler`. **Scheduler is a DB-claim poller, NOT Quartz** — see the corrected "Scheduler" section below.
+- **D6-A (backend — `cronJob` table + REST CRUD + scheduler + IT):** ✅ **SHIPPED 2026-05-27.** `ORCH_CRON_JOB` + `ORCH_CRON_JOB_FIRE_HISTORY` (Flyway V2), `CronJobController` (8 endpoints), `CronFireService` (launch via `RunService.startRun`), `CronJobScheduler`. **Scheduler is a DB-claim poller, NOT Quartz** — see the corrected "Scheduler" section below.
 - **D6-B (frontend — list / detail pages + create modal + Home wiring):** ✅ **SHIPPED.** IA shell landed 2026-05-13; the live wiring landed 2026-05-27 — `src/api/automation.ts` flipped from the stub to the real client, `CreateScheduleDialog` added, `<AutomationDetailPage>` wired for create/enable/disable/fireNow/delete, Home "Upcoming scheduled runs" reads enabled schedules. `CronJobSummary` field names match the backend verbatim.
 - **D6-C (operator UX polish):** the cron-expression "next fires" preview shipped with D6-B (dependency-free, UTC, 5-field). Remaining polish (tz-aware preview, richer fire-history surfacing) is incremental.
 - **D6-D (webhook notifications):** ⏳ deferred until there's demand (Achievable addition #10, out of scope for the current Goals-only pass).
@@ -70,9 +70,8 @@ The original options, kept for archaeology:
    a future fully-serverless control plane, but the poller works identically
    local and cloud with no extra infra.
 
-Sponsor approval not needed for CRON setup itself — the *capacity*
-the CRON eventually consumes still flows through the existing
-sponsor-approval workflow on `/capacity` (CRON can't bypass it).
+There is no approval flow: a fire draws on the group's pool exactly like a
+manual launch, and fails the same way when the pool is short.
 
 ## REST surface (sketch)
 

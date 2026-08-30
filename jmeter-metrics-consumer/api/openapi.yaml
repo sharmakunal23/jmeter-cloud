@@ -53,7 +53,7 @@ paths:
   /api/v1/ingest:
     post:
       tags: [ingest]
-      summary: Ingest one WorkerMetricBatch envelope into its group's fact table.
+      summary: One WorkerMetricBatch envelope into its group's fact table
       description: |
         Called by every worker's dispatcher, one envelope per (worker, window).
         `groupId` names the application group (`cps` → `CPS_METRICS`); the
@@ -162,7 +162,7 @@ paths:
     get:
       tags: [actuator]
       security: []
-      summary: Aggregate health — DB connectivity + ingest-progress staleness.
+      summary: Aggregate health, database and ingest progress
       description: |
         DOWN if the database is unreachable or no envelope has been ingested for
         `metricsConsumer.heartbeat.staleAfterSeconds` (the `ingestProgress`

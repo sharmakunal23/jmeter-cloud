@@ -113,7 +113,7 @@
         <!-- Cloud-only profile: enables the S3 blob-store backend. The
              default fat JAR stays AWS-SDK-free so air-gapped local dev
              doesn't carry an unused 12+ MB SDK. Mirrors the orchestrator's
-             -Pstorage-s3 pattern: source root src/main/java-cloud/ is
+             -Pstorage-s3 pattern: source root src/main/javaCloud/ is
              added by build-helper-maven-plugin only when this profile
              is active. -->
         <profile>
@@ -138,7 +138,7 @@
                                 <goals><goal>add-source</goal></goals>
                                 <configuration>
                                     <sources>
-                                        <source>${project.basedir}/src/main/java-cloud</source>
+                                        <source>${project.basedir}/src/main/javaCloud</source>
                                     </sources>
                                 </configuration>
                             </execution>
@@ -148,7 +148,7 @@
                                 <goals><goal>add-test-source</goal></goals>
                                 <configuration>
                                     <sources>
-                                        <source>${project.basedir}/src/test/java-cloud</source>
+                                        <source>${project.basedir}/src/test/javaCloud</source>
                                     </sources>
                                 </configuration>
                             </execution>

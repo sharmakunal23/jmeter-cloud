@@ -30,7 +30,7 @@ import static org.assertj.core.api.SoftAssertions.assertSoftly;
 /**
  * Verifies the production {@link DocumentServiceResultSink} against a JDK
  * {@link HttpServer} stub — no third-party HTTP-mock dep, no real network.
- * Lives under {@code src/test/java-storage-docservice/} so it's only built
+ * Lives under {@code src/test/javaStorageDocumentService/} so it's only built
  * with {@code -Pstorage-docservice}, mirroring its production counterpart.
  */
 @DisplayName("DocumentServiceResultSink — PUT shape, retries, header injection")

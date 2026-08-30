@@ -7,8 +7,6 @@ platform on the real clusters." Each section states the decision, the default re
 and the concrete steps. Execute top to bottom at migration; nothing here
 blocks local kind work.
 
-Track: KUBE (KUBE-11). Security cross-refs:
-the SECURITY track (S-0/D-6, S-2/S-9, S-5/S-11, S-15).
 
 ---
 
@@ -66,8 +64,8 @@ opens, by source, destination, port and purpose. The Calico templates in each
 `REPLACE_ME_*` placeholders (API-server endpoint IPs, the Oracle host, the SMTP
 relay, the SUT domains, the applications' health-endpoint hosts).
 
-`privateCloud/networkPolicies.yaml` ships the full default-deny set plus
-one allow per seam:
+The full default-deny set — encoded per service in
+`kube/kustomize/overlays/<env>/network-policy-custom.yml` — is one allow per seam:
 
 - ingress-controller → **ui**:80; ui → **global**:8082 + **document**:8084
 - global → each **regional**:8088 (the `REGIONS` URLs — external when the
@@ -82,11 +80,10 @@ one allow per seam:
 - consumer → oracle; flyway Job → oracle
 - everyone → kube-dns:53
 
-It is **commented in the umbrella** because kind's kindnet doesn't
-enforce NetworkPolicy (it would be untested dead weight) — uncomment on
-a Calico/Cilium/enforcing cluster after filling the two placeholders
-(ingress-controller namespace, SMTP egress) and verifying kubelet
-probes pass under default-deny on your CNI.
+kind's kindnet doesn't enforce NetworkPolicy, so nothing local tests these;
+on the enforcing cluster fill the placeholders (ingress-controller
+namespace, SMTP egress) and verify kubelet probes still pass under
+default-deny on your CNI.
 
 ## 4. TLS at the Ingress (SECURITY S-15 lands here)
 
@@ -102,10 +99,6 @@ Contour:
    (`kubectl create secret tls jmeter-cloud-tls ...`).
 3. Force HTTPS (`nginx.ingress.kubernetes.io/ssl-redirect: "true"`) and
    add HSTS once the cert is stable.
-   (`GF_SECURITY_ALLOW_EMBEDDING=true`, `COOKIE_SAMESITE=none`,
-   `CONTENT_SECURITY_POLICY=false` — compose-parity defaults): once the
-   platform hostname exists, scope CSP `frame-ancestors` to it instead
-   of disabled-CSP, and consider `SAMESITE=lax`.
 
 Keep the body-size/read-timeout annotations as shipped (1024m/600s) —
 they mirror the pod nginx's blob-upload limits.
@@ -117,8 +110,8 @@ they mirror the pod nginx's blob-upload limits.
 | `oracle` (kind StatefulSet template, 10Gi; the operator's instance on privateCloud) | ALL platform state: runs, registry, capacity, audit trail, metrics partitions, AI cache | Set an explicit `storageClassName` (SSD-class, `allowVolumeExpansion: true`) on kind; on privateCloud the instance is the DBA's. **Backups are mandatory**: RMAN or Data Pump on a schedule (or CSI VolumeSnapshots for the kind volume). Test a restore before go-live. Retention is each group's nightly `<P>_NIGHTLY_MAINT` job inside the database (archive after `hotDays`, prune after `historyDays`, stats), rendered from `oracle/groups/<id>.json` — no consumer setting, no partition runway to maintain, no external cron. |
 | `document-service-data` (10Gi) | Test plans, data zips, saved JTL archives | Same storageClass treatment. Backup optional-but-recommended (artifacts are re-uploadable; saved results are not). Growth = operator-driven; alert on PVC usage >80%. |
 
-Both overlays carry commented `storageClassName` patch stubs
-(oracle) — set them rather than relying on the cluster default.
+Set an explicit `storageClassName` on the kind StatefulSet's volume template
+(`oracle/kube/local`) rather than relying on the cluster default.
 
 ## 6. Alerting obligation (SLIMDOWN D-6, generalized — HARD requirement)
 
@@ -144,14 +137,14 @@ in SECURITY S-0/D-6 for the AWS path.
 Spring profile stays **`local` (no auth) ONLY while the cluster is
 private/internal** (network-isolated, org-only Ingress). Any wider
 exposure — other teams, other networks, the internet — requires the
-`cloud` profile auth work first (PHASE2 Track C; SECURITY S-2/S-9).
+`cloud` profile auth work first.
 NetworkPolicies (§3) and Ingress TLS (§4) are *transport* hardening,
 not authentication — they don't move this gate.
 
 ## 8. Registry + image pinning (cross-ref KUBE-8)
 
 Per `README.md` "Images & registry (KUBE-8)": every image goes through
-the private registry via the overlays' `images:` transformers, and
+the private registry via the `${containerImageUri}` token each `jules.yml` substitutes, and
 `PODPROVISIONER_IMAGE` (runtime-stamped, in NO manifest) must be pinned
 `repo:tag@sha256:<digest>` — a config re-tag mid-run drains workers
 (IMAGE_MISMATCH). Never roll it while runs are active.

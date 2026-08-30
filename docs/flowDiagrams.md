@@ -4,7 +4,7 @@ How the components interact at runtime. The diagrams carry the detail — the
 prose only says what a diagram cannot.
 
 1. [Control plane — starting a run](#1-control-plane--starting-a-run)
-2. [Pod registry — register, heartbeat, sweep, claim](#2-pod-registry--register-heartbeat-sweep-claim)
+2. [Pod registry — register, heartbeat, sweep, claim](#2-pod-registry--liveness-sweep-claim)
 3. [Data plane — metrics from JMeter to the UI](#3-data-plane--metrics-from-jmeter-to-the-ui)
 4. [Artifact plane — test plans, data files, results](#4-artifact-plane--test-plans-data-files-results)
 5. [Run lifecycle — local-orchestrator state machine](#5-run-lifecycle--local-orchestrator-state-machine)
@@ -16,7 +16,7 @@ prose only says what a diagram cannot.
 
 ## 1. Control plane — starting a run
 
-Dashed lines are sync HTTP; solid lines are persistence.
+Solid arrows are requests, dashed arrows are replies; every line into `DB` is persistence.
 
 ```mermaid
 sequenceDiagram
@@ -121,7 +121,7 @@ sequenceDiagram
 
     Note over LO: @PostConstruct fires a daemon thread<br/>so Spring init never blocks on the global.
 
-    LO->>GO: POST /api/v1/registerPod<br/>{ podId, region, baseUrl }
+    LO->>GO: POST /api/v1/registerPod<br/>{ podId, region, baseUrl, groupId }
     GO->>DB: MERGE INTO ORCH_POD … ON (POD_ID)<br/>WHEN MATCHED: STATE='IDLE', REGION=…, BASE_URL=…, LAST_HEARTBEAT=SYSTIMESTAMP<br/>WHEN NOT MATCHED: INSERT
     GO-->>LO: 200 OK
 
@@ -222,7 +222,7 @@ re-registration needed.
 
 Latency budget across the data plane (target SLO):
 
-| Hop | Local stack | Cloud (Phase 2) |
+| Hop | Local stack | Hosted target |
 |-----|-------------|-----------------|
 | JTL row → aggregator | < 1 ms | < 1 ms |
 | Aggregator → dispatcher queue | sub-microsecond (CAS) | sub-microsecond |
@@ -323,7 +323,7 @@ flowchart LR
     B == "/api/v1/blob[/...]<br/>(uploads, listing, download)" ==> NX
     NX -- "proxy_pass<br/>(client_max_body_size 1024m,<br/>proxy_request_buffering off)" --> DS[document-service:8084]
 
-    B == "/api/v1/runs[/...]<br/>/api/v1/pods<br/>/api/v1/registerPod<br/>/api/v1/heartbeat<br/>/actuator/*" ==> NX
+    B == "/api/v1/runs[/...]<br/>/api/v1/applications[/...]<br/>/api/v1/applicationGroups[/...]<br/>/actuator/*" ==> NX
     NX -- "proxy_pass" --> GO[global-orchestrator:8082]
 
     GO -. "fan-out POST /test + status poll + log proxy<br/>through the region's relay<br/>(direct regions by baseUrl)" .-> LO[local-orchestrator:8080]

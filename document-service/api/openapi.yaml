@@ -321,9 +321,9 @@ components:
           nullable: true
           maxLength: 64
           description: |
-            Application tag supplied via X-Application on upload (Step 28).
-            Gates the launcher's downstream test-plan / data-files
-            pickers. `null` for legacy blobs uploaded before tagging.
+            Application tag supplied via X-Application on upload; gates the
+            launcher's test-plan / data-files pickers. `null` when uploaded
+            without one.
           example: "checkout-svc"
 
     ApplicationSummary:

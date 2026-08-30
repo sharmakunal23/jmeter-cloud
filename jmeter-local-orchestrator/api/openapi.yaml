@@ -7,7 +7,7 @@ info:
   description: |
     Owns the full lifecycle of a single JMeter test on one pod or instance:
     accept artifacts, launch JMeter as a child process, tail its JTL, stream
-    1-second windows to the metrics-consumer, and optionally upload the JTL
+    15-second windows to the metrics-consumer, and optionally upload the JTL
     afterwards.
 
     **One process, one worker, one test at a time.** Every resource here is a
@@ -372,7 +372,7 @@ paths:
   /api/v1/logs:
     get:
       tags: [observability]
-      summary: Tail of the JMeter child's stdout/stderr (console) or jmeter.log
+      summary: JMeter console or jmeter.log tail
       description: |
         `stream` picks the source; the two are deliberately not merged, so a UI
         tab labelled "Console" never sprouts log4j lines. Any other value is a
@@ -409,15 +409,9 @@ paths:
   # ────────────────────────────────────────────────────────────────────────
   # Platform
   #
-  # /api/v1/health, /api/v1/info, and /api/v1/metrics were dropped when the
-  # orchestrator migrated to Spring Boot — health/info are served by Spring
-  # Boot Actuator at /actuator/health and /actuator/info.
-  # (2026-07-21): /actuator/prometheus is 404 by design — the Micrometer/
-  # OTel stack was removed (hosting infra provides observability); the
-  # app-level counters live on /api/v1/metrics/orchestrator. /api/v1/ready
-  # and /api/v1/config stay because they implement orchestrator-specific
-  # logic that actuator doesn't cover (ingest + disk readiness composition;
-  # resolved-config snapshot with secrets redacted).
+  # Health and info are Spring Boot Actuator's (/actuator/health, /actuator/info);
+  # there is no /actuator/prometheus. /api/v1/ready and /api/v1/config compose
+  # what actuator does not (ingest + disk readiness; the redacted config).
   # ────────────────────────────────────────────────────────────────────────
   /api/v1/ready:
     get:
@@ -454,7 +448,7 @@ paths:
   /api/v1/config:
     get:
       tags: [platform]
-      summary: Effective config (env + per-run overrides), secrets redacted
+      summary: Effective config, secrets redacted
       responses:
         "200":
           description: Resolved config.
@@ -692,7 +686,7 @@ components:
           nullable: true
           description: |
             Per-run override of the aggregator's late-arrival grace period
-            (seconds). A 1-second metric window stays open until the JTL tailer
+            (seconds). A metric window stays open until the JTL tailer
             has seen this many seconds of newer data before closing, so slow
             samples — JMeter timestamps a sample at its START but writes it at
             COMPLETION, so a slow row lands in the JTL out of order — are

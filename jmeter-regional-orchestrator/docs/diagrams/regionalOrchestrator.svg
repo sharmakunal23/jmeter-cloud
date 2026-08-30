@@ -65,7 +65,7 @@
     <text x="188" y="170">/api/v1/pods · /api/v1/workers (liveness) · /workers/status</text>
     <text x="188" y="182">/api/v1/workers/{podName}/… · one URL per region (REGIONS=…)</text>
     <text x="188" y="322">create · delete · list Pod</text>
-    <text x="272" y="256">relay: POST /test · status · logs</text>
+    <text x="272" y="256">relay: POST /test · drain · abort · logs</text>
     <text x="616" y="186" fill="#94a3b8">no heartbeats —</text>
     <text x="616" y="197" fill="#94a3b8">the Pod list is liveness</text>
     <text x="611" y="170">ingest</text>

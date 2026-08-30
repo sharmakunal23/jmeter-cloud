@@ -193,7 +193,7 @@
                 </plugins>
             </build>
         </profile>
-        <!-- The -Pcloud profile (AWS SES + the src/main/java-cloud source
+        <!-- The -Pcloud profile (AWS SES + the src/main/javaCloud source
              root) was removed: SMTP is the one email backend; the deploy
              environment's relay is configured via the existing spring.mail
              env vars, and SES itself offers an SMTP endpoint. -->

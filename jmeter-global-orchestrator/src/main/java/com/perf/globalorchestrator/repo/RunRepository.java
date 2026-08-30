@@ -281,10 +281,13 @@ public class RunRepository {
      * becomes stale between the two statements is caught by the next sweep.
      */
     public List<String> failStalePreparing(Instant cutoff, String reason) {
+        // Age vs SYSTIMESTAMP for the same reason as markLostBefore: CREATED_AT
+        // is the database's clock.
+        double ageSeconds = Math.max(0L, java.time.Duration.between(cutoff, Instant.now()).toMillis()) / 1000.0;
         List<String> ids = jdbc.queryForList(
                 "SELECT RUN_ID FROM ORCH_RUN "
-                + "WHERE STATE='PREPARING' AND CREATED_AT < ?",
-                String.class, OracleBind.ts(cutoff));
+                + "WHERE STATE='PREPARING' AND CREATED_AT < SYSTIMESTAMP - NUMTODSINTERVAL(?, 'SECOND')",
+                String.class, ageSeconds);
         List<String> failed = new ArrayList<>();
         for (String runId : ids) {
             int n = jdbc.update(

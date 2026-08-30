@@ -301,5 +301,19 @@ public final class AsyncMetricsDispatcher implements MetricsDispatcher {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+        // Whatever the worker thread never took still belongs on disk — the
+        // buffer is the durability boundary, the queue is not.
+        java.util.List<Pending> left = new java.util.ArrayList<>();
+        queue.drainTo(left);
+        for (Pending p : left) {
+            try {
+                buffer.enqueue(p.envelope(), p.groupId());
+            } catch (Exception e) {
+                LOG.log(Level.WARNING, "close(): could not persist queued envelope", e);
+            }
+        }
+        if (!left.isEmpty()) {
+            LOG.info(() -> "close(): persisted " + left.size() + " queued envelope(s) to the disk buffer");
+        }
     }
 }

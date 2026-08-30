@@ -6,7 +6,10 @@ import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.databind.jsontype.BasicPolymorphicTypeValidator;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.springframework.boot.autoconfigure.cache.RedisCacheManagerBuilderCustomizer;
+import org.springframework.cache.Cache;
+import org.springframework.cache.annotation.CachingConfigurer;
 import org.springframework.cache.annotation.EnableCaching;
+import org.springframework.cache.interceptor.CacheErrorHandler;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
@@ -44,7 +47,32 @@ import java.time.Duration;
  */
 @Configuration
 @EnableCaching
-public class CacheConfig {
+public class CacheConfig implements CachingConfigurer {
+
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(CacheConfig.class);
+
+    /**
+     * A cache outage degrades to the database, never to a 500: every cache
+     * get/put/evict failure is logged and swallowed, so {@code @Cacheable}
+     * methods fall through to their body when Redis is down.
+     */
+    @Override
+    public CacheErrorHandler errorHandler() {
+        return new CacheErrorHandler() {
+            @Override public void handleCacheGetError(RuntimeException e, Cache cache, Object key) {
+                LOG.warn("cache GET {}:{} failed — serving from the database: {}", cache.getName(), key, e.toString());
+            }
+            @Override public void handleCachePutError(RuntimeException e, Cache cache, Object key, Object value) {
+                LOG.warn("cache PUT {}:{} failed — entry not cached: {}", cache.getName(), key, e.toString());
+            }
+            @Override public void handleCacheEvictError(RuntimeException e, Cache cache, Object key) {
+                LOG.warn("cache EVICT {}:{} failed: {}", cache.getName(), key, e.toString());
+            }
+            @Override public void handleCacheClearError(RuntimeException e, Cache cache) {
+                LOG.warn("cache CLEAR {} failed: {}", cache.getName(), e.toString());
+            }
+        };
+    }
 
     /** Per-run timeseries response for a TERMINAL run (immutable). */
     public static final String CACHE_RUN_TIMESERIES = "runTimeseries";

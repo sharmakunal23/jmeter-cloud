@@ -64,8 +64,10 @@ public class K8sPodProvisioner implements PodProvisioner {
 
     static final String CONTAINER_NAME = "local-orchestrator";
 
-    /** Graceful-delete window handed to the kubelet. */
-    private static final long DELETE_GRACE_SECONDS = 10;
+    /** Graceful-delete window handed to the kubelet — must exceed the worker's
+     * own drain ({@code ORCHESTRATOR_SHUTDOWN_GRACE_S}, 30 s: stop JMeter, flush
+     * the last window to the disk buffer), or an eviction SIGKILLs the flush. */
+    private static final long DELETE_GRACE_SECONDS = 45;
 
     /** How long restart() waits for the old Pod to disappear before recreating. */
     private static final long DELETE_AWAIT_MS = 30_000;

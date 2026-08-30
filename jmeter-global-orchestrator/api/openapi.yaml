@@ -10,8 +10,8 @@ info:
     `ORCH_*` tables of the Oracle schema `CARDZATE_DB_GRAF` and serving metrics
     back from the application group's fact tables beside them.
 
-    Pod selection is registry-driven and runs claim only IDLE pods belonging
-    to their own application. Liveness has two sources: dynamic workers in a
+    Pod selection is registry-driven and runs claim only IDLE pods from their
+    application group's pool in the run's region. Liveness has two sources: dynamic workers in a
     routed region (`REGIONS=id=url`) are judged by the kubelet through the
     region's `GET /api/v1/workers` (ready → IDLE, dead/absent → LOST with the
     kubelet's reason); operator-declared workers self-register and heartbeat
@@ -246,7 +246,7 @@ paths:
       - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
     post:
       tags: [runs]
-      summary: Permanently delete ("purge") a hidden run — HARD delete, irreversible
+      summary: Purge a hidden run (irreversible)
       description: |
         The second tier of the two-tier delete model ("trash, then empty
         trash"). Unlike `DELETE /runs/{runId}` (which only HIDES), this
@@ -648,7 +648,7 @@ paths:
       - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
     get:
       tags: [runs]
-      summary: The aggregate report — one row per label from the run's group fact table
+      summary: Aggregate report, one row per label
       description: |
         Folds the run's rows in its application group's `<GROUP_ID>_METRICS`
         (and the archived-day table) per JMeter label, busiest first: samples,
@@ -692,7 +692,7 @@ paths:
       - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
     get:
       tags: [runs]
-      summary: The Metrics tab's headline numbers — the hosted dashboard's "Key Metrics" and "Summary by Application"
+      summary: Run summary, totals and one row per application
       description: |
         One `GROUP BY ROLLUP(LABEL.APPLICATION)` statement over the run's rows
         (or its trailing `window`): the total and one row per application, each
@@ -1184,9 +1184,6 @@ paths:
         `REGIONS`, see `GET /api/v1/platform/capabilities`, or the single
         starter region `us-east-1` when it declares none). Pod counts are never set
         here — capacity changes go through the capacity endpoints.
-        (DIRECT-METRICS, 2026-07-20: the KAFKA-PER-APP topic provisioning
-        that used to happen on registration left with the broker — workers
-        POST metrics straight to the metrics-consumer.)
       requestBody:
         required: true
         content:
@@ -1291,7 +1288,7 @@ paths:
       - { name: applicationId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
     post:
       tags: [applications]
-      summary: Permanently delete ("purge") a hidden application — HARD delete, irreversible
+      summary: Purge a hidden application (irreversible)
       description: |
         The second tier of the two-tier delete model ("trash, then empty
         trash"). Unlike `DELETE /applications/{id}` (which only HIDES), this
@@ -1358,7 +1355,7 @@ paths:
   /api/v1/regions/status:
     get:
       tags: [pods]
-      summary: Every configured region and its regional orchestrator's reachability
+      summary: Configured regions and their reachability
       description: |
         One entry per id in `REGIONS`, in declaration order. A routed region
         (one configured as `id=url`) carries the last probe's verdict:
@@ -1482,7 +1479,7 @@ paths:
 
   /api/v1/admin/pods/{podName}:
     parameters:
-      - { name: podName, in: path, required: true, schema: { type: string } }
+      - { name: podName, in: path, required: true, schema: { type: string, pattern: "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" }, description: "DNS-1123 label; anything else is 400 INVALID_POD_NAME." }
     delete:
       tags: [admin]
       summary: Tear a worker down, bypassing the in-use check
@@ -1526,7 +1523,7 @@ paths:
       tags: [capacity]
       summary: Set per-(group, region) maxAvailable directly
       description: |
-        Replaces the Phase 2 sponsor-gate stub. No approval flow — the
+        No approval flow — the
         operator owns capacity. Refuses 409 `CAPACITY_SHRINK_BELOW_PROVISIONED`
         when the requested ceiling is lower than the number of pods
         currently provisioned (drain first).
@@ -1617,7 +1614,7 @@ paths:
     parameters:
       - { name: groupId, in: path, required: true, schema: { type: string, pattern: "^[a-z][a-z0-9_]{0,29}$" } }
       - { name: region,  in: path, required: true, schema: { type: string } }
-      - { name: podName,       in: path, required: true, schema: { type: string } }
+      - { name: podName, in: path, required: true, schema: { type: string, pattern: "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" }, description: "DNS-1123 label; anything else is 400 INVALID_POD_NAME." }
     post:
       tags: [capacity]
       summary: Restart one container in place
@@ -1645,10 +1642,10 @@ paths:
     parameters:
       - { name: groupId, in: path, required: true, schema: { type: string, pattern: "^[a-z][a-z0-9_]{0,29}$" } }
       - { name: region,  in: path, required: true, schema: { type: string } }
-      - { name: podName,       in: path, required: true, schema: { type: string } }
+      - { name: podName, in: path, required: true, schema: { type: string, pattern: "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" }, description: "DNS-1123 label; anything else is 400 INVALID_POD_NAME." }
     put:
       tags: [capacity]
-      summary: Declare an operator-deployed worker (STATIC provisioning only)
+      summary: Declare an operator-deployed worker (STATIC)
       description: |
         Binds a worker the operator deployed themselves to this
         (group, region) pool. **Static mode only** — `409
@@ -2983,7 +2980,7 @@ components:
         podId:
           type: string
           description: |
-            Pod identity. Matches `WorkerMetric.workerId` so the metrics
+            Pod identity. Matches `WorkerMetricBatch.workerId` so the metrics
             join works. Typically the K8s pod name / Docker container
             hostname.
         region:

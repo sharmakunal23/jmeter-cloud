@@ -260,6 +260,11 @@ public class CapacityController {
             @PathVariable String podName,
             @RequestParam(name = "force", defaultValue = "false") boolean force,
             @RequestBody DeclarePodRequest req) {
+        if (!com.perf.globalorchestrator.domain.PodNames.isValid(podName)) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "code", "INVALID_POD_NAME",
+                    "message", "podName must be a DNS-1123 label: " + podName));
+        }
         provisioning.requireStatic("declare worker " + podName);
         requireGroup(groupId);
         if (req == null) {
@@ -342,6 +347,11 @@ public class CapacityController {
             @PathVariable String groupId,
             @PathVariable String region,
             @PathVariable String podName) {
+        if (!com.perf.globalorchestrator.domain.PodNames.isValid(podName)) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "code", "INVALID_POD_NAME",
+                    "message", "podName must be a DNS-1123 label: " + podName));
+        }
         provisioning.requireDynamic("restart worker " + podName);
         requireGroup(groupId);
         requirePodBoundToGroupRegion(groupId, region, podName);
@@ -373,6 +383,11 @@ public class CapacityController {
             @PathVariable String groupId,
             @PathVariable String region,
             @PathVariable String podName) {
+        if (!com.perf.globalorchestrator.domain.PodNames.isValid(podName)) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "code", "INVALID_POD_NAME",
+                    "message", "podName must be a DNS-1123 label: " + podName));
+        }
         requireGroup(groupId);
         requirePodBoundToGroupRegion(groupId, region, podName);
         Optional<ActiveRunBinding> blocker = pods.findActiveRunBindingFor(podName);

@@ -183,22 +183,27 @@ public class PodRepository {
         // DRAINING_FOR_RECYCLE pods may go silent
         // while their container is being stopped. Don't relabel them LOST;
         // the recycle path is the authoritative driver for these rows.
+        // The cutoff becomes an AGE compared against SYSTIMESTAMP — heartbeats
+        // are written with the database's clock, so the database's clock must
+        // judge them; hub/DB skew ≥ lostAfterMs would otherwise mass-LOST a
+        // healthy fleet each sweep.
+        double ageSeconds = Math.max(0L, java.time.Duration.between(cutoff, Instant.now()).toMillis()) / 1000.0;
         if (excludedRegions == null || excludedRegions.isEmpty()) {
             return jdbc.update(
                     "UPDATE ORCH_POD "
                     + "SET STATE='LOST' "
                     + "WHERE STATE NOT IN ('LOST', 'DRAINING_FOR_RECYCLE') "
-                    + "  AND LAST_HEARTBEAT < ?",
-                    OracleBind.ts(cutoff));
+                    + "  AND LAST_HEARTBEAT < SYSTIMESTAMP - NUMTODSINTERVAL(?, 'SECOND')",
+                    ageSeconds);
         }
         Object[] args = new Object[excludedRegions.size() + 1];
-        args[0] = OracleBind.ts(cutoff);
+        args[0] = ageSeconds;
         for (int i = 0; i < excludedRegions.size(); i++) args[i + 1] = excludedRegions.get(i);
         return jdbc.update(
                 "UPDATE ORCH_POD "
                 + "SET STATE='LOST' "
                 + "WHERE STATE NOT IN ('LOST', 'DRAINING_FOR_RECYCLE') "
-                + "  AND LAST_HEARTBEAT < ? "
+                + "  AND LAST_HEARTBEAT < SYSTIMESTAMP - NUMTODSINTERVAL(?, 'SECOND') "
                 + "  AND NOT (SOURCE='DYNAMIC' AND REGION IN (" + MetricsPurgeRepository.marks(excludedRegions) + "))",
                 args);
     }

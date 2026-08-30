@@ -167,9 +167,9 @@ recycling is a dynamic-substrate feature), so nothing fights your rollout.
 **Workers clean up after themselves.** Because a declared worker is never
 recycled, each one reaps a JMeter process that outlived its run (before
 every run and on a 60 s idle tick) and bounds the artifacts kept back for
-diagnosis. See `ORPHAN_JMETER_POLICY`, `RUN_ARTIFACT_RETENTION_COUNT` and
-`RUN_ARTIFACT_RETENTION_DAYS` in
-[`jmeter-local-orchestrator/README.md`](../../../jmeter-local-orchestrator/README.md).
+diagnosis. The knobs are `ORPHAN_JMETER_POLICY`, `RUN_ARTIFACT_RETENTION_COUNT` and
+`RUN_ARTIFACT_RETENTION_DAYS` (validated in the worker's `OrchestratorConfig`; the
+effective values show on its `GET /api/v1/config`).
 A worker that finds an orphan it cannot kill reports `NOT READY` and takes
 itself out of rotation rather than running a test whose numbers would be
 quietly wrong.
@@ -187,8 +187,7 @@ The declare endpoint accepts an operator-supplied URL that the control plane
 then fetches every 30 s from every replica. Input validation rejects the
 cheap abuses (non-HTTP schemes, embedded credentials, query/fragment
 smuggling), but **there is no host allowlist** — consistent with the
-platform's internal-use posture. This is called out in
-the SECURITY track as a reason the S-11 target-host
+platform's internal-use posture. This is why the S-11 target-host
 allowlist and egress controls are mandatory, not optional, before this is
 reachable from anywhere untrusted.
 

@@ -28,23 +28,49 @@ public final class ExpiringCache<K, V> {
         this.maxSize = maxSize;
     }
 
-    /** The cached value for {@code key}, or the loader's — loaded once per key at a time, never cached when it throws. */
+    private final ConcurrentHashMap<K, java.util.concurrent.CompletableFuture<Entry<V>>> inFlight = new ConcurrentHashMap<>();
+
+    /**
+     * The cached value for {@code key}, or the loader's — loaded once per key at
+     * a time, never cached when it throws. The loader runs OUTSIDE any map lock
+     * (a slow database load must not stall unrelated keys in the same hash bin);
+     * concurrent misses on one key wait on the same in-flight load.
+     */
     public V get(K key, Function<K, V> loader) {
         long now = System.currentTimeMillis();
         Entry<V> hit = map.get(key);
         if (hit != null && hit.expiresAt > now) {
             return hit.value;
         }
-        Entry<V> fresh = map.compute(key, (k, current) -> {
-            if (current != null && current.expiresAt > now) {
-                return current;
+        var mine = new java.util.concurrent.CompletableFuture<Entry<V>>();
+        var theirs = inFlight.putIfAbsent(key, mine);
+        if (theirs != null) {
+            try {
+                return theirs.join().value;
+            } catch (java.util.concurrent.CompletionException e) {
+                if (e.getCause() instanceof RuntimeException re) throw re;
+                throw e;
             }
-            return new Entry<>(loader.apply(k), now + ttlMillis);
-        });
-        if (map.size() > maxSize) {
-            evict(now);
         }
-        return fresh.value;
+        try {
+            Entry<V> current = map.get(key);
+            if (current != null && current.expiresAt > now) {
+                mine.complete(current);
+                return current.value;
+            }
+            Entry<V> fresh = new Entry<>(loader.apply(key), now + ttlMillis);
+            map.put(key, fresh);
+            mine.complete(fresh);
+            if (map.size() > maxSize) {
+                evict(now);
+            }
+            return fresh.value;
+        } catch (RuntimeException e) {
+            mine.completeExceptionally(e);
+            throw e;
+        } finally {
+            inFlight.remove(key);
+        }
     }
 
     public void invalidate(K key) {

@@ -1,9 +1,8 @@
 # Kubernetes deploy — umbrella + conventions
 
 How the platform deploys to Kubernetes (private cloud, validated on
-kind). Built by the **KUBE track** — live status and per-phase
-checklists in the KUBE track. Compose remains the
-primary local dev environment; everything here is additive.
+kind). Compose remains the primary local dev environment; everything here
+is additive.
 
 ## Layout (PRIVATE-CLOUD-ALIGNMENT Track 7 — the hosted blueprint)
 
@@ -33,7 +32,7 @@ The old `overlays/{kind,privateCloud}` and the `privateCloud` umbrella are gone
 (2026-08-30). Filenames under `kube/kustomize/` mirror the blueprint verbatim
 (`.yml`, `network-policy.yml`) — the repo's camelCase rule exempts that tree.
 
-## Conventions (locked in KUBE-0 — full rationale in the tracker)
+## Conventions (locked)
 
 1. **Kustomize, not Helm.** Built into kubectl; two overlays cover our
    environments; no new tooling (repo posture: no top-level build tool).
@@ -196,11 +195,11 @@ correctness. The per-service verdict:
 - **IMAGE_MISMATCH has a grace window.** During a rollout two replicas
   run different images and would drain each other's freshly-spun workers
   in a loop. A pod younger than
-  `{global,k8s}Orchestrator.pod.imageMismatchMinAgeMs` (default 10 min)
+  `globalOrchestrator.pod.imageMismatchMinAgeMs` (default 10 min)
   is left alone; a genuine image change still recycles on the next sweep
   after the window.
 
-Both orchestrator Deployments also set `strategy.rollingUpdate.maxSurge:
+The global-orchestrator Deployment also sets `strategy.rollingUpdate.maxSurge:
 0` so a **single-replica** deploy is a strict stop-then-start — the
 mixed-image window doesn't exist at `replicas: 1` (the grace window
 covers it at `replicas > 1`).

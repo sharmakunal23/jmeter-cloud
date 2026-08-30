@@ -44,8 +44,20 @@ public class WorkerStatusFetcher {
         byRegion.forEach((region, refs) -> {
             Optional<String> url = regions.urlOf(region);
             if (url.isEmpty()) {
-                for (WorkerRef ref : refs) {
-                    direct.getTestStatus(ref).ifPresent(snap -> out.put(ref.podName(), snap));
+                // One virtual thread per worker: k unreachable workers cost one
+                // 5 s timeout, not k of them, and this runs on the UI's poll thread.
+                try (var pool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+                    List<java.util.concurrent.Future<Optional<Map<String, Object>>>> futures = new ArrayList<>();
+                    for (WorkerRef ref : refs) futures.add(pool.submit(() -> direct.getTestStatus(ref)));
+                    for (int i = 0; i < refs.size(); i++) {
+                        WorkerRef ref = refs.get(i);
+                        try {
+                            futures.get(i).get().ifPresent(snap -> out.put(ref.podName(), snap));
+                        } catch (Exception e) {
+                            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+                            LOG.debug("status fetch for {} failed: {}", ref.podName(), e.toString());
+                        }
+                    }
                 }
                 return;
             }

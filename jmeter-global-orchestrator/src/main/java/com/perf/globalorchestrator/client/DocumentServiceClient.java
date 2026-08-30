@@ -131,6 +131,8 @@ public class DocumentServiceClient {
 
     /** Page size for the blob listing scan; mirrors BlobController's cap. */
     private static final int LIST_PAGE = 500;
+    /** Hard page cap (100k blobs) so a misbehaving listing can never loop forever. */
+    private static final int LIST_MAX_PAGES = 200;
 
     /**
      * Lists the blobIds of every result blob belonging to {@code runId}.
@@ -150,7 +152,7 @@ public class DocumentServiceClient {
         String prefix = "results-" + runId + "-";
         List<String> blobIds = new ArrayList<>();
         int offset = 0;
-        while (true) {
+        for (int page = 0; page < LIST_MAX_PAGES; page++) {
             URI target = URI.create(baseUrl + "/api/v1/blob?type=result&offset=" + offset
                     + "&limit=" + LIST_PAGE);
             HttpResponse<String> resp;

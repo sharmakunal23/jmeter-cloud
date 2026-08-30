@@ -18,7 +18,7 @@ platform is* and how the pieces fit together, see [`README.md`](./README.md).
 | Need | Why |
 |------|-----|
 | Docker Engine + Compose v2 (`docker compose`, not `docker-compose`) | Everything runs as containers, composed from per-subsystem fragments via `include:`. |
-| ~7 GB free RAM for Docker | Oracle Free (~2.2 GB) + Redis + 4 Spring services + worker pods. |
+| ~7 GB free RAM for Docker | Oracle Free (~2.2 GB) + Redis + MailHog + 3 Spring services + UI, plus the workers you start. |
 | Ports free on the host | See the port table below — mainly `1521`, `8082–8086`. |
 
 No JDK, Maven, or Node is required to *run* the stack — images build inside Docker. You only
@@ -38,7 +38,7 @@ throwaway local credentials, fine as-is.
 ## 3. Bring the stack up
 
 ```bash
-# Full stack (default profile): oracle + redis + the 4 services + UI
+# Full stack (default profile): oracle + redis + mailhog + the 3 services + UI — no workers
 docker compose up -d --build
 ```
 
@@ -56,10 +56,13 @@ docker compose ps                                   # health of every container
 docker compose logs -f global-orchestrator          # follow one service's logs
 ```
 
-Worker pods (`local-orchestrator`) are **not** started by Compose. They are provisioned on
-demand per application group from the UI **Capacity** tab (or the capacity API). That is by design —
-the global-orchestrator owns worker lifecycle so pods scale per (group, region), and every
-application in the group draws on the same pool.
+Workers (`jmeter-local-orchestrator`) are **not** started by Compose. Under the default
+`PROVISIONING_MODE=STATIC` you run one yourself (`docker run … jmeter-local-orchestrator:dev`
+on the `jmeter-cloud_default` network with `POD_NAME`, `RUN_ID`, `JTL_PATH`, `SENTINEL_PATH`,
+`METRICS_INGEST_URL` set) and **declare** it into a group's pool —
+`PUT /api/v1/applicationGroups/{groupId}/capacity/{region}/pods/{podName}` or the UI's
+**Capacity** page; every application in the group draws on that pool. On-demand provisioning
+needs `PROVISIONING_MODE=DYNAMIC` and kind regions (§8b).
 
 ## 4. Service endpoints & ports
 
@@ -87,7 +90,7 @@ Overrides: `HTTP_PORT` on each service, `JMX_PORT` for the JMX bridge.
 Easiest path is the UI:
 
 1. Open **http://localhost:8086**.
-2. **Capacity** → pick the application's group → add a worker for a region (provisions a `local-orchestrator` pod into the group's pool).
+2. **Capacity** → pick the application's group → **declare** the worker you started (§3) for its region; under DYNAMIC with kind regions the same page spins one.
 3. **Documents** → upload a `.jmx` test plan.
 4. **Runs → New run** → choose the plan, set fleet size/region → **Start**.
 5. You land on `/runs/{runId}` with the live fleet table, the native uPlot **Metrics** tab,
@@ -108,8 +111,6 @@ The metric pipeline behind that run:
   (itself + Oracle pools + cache, metrics-consumer, document-service, every data center's regional +
   workers), refreshed every minute; the UI Home page renders exactly this. `?refresh=true` probes now.
 - **Live per-run charts:** the UI run-detail **Metrics** tab (native uPlot over the run's `<GROUP_ID>_METRICS` rows, bucketed 15/30/60 s).
-  variable is auto-populated). It's the only provisioned dashboard — the infra dashboards and
-  Jaeger tracing retired with the SLIMDOWN track (2026-07-21; hosting infra provides observability).
 - **Logs:** `docker compose logs -f <service>` — JSON, one record per line, each carrying
   `runId` / `actor`.
 
@@ -147,12 +148,14 @@ docker build --provenance=false -t jmeter-metrics-consumer:dev jmeter-metrics-co
 docker build --provenance=false -t document-service:dev document-service/
 docker build --provenance=false -t jmeter-global-orchestrator:dev jmeter-global-orchestrator/
 docker build --provenance=false -t jmeter-cloud-ui:dev jmeter-cloud-ui/
+docker build --provenance=false -t jmeter-regional-orchestrator:dev jmeter-regional-orchestrator/
 docker build --provenance=false -t jmeter-local-orchestrator:dev \
   -f jmeter-local-orchestrator/docker/Dockerfile .
 
 kind load docker-image --name jmeter-cloud \
   jmeter-cloud-flyway:dev jmeter-metrics-consumer:dev document-service:dev \
-  jmeter-global-orchestrator:dev jmeter-cloud-ui:dev jmeter-local-orchestrator:dev
+  jmeter-global-orchestrator:dev jmeter-cloud-ui:dev jmeter-local-orchestrator:dev \
+  jmeter-regional-orchestrator:dev
 # (gvenzl/oracle-free / mailhog are public multi-arch images — the
 # kubelet pulls them; multi-arch images won't side-load anyway.)
 

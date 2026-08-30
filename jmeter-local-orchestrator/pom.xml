@@ -531,7 +531,7 @@
 
              S3 is intentionally an *artifact source only* — RESULT_SINK=S3
              is rejected at config-load time. Source for S3ArtifactSource
-             lives in src/main/java-storage-s3/ and is compiled only when
+             lives in src/main/javaStorageS3/ and is compiled only when
              this profile is active. The default fat JAR remains S3-free
              so air-gapped clusters and non-AWS deployments don't carry
              an unused 12+ MB SDK.
@@ -560,7 +560,7 @@
                                 <goals><goal>add-source</goal></goals>
                                 <configuration>
                                     <sources>
-                                        <source>${project.basedir}/src/main/java-storage-s3</source>
+                                        <source>${project.basedir}/src/main/javaStorageS3</source>
                                     </sources>
                                 </configuration>
                             </execution>
@@ -570,7 +570,7 @@
                                 <goals><goal>add-test-source</goal></goals>
                                 <configuration>
                                     <sources>
-                                        <source>${project.basedir}/src/test/java-storage-s3</source>
+                                        <source>${project.basedir}/src/test/javaStorageS3</source>
                                     </sources>
                                 </configuration>
                             </execution>
@@ -583,7 +583,7 @@
         <!-- Document Service result-sink backend (added in MIGRATION step 9).
 
              Source for DocumentServiceResultSink lives in
-             src/main/java-storage-docservice/ and is added to the build
+             src/main/javaStorageDocumentService/ and is added to the build
              only when this profile is active. The default fat JAR is
              unaffected — important because the orchestrator runs in
              air-gapped clusters where the doc service isn't reachable.
@@ -604,7 +604,7 @@
                                 <goals><goal>add-source</goal></goals>
                                 <configuration>
                                     <sources>
-                                        <source>${project.basedir}/src/main/java-storage-docservice</source>
+                                        <source>${project.basedir}/src/main/javaStorageDocumentService</source>
                                     </sources>
                                 </configuration>
                             </execution>
@@ -614,7 +614,7 @@
                                 <goals><goal>add-test-source</goal></goals>
                                 <configuration>
                                     <sources>
-                                        <source>${project.basedir}/src/test/java-storage-docservice</source>
+                                        <source>${project.basedir}/src/test/javaStorageDocumentService</source>
                                     </sources>
                                 </configuration>
                             </execution>

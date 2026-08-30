@@ -8,7 +8,7 @@
   <rect width="900" height="392" fill="#fafaf9"/>
 
   <text x="16" y="26" font-size="15" font-weight="700" fill="#0f172a">Boot order — docker compose up</text>
-  <text x="16" y="44" font-size="10" fill="#64748b">Every arrow is a `depends_on` edge — waits for healthy, or for a one-shot to complete. Cold build ≈ 5 min, warm ≈ 30 s.</text>
+  <text x="16" y="44" font-size="10" fill="#64748b">Every arrow is a `depends_on` edge — waits for healthy, or for a one-shot to complete. Cold build ≈ 5 min, warm ≈ 30 s; edges implied by a longer chain are omitted.</text>
 
   <text x="16" y="72"  font-size="9" font-weight="600" fill="#94a3b8" letter-spacing="1">1 · INFRA</text>
   <text x="16" y="164" font-size="9" font-weight="600" fill="#94a3b8" letter-spacing="1">2 · INIT</text>
@@ -18,15 +18,15 @@
   <!-- 1 infra -->
   <g font-size="11" text-anchor="middle">
     <rect x="150" y="58" width="150" height="42" rx="6" fill="#d1fae5" stroke="#047857"/>
-    <text x="225" y="76" font-weight="600" fill="#065f46">Oracle</text>
+    <text x="225" y="76" font-weight="600" fill="#065f46">oracle</text>
     <text x="225" y="90" font-size="10" fill="#475569">:1521</text>
 
     <rect x="340" y="58" width="150" height="42" rx="6" fill="#d1fae5" stroke="#047857"/>
-    <text x="415" y="76" font-weight="600" fill="#065f46">Redis</text>
+    <text x="415" y="76" font-weight="600" fill="#065f46">redis</text>
     <text x="415" y="90" font-size="10" fill="#475569">:6379</text>
 
     <rect x="530" y="58" width="170" height="42" rx="6" fill="#ffffff" stroke="#cbd5e1"/>
-    <text x="615" y="76" font-weight="600" fill="#475569">MailHog</text>
+    <text x="615" y="76" font-weight="600" fill="#475569">mailhog</text>
     <text x="615" y="90" font-size="10" fill="#94a3b8">:8025 · no dependents</text>
   </g>
 

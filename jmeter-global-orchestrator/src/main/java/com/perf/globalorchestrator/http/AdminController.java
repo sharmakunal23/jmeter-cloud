@@ -128,6 +128,11 @@ public class AdminController {
 
     @DeleteMapping("/pods/{podName}")
     public ResponseEntity<Map<String, Object>> tearDownPod(@PathVariable String podName) {
+        if (!com.perf.globalorchestrator.domain.PodNames.isValid(podName)) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "code", "INVALID_POD_NAME",
+                    "message", "podName must be a DNS-1123 label: " + podName));
+        }
         provisioning.requireDynamic("tear down worker " + podName);
         Optional<com.perf.globalorchestrator.domain.Pod> row = pods.findByPodId(podName);
         if (row.isEmpty()) {
