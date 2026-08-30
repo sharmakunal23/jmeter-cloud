@@ -6,7 +6,7 @@ import java.time.Instant;
 
 /**
  * Per-(group, region) operator-set max-pod budget — the worker pool is the
- * application group's (GROUP-CAPACITY, 2026-08-31), so every application in
+ * application group's (GROUP-CAPACITY, 2026-08-30), so every application in
  * the group draws on the same rows.
  *
  * <p>Compute costs money on the cloud, so this is mandatory: a group that

@@ -20,7 +20,7 @@ const VIEW_MODE_STORAGE_KEY = "jmeterCloud.capacity.listViewMode";
 
 /**
  * Capacity list — one row per application group, since the worker pool is
- * the group's (GROUP-CAPACITY, 2026-08-31): every application in a group
+ * the group's (GROUP-CAPACITY, 2026-08-30): every application in a group
  * draws on the same per-region budget. Per row: regions, ready, in use,
  * `{provisioned}/{max}` with a utilization bar, and a recent-activity chip
  * from the most recent `pod.lastHeartbeat` across the group's regions. The

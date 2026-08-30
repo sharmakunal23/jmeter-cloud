@@ -52,7 +52,7 @@ public class PodRegistrar {
             @Value("${POD_ID:#{null}}")              String podIdOverride,
             @Value("${POD_BASE_URL:#{null}}")        String podBaseUrlOverride,
             // The application group whose pool this worker joins — stamped by
-            // the regional's PodProvisioner (GROUP-CAPACITY, 2026-08-31; was
+            // the regional's PodProvisioner (GROUP-CAPACITY, 2026-08-30; was
             // APPLICATION_ID). Optional: operator-declared static workers get
             // their group from the declare call and register without it.
             @Value("${GROUP_ID:#{null}}")            String groupId) {

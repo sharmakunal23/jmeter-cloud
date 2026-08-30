@@ -16,7 +16,7 @@ import java.util.Optional;
 /**
  * JDBC access for {@code ORCH_CRON_JOB}.
  * Mirrors {@link RunRepository}'s conventions: the run-state JdbcTemplate,
- * inline-lambda RowMapper, quoted-camelCase SQL.
+ * inline-lambda RowMapper, bare UPPER_SNAKE SQL.
  *
  * <p>The claim path ({@link #findDueForUpdate}) goes through
  * {@code ORCH_CLAIMS.CLAIM_DUE_CRON_JOBS}, which locks the due

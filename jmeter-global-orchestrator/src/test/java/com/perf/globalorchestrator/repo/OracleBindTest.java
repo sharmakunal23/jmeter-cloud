@@ -32,6 +32,15 @@ class OracleBindTest {
     }
 
     @Test
+    void column_labels_become_the_api_keys() {
+        assertEquals("totalThroughput", OracleBind.camel("TOTAL_THROUGHPUT"));
+        assertEquals("avgP50Ms", OracleBind.camel("AVG_P50_MS"));
+        assertEquals("httpErrorRate", OracleBind.camel("HTTP_ERROR_RATE"));
+        assertEquals("n", OracleBind.camel("N"));
+        assertEquals("", OracleBind.camel(""));
+    }
+
+    @Test
     void in_lists_are_chunked_under_oracles_cap() {
         List<String> ids = java.util.stream.IntStream.range(0, 1201).mapToObj(i -> "r" + i).toList();
         List<List<String>> chunks = MetricsPurgeRepository.chunks(ids);

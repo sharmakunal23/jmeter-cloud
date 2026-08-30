@@ -1,6 +1,6 @@
 # oracle subsystem — Compose fragment.
 #
-# Oracle Database 23ai Free (gvenzl multi-arch image — runs natively on
+# Oracle Database Free 26ai, 23.26.2 (gvenzl multi-arch image — runs natively on
 # arm64). One PDB, FREEPDB1, one schema, CARDZATE_DB_GRAF: the hosted
 # metrics layout (written by jmeter-metrics-consumer as the owner, read by
 # jmeter-global-orchestrator) plus the ORCH_* control-plane tables

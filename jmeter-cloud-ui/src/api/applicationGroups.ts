@@ -5,7 +5,7 @@
  * (`cps` → `CPS_METRICS`), so it equals the metrics schema's
  * `GROUP_REGISTRY.GROUP_ID` (e.g. `cps` for "Servicing MQ"). The group also
  * owns the worker pool — its per-region capacity and the pod recycle policy
- * (GROUP-CAPACITY, 2026-08-31) — which every application in it draws on.
+ * (GROUP-CAPACITY, 2026-08-30) — which every application in it draws on.
  */
 
 import { requestJson } from "./applications";

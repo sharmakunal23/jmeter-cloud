@@ -14,7 +14,7 @@ import java.util.Optional;
 
 /**
  * Append-only access for
- * {@code globalOrchestrator.applicationHealthHistory}. Written by
+ * {@code ORCH_APPLICATION_HEALTH_HISTORY}. Written by
  * {@code ApplicationHealthPoller} on a status change; read by
  * {@code InfraReadinessComposer} to compute 24h downtime windows.
  */

@@ -33,7 +33,7 @@ public record Application(
          * The {@link ApplicationGroup} the app belongs to — required: its
          * workers POST metrics with {@code ?groupId=} set to this, and the
          * group's worker pool (capacity, pods, recycle policy) is what its
-         * runs draw on (GROUP-CAPACITY, 2026-08-31).
+         * runs draw on (GROUP-CAPACITY, 2026-08-30).
          */
         String metricsGroupId,
         /**

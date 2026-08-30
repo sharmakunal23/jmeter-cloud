@@ -24,7 +24,9 @@ anyone adding a table or a repository.
 | `ORCH_AI_RESPONSE` | `(KIND, CACHE_KEY, PROMPT_VERSION)` | `RESPONSE CLOB IS JSON` |
 
 Naming: every identifier UPPER_SNAKE, unquoted (the metrics layout's rule);
-tables `ORCH_<NAME>`, constraints and indexes `ORCH_<TABLE>_<COLS>_{PK,FK,UQ,CHK,IDX}`.
+tables `ORCH_<NAME>`, constraints and indexes `ORCH_<TABLE>_<COLS>_{PK,FK,UQ,CHK,IDX}` —
+`<COLS>` may be abbreviated (`ORCH_POD_GROUP_REGION_STATE_IDX` covers `(GROUP_ID, REGION,
+STATE, LAST_HEARTBEAT)`); the suffix is the rule.
 Type rules: ids `VARCHAR2(64 CHAR)`, names 255, free text 4000, JSON `CLOB CHECK (IS JSON)`,
 booleans `NUMBER(1) CHECK IN (0,1)`, instants `TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP`.
 
@@ -56,9 +58,11 @@ OPEN cursor FOR SELECT <ORCH_POD columns> WHERE POD_ID IN (TABLE(held)) ORDER BY
 Both are called from a `BEGIN … END;` block with a `REF CURSOR` out parameter
 (`Types.REF_CURSOR`); the locks belong to the caller's JDBC transaction.
 
-| Verified (2026-08-28 on 23ai Free; re-run under the renamed schema 2026-09-01 by `GlobalRunDbTest`) | Result |
+| Verified on Oracle Free 26ai (23.26.2) — hand-run 2026-08-28, then `GlobalRunDbTest` under the one schema 2026-08-30 | Result |
 |---|---|
-| 5 IDLE workers (one held by a RUNNING member, one in another region); session A claims 2 and holds; session B claims 5 while `v$locked_object` shows A's locks | A: `w3, w2` (freshest first); B: `w1` only |
+| Hand-run: 5 IDLE workers (one held by a RUNNING member, one in another region); session A claims 2 and holds; session B claims 5 while `v$locked_object` shows A's locks | A: `w3, w2` (freshest first); B: `w1` only |
+| `GlobalRunDbTest`: 5 IDLE workers in one region; transaction A claims 2 and holds; B claims 5 before A commits | B gets exactly the other 3; a region or group filter that matches none returns none |
+| `ORCH_AI_RESPONSE`: upsert → find → upsert again → find past the TTL → purge by run id | the CLOB round-trips by its bare label; the MERGE replaces; an expired row is a miss; `deleteForRun` removes the single-run row and the comparison it sits in |
 | 5 schedules: two due, one not due, one disabled, one platform-level future | claim returns the two due, earliest first |
 | Duplicate platform job name, `MAX_RUNS` without a threshold, pod for an unknown group, non-JSON `PROPERTIES` | ORA-00001, ORA-02290, ORA-02291, ORA-02290 |
 | V1 + V2 applied from an empty schema | every object `VALID`, 13 `ORCH_*` tables, no non-UPPER object or column name but Flyway's own history |
@@ -74,7 +78,7 @@ V2 also carries `METRICS_READER`'s / `METRICS_PURGER`'s grants on the shared
 metrics dimensions, so V1 stays the hosted file. The owner keeps DDL; every
 pool sets `CURRENT_SCHEMA = CARDZATE_DB_GRAF` and names tables bare.
 
-## Upgrading a database that has the pre-09-01 layout
+## Upgrading a database that has the two-schema layout
 
 `DROP USER "globalOrchestrator" CASCADE` (and the three quoted users), create
 the users from `initdb/`, `flyway repair` (V1's checksum changed when its

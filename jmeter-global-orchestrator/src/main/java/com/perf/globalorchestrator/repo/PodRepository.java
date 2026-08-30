@@ -224,7 +224,7 @@ public class PodRepository {
      * available pods rather than double-claiming.
      *
      * <p>The application-scoped capacity ceiling
-     * ({@code groupCapacity.maxAvailable}) is enforced upstream in
+     * ({@code ORCH_GROUP_CAPACITY.MAX_AVAILABLE}) is enforced upstream in
      * {@code RunService} BEFORE this runs. Returning fewer rows than
      * {@code limit} means the cap-check passed but the ready-pod count was
      * short — the operator needs to spin more pods (or, if a parallel run
@@ -336,7 +336,7 @@ public class PodRepository {
     /**
      * Phase 2: counts every pod row bound to {@code (groupId, region)}.
      * Used by capacity-enforcement checks when spinning up a new pod —
-     * count(rows) + 1 must be ≤ {@code groupCapacity.maxAvailable}.
+     * count(rows) + 1 must be ≤ {@code ORCH_GROUP_CAPACITY.MAX_AVAILABLE}.
      */
     public int countByGroupAndRegion(String groupId, String region) {
         Integer n = jdbc.queryForObject(
@@ -361,7 +361,7 @@ public class PodRepository {
     /**
      * HARD-DELETE / purge Phase 2 — deletes every pod row bound to
      * {@code groupId}. Called by the application purge BEFORE the
-     * application row is removed: {@code pod.groupId} is
+     * application row is removed: {@code ORCH_POD.GROUP_ID} is
      * a plain foreign key, so the app row can't be dropped while
      * its pods linger. A hidden app has no active runs (the hide guard ensures
      * it), so its pods are idle registry rows; this clears them. Idempotent —

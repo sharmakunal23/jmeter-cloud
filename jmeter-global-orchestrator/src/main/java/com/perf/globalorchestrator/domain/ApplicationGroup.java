@@ -12,7 +12,7 @@ import java.util.List;
  * {@code CPS_METRICS}, {@code CPS_METRICS_H}); it must name a row of
  * {@code GROUP_REGISTRY} there. The group also owns the worker pool
  * ({@code groupCapacity}, {@code pod}) and the pool's recycle policy
- * (GROUP-CAPACITY, 2026-08-31). Persisted in
+ * (GROUP-CAPACITY, 2026-08-30). Persisted in
  * {@code ORCH_APPLICATION_GROUP}.
  *
  * @param grafanaLiveUrl    the group's live Grafana dashboard (reads

@@ -47,7 +47,7 @@ import java.util.Optional;
 /**
  * The operator-facing capacity surface, every route scoped to one
  * {@code (groupId, region)} — the worker pool is the application group's
- * (GROUP-CAPACITY, 2026-08-31): set {@code maxAvailable}, list the pods
+ * (GROUP-CAPACITY, 2026-08-30): set {@code maxAvailable}, list the pods
  * provisioned for that pair, and spin, restart or drain one. The routes and
  * their responses are specified in {@code api/openapi.yaml}.
  *

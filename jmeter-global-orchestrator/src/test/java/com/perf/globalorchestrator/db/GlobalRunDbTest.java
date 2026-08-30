@@ -13,6 +13,7 @@ import com.perf.globalorchestrator.domain.PodSource;
 import com.perf.globalorchestrator.domain.Run;
 import com.perf.globalorchestrator.domain.RunFleetMember;
 import com.perf.globalorchestrator.domain.RunState;
+import com.perf.globalorchestrator.repo.AiResponseRepository;
 import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.CronJobRepository;
@@ -64,6 +65,7 @@ class GlobalRunDbTest extends OracleDbTestSupport {
     @Autowired PodRepository pods;
     @Autowired RunRepository runs;
     @Autowired CronJobRepository cronJobs;
+    @Autowired AiResponseRepository aiResponses;
     @Autowired @Qualifier("metricsJdbcTemplate") JdbcTemplate metricsReader;
     @Autowired @Qualifier("metricsPurgeJdbcTemplate") JdbcTemplate metricsPurge;
     @Autowired PlatformTransactionManager txManager;
@@ -285,5 +287,24 @@ class GlobalRunDbTest extends OracleDbTestSupport {
                 .isInstanceOf(org.springframework.dao.DataAccessException.class);   // ORA-01407: NOT NULL
         assertThat(groups.delete("grp")).isTrue();
         assertThat(groups.findById("grp")).isEmpty();
+    }
+
+    @Test
+    void ai_response_cache_round_trips_the_clob_expires_on_read_and_purges_by_run() {
+        aiResponses.upsert("insights", "run-ai-1", "v1", "{\"summary\":\"ok\"}", "claude-sonnet-4-6", 10, 20);
+        var hit = aiResponses.find("insights", "run-ai-1", "v1", Duration.ofDays(30)).orElseThrow();
+        assertThat(hit.responseJson()).isEqualTo("{\"summary\":\"ok\"}");   // the CLOB read by its bare column label
+        assertThat(hit.model()).isEqualTo("claude-sonnet-4-6");
+        assertThat(hit.tokensIn()).isEqualTo(10);
+        assertThat(hit.tokensOut()).isEqualTo(20);
+        assertThat(hit.createdAt()).isAfter(Instant.now().minus(Duration.ofMinutes(1)));
+
+        aiResponses.upsert("insights", "run-ai-1", "v1", "{\"summary\":\"again\"}", "claude-sonnet-4-6", 1, 2);   // MERGE replaces
+        assertThat(aiResponses.find("insights", "run-ai-1", "v1", Duration.ofDays(30)).orElseThrow().responseJson()).isEqualTo("{\"summary\":\"again\"}");
+        assertThat(aiResponses.find("insights", "run-ai-1", "v1", Duration.ZERO)).isEmpty();   // past the TTL = a miss, not a stale hit
+
+        aiResponses.upsert("compare", "run-ai-1|run-ai-2", "v1", "{}", "claude-sonnet-4-6", 0, 0);
+        assertThat(aiResponses.deleteForRun("run-ai-1")).isEqualTo(2);   // the single-run row and the comparison it sits in
+        assertThat(aiResponses.find("compare", "run-ai-1|run-ai-2", "v1", Duration.ofDays(30))).isEmpty();
     }
 }

@@ -51,7 +51,7 @@ import java.util.stream.Collectors;
  *
  * <p>Pods carry the {@code com.perf.jmeterCloud.*} labels so the global's
  * reconciler can list and adopt by group and region with server-side
- * selectors. The pool is the application group's (GROUP-CAPACITY, 2026-08-31):
+ * selectors. The pool is the application group's (GROUP-CAPACITY, 2026-08-30):
  * the label is {@code com.perf.jmeterCloud.groupId}, and a worker Pod created
  * before that change (labelled {@code applicationId}) does not match
  * {@link #listFor} — recreate such Pods; the local kind clusters are recycled

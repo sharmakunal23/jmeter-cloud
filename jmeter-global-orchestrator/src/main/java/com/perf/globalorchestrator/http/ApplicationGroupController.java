@@ -32,7 +32,7 @@ import java.util.regex.Pattern;
  * send as {@code ?groupId=} on metrics POSTs and, upper-cased, the prefix of the
  * group's tables in {@code CARDZATE_DB_GRAF} ({@code cps} → {@code CPS_METRICS});
  * it must equal a {@code GROUP_REGISTRY.GROUP_ID} there. The group owns the
- * worker pool (GROUP-CAPACITY, 2026-08-31): its per-region capacity rows are
+ * worker pool (GROUP-CAPACITY, 2026-08-30): its per-region capacity rows are
  * seeded at 0 on create and edited through {@link CapacityController}, and its
  * recycle policy is set here. Groups are hard-deleted; a delete is refused while
  * any application (visible or archived), worker or capacity row is in the group.

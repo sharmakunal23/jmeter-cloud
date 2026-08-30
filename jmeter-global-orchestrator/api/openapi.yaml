@@ -38,7 +38,7 @@ tags:
   - name: capacity
     description: |
       Per-(group, region) pod-budget management — the worker pool is the
-      application group's (GROUP-CAPACITY, 2026-08-31): every application in
+      application group's (GROUP-CAPACITY, 2026-08-30): every application in
       the group draws on it. `PUT /api/v1/applicationGroups/{groupId}/capacity/{region}`
       sets `maxAvailable`; the `/pods` sub-endpoints spin / restart / drain /
       declare individual workers.
@@ -1341,8 +1341,8 @@ paths:
       tags: [pods]
       summary: Per-region pod capacity rollup
       description: |
-        Aggregates `globalOrchestrator.pod` by region; `idlePods`
-        excludes pods already claimed by an active `runFleetMember`,
+        Aggregates `ORCH_POD` by region; `idlePods`
+        excludes pods already claimed by an active `ORCH_RUN_FLEET_MEMBER` row,
         so the count reflects what `POST /api/v1/runs` could claim
         right now. Used by the UI launcher's per-region allocation
         widget.

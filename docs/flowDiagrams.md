@@ -24,7 +24,7 @@ sequenceDiagram
     participant U  as Browser (UI)
     participant NX as nginx (jmeter-cloud-ui)
     participant GO as global-orchestrator
-    participant PG as Database<br/>(globalOrchestrator schema)
+    participant DB as Database<br/>(CARDZATE_DB_GRAF · ORCH_* tables)
     participant RO as regional-orchestrator<br/>(in the region's cluster)
     participant LO as local-orchestrator-N<br/>(JMeter baked in)
     participant JM as JMeter (child process)
@@ -33,27 +33,27 @@ sequenceDiagram
     NX->>GO: forward (^~ /api/* proxy)
 
     rect rgba(200,220,255,0.25)
-        Note over GO,PG: Atomic claim transaction
+        Note over GO,DB: Atomic claim transaction
         loop once per fleetAllocation entry
-            GO->>PG: ORCH_CLAIMS.CLAIM_IDLE_PODS(region, groupId, count)<br/>candidates: ORCH_POD WHERE STATE='IDLE'<br/>AND NOT EXISTS (active ORCH_RUN_FLEET_MEMBER)<br/>then one FOR UPDATE SKIP LOCKED lock per row
+            GO->>DB: ORCH_CLAIMS.CLAIM_IDLE_PODS(region, groupId, count)<br/>candidates: ORCH_POD WHERE STATE='IDLE'<br/>AND NOT EXISTS (active ORCH_RUN_FLEET_MEMBER)<br/>then one FOR UPDATE SKIP LOCKED lock per row
         end
-        GO->>PG: INSERT INTO ORCH_RUN (STATE=PREPARING)
-        GO->>PG: INSERT ORCH_RUN_FLEET_MEMBER rows (STATE=PENDING) per claimed pod
-        GO->>PG: UPDATE ORCH_RUN SET STATE=STARTING
+        GO->>DB: INSERT INTO ORCH_RUN (STATE=PREPARING)
+        GO->>DB: INSERT ORCH_RUN_FLEET_MEMBER rows (STATE=PENDING) per claimed pod
+        GO->>DB: UPDATE ORCH_RUN SET STATE=STARTING
     end
 
     alt shortfall and spinShortfall (async launch)
-        GO->>PG: INSERT "run" (state=PREPARING,<br/>stateReason='provisioning 6 worker(s) … 0/6 ready')
+        GO->>DB: INSERT ORCH_RUN (STATE=PREPARING,<br/>STATE_REASON='provisioning 6 worker(s) … 0/6 ready')
         GO-->>NX: 201 Created + Run JSON (PREPARING)
         NX-->>U: launch modal stays on "Provisioning workers"
         Note over GO,RO: a virtual thread reserves names serially (PK-guarded),<br/>then creates every pod in parallel and waits for readiness
         GO->>RO: POST /api/v1/pods { podName, groupId, region } × N
         loop until ready (readiness probe = Tomcat answering)
             GO->>RO: GET /api/v1/pods/{podName}
-            GO->>PG: UPDATE "run" SET stateReason='… k/N ready'
+            GO->>DB: UPDATE ORCH_RUN SET STATE_REASON='… k/N ready'
         end
-        GO->>PG: UPDATE pod SET state='IDLE' (LOST-until-ready → claimable)
-        Note over GO,PG: then the same claim transaction as above,<br/>into the existing run
+        GO->>DB: UPDATE ORCH_POD SET STATE='IDLE' (LOST-until-ready → claimable)
+        Note over GO,DB: then the same claim transaction as above,<br/>into the existing run
     end
 
     par bounded-thread-pool fan-out (default 32)
@@ -63,12 +63,12 @@ sequenceDiagram
         LO->>JM: spawn /opt/jmeter/bin/jmeter -n -t plan.jmx -l results.jtl
         LO-->>RO: 202 ACCEPTED
         RO-->>GO: 202 ACCEPTED
-        GO->>PG: UPDATE "runFleetMember" state=ACCEPTED, fanoutStatusCode=202
+        GO->>DB: UPDATE ORCH_RUN_FLEET_MEMBER SET STATE=ACCEPTED, FANOUT_STATUS_CODE=202
     and
         Note over GO,LO: Strict mode rolls the whole claim back on any<br/>per-region shortfall → 503 INSUFFICIENT_CAPACITY.<br/>?bestEffort=true accepts the partial claim.
     end
 
-    GO->>PG: UPDATE "run" state=RUNNING (if any member ACCEPTED)
+    GO->>DB: UPDATE ORCH_RUN SET STATE=RUNNING (if any member ACCEPTED)
     GO-->>NX: 201 Created + Run JSON (sync launch) — the async one is already RUNNING by now
     NX-->>U: navigate to /applications/{app}/runs/{runId} once RUNNING
 
@@ -88,22 +88,22 @@ sequenceDiagram
     participant GO as global-orchestrator<br/>(WorkerLivenessProbe, every 15 s)
     participant RO as regional-orchestrator
     participant K8 as Kubernetes API
-    participant PG as Database<br/>(globalOrchestrator.pod)
+    participant DB as Database<br/>(ORCH_POD)
 
-    Note over GO,PG: POST /api/v1/applicationGroups/{groupId}/capacity/{region}/pods registers the pod LOST<br/>(unclaimable), asks the regional to create it, and waits up to 20 s<br/>for readiness. Slower pods answer ready=false and this loop flips them IDLE.
+    Note over GO,DB: POST /api/v1/applicationGroups/{groupId}/capacity/{region}/pods registers the pod LOST<br/>(unclaimable), asks the regional to create it, and waits up to 20 s<br/>for readiness. Slower pods answer ready=false and this loop flips them IDLE.
 
     loop every 15 s, once per routed region
         GO->>RO: GET /api/v1/workers
         RO->>K8: list Pods (managedBy=regional-orchestrator)
         RO-->>GO: [{ podName, ready, dead, reason, exitCode }]
         alt ready
-            GO->>PG: UPDATE pod SET lastHeartbeat=now(), state='IDLE'
+            GO->>DB: UPDATE ORCH_POD SET LAST_HEARTBEAT=SYSTIMESTAMP, STATE='IDLE'
         else never ready (LOST, runsServed=0) and dead, absent or Pending for 10 min
             GO->>RO: DELETE /api/v1/pods/{podName}
-            GO->>PG: DELETE FROM pod WHERE podId=…
+            GO->>DB: DELETE FROM ORCH_POD WHERE POD_ID=…
         else dead or absent (OOMKilled, Unschedulable, deleted)
-            GO->>PG: UPDATE pod SET state='LOST'
-            GO->>PG: UPDATE runFleetMember SET state='FAILED',<br/>stateReason='worker Pod OOMKilled (exit 137)'
+            GO->>DB: UPDATE ORCH_POD SET STATE='LOST'
+            GO->>DB: UPDATE ORCH_RUN_FLEET_MEMBER SET STATE='FAILED',<br/>STATE_REASON='worker Pod OOMKilled (exit 137)'
         end
     end
     Note over GO: A region unreachable for more than 5 min<br/>loses every dynamic worker in it. Shorter outages change nothing.<br/>A pod that served a run keeps its LOST row for forensics.
@@ -116,18 +116,18 @@ sequenceDiagram
     autonumber
     participant LO as local-orchestrator pod<br/>(PodRegistrar bean)
     participant GO as global-orchestrator
-    participant PG as Database<br/>(globalOrchestrator.pod)
+    participant DB as Database<br/>(ORCH_POD)
     participant SW as PodSweeper @Scheduled<br/>(every 30 s)
 
     Note over LO: @PostConstruct fires a daemon thread<br/>so Spring init never blocks on the global.
 
     LO->>GO: POST /api/v1/registerPod<br/>{ podId, region, baseUrl }
-    GO->>PG: INSERT INTO pod … ON CONFLICT (podId) DO UPDATE<br/>SET state='IDLE', region=…, baseUrl=…, lastHeartbeat=now()
+    GO->>DB: MERGE INTO ORCH_POD … ON (POD_ID)<br/>WHEN MATCHED: STATE='IDLE', REGION=…, BASE_URL=…, LAST_HEARTBEAT=SYSTIMESTAMP<br/>WHEN NOT MATCHED: INSERT
     GO-->>LO: 200 OK
 
     loop every 30 s (heartbeatIntervalMs)
         LO->>GO: POST /api/v1/heartbeat { podId }
-        GO->>PG: UPDATE pod SET lastHeartbeat=now(), state='IDLE'<br/>WHERE podId=…
+        GO->>DB: UPDATE ORCH_POD SET LAST_HEARTBEAT=SYSTIMESTAMP, STATE='IDLE'<br/>WHERE POD_ID=…
         alt pod row missing (DB reset)
             GO-->>LO: 404 POD_NOT_REGISTERED
             LO->>GO: POST /api/v1/registerPod (auto re-register)
@@ -135,10 +135,10 @@ sequenceDiagram
     end
 
     loop every 30 s (sweepIntervalMs)
-        SW->>PG: UPDATE pod SET state='LOST'<br/>WHERE state != 'LOST' AND lastHeartbeat < now() - INTERVAL '90 s'<br/>AND NOT (dynamic pod in a routed region)
+        SW->>DB: UPDATE ORCH_POD SET STATE='LOST'<br/>WHERE STATE NOT IN ('LOST', 'DRAINING_FOR_RECYCLE')<br/>AND LAST_HEARTBEAT < now − 90 s<br/>AND NOT (SOURCE='DYNAMIC' AND REGION IN routed regions)
     end
 
-    Note over GO,PG: Run-launch claim:<br/>SELECT … WHERE state='IDLE' AND NOT EXISTS<br/>(active runFleetMember) ORDER BY lastHeartbeat DESC<br/>LIMIT N FOR UPDATE OF p SKIP LOCKED.<br/>SKIP LOCKED makes concurrent launches pick<br/>different pods rather than waiting on each other.
+    Note over GO,DB: Run-launch claim — ORCH_CLAIMS.CLAIM_IDLE_PODS:<br/>candidates WHERE STATE='IDLE' AND NOT EXISTS<br/>(active ORCH_RUN_FLEET_MEMBER) ORDER BY LAST_HEARTBEAT DESC,<br/>then one SELECT … FOR UPDATE OF STATE SKIP LOCKED per row.<br/>SKIP LOCKED makes concurrent launches pick<br/>different pods rather than waiting on each other.
 ```
 
 The 90 s LOST threshold is 3× the heartbeat, so one missed beat cannot flap a
@@ -152,71 +152,71 @@ re-registration needed.
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │  jmeter-local-orchestrator pod (image bakes JMeter 5.6.3)            │
-│                                                                       │
-│   JMeter (child)                                                      │
-│       │                                                               │
-│       │ writes results.jtl (CSV, one row per request,                 │
-│       │  user.properties baked in at image build)                     │
-│       ▼                                                               │
-│   FilePoller ─► JtlRowParser ─► TumblingWindowAggregator              │
-│                                  (HDRHistogram per                    │
-│                                   {workerId, label, second})          │
-│       │                                                               │
-│       │ one WorkerMetricBatch envelope per closed second,             │
-│       │ per (workerId, windowSecond)                                  │
-│       ▼                                                               │
-│   AsyncMetricsDispatcher                                              │
-│     ├ persists to DiskBackedMetricsBuffer FIRST (gzipped, atomic      │
-│     │  rename) — a failed POST just stays on disk for the sweeper     │
-│     └ HttpIngestClient POSTs it                                       │
+│                                                                      │
+│   JMeter (child)                                                     │
+│       │                                                              │
+│       │ writes results.jtl (CSV, one row per request,                │
+│       │  user.properties baked in at image build)                    │
+│       ▼                                                              │
+│   FilePoller ─► JtlRowParser ─► TumblingWindowAggregator             │
+│                                  (HDRHistogram per                   │
+│                                   {workerId, label, 15-s window})    │
+│       │                                                              │
+│       │ one WorkerMetricBatch envelope per closed window (15 s,      │
+│       │ grid-aligned), per (workerId, windowSecond)                  │
+│       ▼                                                              │
+│   AsyncMetricsDispatcher                                             │
+│     ├ persists to DiskBackedMetricsBuffer FIRST (gzipped, atomic     │
+│     │  rename) — a failed POST just stays on disk for the sweeper    │
+│     └ HttpIngestClient POSTs it; ?groupId= travels with the envelope │
 └────────────┬─────────────────────────────────────────────────────────┘
              │
-             │ POST /api/v1/ingest   Content-Type: application/json
-             │ body: WorkerMetricBatch
+             │ POST /api/v1/ingest?groupId=<group>   Content-Type: application/json
+             │ body: WorkerMetricBatch   Authorization: METRICS_INGEST_AUTH
              ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  jmeter-metrics-consumer  (:8083)                                     │
-│                                                                       │
-│   ┌─ Jackson decode; required identity fields validated here so a     │
-│   │  semantically-broken envelope is a terminal 400, not a 503 loop   │
-│   └─ TWO round-trips per chunk, one transaction:                      │
-│        JDBC batch → metrics."workerMetricStage" (+ status stage)      │
-│        CALL metrics."metricsIngest"."ingestStaged"(:landed)           │
-│          1 prune rows already in "workerMetric"   ← replays leave     │
-│          2 INSERT the rest (ORA-00001 = a concurrent replica won →    │
-│            whole tx rolls back → 503 → worker replays)                │
-│          3 MERGE runSecond / runSecondStatus / runLabel FROM stage    │
-│                                                                       │
-│   The prune is the whole correctness argument: after it the stage    │
-│   holds exactly the rows this transaction inserts, so a replayed      │
-│   envelope adds nothing because it inserted nothing.                  │
-│                                                                       │
-│   202 → worker deletes from its buffer                                │
-│   400/413 → terminal, worker drops + counts                           │
-│   503 → worker retries from disk (ingest is idempotent)               │
+│  jmeter-metrics-consumer  (:8083)                                    │
+│                                                                      │
+│   ┌─ Jackson decode; required identity fields validated here so a    │
+│   │  semantically-broken envelope is a terminal 400, not a 503 loop  │
+│   ├─ ?groupId → GROUP_REGISTRY → the group's <GROUP_ID>_METRICS      │
+│   │  (unknown or disabled group = 400 UNKNOWN_GROUP, terminal)       │
+│   ├─ RUN / WORKER / LABEL resolved get-or-create, committed at once  │
+│   └─ per (RUN_ID, WORKER_ID, WINDOW_SECOND): one PK-prefix probe for │
+│        the labels already landed, then the rest in chunks with       │
+│        INSERT /*+ IGNORE_ROW_ON_DUPKEY_INDEX(PK) */ — first write    │
+│        wins, a replay inserts 0 rows and 0 is success; nothing is    │
+│        held across chunks (a race duplicate: 503 → replay → probe)   │
+│                                                                      │
+│   202 → worker deletes from its buffer                               │
+│   400/413 → terminal, worker drops + counts                          │
+│   503 → worker retries from disk (ingest is idempotent)              │
 └────────────┬─────────────────────────────────────────────────────────┘
              │
-             │ INTERVAL-partitioned weekly on "windowSecond"
+             │ daily INTERVAL partitions on WINDOW_SECOND
              ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  Oracle — CARDZATE_DB_GRAF metrics schema (one PDB)                                    │
-│                                                                       │
-│   metrics."workerMetric" + "workerMetricStatus" (one row per code)    │
-│     ├ SYS_P…  ← a week's partition, created on its first insert       │
-│     └ dropped after retention.rawDays by the consumer's RetentionJob  │
-│          (boot + daily, "maintenanceLock" FOR UPDATE SKIP LOCKED)     │
-│                                                                       │
-│   metrics."runSecond" / "runSecondStatus" / "runLabel"                │
-│     └ the rollups every orchestrator read uses                        │
+│  Oracle — CARDZATE_DB_GRAF (one schema)                              │
+│                                                                      │
+│   <GROUP_ID>_METRICS   one row per (run, worker, label, 15-s window) │
+│     ├ SYS_P…  ← a day's partition, created on its first insert       │
+│     └ after hotDays archived into <GROUP_ID>_METRICS_H (workers      │
+│        collapsed), dropped after historyDays — the group's nightly   │
+│        job, never a DELETE from an application                       │
+│                                                                      │
+│   LABEL · RUN · WORKER   the shared dimensions every read joins      │
+│   no rollups: readers aggregate at query time, the way the hosted    │
+│   Grafana panels do (SUM of components, never a ratio of ratios)     │
 └────────────┬──────────┬──────────────────────────────────────────────┘
              │          │
-             │ rollups  │ raw table
+             │ hub, as  │ hub, as METRICS_PURGER
+             │ METRICS_READER
              ▼          ▼
    ┌──────────────────┐  ┌──────────────────────┐
-   │  orchestrators   │  │  rebuild · purge     │
-   │  /timeseries     │  │  perTestLiveMetrics  │
-   │  /metrics        │  │  (the ONLY remaining │
-   │                  │  │   raw-table reader)  │
+   │  Metrics tab     │  │  run purge — the one │
+   │  /summary        │  │  bounded DELETE, on  │
+   │  /timeseries     │  │  the run's           │
+   │  /metrics        │  │  WINDOW_SECOND range │
    └──────────────────┘  └──────────────────────┘
 ```
 
@@ -228,7 +228,7 @@ Latency budget across the data plane (target SLO):
 | Aggregator → dispatcher queue | sub-microsecond (CAS) | sub-microsecond |
 | Dispatcher → disk buffer | < 5 ms (gzip + atomic rename) | < 10 ms |
 | POST /ingest → consumer | < 20 ms | < 50 ms |
-| Consumer → Oracle (stage + ingest call) | p50 3 ms (measured 2026-08-28, 8 workers) | p99 7 ms, max 17 ms |
+| Consumer → Oracle (probe + insert) | p50 3 ms (measured 2026-08-28, 8 workers) | p99 7 ms, max 17 ms |
 | Oracle → a Metrics tab panel (`/summary`, `/timeseries`, `/metrics`; open sections only, every 15 s while live) | p50 8 ms (measured, `/timeseries`) | p99 17 ms |
 | **End-to-end** | **< 1 s** | **< 3 s** |
 

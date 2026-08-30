@@ -436,7 +436,7 @@ public class RunRepository {
      * createdAt}. Drives PodRecycler's best-effort attribution of a recycle to
      * a run (a pod can serve many runs over its life, so "most recent" is the
      * pragmatic choice). Empty when the pod never served a run. Backed by the
-     * {@code runFleetMember_workerId_createdAt_idx} index.
+     * {@code ORCH_RUN_FLEET_MEMBER_WORKER_ID_IDX} index.
      */
     public Optional<String> findMostRecentRunIdForWorker(String workerId) {
         try {

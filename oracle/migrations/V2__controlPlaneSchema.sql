@@ -1,5 +1,5 @@
 -- V2__controlPlaneSchema.sql — the control plane's tables inside the one
--- platform schema, CARDZATE_DB_GRAF (CONTROL-PLANE-NAMING, 2026-09-01): V1
+-- platform schema, CARDZATE_DB_GRAF (CONTROL-PLANE-NAMING, 2026-08-30): V1
 -- is the hosted metrics layout verbatim, this is what the platform adds to
 -- it. Every object is ORCH_-prefixed so the two families stay apart in one
 -- schema (ORCH_RUN is a launch; RUN is the metrics dimension keyed by its
@@ -7,7 +7,7 @@
 -- connects as GLOBAL_ORCHESTRATOR_WRITER with the grants at the end, and the
 -- metrics readers' grants on the shared dimensions live here too — V1
 -- stays the hosted file.
--- Written to the 19c-compatible subset and validated on 23ai Free.
+-- Written to the 19c-compatible subset and validated on Oracle Free 26ai (23.26.2).
 --
 -- Type rules used throughout: ids VARCHAR2(64 CHAR); names 255; free text
 -- 4000; JSON documents CLOB CHECK (IS JSON); booleans NUMBER(1) IN (0,1);
@@ -25,20 +25,20 @@
 -- ═══════════════════════════════════════════════════════════════════════
 
 CREATE TABLE ORCH_RUN (
-    RUN_ID            VARCHAR2(64 CHAR)   NOT NULL,
-    ORIGIN_REGION     VARCHAR2(64 CHAR)   NOT NULL,
+    RUN_ID              VARCHAR2(64 CHAR)   NOT NULL,
+    ORIGIN_REGION       VARCHAR2(64 CHAR)   NOT NULL,
     TEST_PLAN_BLOB_ID   VARCHAR2(64 CHAR)   NOT NULL,
     DATA_FILES_BLOB_ID  VARCHAR2(64 CHAR),
-    INITIATED_BY      VARCHAR2(255 CHAR)  NOT NULL,
-    STATE            VARCHAR2(32 CHAR)   NOT NULL,
-    STATE_REASON      VARCHAR2(4000 CHAR),
-    APPLICATION      VARCHAR2(255 CHAR),                         -- application name; NULL on legacy rows
-    METRICS_GROUP_ID   VARCHAR2(30 CHAR),                          -- the application's group AT LAUNCH: the run's rows live in <UPPER(id)>_METRICS forever, even if the app moves group
-    SAVE_RESULTS      NUMBER(1)           DEFAULT 0 NOT NULL,     -- workers upload their JTL on COMPLETE
-    CREATED_AT        TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    STARTED_AT        TIMESTAMP(3) WITH TIME ZONE,
-    COMPLETED_AT      TIMESTAMP(3) WITH TIME ZONE,
-    HIDDEN_AT         TIMESTAMP(3) WITH TIME ZONE,                -- soft-deleted when set; terminal runs only
+    INITIATED_BY        VARCHAR2(255 CHAR)  NOT NULL,
+    STATE               VARCHAR2(32 CHAR)   NOT NULL,
+    STATE_REASON        VARCHAR2(4000 CHAR),
+    APPLICATION         VARCHAR2(255 CHAR),                         -- application name; NULL on legacy rows
+    METRICS_GROUP_ID    VARCHAR2(30 CHAR),                          -- the application's group AT LAUNCH: the run's rows live in <UPPER(id)>_METRICS forever, even if the app moves group
+    SAVE_RESULTS        NUMBER(1)           DEFAULT 0 NOT NULL,     -- workers upload their JTL on COMPLETE
+    CREATED_AT          TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    STARTED_AT          TIMESTAMP(3) WITH TIME ZONE,
+    COMPLETED_AT        TIMESTAMP(3) WITH TIME ZONE,
+    HIDDEN_AT           TIMESTAMP(3) WITH TIME ZONE,                -- soft-deleted when set; terminal runs only
     CONSTRAINT ORCH_RUN_PK PRIMARY KEY (RUN_ID),
     CONSTRAINT ORCH_RUN_SAVE_RESULTS_CHK CHECK (SAVE_RESULTS IN (0, 1))
 );
@@ -52,21 +52,21 @@ CREATE INDEX ORCH_RUN_METRICS_GROUP_ID_STATE_IDX
 CREATE INDEX ORCH_RUN_STATE_CREATED_AT_IDX
     ON ORCH_RUN (STATE, CREATED_AT DESC);
 COMMENT ON TABLE ORCH_RUN IS
-    'One row per fleet run. Owned by jmeter-global-orchestrator; runId is a server-issued ULID.';
+    'One row per fleet run. Owned by jmeter-global-orchestrator; RUN_ID is a server-issued ULID.';
 
 CREATE TABLE ORCH_RUN_FLEET_MEMBER (
-    RUN_ID            VARCHAR2(64 CHAR)   NOT NULL,
-    WORKER_ID         VARCHAR2(64 CHAR)   NOT NULL,
-    REGION           VARCHAR2(64 CHAR)   NOT NULL,
-    STATE            VARCHAR2(32 CHAR)   NOT NULL,
-    STATE_REASON      VARCHAR2(4000 CHAR),
-    FANOUT_STATUS_CODE NUMBER(10),
-    POD_BASE_URL       VARCHAR2(512 CHAR),
-    PROPERTIES       CLOB                DEFAULT '{}' NOT NULL,  -- per-node JMeter -J properties at launch
-    JOINED_AT_SECOND   NUMBER(19),                                 -- NULL = original fleet; >= 0 = scale-up joiner
-    CREATED_AT        TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    STARTED_AT        TIMESTAMP(3) WITH TIME ZONE,
-    COMPLETED_AT      TIMESTAMP(3) WITH TIME ZONE,
+    RUN_ID              VARCHAR2(64 CHAR)   NOT NULL,
+    WORKER_ID           VARCHAR2(64 CHAR)   NOT NULL,
+    REGION              VARCHAR2(64 CHAR)   NOT NULL,
+    STATE               VARCHAR2(32 CHAR)   NOT NULL,
+    STATE_REASON        VARCHAR2(4000 CHAR),
+    FANOUT_STATUS_CODE  NUMBER(10),
+    POD_BASE_URL        VARCHAR2(512 CHAR),
+    PROPERTIES          CLOB                DEFAULT '{}' NOT NULL,  -- per-node JMeter -J properties at launch
+    JOINED_AT_SECOND    NUMBER(19),                                 -- NULL = original fleet; >= 0 = scale-up joiner
+    CREATED_AT          TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    STARTED_AT          TIMESTAMP(3) WITH TIME ZONE,
+    COMPLETED_AT        TIMESTAMP(3) WITH TIME ZONE,
     CONSTRAINT ORCH_RUN_FLEET_MEMBER_PK PRIMARY KEY (RUN_ID, WORKER_ID),
     CONSTRAINT ORCH_RUN_FLEET_MEMBER_RUN_FK FOREIGN KEY (RUN_ID)
         REFERENCES ORCH_RUN (RUN_ID) ON DELETE CASCADE,
@@ -89,18 +89,18 @@ COMMENT ON TABLE ORCH_RUN_FLEET_MEMBER IS
 -- tables in the metrics schema (cps -> CPS_METRICS, CPS_METRICS_H), and it
 -- must name a row of GROUP_REGISTRY there.
 CREATE TABLE ORCH_APPLICATION_GROUP (
-    GROUP_ID      VARCHAR2(30 CHAR)   NOT NULL,   -- [a-z][a-z0-9_]{0,29}; = metrics GROUP_REGISTRY.GROUP_ID (e.g. cps)
-    NAME         VARCHAR2(255 CHAR)  NOT NULL,   -- display name (e.g. Servicing MQ)
-    DESCRIPTION  VARCHAR2(4000 CHAR),
-    GRAFANA_LIVE_URL    VARCHAR2(2000 CHAR),                    -- the group's live dashboard (reads <P>_METRICS); the UI's "Open in Grafana" default
-    GRAFANA_HISTORY_URL VARCHAR2(2000 CHAR),                    -- the history dashboard (reads <P>_METRICS_H); optional, falls back to live
-    HOT_DAYS      NUMBER(5)           DEFAULT 7 NOT NULL,      -- days the live dashboard covers (= the group's hot retention); older runs open history
-    -- The worker pool's policy — the pool is the group's (GROUP-CAPACITY, 2026-08-31), so its rules are too.
-    RECYCLE_POLICY  VARCHAR2(32 CHAR) DEFAULT 'REUSE' NOT NULL,
-    MAX_RUNS_PER_POD  NUMBER(10),
-    POD_MAX_AGE_HOURS NUMBER(10),
-    ALWAYS_ON       NUMBER(1)         DEFAULT 0 NOT NULL,      -- DRAIN_REGION jobs skip this group's workers
-    CREATED_AT    TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    GROUP_ID             VARCHAR2(30 CHAR)   NOT NULL,   -- [a-z][a-z0-9_]{0,29}; = metrics GROUP_REGISTRY.GROUP_ID (e.g. cps)
+    NAME                 VARCHAR2(255 CHAR)  NOT NULL,   -- display name (e.g. Servicing MQ)
+    DESCRIPTION          VARCHAR2(4000 CHAR),
+    GRAFANA_LIVE_URL     VARCHAR2(2000 CHAR),                    -- the group's live dashboard (reads <P>_METRICS); the UI's "Open in Grafana" default
+    GRAFANA_HISTORY_URL  VARCHAR2(2000 CHAR),                    -- the history dashboard (reads <P>_METRICS_H); optional, falls back to live
+    HOT_DAYS             NUMBER(5)           DEFAULT 7 NOT NULL,      -- days the live dashboard covers (= the group's hot retention); older runs open history
+    -- The worker pool's policy — the pool is the group's (GROUP-CAPACITY, 2026-08-30), so its rules are too.
+    RECYCLE_POLICY       VARCHAR2(32 CHAR) DEFAULT 'REUSE' NOT NULL,
+    MAX_RUNS_PER_POD     NUMBER(10),
+    POD_MAX_AGE_HOURS    NUMBER(10),
+    ALWAYS_ON            NUMBER(1)         DEFAULT 0 NOT NULL,      -- DRAIN_REGION jobs skip this group's workers
+    CREATED_AT           TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT ORCH_APPLICATION_GROUP_PK PRIMARY KEY (GROUP_ID),
     CONSTRAINT ORCH_APPLICATION_GROUP_HOT_DAYS_CHK CHECK (HOT_DAYS > 0),
     CONSTRAINT ORCH_APPLICATION_GROUP_NAME_UQ UNIQUE (NAME),
@@ -117,21 +117,21 @@ CREATE TABLE ORCH_APPLICATION_GROUP (
     CONSTRAINT ORCH_APPLICATION_GROUP_POD_MAX_AGE_HOURS_CHK CHECK (POD_MAX_AGE_HOURS IS NULL OR POD_MAX_AGE_HOURS BETWEEN 1 AND 720)
 );
 COMMENT ON TABLE ORCH_APPLICATION_GROUP IS
-    'A team''s applications share one group: its groupId routes their metrics to the group''s own fact tables, and the group owns the worker pool (groupCapacity, pod) and its recycle policy.';
+    'A team''s applications share one group: its groupId routes their metrics to the group''s own fact tables, and the group owns the worker pool (ORCH_GROUP_CAPACITY, ORCH_POD) and its recycle policy.';
 
 CREATE TABLE ORCH_APPLICATION (
-    APPLICATION_ID       VARCHAR2(64 CHAR)   NOT NULL,
-    NAME                VARCHAR2(255 CHAR)  NOT NULL,
-    SEAL_ID              VARCHAR2(128 CHAR),
-    DESCRIPTION         VARCHAR2(4000 CHAR),
-    METRICS_GROUP_ID      VARCHAR2(30 CHAR)   NOT NULL,                       -- FK applicationGroup: the team whose pool the app runs on and whose tables take its metrics
-    METRICS_APPLICATION  VARCHAR2(64 CHAR),                                 -- the group classifier's value for this app's labels (LABEL.APPLICATION); the dashboards are the group's
-    HEALTH_ENDPOINTS     CLOB                DEFAULT '[]' NOT NULL,  -- JSON array of URLs polled by ApplicationHealthPoller
-    CREATED_AT           TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    LAST_HEALTH_CHECKED_AT TIMESTAMP(3) WITH TIME ZONE,
-    LAST_HEALTH_STATUS    VARCHAR2(32 CHAR),
-    LAST_HEALTH_DETAILS   CLOB,                                      -- JSON array of {url, statusCode, latencyMs, error?, ok}
-    HIDDEN_AT            TIMESTAMP(3) WITH TIME ZONE,               -- soft-deleted when set; the name stays reserved
+    APPLICATION_ID          VARCHAR2(64 CHAR)   NOT NULL,
+    NAME                    VARCHAR2(255 CHAR)  NOT NULL,
+    SEAL_ID                 VARCHAR2(128 CHAR),
+    DESCRIPTION             VARCHAR2(4000 CHAR),
+    METRICS_GROUP_ID        VARCHAR2(30 CHAR)   NOT NULL,                       -- FK applicationGroup: the team whose pool the app runs on and whose tables take its metrics
+    METRICS_APPLICATION     VARCHAR2(64 CHAR),                                 -- the group classifier's value for this app's labels (LABEL.APPLICATION); the dashboards are the group's
+    HEALTH_ENDPOINTS        CLOB                DEFAULT '[]' NOT NULL,  -- JSON array of URLs polled by ApplicationHealthPoller
+    CREATED_AT              TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    LAST_HEALTH_CHECKED_AT  TIMESTAMP(3) WITH TIME ZONE,
+    LAST_HEALTH_STATUS      VARCHAR2(32 CHAR),
+    LAST_HEALTH_DETAILS     CLOB,                                      -- JSON array of {url, statusCode, latencyMs, error?, ok}
+    HIDDEN_AT               TIMESTAMP(3) WITH TIME ZONE,               -- soft-deleted when set; the name stays reserved
     CONSTRAINT ORCH_APPLICATION_PK PRIMARY KEY (APPLICATION_ID),
     CONSTRAINT ORCH_APPLICATION_NAME_UQ UNIQUE (NAME),
     CONSTRAINT ORCH_APPLICATION_HEALTH_ENDPOINTS_CHK CHECK (HEALTH_ENDPOINTS IS JSON),
@@ -140,18 +140,18 @@ CREATE TABLE ORCH_APPLICATION (
     CONSTRAINT ORCH_APPLICATION_METRICS_GROUP_FK FOREIGN KEY (METRICS_GROUP_ID)
         REFERENCES ORCH_APPLICATION_GROUP (GROUP_ID)
 );
--- FK index: without it a group delete takes a table lock on application.
+-- FK index: without it a group delete takes a table lock on ORCH_APPLICATION.
 CREATE INDEX ORCH_APPLICATION_METRICS_GROUP_ID_IDX
     ON ORCH_APPLICATION (METRICS_GROUP_ID);
 COMMENT ON TABLE ORCH_APPLICATION IS
     'Registered application: operator metadata, its group (required — the pool and the metrics tables are the group''s), last health snapshot.';
 
 CREATE TABLE ORCH_GROUP_CAPACITY (
-    GROUP_ID        VARCHAR2(30 CHAR)  NOT NULL,
+    GROUP_ID       VARCHAR2(30 CHAR)  NOT NULL,
     REGION         VARCHAR2(64 CHAR)  NOT NULL,
-    MAX_AVAILABLE   NUMBER(10)         NOT NULL,   -- workers budgeted for this group in this region; 0 allowed
-    CREATED_AT      TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    UPDATED_AT      TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    MAX_AVAILABLE  NUMBER(10)         NOT NULL,   -- workers budgeted for this group in this region; 0 allowed
+    CREATED_AT     TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    UPDATED_AT     TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT ORCH_GROUP_CAPACITY_PK PRIMARY KEY (GROUP_ID, REGION),
     CONSTRAINT ORCH_GROUP_CAPACITY_GROUP_FK FOREIGN KEY (GROUP_ID)
         REFERENCES ORCH_APPLICATION_GROUP (GROUP_ID) ON DELETE CASCADE,
@@ -162,11 +162,11 @@ COMMENT ON TABLE ORCH_GROUP_CAPACITY IS
 
 CREATE TABLE ORCH_POD (
     POD_ID          VARCHAR2(64 CHAR)   NOT NULL,   -- DNS-1123 label
-    REGION         VARCHAR2(64 CHAR)   NOT NULL,
+    REGION          VARCHAR2(64 CHAR)   NOT NULL,
     BASE_URL        VARCHAR2(512 CHAR)  NOT NULL,
-    STATE          VARCHAR2(32 CHAR)   NOT NULL,
+    STATE           VARCHAR2(32 CHAR)   NOT NULL,
     GROUP_ID        VARCHAR2(30 CHAR)   NOT NULL,                     -- the pool it belongs to; any application in the group may claim it
-    SOURCE         VARCHAR2(16 CHAR)   DEFAULT 'DYNAMIC' NOT NULL,  -- DYNAMIC: control-plane owned; STATIC: operator-declared
+    SOURCE          VARCHAR2(16 CHAR)   DEFAULT 'DYNAMIC' NOT NULL,  -- DYNAMIC: control-plane owned; STATIC: operator-declared
     RUNS_SERVED     NUMBER(19)          DEFAULT 0 NOT NULL,          -- bumped inside the claim transaction
     IMAGE_DIGEST    VARCHAR2(128 CHAR),
     LAST_HEARTBEAT  TIMESTAMP(3) WITH TIME ZONE NOT NULL,
@@ -194,10 +194,10 @@ CREATE TABLE ORCH_RUN_EVENT (
     EVENT_ID      VARCHAR2(64 CHAR)   NOT NULL,
     RUN_ID        VARCHAR2(64 CHAR)   NOT NULL,
     EVENT_TYPE    VARCHAR2(64 CHAR)   NOT NULL,
-    ACTOR        VARCHAR2(255 CHAR)  DEFAULT 'anonymous' NOT NULL,   -- X-Actor header
+    ACTOR         VARCHAR2(255 CHAR)  DEFAULT 'anonymous' NOT NULL,   -- X-Actor header
     ACTOR_SOURCE  VARCHAR2(64 CHAR)   DEFAULT 'anonymous' NOT NULL,
-    PAYLOAD      CLOB                DEFAULT '{}' NOT NULL,
-    RESULT       VARCHAR2(32 CHAR)   NOT NULL,
+    PAYLOAD       CLOB                DEFAULT '{}' NOT NULL,
+    RESULT        VARCHAR2(32 CHAR)   NOT NULL,
     OCCURRED_AT   TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT ORCH_RUN_EVENT_PK PRIMARY KEY (EVENT_ID),
     CONSTRAINT ORCH_RUN_EVENT_RUN_FK FOREIGN KEY (RUN_ID)
@@ -212,25 +212,25 @@ COMMENT ON TABLE ORCH_RUN_EVENT IS
     'Append-only audit log of run mutations (start / scale / drain / abort / stop), one row per operator action.';
 
 CREATE TABLE ORCH_CRON_JOB (
-    CRON_JOB_ID       VARCHAR2(64 CHAR)   NOT NULL,
-    NAME            VARCHAR2(255 CHAR)  NOT NULL,
-    KIND            VARCHAR2(32 CHAR)   DEFAULT 'LAUNCH_RUN' NOT NULL,
-    APPLICATION_NAME VARCHAR2(255 CHAR),                                   -- NULL for platform-level report kinds
-    TEMPLATE_BLOB_ID  VARCHAR2(64 CHAR),
-    REGION          VARCHAR2(64 CHAR),
-    CRON_EXPRESSION  VARCHAR2(128 CHAR)  NOT NULL,
-    TIME_ZONE        VARCHAR2(64 CHAR)   DEFAULT 'UTC' NOT NULL,
-    ENABLED         NUMBER(1)           DEFAULT 1 NOT NULL,
-    RECIPIENTS      VARCHAR2(4000 CHAR),                                  -- comma-separated emails (report kinds)
-    CUSTOM_SUBJECT   VARCHAR2(512 CHAR),
-    CUSTOM_INTRO     VARCHAR2(4000 CHAR),
-    CREATED_BY       VARCHAR2(255 CHAR),
-    CREATED_AT       TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    LAST_FIRED_AT     TIMESTAMP(3) WITH TIME ZONE,
+    CRON_JOB_ID        VARCHAR2(64 CHAR)   NOT NULL,
+    NAME               VARCHAR2(255 CHAR)  NOT NULL,
+    KIND               VARCHAR2(32 CHAR)   DEFAULT 'LAUNCH_RUN' NOT NULL,
+    APPLICATION_NAME   VARCHAR2(255 CHAR),                                   -- NULL for platform-level report kinds
+    TEMPLATE_BLOB_ID   VARCHAR2(64 CHAR),
+    REGION             VARCHAR2(64 CHAR),
+    CRON_EXPRESSION    VARCHAR2(128 CHAR)  NOT NULL,
+    TIME_ZONE          VARCHAR2(64 CHAR)   DEFAULT 'UTC' NOT NULL,
+    ENABLED            NUMBER(1)           DEFAULT 1 NOT NULL,
+    RECIPIENTS         VARCHAR2(4000 CHAR),                                  -- comma-separated emails (report kinds)
+    CUSTOM_SUBJECT     VARCHAR2(512 CHAR),
+    CUSTOM_INTRO       VARCHAR2(4000 CHAR),
+    CREATED_BY         VARCHAR2(255 CHAR),
+    CREATED_AT         TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    LAST_FIRED_AT      TIMESTAMP(3) WITH TIME ZONE,
     LAST_FIRED_RUN_ID  VARCHAR2(64 CHAR),
-    LAST_FIRE_STATUS  VARCHAR2(64 CHAR),
-    NEXT_FIRE_AT      TIMESTAMP(3) WITH TIME ZONE,                          -- advanced inside the claim transaction
-    CLAIMED_AT       TIMESTAMP(3) WITH TIME ZONE,
+    LAST_FIRE_STATUS   VARCHAR2(64 CHAR),
+    NEXT_FIRE_AT       TIMESTAMP(3) WITH TIME ZONE,                          -- advanced inside the claim transaction
+    CLAIMED_AT         TIMESTAMP(3) WITH TIME ZONE,
     CONSTRAINT ORCH_CRON_JOB_PK PRIMARY KEY (CRON_JOB_ID),
     CONSTRAINT ORCH_CRON_JOB_APP_NAME_UQ UNIQUE (APPLICATION_NAME, NAME),
     CONSTRAINT ORCH_CRON_JOB_ENABLED_CHK CHECK (ENABLED IN (0, 1)),
@@ -248,26 +248,26 @@ CREATE TABLE ORCH_CRON_JOB (
 CREATE INDEX ORCH_CRON_JOB_ENABLED_NEXT_FIRE_AT_IDX
     ON ORCH_CRON_JOB (ENABLED, NEXT_FIRE_AT);
 COMMENT ON TABLE ORCH_CRON_JOB IS
-    'Persistent schedules fired by a DB-claim sweep (ORCH_CLAIMS.CLAIM_DUE_CRON_JOBS). nextFireAt is advanced in the claim transaction, so a mid-fire crash errs toward not double-firing.';
+    'Persistent schedules fired by a DB-claim sweep (ORCH_CLAIMS.CLAIM_DUE_CRON_JOBS). NEXT_FIRE_AT is advanced in the claim transaction, so a mid-fire crash errs toward not double-firing.';
 
 CREATE TABLE ORCH_CRON_JOB_FIRE_HISTORY (
-    FIRE_ID      VARCHAR2(64 CHAR)   NOT NULL,
+    FIRE_ID       VARCHAR2(64 CHAR)   NOT NULL,
     CRON_JOB_ID   VARCHAR2(64 CHAR)   NOT NULL,   -- no FK: history survives schedule deletion
-    FIRED_AT     TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    OUTCOME     VARCHAR2(32 CHAR)   NOT NULL,   -- LAUNCHED / SKIPPED / FAILED / DISABLED
-    RUN_ID       VARCHAR2(64 CHAR),
-    ERROR_REASON VARCHAR2(4000 CHAR),
+    FIRED_AT      TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    OUTCOME       VARCHAR2(32 CHAR)   NOT NULL,   -- LAUNCHED / SKIPPED / FAILED / DISABLED
+    RUN_ID        VARCHAR2(64 CHAR),
+    ERROR_REASON  VARCHAR2(4000 CHAR),
     CONSTRAINT ORCH_CRON_JOB_FIRE_HISTORY_PK PRIMARY KEY (FIRE_ID)
 );
 CREATE INDEX ORCH_CRON_JOB_FIRE_HISTORY_JOB_FIRED_AT_IDX
     ON ORCH_CRON_JOB_FIRE_HISTORY (CRON_JOB_ID, FIRED_AT DESC);
 
 CREATE TABLE ORCH_APPLICATION_HEALTH_HISTORY (
-    HISTORY_ID     VARCHAR2(64 CHAR)   NOT NULL,
-    APPLICATION_ID VARCHAR2(64 CHAR)   NOT NULL,   -- no FK: the daily report reads it after an app is purged
-    STATUS        VARCHAR2(32 CHAR)   NOT NULL,
-    CHANGED_AT     TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    DETAILS       CLOB,
+    HISTORY_ID      VARCHAR2(64 CHAR)   NOT NULL,
+    APPLICATION_ID  VARCHAR2(64 CHAR)   NOT NULL,   -- no FK: the daily report reads it after an app is purged
+    STATUS          VARCHAR2(32 CHAR)   NOT NULL,
+    CHANGED_AT      TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    DETAILS         CLOB,
     CONSTRAINT ORCH_APPLICATION_HEALTH_HISTORY_PK PRIMARY KEY (HISTORY_ID),
     CONSTRAINT ORCH_APPLICATION_HEALTH_HISTORY_DETAILS_CHK CHECK (DETAILS IS JSON)
 );
@@ -277,14 +277,14 @@ COMMENT ON TABLE ORCH_APPLICATION_HEALTH_HISTORY IS
     'Append-only health transitions per application (status changes only); the infra-readiness email derives downtime windows from it.';
 
 CREATE TABLE ORCH_RUN_TREND (
-    RUN_ID           VARCHAR2(64 CHAR)   NOT NULL,
-    APPLICATION_NAME VARCHAR2(255 CHAR),
-    P50_MS           BINARY_DOUBLE       NOT NULL,
-    P95_MS           BINARY_DOUBLE       NOT NULL,
-    P99_MS           BINARY_DOUBLE       NOT NULL,
-    ERROR_RATE       BINARY_DOUBLE       NOT NULL,
-    THROUGHPUT_RPS   BINARY_DOUBLE       NOT NULL,
-    COMPLETED_AT     TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    RUN_ID            VARCHAR2(64 CHAR)   NOT NULL,
+    APPLICATION_NAME  VARCHAR2(255 CHAR),
+    P50_MS            BINARY_DOUBLE       NOT NULL,
+    P95_MS            BINARY_DOUBLE       NOT NULL,
+    P99_MS            BINARY_DOUBLE       NOT NULL,
+    ERROR_RATE        BINARY_DOUBLE       NOT NULL,
+    THROUGHPUT_RPS    BINARY_DOUBLE       NOT NULL,
+    COMPLETED_AT      TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT ORCH_RUN_TREND_PK PRIMARY KEY (RUN_ID)
 );
 CREATE INDEX ORCH_RUN_TREND_APP_COMPLETED_AT_IDX
@@ -293,14 +293,14 @@ COMMENT ON TABLE ORCH_RUN_TREND IS
     'One frozen aggregate per COMPLETED run, written on the terminal transition; the daily report''s 7-day baseline without touching the metrics schema.';
 
 CREATE TABLE ORCH_AI_RESPONSE (
-    KIND          VARCHAR2(32 CHAR)   NOT NULL,
-    CACHE_KEY      VARCHAR2(255 CHAR)  NOT NULL,   -- runId, or "runA|runB" for a comparison
-    PROMPT_VERSION VARCHAR2(32 CHAR)   NOT NULL,
-    RESPONSE      CLOB                NOT NULL,   -- { summary, findings[] }, kind-specific
-    MODEL         VARCHAR2(128 CHAR)  NOT NULL,
-    TOKENS_IN      NUMBER(10)          NOT NULL,
-    TOKENS_OUT     NUMBER(10)          NOT NULL,
-    CREATED_AT     TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    KIND            VARCHAR2(32 CHAR)   NOT NULL,
+    CACHE_KEY       VARCHAR2(255 CHAR)  NOT NULL,   -- a run id, or "runA|runB" for a comparison
+    PROMPT_VERSION  VARCHAR2(32 CHAR)   NOT NULL,
+    RESPONSE        CLOB                NOT NULL,   -- { summary, findings[] }, kind-specific
+    MODEL           VARCHAR2(128 CHAR)  NOT NULL,
+    TOKENS_IN       NUMBER(10)          NOT NULL,
+    TOKENS_OUT      NUMBER(10)          NOT NULL,
+    CREATED_AT      TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT ORCH_AI_RESPONSE_PK PRIMARY KEY (KIND, CACHE_KEY, PROMPT_VERSION),
     CONSTRAINT ORCH_AI_RESPONSE_RESPONSE_CHK CHECK (RESPONSE IS JSON)
 );
@@ -310,17 +310,17 @@ COMMENT ON TABLE ORCH_AI_RESPONSE IS
     'Durable cache of Claude-generated insights keyed (kind, cacheKey, promptVersion); a miss costs a bill, so it lives here rather than in Redis.';
 
 CREATE TABLE ORCH_PURGE_AUDIT (
-    PURGE_ID           VARCHAR2(64 CHAR)   NOT NULL,
-    TARGET_TYPE        VARCHAR2(32 CHAR)   NOT NULL,   -- RUN / APPLICATION
-    TARGET_ID          VARCHAR2(64 CHAR)   NOT NULL,   -- no FK: the tombstone outlives its target
-    APPLICATION_NAME   VARCHAR2(255 CHAR),
-    ACTOR             VARCHAR2(255 CHAR)  NOT NULL,
-    REASON            VARCHAR2(4000 CHAR),
-    METRIC_ROWS_DELETED NUMBER(19),
-    BLOBS_DELETED      NUMBER(10),
-    CHILD_RUNS_PURGED   NUMBER(10),
-    PURGED_AT          TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    DETAILS           CLOB,
+    PURGE_ID             VARCHAR2(64 CHAR)   NOT NULL,
+    TARGET_TYPE          VARCHAR2(32 CHAR)   NOT NULL,   -- RUN / APPLICATION
+    TARGET_ID            VARCHAR2(64 CHAR)   NOT NULL,   -- no FK: the tombstone outlives its target
+    APPLICATION_NAME     VARCHAR2(255 CHAR),
+    ACTOR                VARCHAR2(255 CHAR)  NOT NULL,
+    REASON               VARCHAR2(4000 CHAR),
+    METRIC_ROWS_DELETED  NUMBER(19),
+    BLOBS_DELETED        NUMBER(10),
+    CHILD_RUNS_PURGED    NUMBER(10),
+    PURGED_AT            TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    DETAILS              CLOB,
     CONSTRAINT ORCH_PURGE_AUDIT_PK PRIMARY KEY (PURGE_ID),
     CONSTRAINT ORCH_PURGE_AUDIT_DETAILS_CHK CHECK (DETAILS IS JSON)
 );

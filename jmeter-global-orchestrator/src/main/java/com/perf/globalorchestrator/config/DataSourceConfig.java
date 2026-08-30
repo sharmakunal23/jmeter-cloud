@@ -155,7 +155,7 @@ public class DataSourceConfig {
      * The name is an identifier, validated before it is spliced.
      */
     static String currentSchema(String schema) {
-        if (!schema.matches("[A-Za-z][A-Za-z0-9_]{0,127}")) {
+        if (!schema.matches("[A-Z][A-Z0-9_]{0,127}")) {
             throw new IllegalArgumentException("schema is not an identifier: " + schema);
         }
         return "ALTER SESSION SET CURRENT_SCHEMA = " + schema;

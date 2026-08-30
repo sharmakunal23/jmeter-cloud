@@ -16,7 +16,7 @@ import java.util.Optional;
 /**
  * Persistence for {@code ORCH_APPLICATION_GROUP} — the group's
  * identity, dashboards and the pool's recycle policy. Groups are hard-deleted;
- * the {@code application.metricsGroupId} and {@code pod.groupId} FKs (no ON
+ * the {@code ORCH_APPLICATION.METRICS_GROUP_ID} and {@code ORCH_POD.GROUP_ID} FKs (no ON
  * DELETE action) refuse the delete while an application — visible or
  * archived — or a worker still points at the group, and
  * {@link #countApplications} / {@link #countPods} let the controller say so

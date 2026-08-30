@@ -9,7 +9,7 @@ import {
 import { applicationGroupsApi, type ApplicationGroup } from "../api/applicationGroups";
 
 /* Capacity and the worker lifecycle policy are the application GROUP's
- * (GROUP-CAPACITY, 2026-08-31) — this form only picks the group. */
+ * (GROUP-CAPACITY, 2026-08-30) — this form only picks the group. */
 
 /**
  * D-AppRegistry — modal form for registering a new application.

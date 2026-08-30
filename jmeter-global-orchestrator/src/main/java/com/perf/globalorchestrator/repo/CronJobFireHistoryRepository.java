@@ -12,8 +12,8 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * Append-only access for {@code globalOrchestrator.cronJobFireHistory}. One row per fire attempt; never updated or deleted (the role
- * has only SELECT + INSERT, like {@code runEvent}).
+ * Append-only access for {@code ORCH_CRON_JOB_FIRE_HISTORY}. One row per fire attempt; never updated or deleted (the role
+ * has only SELECT + INSERT, like {@code ORCH_RUN_EVENT}).
  */
 @Repository
 public class CronJobFireHistoryRepository {

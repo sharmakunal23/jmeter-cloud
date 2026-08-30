@@ -34,11 +34,11 @@ public class AiResponseRepository {
      */
     public Optional<CachedAiResponse> find(String kind, String cacheKey, String promptVersion, Duration ttl) {
         List<CachedAiResponse> rows = jdbc.query(
-                "SELECT RESPONSE AS responseJson, MODEL, TOKENS_IN, TOKENS_OUT, CREATED_AT "
+                "SELECT RESPONSE, MODEL, TOKENS_IN, TOKENS_OUT, CREATED_AT "
                         + "FROM ORCH_AI_RESPONSE "
                         + "WHERE KIND = ? AND CACHE_KEY = ? AND PROMPT_VERSION = ? AND CREATED_AT > ?",
                 (rs, n) -> new CachedAiResponse(
-                        rs.getString("RESPONSE_JSON"),
+                        rs.getString("RESPONSE"),
                         rs.getString("MODEL"),
                         rs.getInt("TOKENS_IN"),
                         rs.getInt("TOKENS_OUT"),

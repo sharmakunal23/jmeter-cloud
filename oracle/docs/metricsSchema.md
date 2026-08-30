@@ -62,7 +62,7 @@ queries are the reference shape; the `oracle-sql` skill holds the rules.
 The global orchestrator's reader (`MetricsTimeseriesRepository`, Track 4)
 computes the bucket once in an inline view and groups by its alias — two
 `?` placeholders are two expressions to Oracle (ORA-00979) — and unions the
-`_H` archive under the same predicate. Its plan on 23ai Free:
+`_H` archive under the same predicate. Its plan on Oracle Free 26ai (23.26.2):
 
 ```
 SORT GROUP BY
@@ -100,7 +100,7 @@ docker compose up flyway-migrate                 # locally; the DBA runs the sam
 Then create the application group with the same `groupId` in the UI and put
 the applications in it; their workers send `?groupId=<groupId>`.
 
-## Verified 2026-08-29 on 23ai Free (`jmeter-metrics-consumer -PdbTests`, `MetricsSchemaDbTest`)
+## Verified 2026-08-29 on Oracle Free 26ai (23.26.2) (`jmeter-metrics-consumer -PdbTests`, `MetricsSchemaDbTest`)
 
 | Gate | Result |
 |---|---|

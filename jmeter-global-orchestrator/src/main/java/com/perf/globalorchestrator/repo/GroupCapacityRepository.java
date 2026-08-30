@@ -18,7 +18,7 @@ import java.util.Optional;
  * Persistence for {@code ORCH_GROUP_CAPACITY} — one row per
  * (groupId, region), foreign-keyed to {@code applicationGroup} with
  * {@code ON DELETE CASCADE}. The pool is the group's: every application in
- * the group launches against these rows (GROUP-CAPACITY, 2026-08-31).
+ * the group launches against these rows (GROUP-CAPACITY, 2026-08-30).
  *
  * <p>The grid is orchestrator-owned and slow-moving, so the list reads are
  * cached and <b>every mutating method evicts the whole cache</b>: write-through
