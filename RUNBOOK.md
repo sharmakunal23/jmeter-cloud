@@ -92,6 +92,9 @@ Easiest path is the UI:
 1. Open **http://localhost:8086**.
 2. **Capacity** → pick the application's group → **declare** the worker you started (§3) for its region; under DYNAMIC with kind regions the same page spins one.
 3. **Documents** → upload a `.jmx` test plan.
+   (Optional) **Plugins** → add a JMeter plugin jar once — name + version, one
+   version per plugin — and pick it in the launcher's Plugins field; the jars
+   ride to every worker of that run via `-Jsearch_paths`.
 4. **Runs → New run** → choose the plan, set fleet size/region → **Start**.
 5. You land on `/runs/{runId}` with the live fleet table, the native uPlot **Metrics** tab,
    and per-pod logs. Metrics appear within ~1–2 s of the first sample.

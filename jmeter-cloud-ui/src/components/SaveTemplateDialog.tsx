@@ -57,7 +57,7 @@ export function SaveTemplateDialog({ body, onSaved, onClose }: SaveTemplateDialo
   return (
     <Modal
       title="Save as template"
-      infoTip="Saves the full launcher state — plan, data files, fleet with per-worker parameters, global properties, and save-results — as a reusable template."
+      infoTip="Saves the full launcher state — plan, data files, fleet with per-worker parameters, global properties, plugins, and save-results — as a reusable template."
       width="form"
       onClose={onClose}
       closeDisabled={submitting}
@@ -108,6 +108,9 @@ export function SaveTemplateDialog({ body, onSaved, onClose }: SaveTemplateDialo
             )}
             {body.globalProperties && Object.keys(body.globalProperties).length > 0 && (
               <li>Global properties: {Object.keys(body.globalProperties).length}</li>
+            )}
+            {(body.pluginIds?.length ?? 0) > 0 && (
+              <li>Plugins: {body.pluginIds!.length}</li>
             )}
             <li>Save results: {body.saveResults ? "on" : "off"}</li>
           </ul>

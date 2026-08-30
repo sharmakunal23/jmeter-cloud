@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { runsApi, GlobalOrchestratorError, type FleetAllocationEntry,
          type RegionShortfall, type StartRunRequest, type WorkerStatus } from "../api/runs";
 import { blobsApi, type BlobMetadata } from "../api/blobs";
+import { pluginsApi, type PluginSummary } from "../api/plugins";
 import { regionsApi, type RegionCapacity } from "../api/regions";
 import { applicationsApi } from "../api/applications";
 import { applicationGroupsApi } from "../api/applicationGroups";
@@ -15,6 +16,7 @@ import { FleetAllocationFormView } from "../components/FleetAllocationFormView";
 //  now owns the per-region capacity surface.)
 import { GlobalPropertiesEditor } from "../components/GlobalPropertiesEditor";
 import { NodePropertiesDrawer } from "../components/NodePropertiesDrawer";
+import { RunPluginsField } from "../components/RunPluginsField";
 import { RunStartProgress, type Stage } from "../components/RunStartProgress";
 import { SaveTemplateDialog } from "../components/SaveTemplateDialog";
 import { templatesApi, type TemplateBody } from "../api/templates";
@@ -93,7 +95,14 @@ export function NewRunPage() {
   // Fleet-wide JMeter property defaults — every worker inherits these
   // unless its per-pod override (perNodeProperties) sets the same key.
   const [globalProperties, setGlobalProperties] = useState<Record<string, string>>({});
-  const [labelFilter, setLabelFilter] = useState("");
+  // UX-DYNAMICS T3 — run-scoped plugin selection from the global library
+  // (replaces the removed label filter, which nothing ever read).
+  const [pluginIds, setPluginIds] = useState<string[]>([]);
+  const [pluginLib, setPluginLib] = useState<
+    | { status: "loading" }
+    | { status: "ok"; items: PluginSummary[] }
+    | { status: "error"; message: string }
+  >({ status: "loading" });
   const [saveResults, setSaveResults] = useState(false);
   const [submit, setSubmit] = useState<SubmitState>({ status: "idle" });
   // Multi-stage progress modal shown while a run starts. Null
@@ -204,7 +213,8 @@ export function NewRunPage() {
           setWorkerStatuses(statuses);
         }
         if (tpl.globalProperties) setGlobalProperties(tpl.globalProperties);
-        if (tpl.labelFilter !== undefined) setLabelFilter(tpl.labelFilter);
+        if (tpl.pluginIds) setPluginIds(tpl.pluginIds);
+        // v1 bodies may carry labelFilter — ignored (removed platform-wide).
         if (tpl.saveResults !== undefined) setSaveResults(tpl.saveResults);
       })
       .catch((err: unknown) => {
@@ -254,6 +264,18 @@ export function NewRunPage() {
     }
     return () => ctl.abort();
   }, [blobs, testPlanBlobId, dataFilesBlobId]);
+
+  // UX-DYNAMICS T3 — the global plugin library for the run-plugins field.
+  useEffect(() => {
+    const ctl = new AbortController();
+    pluginsApi.list(ctl.signal)
+      .then((items) => setPluginLib({ status: "ok", items }))
+      .catch((err: unknown) => {
+        if (ctl.signal.aborted) return;
+        setPluginLib({ status: "error", message: err instanceof Error ? err.message : String(err) });
+      });
+    return () => ctl.abort();
+  }, []);
 
   // Initial regions load + 5 s refresh while the page is open.
   async function refreshRegions() {
@@ -430,11 +452,17 @@ export function NewRunPage() {
     && planProbe?.blobId === testPlanBlobId && planProbe.meta === null;
   const allocError = totalPods < 1 ? "allocate at least 1 worker" : null;
   const dupError = hasDuplicates(allocation) ? "duplicate region in allocation" : null;
+  // UX-DYNAMICS T3 — a hydrated plugin id no longer in the library is warned
+  // about and excluded from the launch; before the library loads, ids pass
+  // through untouched (the hub validates them anyway).
+  const knownPluginIds = pluginLib.status === "ok"
+    ? new Set(pluginLib.items.map((p) => p.pluginId)) : null;
+  const unknownPluginIds = knownPluginIds ? pluginIds.filter((id) => !knownPluginIds.has(id)) : [];
+  const launchPluginIds = knownPluginIds ? pluginIds.filter((id) => knownPluginIds.has(id)) : pluginIds;
   const canSubmit = !appError && !planError && !planMissing && !allocError && !dupError && submit.status !== "submitting";
   const appGateOpen = !!application;
 
   function buildRequest(): StartRunRequest {
-    const labels = labelFilter.split(",").map((s) => s.trim()).filter(Boolean);
     // No merge: each worker's perNodeProperties[i] is already a complete
     // snapshot (taken when the worker was added, plus any drawer edits).
     const cleanAllocation: FleetAllocationEntry[] = buildCleanAllocation(allocation);
@@ -444,7 +472,7 @@ export function NewRunPage() {
       // the Applications tab can filter without joining through document-service.
       application: application.trim() || undefined,
       fleetAllocation: cleanAllocation,
-      labelFilter: labels.length > 0 ? labels : undefined,
+      pluginIds: launchPluginIds.length > 0 ? launchPluginIds : undefined,
       saveResults: saveResults || undefined,
       // initiatedBy is no longer collected here — the global-orchestrator
       // derives it from the X-Actor header (the cached operator name).
@@ -980,22 +1008,17 @@ export function NewRunPage() {
             /capacity tab now owns the per-region capacity surface so the
             launcher form stays focused on what's specific to *this* run.
 
-            Label filter sits below — optional run-metadata, not central to
-            the fleet decision. "Initiated by" was removed: the run's
-            initiator is now derived from the operator's name (the X-Actor
-            header set via the header control), not asked for here. */}
-        <div className="formField">
-          <label htmlFor="labelFilter">Label filter</label>
-          <input
-            id="labelFilter"
-            type="text"
-            value={labelFilter}
-            onChange={(e) => setLabelFilter(e.target.value)}
-            placeholder="comma-separated, e.g. GET /api/foo, POST /api/bar"
-            autoComplete="off"
-          />
-          <small>Optional — focus the run on specific JMeter sampler labels.</small>
-        </div>
+            Plugins sit below (UX-DYNAMICS T3) — run-scoped jars from the
+            global library, staged onto every worker; replaced the label
+            filter, which nothing on the platform ever read. */}
+        <RunPluginsField
+          plugins={pluginLib.status === "ok" ? pluginLib.items : null}
+          loading={pluginLib.status === "loading"}
+          error={pluginLib.status === "error" ? pluginLib.message : null}
+          value={pluginIds}
+          onChange={setPluginIds}
+          unknownIds={unknownPluginIds}
+        />
       </form>
 
       <div className="newRunLayout__viz">
@@ -1063,15 +1086,17 @@ export function NewRunPage() {
       {saveTemplateOpen && (
         <SaveTemplateDialog
           body={{
-            v: 1,
+            v: 2,
             application,
             testPlanBlobId,
             dataFilesBlobId: dataFilesBlobId || undefined,
             fleetAllocation: buildCleanAllocation(allocation),
             globalProperties:
               Object.keys(globalProperties).length > 0 ? globalProperties : undefined,
-            labelFilter: labelFilter || undefined,
-            saveResults: saveResults || undefined,
+            pluginIds: pluginIds.length > 0 ? pluginIds : undefined,
+            // Explicit boolean (v2) — an operator's deliberate "off" is a fact,
+            // not an omission.
+            saveResults: saveResults,
           }}
           onSaved={(blobId) => {
             setSavedTemplateId(blobId);

@@ -9,7 +9,10 @@
 // blobs with X-Type: template and a JSON body. The blob body is the
 // templatesApi.TemplateBody serialised; Documents tab hides the
 // "template" type since it isn't a user-managed file artifact.
-export type BlobType = "testPlan" | "dataFiles" | "result" | "other" | "template";
+// "plugin" added in UX-DYNAMICS T3 — a JMeter plugin jar (or a zip bundle
+// of jars) backing one hub ORCH_PLUGIN registry row; managed on the
+// Plugins page, hidden from Documents like "template".
+export type BlobType = "testPlan" | "dataFiles" | "result" | "other" | "template" | "plugin";
 
 export interface BlobMetadata {
   blobId: string;

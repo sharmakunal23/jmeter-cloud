@@ -3,7 +3,8 @@
 What `oracle/migrations/V2__controlPlaneSchema.sql` adds to `CARDZATE_DB_GRAF`
 beside the hosted metrics layout: the 13 `ORCH_`-prefixed control-plane tables
 and the one place a plain translation would have been wrong — the two claim
-queries. The prefix keeps the two families apart in one schema (`ORCH_RUN` is a
+queries. `V3__pluginLibrary.sql` (UX-DYNAMICS T3, 2026-08-30) adds the 14th,
+`ORCH_PLUGIN`, plus the run's `PLUGINS` snapshot column. The prefix keeps the two families apart in one schema (`ORCH_RUN` is a
 launch; `RUN` is the metrics dimension, `RUN.RUN_KEY = ORCH_RUN.RUN_ID`). For
 anyone adding a table or a repository.
 
@@ -11,7 +12,7 @@ anyone adding a table or a repository.
 
 | Table | Key | Notes |
 |---|---|---|
-| `ORCH_RUN` | `RUN_ID` | `SAVE_RESULTS NUMBER(1)`; `HIDDEN_AT` = soft delete; `APPLICATION` is the app's name; indexes on `CREATED_AT`, `(APPLICATION, CREATED_AT)`, `(METRICS_GROUP_ID, STATE)`, `(STATE, CREATED_AT)` — the Postgres partial indexes have no Oracle form and the table is small |
+| `ORCH_RUN` | `RUN_ID` | `SAVE_RESULTS NUMBER(1)`; `HIDDEN_AT` = soft delete; `APPLICATION` is the app's name; `PLUGINS CLOB IS JSON` (V3) — the launch-time plugin snapshot `[{pluginId,name,version,blobId,fileName}]`, deliberately no FK so registry deletes never break a run; indexes on `CREATED_AT`, `(APPLICATION, CREATED_AT)`, `(METRICS_GROUP_ID, STATE)`, `(STATE, CREATED_AT)` — the Postgres partial indexes have no Oracle form and the table is small |
 | `ORCH_RUN_FLEET_MEMBER` | `(RUN_ID, WORKER_ID)` | FK → `ORCH_RUN` `ON DELETE CASCADE`; `PROPERTIES CLOB IS JSON`; `(WORKER_ID, STATE, CREATED_AT)` index serves the claim's `NOT EXISTS` |
 | `ORCH_APPLICATION_GROUP` | `GROUP_ID`, unique `NAME` | a team's applications **and their worker pool**; `GROUP_ID` (`[a-z][a-z0-9_]{0,29}`) = `GROUP_REGISTRY.GROUP_ID`, what workers send as `?groupId=`; `UPPER(groupId)` prefixes the group's `_METRICS` / `_METRICS_H` tables; carries the pod policy (`RECYCLE_POLICY` CHECKs + thresholds, `ALWAYS_ON NUMBER(1)`) |
 | `ORCH_APPLICATION` | `APPLICATION_ID`, unique `NAME` | `METRICS_GROUP_ID` **NOT NULL** FK → `ORCH_APPLICATION_GROUP` (no ON DELETE: a group with applications cannot be deleted; indexed) + `METRICS_APPLICATION` (the group classifier's `LABEL.APPLICATION` value); `HEALTH_ENDPOINTS`/`LAST_HEALTH_DETAILS` CLOB `IS JSON`. No pool policy here — it is the group's |
@@ -22,6 +23,7 @@ anyone adding a table or a repository.
 | `ORCH_CRON_JOB_FIRE_HISTORY`, `ORCH_APPLICATION_HEALTH_HISTORY`, `ORCH_PURGE_AUDIT` | id | deliberately FK-less — they outlive their subjects |
 | `ORCH_RUN_TREND` | `RUN_ID` | `BINARY_DOUBLE` — these are stored ratios, not sums |
 | `ORCH_AI_RESPONSE` | `(KIND, CACHE_KEY, PROMPT_VERSION)` | `RESPONSE CLOB IS JSON` |
+| `ORCH_PLUGIN` (V3) | `PLUGIN_ID`, unique `NAME`, unique `SHA256` | the global JMeter plugin library — one version per plugin (upgrade = delete + re-register; rows immutable, no UPDATE grant); jar bytes live in a document-service blob (`BLOB_ID`); a delete is blocked `409` while a non-terminal run's snapshot references it |
 
 Naming: every identifier UPPER_SNAKE, unquoted (the metrics layout's rule);
 tables `ORCH_<NAME>`, constraints and indexes `ORCH_<TABLE>_<COLS>_{PK,FK,UQ,CHK,IDX}` —
@@ -65,13 +67,14 @@ Both are called from a `BEGIN … END;` block with a `REF CURSOR` out parameter
 | `ORCH_AI_RESPONSE`: upsert → find → upsert again → find past the TTL → purge by run id | the CLOB round-trips by its bare label; the MERGE replaces; an expired row is a miss; `deleteForRun` removes the single-run row and the comparison it sits in |
 | 5 schedules: two due, one not due, one disabled, one platform-level future | claim returns the two due, earliest first |
 | Duplicate platform job name, `MAX_RUNS` without a threshold, pod for an unknown group, non-JSON `PROPERTIES` | ORA-00001, ORA-02290, ORA-02291, ORA-02290 |
-| V1 + V2 applied from an empty schema | every object `VALID`, 13 `ORCH_*` tables, no non-UPPER object or column name but Flyway's three (`flyway_schema_history`, its `_pk` and `_s_idx` — tool-imposed, like `docker-compose.yml`; don't "fix" them with `-table=`) |
+| V1 + V2 + V3 applied from an empty schema | every object `VALID`, 14 `ORCH_*` tables, no non-UPPER object or column name but Flyway's three (`flyway_schema_history`, its `_pk` and `_s_idx` — tool-imposed, like `docker-compose.yml`; don't "fix" them with `-table=`) |
 
 ## Roles
 
 `GLOBAL_ORCHESTRATOR_WRITER` — the hub's run-state pool: full DML on `ORCH_RUN`,
 `ORCH_RUN_FLEET_MEMBER`, `ORCH_POD`, `ORCH_APPLICATION_GROUP`, `ORCH_APPLICATION`,
-`ORCH_GROUP_CAPACITY`, `ORCH_CRON_JOB`, `ORCH_AI_RESPONSE`; `SELECT, INSERT` on the
+`ORCH_GROUP_CAPACITY`, `ORCH_CRON_JOB`, `ORCH_AI_RESPONSE`; `SELECT, INSERT, DELETE`
+on `ORCH_PLUGIN` (V3 — no UPDATE, rows are immutable); `SELECT, INSERT` on the
 append-only tables (plus `DELETE` where a purge path exists: `ORCH_RUN_TREND`,
 `ORCH_APPLICATION_HEALTH_HISTORY`); `EXECUTE` on `ORCH_CLAIMS` and `ORCH_ID_TABLE`.
 V2 also carries `METRICS_READER`'s / `METRICS_PURGER`'s grants on the shared

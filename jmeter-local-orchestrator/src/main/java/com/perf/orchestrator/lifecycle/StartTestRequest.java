@@ -102,7 +102,15 @@ public record StartTestRequest(
          * ({@code FLUSH_WINDOW_SECONDS}, default 15). Every worker of a run
          * must use the same value — the global-orchestrator sends it to all.
          */
-        Integer windowSeconds) {
+        Integer windowSeconds,
+        /**
+         * UX-DYNAMICS T3 — run-scoped library plugin jars. Each entry is
+         * staged under {@code ${PLUGINS_DIR}} (content-addressed by blobId,
+         * so a cached blob is never re-downloaded) and the staged jars are
+         * passed to the JMeter child via {@code -Jsearch_paths}. The JMeter
+         * install itself is never mutated. Null/empty = no library plugins.
+         */
+        List<PluginSpec> plugins) {
 
     private static final Pattern KEY_PATTERN  = Pattern.compile("[A-Za-z_][A-Za-z0-9_.]{0,63}");
     private static final Pattern GROUP_ID_PATTERN = Pattern.compile("[a-z][a-z0-9_]{0,29}");
@@ -120,6 +128,8 @@ public record StartTestRequest(
         jmeterJvmArgs = jmeterJvmArgs == null ? List.of() : List.copyOf(jmeterJvmArgs);
         properties    = properties    == null ? Map.of()
                 : Map.copyOf(validateProperties(properties));
+        // Each PluginSpec validates itself in its own compact constructor.
+        plugins       = plugins       == null ? List.of() : List.copyOf(plugins);
     }
 
     /**

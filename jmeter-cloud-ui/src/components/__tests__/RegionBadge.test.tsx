@@ -20,7 +20,6 @@ function makeRun(overrides: Partial<Run> = {}): Run {
         testPlanBlobId: "blob-test-plan",
         dataFilesBlobId: null,
         initiatedBy: "test",
-        labelFilter: [],
         state: "RUNNING",
         stateReason: null,
         createdAt: "2026-05-11T12:00:00Z",

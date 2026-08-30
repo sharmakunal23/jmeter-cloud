@@ -53,13 +53,14 @@ paths:
         64 chars; it gates the launcher's downstream pickers and feeds the
         `GET /api/v1/applications` rollup.
 
-        A body tagged `X-Type: dataFiles` must begin with the ZIP magic
+        A body tagged `X-Type: dataFiles` or `X-Type: plugin` (a jar is a zip
+        container) must begin with the ZIP magic
         (`PK\x03\x04`) or it is rejected `400 INVALID_ARCHIVE` — otherwise a
         bad archive surfaces much later, as a run-launch failure.
       parameters:
         - { name: X-Name,        in: header, required: false, schema: { type: string } }
         - { name: X-Description, in: header, required: false, schema: { type: string } }
-        - { name: X-Type,        in: header, required: false, schema: { type: string, enum: [testPlan, dataFiles, result, other] } }
+        - { name: X-Type,        in: header, required: false, schema: { type: string, enum: [testPlan, dataFiles, result, template, plugin, other] } }
         - { name: X-Application, in: header, required: false, schema: { type: string, maxLength: 64 } }
       requestBody:
         required: true
@@ -93,7 +94,7 @@ paths:
         - name: type
           in: query
           required: false
-          schema: { type: string, enum: [testPlan, dataFiles, result, other] }
+          schema: { type: string, enum: [testPlan, dataFiles, result, template, plugin, other] }
         - name: application
           in: query
           required: false
@@ -314,7 +315,7 @@ components:
         type:
           type: string
           nullable: true
-          enum: [testPlan, dataFiles, result, other]
+          enum: [testPlan, dataFiles, result, template, plugin, other]
           description: Purpose tag supplied via X-Type on upload.
         application:
           type: string

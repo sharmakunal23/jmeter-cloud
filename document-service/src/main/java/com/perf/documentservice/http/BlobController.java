@@ -63,10 +63,11 @@ public class BlobController {
         String app = sanitizeApplication(application);
         description = sanitizeDescription(description);   // capped at 200 chars
         // The local-orchestrator unzips dataFiles before launching JMeter, so a
-        // non-zip upload only fails much later at run-launch. Checking the ZIP
-        // magic here turns that deferred failure into a clean 400.
-        try (InputStream in = "dataFiles".equals(type)
-                ? requireZipMagic(request.getInputStream())
+        // non-zip upload only fails much later at run-launch. Same for plugin
+        // jars/bundles (a jar IS a zip container). Checking the ZIP magic here
+        // turns that deferred failure into a clean 400.
+        try (InputStream in = ("dataFiles".equals(type) || "plugin".equals(type))
+                ? requireZipMagic(request.getInputStream(), type)
                 : request.getInputStream()) {
             BlobMetadata meta = store.put(in, contentType, name, description, type, app);
             // The access log carries status and latency but not body size, so
@@ -86,13 +87,13 @@ public class BlobController {
      * <p>Returns a {@code PushbackInputStream} with the magic bytes unread, so
      * the downstream digest and writer still see the whole file.
      */
-    private static InputStream requireZipMagic(InputStream raw) throws IOException {
+    static InputStream requireZipMagic(InputStream raw, String type) throws IOException {
         java.io.PushbackInputStream pb = new java.io.PushbackInputStream(raw, 4);
         byte[] magic = new byte[4];
         int read = pb.readNBytes(magic, 0, 4);
         if (read < 4 || magic[0] != 0x50 || magic[1] != 0x4B
                 || magic[2] != 0x03 || magic[3] != 0x04) {
-            throw new NotAZipException("Upload tagged X-Type=dataFiles is not a valid ZIP archive "
+            throw new NotAZipException("Upload tagged X-Type=" + type + " is not a valid ZIP/JAR archive "
                     + "(missing PK\\x03\\x04 header). Got "
                     + (read == 0 ? "empty body" : "first bytes 0x" + hex(magic, read))
                     + ".");

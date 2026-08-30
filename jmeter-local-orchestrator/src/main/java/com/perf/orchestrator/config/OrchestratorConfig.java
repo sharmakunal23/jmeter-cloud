@@ -146,6 +146,12 @@ public final class OrchestratorConfig {
     private final int maxEntrySizeMb;
     private final int maxFileCount;
 
+    // UX-DYNAMICS T3 — run-scoped plugin jars (content-addressed cache).
+    private final String pluginsDir;
+    private final int maxPluginSizeMb;
+    private final int pluginsCacheMaxEntries;
+    private final long pluginsCacheMaxBytes;
+
     // JMeter child process
     private final String jmeterHome;
     private final String jmeterBin;
@@ -289,6 +295,14 @@ public final class OrchestratorConfig {
         this.maxExtractedSizeMb = parsePositiveInt(env, "MAX_EXTRACTED_SIZE_MB", 1024);
         this.maxEntrySizeMb     = parsePositiveInt(env, "MAX_ENTRY_SIZE_MB",     256);
         this.maxFileCount       = parsePositiveInt(env, "MAX_FILE_COUNT",        500);
+
+        // UX-DYNAMICS T3 — plugin staging. The cache is content-addressed by
+        // blobId under PLUGINS_DIR and bounded by entries + bytes.
+        this.pluginsDir             = env.getOrDefault("PLUGINS_DIR", this.baseDir + "/plugins");
+        this.maxPluginSizeMb        = parsePositiveInt(env, "MAX_PLUGIN_SIZE_MB", 256);
+        this.pluginsCacheMaxEntries = parsePositiveInt(env, "PLUGINS_CACHE_MAX_ENTRIES", 64);
+        this.pluginsCacheMaxBytes   = parsePositiveLong(env, "PLUGINS_CACHE_MAX_BYTES",
+                2L * 1024L * 1024L * 1024L);     // 2 GiB
 
         this.jmeterHome    = env.getOrDefault("JMETER_HOME",     "/opt/jmeter");
         this.jmeterBin     = env.getOrDefault("JMETER_BIN",       this.jmeterHome + "/bin/jmeter");
@@ -678,6 +692,11 @@ public final class OrchestratorConfig {
     public int getMaxExtractedSizeMb()               { return maxExtractedSizeMb; }
     public int getMaxEntrySizeMb()                   { return maxEntrySizeMb; }
     public int getMaxFileCount()                     { return maxFileCount; }
+
+    public String getPluginsDir()                    { return pluginsDir; }
+    public int    getMaxPluginSizeMb()               { return maxPluginSizeMb; }
+    public int    getPluginsCacheMaxEntries()        { return pluginsCacheMaxEntries; }
+    public long   getPluginsCacheMaxBytes()          { return pluginsCacheMaxBytes; }
 
     public String getJmeterHome()                    { return jmeterHome; }
     public String getJmeterBin()                     { return jmeterBin; }

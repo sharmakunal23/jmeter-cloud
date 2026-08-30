@@ -410,7 +410,8 @@ public class CronFireService {
      *  (a schedule never auto-provisions — that's a cost decision the operator
      *  makes by pre-provisioning capacity), and {@code initiatedBy} is left
      *  null so the {@code actor} drives attribution. */
-    private static StartRunRequest toStartRunRequest(TemplateBody t) {
+    /** Package-private for the mapping test. */
+    static StartRunRequest toStartRunRequest(TemplateBody t) {
         return new StartRunRequest(
                 t.testPlanBlobId(),
                 t.dataFilesBlobId(),
@@ -418,18 +419,10 @@ public class CronFireService {
                 0,                       // fleetSize — unused when fleetAllocation is present
                 List.of(),               // regions — legacy single-region path, unused
                 t.fleetAllocation(),
-                splitLabels(t.labelFilter()),
                 null,                    // initiatedBy — derived from the actor
                 Boolean.FALSE,           // spinShortfall — schedules never auto-spin
-                t.saveResults());
-    }
-
-    private static List<String> splitLabels(String labelFilter) {
-        if (labelFilter == null || labelFilter.isBlank()) return List.of();
-        return Arrays.stream(labelFilter.split(","))
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .toList();
+                t.saveResults(),
+                t.pluginIds());
     }
 
     private static String truncate(String s) {

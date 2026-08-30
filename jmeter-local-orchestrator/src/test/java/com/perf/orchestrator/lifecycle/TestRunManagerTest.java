@@ -84,6 +84,52 @@ class TestRunManagerTest {
     }
 
     // -----------------------------------------------------------------------
+    // UX-DYNAMICS T3 — run-scoped plugin jars on the launch command
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("plugin jars → -Jsearch_paths")
+    class PluginJars {
+
+        private static final String ULID = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+        private StartTestRequest reqWithPlugins(String runId) {
+            return new StartTestRequest(runId, "us-east-1", null,
+                    null, null, List.of("-Gduration=30"), List.of(),
+                    java.util.Map.of("USER_OFFSET", "0"),
+                    null, null, null, null, null, null, null, null,
+                    List.of(new PluginSpec(ULID, "casutg.jar")));
+        }
+
+        @Test
+        @DisplayName("a cached plugin jar rides -Jsearch_paths, before -J properties and jmeterArgs")
+        void searchPathsComposedAndOrdered() throws Exception {
+            java.nio.file.Path jar = baseDir.resolve("plugins").resolve(ULID + ".jar");
+            java.nio.file.Files.createDirectories(jar.getParent());
+            java.nio.file.Files.write(jar, new byte[]{0x50, 0x4b, 3, 4});
+
+            manager.start(reqWithPlugins("r-plugins"));
+            Awaitility.await().atMost(Duration.ofSeconds(3)).until(() -> launcher.lastSpec.get() != null);
+            List<String> cmd = launcher.lastSpec.get().command();
+            String searchPaths = cmd.stream()
+                    .filter(a -> a.startsWith("-Jsearch_paths=")).findFirst().orElseThrow();
+            assertThat(searchPaths).contains(jar.toAbsolutePath().toString());
+            assertThat(cmd.indexOf(searchPaths))
+                    .isLessThan(cmd.indexOf("-JUSER_OFFSET=0"))
+                    .isLessThan(cmd.indexOf("-Gduration=30"));
+        }
+
+        @Test
+        @DisplayName("no plugins → no -Jsearch_paths flag")
+        void absentWithoutPlugins() {
+            manager.start(req("r-noplugins"));
+            Awaitility.await().atMost(Duration.ofSeconds(3)).until(() -> launcher.lastSpec.get() != null);
+            assertThat(launcher.lastSpec.get().command())
+                    .noneMatch(a -> a.startsWith("-Jsearch_paths="));
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Validation
     // -----------------------------------------------------------------------
 
@@ -554,14 +600,15 @@ class TestRunManagerTest {
                 null,                 // joinedAtSecond — null = original-fleet (Phase C)
                 null,                 // application — untagged in these legacy tests
                 null,                 // gracePeriodSeconds — null = use the orchestrator default
-                null, null);          // metricsGroupId, windowSeconds — orchestrator defaults
+                null, null,           // metricsGroupId, windowSeconds — orchestrator defaults
+                List.of());           // plugins — none in these legacy tests
     }
 
     private static StartTestRequest reqWithGrace(String runId, Integer gracePeriodSeconds) {
         return new StartTestRequest(runId, "us-east-1", null,
                 null, null, List.of(), List.of(), java.util.Map.of(),
                 null, null, null, null, null,
-                gracePeriodSeconds, null, null);
+                gracePeriodSeconds, null, null, List.of());
     }
 
     private static OrchestratorConfig configIn(Path base) {
@@ -602,9 +649,12 @@ class TestRunManagerTest {
         final AtomicInteger lastSigtermCount = new AtomicInteger();
         final AtomicInteger lastSigkillCount = new AtomicInteger();
 
+        final AtomicReference<LaunchSpec> lastSpec = new AtomicReference<>();
+
         @Override
         public JmeterProcess launch(LaunchSpec spec) {
             launched.incrementAndGet();
+            lastSpec.set(spec);
             return new FakeProcess(this);
         }
     }

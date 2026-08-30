@@ -31,7 +31,6 @@ public record StartRunRequest(
         int fleetSize,
         List<String> regions,
         List<FleetAllocationEntry> fleetAllocation,
-        List<String> labelFilter,
         String initiatedBy,
         /**
          * When true, a shortfall in the claim
@@ -52,12 +51,19 @@ public record StartRunRequest(
          * {@code autoUploadResults=true}; persisted on the run row so the UI
          * shows a "Download results" button. Default false.
          */
-        Boolean saveResults) {
+        Boolean saveResults,
+        /**
+         * UX-DYNAMICS T3 — global-library plugin ids to stage onto every
+         * worker of this run. Resolved against {@code ORCH_PLUGIN} at launch
+         * (unknown id → 400) and snapshotted onto the run row, so later
+         * registry deletes never affect this run or its scale-up joiners.
+         */
+        List<String> pluginIds) {
 
     public StartRunRequest {
         regions         = regions         == null ? List.of() : List.copyOf(regions);
-        labelFilter     = labelFilter     == null ? List.of() : List.copyOf(labelFilter);
         fleetAllocation = fleetAllocation == null ? List.of() : List.copyOf(fleetAllocation);
+        pluginIds       = pluginIds       == null ? List.of() : List.copyOf(pluginIds);
     }
 
     /** Null-safe accessor — null in the wire body is treated as false. */

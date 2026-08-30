@@ -30,6 +30,9 @@ public interface ArtifactSource {
     /** Marker passed to {@link #fetch(String, FetchSpec)} for the dataFiles slot. */
     String KIND_DATA_FILES = "DATA_FILES";
 
+    /** Marker passed to {@link #fetch(String, FetchSpec)} for a run-scoped plugin jar/bundle. */
+    String KIND_PLUGIN = "PLUGIN";
+
     /**
      * Fetches the artifact identified by {@code kind} for the given run.
      *

@@ -69,6 +69,15 @@ tags:
       `aiResponse` table (30-day TTL); `?fresh=true` bypasses + re-bills.
       A per-instance daily cap guards cost (429 when tripped); with no key the
       endpoints return 503 `AI_DISABLED` and the UI hides its buttons.
+  - name: plugins
+    description: |
+      The global JMeter plugin library — one version per plugin name
+      (an upgrade is delete + re-register), duplicate content rejected by
+      sha256. Bytes live in document-service (`X-Type: plugin`, a `.jar` or a
+      `.zip` bundle of the plugin plus its dependency jars — dependency
+      resolution is the uploader's job); a run references plugins via
+      `StartRunRequest.pluginIds` and every worker stages the jars into its
+      JMeter `search_paths` — the image is never mutated.
 
 paths:
 
@@ -1333,6 +1342,79 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
+  /api/v1/plugins:
+    get:
+      tags: [plugins]
+      summary: List the plugin library
+      description: Every registered plugin, ordered by name.
+      responses:
+        "200":
+          description: The library.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Plugin" }
+    post:
+      tags: [plugins]
+      summary: Register an uploaded plugin
+      description: |
+        Registers a blob already uploaded with `X-Type: plugin`; sha256, size
+        and file name come from the blob's server-computed metadata. One
+        version per plugin name — a second upload of an existing name is
+        rejected `409 PLUGIN_NAME_TAKEN` (and identical bytes under any name
+        `409 PLUGIN_CONTENT_DUPLICATE`), each carrying `existing`
+        `{pluginId, name, version}` and `orphanBlobDeleted` (the hub deletes
+        the caller's now-orphan upload unless a registry row references it).
+      parameters:
+        - $ref: "#/components/parameters/XActorHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterPluginRequest" }
+      responses:
+        "201":
+          description: Registered.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Plugin" }
+        "400":
+          description: |
+            Codes `INVALID_PLUGIN_NAME`, `INVALID_PLUGIN_VERSION`,
+            `BLOB_NOT_FOUND`, `BLOB_NOT_PLUGIN` (blob not uploaded with
+            `X-Type: plugin`), `INVALID_PLUGIN_FILE` (not `.jar`/`.zip`),
+            `PLUGIN_TOO_LARGE` (over 256 MB).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: "`PLUGIN_NAME_TAKEN` or `PLUGIN_CONTENT_DUPLICATE` — see the POST description."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PluginConflictResponse" }
+
+  /api/v1/plugins/{pluginId}:
+    delete:
+      tags: [plugins]
+      summary: Delete a plugin from the library
+      description: |
+        Removes the registry row; the blob is retained so historical runs and
+        scale-up joiners can always stage their launch snapshot. Idempotent —
+        an unknown id is 204.
+      parameters:
+        - name: pluginId
+          in: path
+          required: true
+          schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+      responses:
+        "204": { description: Deleted (or already absent). }
+        "409":
+          description: "`PLUGIN_IN_USE` — a non-terminal run's snapshot references it; wait for the run to end."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
   /api/v1/regions:
     get:
       tags: [pods]
@@ -2478,9 +2560,13 @@ components:
             Multi-element `regions` is ignored — supply `fleetAllocation`
             instead.
           items: { type: string }
-        labelFilter:
+        pluginIds:
           type: array
-          description: Optional list of JMeter labels to focus the run on.
+          description: |
+            Global-library plugin ids to stage onto every worker
+            (`GET /api/v1/plugins`). Unknown ids reject the launch 400; the
+            resolved set is snapshotted onto the run, so a later registry
+            delete never affects this run or its scale-up joiners.
           items: { type: string }
         initiatedBy:
           type: string
@@ -2560,6 +2646,10 @@ components:
         fleetMembers:
           type: array
           items: { $ref: "#/components/schemas/RunFleetMember" }
+        plugins:
+          type: array
+          description: The launch-time plugin snapshot — what every worker of this run stages, immune to later registry deletes.
+          items: { $ref: "#/components/schemas/PluginRef" }
 
     RunFleetMember:
       type: object
@@ -2597,6 +2687,57 @@ components:
             read time. Null when the pod row is gone (drained pod
             whose member row outlived it). UI uses this to flag a
             worker whose pod is near its recycle threshold.
+
+    Plugin:
+      type: object
+      required: [pluginId, name, version, blobId, sha256, sizeBytes, fileName, createdBy, createdAt]
+      properties:
+        pluginId:   { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+        name:       { type: string, description: "Unique — one version per plugin; upgrade = delete + re-register." }
+        version:    { type: string }
+        blobId:     { type: string, description: "The document-service blob holding the .jar (single plugin) or .zip bundle." }
+        sha256:     { type: string, description: "Server-computed at upload; unique — identical bytes cannot be registered twice." }
+        sizeBytes:  { type: integer, format: int64 }
+        fileName:   { type: string }
+        description: { type: string, nullable: true }
+        createdBy:  { type: string }
+        createdAt:  { type: string, format: date-time }
+
+    PluginRef:
+      type: object
+      required: [pluginId, name, version, blobId, fileName]
+      description: A run's launch-time reference to one plugin — a snapshot, deliberately not a foreign key.
+      properties:
+        pluginId: { type: string }
+        name:     { type: string }
+        version:  { type: string }
+        blobId:   { type: string }
+        fileName: { type: string }
+
+    RegisterPluginRequest:
+      type: object
+      required: [name, version, blobId]
+      properties:
+        name:        { type: string, description: "1–128 chars of [A-Za-z0-9 ._-], starting alphanumeric." }
+        version:     { type: string, description: "1–64 chars, informational — uniqueness is by name and by content." }
+        blobId:      { type: string, description: "A blob already uploaded with X-Type: plugin." }
+        description: { type: string, nullable: true }
+
+    PluginConflictResponse:
+      type: object
+      required: [code, message, existing, orphanBlobDeleted]
+      properties:
+        code:    { type: string, enum: [PLUGIN_NAME_TAKEN, PLUGIN_CONTENT_DUPLICATE] }
+        message: { type: string }
+        existing:
+          type: object
+          properties:
+            pluginId: { type: string }
+            name:     { type: string }
+            version:  { type: string }
+        orphanBlobDeleted:
+          type: boolean
+          description: True when the hub deleted the caller's now-orphan upload (never a blob a registry row references).
 
     ScaleUpRunRequest:
       type: object

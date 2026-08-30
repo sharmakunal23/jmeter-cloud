@@ -27,6 +27,10 @@ vi.mock("../../api/templates", async () => {
   const actual = await vi.importActual<typeof import("../../api/templates")>("../../api/templates");
   return { ...actual, templatesApi: { ...actual.templatesApi, load: vi.fn(), list: vi.fn().mockResolvedValue([]), save: vi.fn() } };
 });
+vi.mock("../../api/plugins", async () => {
+  const actual = await vi.importActual<typeof import("../../api/plugins")>("../../api/plugins");
+  return { ...actual, pluginsApi: { list: vi.fn().mockResolvedValue([]), create: vi.fn(), delete: vi.fn() } };
+});
 vi.mock("../../api/applications", () => ({ applicationsApi: { list: vi.fn() } }));
 vi.mock("../../api/applicationGroups", () => ({ applicationGroupsApi: { get: vi.fn() } }));
 
@@ -83,10 +87,12 @@ describe("NewRunPage — the per-region ceiling is the group's", () => {
 // ── UX-DYNAMICS T2 — template hydration fidelity ──────────────────────
 import { fireEvent, within } from "@testing-library/react";
 import { blobsApi } from "../../api/blobs";
+import { pluginsApi } from "../../api/plugins";
 import { templatesApi } from "../../api/templates";
 
 const blobsList = blobsApi.list as unknown as ReturnType<typeof vi.fn>;
 const blobsMetadata = blobsApi.metadata as unknown as ReturnType<typeof vi.fn>;
+const pluginsList = pluginsApi.list as unknown as ReturnType<typeof vi.fn>;
 const tplLoad = templatesApi.load as unknown as ReturnType<typeof vi.fn>;
 const tplSave = templatesApi.save as unknown as ReturnType<typeof vi.fn>;
 
@@ -127,6 +133,7 @@ describe("NewRunPage — template hydration (UX-DYNAMICS T2)", () => {
     blobsMetadata.mockReset();
     tplLoad.mockReset();
     tplSave.mockReset().mockResolvedValue("tpl-blob-9");
+    pluginsList.mockReset().mockResolvedValue([]);
   });
 
   it("restores plan, data files, save-results and global properties from the template", async () => {
@@ -195,7 +202,54 @@ describe("NewRunPage — template hydration (UX-DYNAMICS T2)", () => {
     fireEvent.change(dlg.getByLabelText(/Template name/i), { target: { value: "t2" } });
     fireEvent.click(dlg.getByRole("button", { name: /Save template/i }));
     await waitFor(() => expect(tplSave).toHaveBeenCalled());
-    const body = tplSave.mock.calls[0][0] as { fleetAllocation: Array<{ perNodeProperties?: unknown }> };
+    const body = tplSave.mock.calls[0][0] as {
+      v: number; saveResults?: boolean; labelFilter?: unknown; pluginIds?: string[];
+      fleetAllocation: Array<{ perNodeProperties?: unknown }>;
+    };
     expect(body.fleetAllocation[0].perNodeProperties).toEqual([{ threads: "10" }]);
+    // v2 semantics: explicit saveResults, no labelFilter ever written.
+    expect(body.v).toBe(2);
+    expect(body.saveResults).toBe(true);
+    expect("labelFilter" in body).toBe(false);
+  });
+
+  it("the label-filter field is gone and a v1 labelFilter is ignored", async () => {
+    mockApp();
+    blobsList.mockImplementation((opts: { type: string }) =>
+      Promise.resolve({ items: opts.type === "testPlan" ? [PLAN_META] : [DATA_META], total: 1 }));
+    tplLoad.mockResolvedValue(tplBody({ labelFilter: "GET /api/foo, POST /api/bar" }));
+    renderWithTemplate("checkout-svc", "tpl1");
+    await waitFor(() => expect(screen.getByLabelText(/Test plan/i)).toHaveValue("plan-1"));
+    expect(screen.queryByLabelText(/Label filter/i)).toBeNull();
+    expect(screen.getByLabelText("Plugins")).toBeInTheDocument();
+  });
+
+  it("template pluginIds hydrate as chips and ride the v2 save body", async () => {
+    mockApp();
+    pluginsList.mockResolvedValue([
+      { pluginId: "p1", name: "jpgc-casutg", version: "3.1", sizeBytes: 2048, sha256: "a", fileName: "casutg.jar", createdAt: "2026-08-30T00:00:00Z" },
+    ]);
+    blobsList.mockImplementation((opts: { type: string }) =>
+      Promise.resolve({ items: opts.type === "testPlan" ? [PLAN_META] : [DATA_META], total: 1 }));
+    tplLoad.mockResolvedValue(tplBody({ pluginIds: ["p1"] }));
+    renderWithTemplate("checkout-svc", "tpl1");
+    await waitFor(() => expect(screen.getByText("jpgc-casutg@3.1")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /Save template/i }));
+    const dlg = within(screen.getByRole("dialog"));
+    fireEvent.change(dlg.getByLabelText(/Template name/i), { target: { value: "t3" } });
+    fireEvent.click(dlg.getByRole("button", { name: /Save template/i }));
+    await waitFor(() => expect(tplSave).toHaveBeenCalled());
+    expect((tplSave.mock.calls[0][0] as { pluginIds?: string[] }).pluginIds).toEqual(["p1"]);
+  });
+
+  it("a hydrated plugin id gone from the library warns and is excluded", async () => {
+    mockApp();
+    pluginsList.mockResolvedValue([]);
+    blobsList.mockImplementation((opts: { type: string }) =>
+      Promise.resolve({ items: opts.type === "testPlan" ? [PLAN_META] : [DATA_META], total: 1 }));
+    tplLoad.mockResolvedValue(tplBody({ pluginIds: ["01GONE00000000000000000000"] }));
+    renderWithTemplate("checkout-svc", "tpl1");
+    await waitFor(() => expect(screen.getByText(/removed from library/)).toBeInTheDocument());
+    expect(screen.getByText(/no longer in the library — excluded/)).toBeInTheDocument();
   });
 });

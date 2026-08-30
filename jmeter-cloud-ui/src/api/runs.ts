@@ -351,7 +351,12 @@ export interface StartRunRequest {
   /** Legacy — used when fleetAllocation is absent. */
   fleetSize?: number;
   regions?: string[];
-  labelFilter?: string[];
+  /**
+   * UX-DYNAMICS T3 — global-library plugin ids staged onto every worker of
+   * this run as extra JMeter jars (-Jsearch_paths). Replaces the removed
+   * labelFilter (which nothing ever read).
+   */
+  pluginIds?: string[];
   initiatedBy?: string;
   /**
    * When true, a shortfall during claim

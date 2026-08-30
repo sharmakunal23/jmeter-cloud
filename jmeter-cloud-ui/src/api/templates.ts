@@ -33,7 +33,13 @@ export interface TemplateBody {
    */
   fleetAllocation: FleetAllocationEntry[];
   globalProperties?: Record<string, string>;
+  /**
+   * v1 bodies only — the label filter was removed platform-wide (nothing
+   * ever read it). Ignored on hydrate, never written by the v2 writer.
+   */
   labelFilter?: string;
+  /** v2 — global-library plugin ids selected for the run (UX-DYNAMICS T3). */
+  pluginIds?: string[];
   /** Save Results — restore the launcher's "upload JTLs on completion" toggle. */
   saveResults?: boolean;
   initiatedBy?: string;

@@ -555,10 +555,6 @@ components:
         `AUTO_UPLOAD_RESULTS=false` — it is normal, not an error.
       enum: [SKIPPED, PENDING, UPLOADING, UPLOADED, FAILED]
 
-    ArtifactSourceType:
-      type: string
-      enum: [HTTP_UPLOAD, S3, DOCUMENT_SERVICE]
-
     ResultSinkType:
       type: string
       description: |
@@ -719,35 +715,40 @@ components:
             worker stamps the same `windowSecond`; the global-orchestrator sends
             one value to the whole fleet.
           example: 15
-        artifactSource:
-          type: object
+        testPlanBlobId:
+          type: string
+          nullable: true
           description: |
-            Optional override of the configured `ARTIFACT_SOURCE`. When
-            `type=S3` or `type=DOCUMENT_SERVICE`, the orchestrator pulls the
-            artifacts from the named source on `PREPARING` instead of using
-            previously-uploaded files.
-          properties:
-            type: { $ref: "#/components/schemas/ArtifactSourceType" }
-            testPlanS3Url:
-              type: string
-              description: e.g. `s3://perf-bucket/plans/checkout-flow.jmx` (only with `type=S3`).
-            dataFilesS3Url:
-              type: string
-              description: e.g. `s3://perf-bucket/data/checkout-flow-data.zip` (only with `type=S3`).
-            testPlan:
-              type: object
-              description: Only with `type=DOCUMENT_SERVICE`.
-              properties:
-                documentName: { type: string }
-                documentId:   { type: string }
-                version:      { type: string, default: "latest" }
-            dataFiles:
-              type: object
-              description: Only with `type=DOCUMENT_SERVICE`.
-              properties:
-                documentName: { type: string }
-                documentId:   { type: string }
-                version:      { type: string, default: "latest" }
+            Document-service blobId of the test plan. With
+            `ARTIFACT_SOURCE=DOCUMENT_SERVICE` the orchestrator fetches the
+            blob and atomically replaces the staged `plan.jmx` before launch;
+            null runs whatever `POST /api/v1/testPlan` staged out-of-band.
+        dataFilesBlobId:
+          type: string
+          nullable: true
+          description: Same contract as `testPlanBlobId`, for the data-files zip.
+        plugins:
+          type: array
+          description: |
+            Run-scoped JMeter plugin jars, staged under `${PLUGINS_DIR}`
+            (content-addressed by blobId — a cached blob is not re-downloaded)
+            and passed to the child via `-Jsearch_paths`. Dependency resolution
+            is the uploader's job — a plugin needing helper jars is uploaded as
+            a flat `.zip` bundle of jars. An operator-supplied `-Jsearch_paths`
+            in `properties`/`jmeterArgs` deliberately overrides the staged jars
+            for that run.
+          items:
+            type: object
+            required: [blobId, fileName]
+            properties:
+              blobId:
+                type: string
+                pattern: "^[0-9A-HJKMNP-TV-Z]{26}$"
+                description: Document-service blob of the jar or zip bundle.
+              fileName:
+                type: string
+                pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$"
+                description: Original file name; must end `.jar` or `.zip`.
 
     StartTestResponse:
       type: object

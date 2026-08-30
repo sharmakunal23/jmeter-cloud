@@ -8,6 +8,8 @@ import com.perf.globalorchestrator.domain.GroupCapacity;
 import com.perf.globalorchestrator.domain.CronJob;
 import com.perf.globalorchestrator.domain.CronJobKind;
 import com.perf.globalorchestrator.domain.MemberState;
+import com.perf.globalorchestrator.domain.Plugin;
+import com.perf.globalorchestrator.domain.PluginRef;
 import com.perf.globalorchestrator.domain.Pod;
 import com.perf.globalorchestrator.domain.PodSource;
 import com.perf.globalorchestrator.domain.Run;
@@ -17,6 +19,7 @@ import com.perf.globalorchestrator.repo.AiResponseRepository;
 import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.CronJobRepository;
+import com.perf.globalorchestrator.repo.PluginRepository;
 import com.perf.globalorchestrator.repo.PodRepository;
 import com.perf.globalorchestrator.repo.RunRepository;
 import org.junit.jupiter.api.DisplayName;
@@ -67,6 +70,7 @@ class GlobalRunDbTest extends OracleDbTestSupport {
     @Autowired RunRepository runs;
     @Autowired CronJobRepository cronJobs;
     @Autowired AiResponseRepository aiResponses;
+    @Autowired PluginRepository pluginLibrary;
     @Autowired @Qualifier("metricsJdbcTemplate") JdbcTemplate metricsReader;
     @Autowired @Qualifier("metricsPurgeJdbcTemplate") JdbcTemplate metricsPurge;
     @Autowired PlatformTransactionManager txManager;
@@ -88,9 +92,10 @@ class GlobalRunDbTest extends OracleDbTestSupport {
     }
 
     @Test
-    void both_migrations_applied_and_every_object_is_valid() {
+    void all_migrations_applied_and_every_object_is_valid() {
         assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_objects WHERE status <> 'VALID'", Integer.class)).isZero();
-        assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_tables WHERE table_name LIKE 'ORCH\\_%' ESCAPE '\\'", Integer.class)).isEqualTo(13);
+        // 13 control-plane tables from V2 + ORCH_PLUGIN from V3.
+        assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_tables WHERE table_name LIKE 'ORCH\\_%' ESCAPE '\\'", Integer.class)).isEqualTo(14);
         // One convention for the whole schema: nothing quoted-case except Flyway's own history table.
         assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_objects WHERE object_name <> UPPER(object_name) AND object_name NOT LIKE 'flyway\\_schema\\_history%' ESCAPE '\\'", Integer.class)).isZero();
         assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_tab_columns WHERE column_name <> UPPER(column_name) AND table_name <> 'flyway_schema_history'", Integer.class)).isZero();
@@ -308,5 +313,40 @@ class GlobalRunDbTest extends OracleDbTestSupport {
         aiResponses.upsert("compare", "run-ai-1|run-ai-2", "v1", "{}", "claude-sonnet-4-6", 0, 0);
         assertThat(aiResponses.deleteForRun("run-ai-1")).isEqualTo(2);   // the single-run row and the comparison it sits in
         assertThat(aiResponses.find("compare", "run-ai-1|run-ai-2", "v1", Duration.ofDays(30))).isEmpty();
+    }
+
+    @Test
+    void plugin_registry_rejects_duplicate_name_and_duplicate_content() {
+        Instant now = Instant.now();
+        pluginLibrary.insert(new Plugin("01T3PLGAAAAAAAAAAAAAAAAAA1", "casutg", "3.1",
+                "01T3BLOBAAAAAAAAAAAAAAAA01", "sha-t3-1", 1024, "casutg.jar", null, "tester", now));
+        assertThatThrownBy(() -> pluginLibrary.insert(new Plugin("01T3PLGAAAAAAAAAAAAAAAAAA2", "casutg", "2.0",
+                "01T3BLOBAAAAAAAAAAAAAAAA02", "sha-t3-2", 1024, "casutg2.jar", null, "tester", now)))
+                .isInstanceOf(org.springframework.dao.DuplicateKeyException.class);   // ORCH_PLUGIN_NAME_UQ
+        assertThatThrownBy(() -> pluginLibrary.insert(new Plugin("01T3PLGAAAAAAAAAAAAAAAAAA3", "renamed", "3.1",
+                "01T3BLOBAAAAAAAAAAAAAAAA03", "sha-t3-1", 1024, "renamed.jar", null, "tester", now)))
+                .isInstanceOf(org.springframework.dao.DuplicateKeyException.class);   // ORCH_PLUGIN_SHA256_UQ
+        assertThat(pluginLibrary.existsByBlobId("01T3BLOBAAAAAAAAAAAAAAAA01")).isTrue();
+        assertThat(pluginLibrary.findByName("casutg").orElseThrow().version()).isEqualTo("3.1");
+        pluginLibrary.delete("01T3PLGAAAAAAAAAAAAAAAAAA1");   // idempotent registry delete
+        assertThat(pluginLibrary.findByName("casutg")).isEmpty();
+    }
+
+    @Test
+    void run_plugins_snapshot_round_trips_the_clob_and_gates_the_delete() {
+        List<PluginRef> refs = List.of(
+                new PluginRef("01T3PLGBBBBBBBBBBBBBBBBBB1", "casutg", "3.1", "01T3BLOBBBBBBBBBBBBBBBB01", "casutg.jar"),
+                new PluginRef("01T3PLGBBBBBBBBBBBBBBBBBB2", "tst", "2.6", "01T3BLOBBBBBBBBBBBBBBBB02", "tst.zip"));
+        runs.insertRun(new Run("01T3RUNPLUGINSAAAAAAAAAAA1", "na-east", "b", null, "pluginsApp", "t",
+                RunState.PREPARING, null, Instant.now(), null, null, false, List.of(), null, refs));
+        assertThat(runs.findByRunId("01T3RUNPLUGINSAAAAAAAAAAA1").orElseThrow().plugins())
+                .containsExactlyElementsOf(refs);   // the CLOB round-trips in order
+        // The delete gate's JSON_EXISTS probe sees the non-terminal snapshot…
+        assertThat(pluginLibrary.countActiveRunsReferencing("01T3PLGBBBBBBBBBBBBBBBBBB1")).isEqualTo(1);
+        assertThat(pluginLibrary.countActiveRunsReferencing("01T3PLGUNKNOWNAAAAAAAAAAAA")).isZero();
+        // …and a pre-T3 constructor writes the '[]' default and reads back empty.
+        runs.insertRun(new Run("01T3RUNPLUGINSAAAAAAAAAAA2", "na-east", "b", null, "pluginsApp", "t",
+                RunState.PREPARING, null, Instant.now(), null, null, false, List.of()));
+        assertThat(runs.findByRunId("01T3RUNPLUGINSAAAAAAAAAAA2").orElseThrow().plugins()).isEmpty();
     }
 }

@@ -30,8 +30,10 @@ import com.perf.globalorchestrator.config.CacheConfig;
 import com.perf.globalorchestrator.repo.MetricsTarget;
 import com.perf.globalorchestrator.repo.RunMetricsRepository;
 import com.perf.globalorchestrator.repo.RunWindow;
+import com.perf.globalorchestrator.repo.PluginRepository;
 import com.perf.globalorchestrator.repo.RunRepository;
 import com.perf.globalorchestrator.repo.RunTrendRepository;
+import com.perf.globalorchestrator.domain.PluginRef;
 import com.perf.globalorchestrator.domain.RunTrend;
 import org.springframework.cache.annotation.Cacheable;
 import org.slf4j.Logger;
@@ -49,6 +51,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -116,6 +119,8 @@ public class RunService {
     private final RunMetricsRepository runMetrics;
     private final MetricsGroupResolver metricsGroups;
     private final RunTrendRepository runTrends;
+    /** UX-DYNAMICS T3 — resolves pluginIds into launch snapshots. */
+    private final PluginRepository pluginRepo;
     /** WORKER-HYGIENE Phase E — spin-to-fill on shortfall. Optional so tests can omit it. */
     private final com.perf.globalorchestrator.provision.PodSpinService spinService;
     /** STATIC-FLEET Phase 2 — gates spin-to-fill; workers are operator-managed in STATIC mode. */
@@ -149,6 +154,7 @@ public class RunService {
             RunMetricsRepository runMetrics,
             MetricsGroupResolver metricsGroups,
             RunTrendRepository runTrends,
+            PluginRepository pluginRepo,
             @org.springframework.beans.factory.annotation.Autowired(required = false)
             com.perf.globalorchestrator.provision.PodSpinService spinService,
             com.perf.globalorchestrator.provision.ProvisioningProperties provisioning,
@@ -167,6 +173,7 @@ public class RunService {
         this.runMetrics = runMetrics;
         this.metricsGroups = metricsGroups;
         this.runTrends = runTrends;
+        this.pluginRepo = pluginRepo;
         this.spinService = spinService;
         this.provisioning = provisioning;
         this.region = region;
@@ -211,7 +218,7 @@ public class RunService {
         Map<String, FanoutOutcome> outcomes = fanOut(
                 started.runId(), started.members(),
                 request.testPlanBlobId(), request.dataFilesBlobId(),
-                request.application(), request.isSaveResults());
+                request.application(), request.isSaveResults(), started.plugins());
 
         long accepted = outcomes.values().stream().filter(o -> o.state() == MemberState.ACCEPTED).count();
         if (accepted == started.members().size()) {
@@ -255,7 +262,8 @@ public class RunService {
                 (request.application() == null || request.application().isBlank()) ? null : request.application(),
                 (request.initiatedBy() != null && !request.initiatedBy().isBlank()) ? request.initiatedBy() : actor.name(),
                 RunState.PREPARING, reason, now, null, null,
-                request.isSaveResults(), List.of(), metricsGroupOf(request.application()));
+                request.isSaveResults(), List.of(), metricsGroupOf(request.application()),
+                resolvePlugins(request.pluginIds()));
         runs.insertRun(preparing);
         runs.updateRunState(runId, RunState.PREPARING, reason);
         LOG.info("run {} PREPARING — {}", runId, reason);
@@ -509,7 +517,7 @@ public class RunService {
             Map<String, FanoutOutcome> outcomes = fanOut(
                     runId, opened.members(),
                     run.testPlanBlobId(), run.dataFilesBlobId(),
-                    run.application(), run.saveResults());
+                    run.application(), run.saveResults(), run.plugins());
 
             long accepted = outcomes.values().stream().filter(o -> o.state() == MemberState.ACCEPTED).count();
             // Append a one-line scale-up note to stateReason so the run-detail
@@ -571,6 +579,10 @@ public class RunService {
     protected StartTransactionResult openRunAndClaimPods(StartRunRequest request, boolean bestEffort, Actor actor,
                                                          String existingRunId) {
         List<FleetAllocationEntry> allocation = resolveAllocation(request);
+        // Resolve BEFORE any claim so an unknown pluginId rejects the launch
+        // with 400 while nothing is held; the resolved refs are the run's
+        // permanent snapshot (immune to later registry deletes).
+        List<PluginRef> plugins = resolvePlugins(request.pluginIds());
         boolean ignoredFleetSize = !request.fleetAllocation().isEmpty() && request.fleetSize() > 0;
 
         int totalRequested = allocation.isEmpty()
@@ -709,7 +721,8 @@ public class RunService {
                 now, null, null,
                 request.isSaveResults(),
                 List.of(),
-                metricsGroupOf(request.application()));
+                metricsGroupOf(request.application()),
+                plugins);
         if (existingRunId == null) {
             runs.insertRun(run);
         }
@@ -752,7 +765,7 @@ public class RunService {
                 new RunEventPayloads.RunStart(run.application(), allocView, totalRequested, granted),
                 granted >= totalRequested ? "ok" : "partial");
 
-        return new StartTransactionResult(runId, initialMembers, stateReason);
+        return new StartTransactionResult(runId, initialMembers, stateReason, plugins);
     }
 
     /**
@@ -1307,6 +1320,31 @@ public class RunService {
         }
     }
 
+    /** Resolves pluginIds against the registry into launch snapshots; unknown ids → 400. */
+    private List<PluginRef> resolvePlugins(List<String> pluginIds) {
+        if (pluginIds == null || pluginIds.isEmpty()) {
+            return List.of();
+        }
+        List<PluginRef> out = new ArrayList<>(pluginIds.size());
+        List<String> unknown = new ArrayList<>();
+        for (String id : new LinkedHashSet<>(pluginIds)) {
+            pluginRepo.findById(id).ifPresentOrElse(
+                    p -> out.add(PluginRef.of(p)),
+                    () -> unknown.add(id));
+        }
+        if (!unknown.isEmpty()) {
+            throw new IllegalArgumentException("unknown pluginId(s): " + String.join(", ", unknown));
+        }
+        return List.copyOf(out);
+    }
+
+    /** The fan-out body's plugin entries — blobId + fileName only (what the worker stages by). */
+    static List<Map<String, String>> pluginWireRefs(List<PluginRef> plugins) {
+        return plugins.stream()
+                .map(p -> Map.of("blobId", p.blobId(), "fileName", p.fileName()))
+                .toList();
+    }
+
     private static void validate(StartRunRequest request) {
         if (request.testPlanBlobId() == null || request.testPlanBlobId().isBlank()) {
             throw new IllegalArgumentException("testPlanBlobId is required");
@@ -1517,7 +1555,7 @@ public class RunService {
     // ── internals ───────────────────────────────────────────────────────
 
     private record StartTransactionResult(String runId, List<RunFleetMember> members,
-                                          String stateReason) {}
+                                          String stateReason, List<PluginRef> plugins) {}
 
     /** MID-TEST-SCALING Phase A — return shape of {@link #openMembersInExistingRun}. */
     private record ScaleUpTransactionResult(List<RunFleetMember> members, String stateReason) {}
@@ -1541,7 +1579,8 @@ public class RunService {
 
     private Map<String, FanoutOutcome> fanOut(String runId, List<RunFleetMember> members,
                                               String testPlanBlobId, String dataFilesBlobId,
-                                              String application, boolean saveResults) {
+                                              String application, boolean saveResults,
+                                              List<PluginRef> plugins) {
         // Metrics routing: every worker POSTs straight to the metrics-consumer
         // (its METRICS_INGEST_URL env) and appends the run's application group
         // as ?groupId= — the consumer routes the rows to <GROUP>_METRICS. Every
@@ -1572,6 +1611,11 @@ public class RunService {
             body.put("testPlanBlobId", testPlanBlobId);
             if (dataFilesBlobId != null) {
                 body.put("dataFilesBlobId", dataFilesBlobId);
+            }
+            // UX-DYNAMICS T3 — the run's plugin snapshot; the worker stages
+            // each blob under ${BASE_DIR}/plugins and adds it to search_paths.
+            if (plugins != null && !plugins.isEmpty()) {
+                body.put("plugins", pluginWireRefs(plugins));
             }
             // Only include joinedAtSecond on
             // scale-up members (it's NULL for original-fleet rows;

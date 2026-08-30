@@ -37,13 +37,31 @@ public record Run(
          * through this — not through the application's current group, which an
          * operator may change later. Null on legacy rows (then the app's group).
          */
-        String metricsGroupId) {
+        String metricsGroupId,
+        /**
+         * UX-DYNAMICS T3 — the launch-time plugin snapshot ({@code
+         * ORCH_RUN.PLUGINS}). Scale-up joiners fan out from this list, so a
+         * registry delete never changes what a running fleet stages.
+         */
+        List<PluginRef> plugins) {
+
+    public Run {
+        plugins = plugins == null ? List.of() : List.copyOf(plugins);
+    }
+
+    /** Pre-T3 callers (tests, legacy paths): no plugin snapshot. */
+    public Run(String runId, String originRegion, String testPlanBlobId, String dataFilesBlobId, String application,
+               String initiatedBy, RunState state, String stateReason, Instant createdAt, Instant startedAt,
+               Instant completedAt, boolean saveResults, List<RunFleetMember> fleetMembers, String metricsGroupId) {
+        this(runId, originRegion, testPlanBlobId, dataFilesBlobId, application, initiatedBy, state, stateReason,
+                createdAt, startedAt, completedAt, saveResults, fleetMembers, metricsGroupId, List.of());
+    }
 
     /** Without a recorded group (legacy rows, tests): the readers fall back to the application's group. */
     public Run(String runId, String originRegion, String testPlanBlobId, String dataFilesBlobId, String application,
                String initiatedBy, RunState state, String stateReason, Instant createdAt, Instant startedAt,
                Instant completedAt, boolean saveResults, List<RunFleetMember> fleetMembers) {
         this(runId, originRegion, testPlanBlobId, dataFilesBlobId, application, initiatedBy, state, stateReason,
-                createdAt, startedAt, completedAt, saveResults, fleetMembers, null);
+                createdAt, startedAt, completedAt, saveResults, fleetMembers, null, List.of());
     }
 }

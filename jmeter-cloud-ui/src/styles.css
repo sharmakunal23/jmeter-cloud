@@ -3106,6 +3106,27 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
   font-size: 0.82rem;
 }
 
+/* Run-plugins selector + plugin chips (UX-DYNAMICS T3). */
+.formField__labelRow {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.runPlugins__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.chip__remove {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0 0 0 0.3rem;
+}
+
 /* ── ScheduleBuilder (Automation create dialogs) ─────────────────── */
 .scheduleBuilder {
   display: flex;

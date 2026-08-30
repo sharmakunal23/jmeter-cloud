@@ -114,6 +114,9 @@ public class TestRunManager implements TestRunGate {
      */
     private final com.perf.orchestrator.storage.ArtifactSource artifactSource;
 
+    /** UX-DYNAMICS T3 — stages run-scoped plugin jars under {@code ${PLUGINS_DIR}}. */
+    private final PluginStager pluginStager;
+
     public TestRunManager(OrchestratorConfig defaults,
                           ArtifactStager stager,
                           CurrentRun currentRun,
@@ -171,6 +174,7 @@ public class TestRunManager implements TestRunGate {
         // stateless; the port number is fixed at construction (matches
         // the launch-time -Jjmeterengine.nongui.port flag).
         this.shutdownPortClient = new JmeterShutdownPortClient(defaults.getJmeterShutdownPort());
+        this.pluginStager = new PluginStager(defaults);
 
         recoverFromCrashIfNeeded();
     }
@@ -293,6 +297,17 @@ public class TestRunManager implements TestRunGate {
                 throw new StartRejection("ARTIFACT_FETCH_FAILED", 502,
                         "Could not fetch dataFiles blob "
                         + request.dataFilesBlobId() + ": " + io.getMessage());
+            }
+        }
+        // UX-DYNAMICS T3 — stage the run's library plugin jars (content-
+        // addressed: cached blobs are never re-downloaded). A malformed
+        // bundle throws ArtifactValidationException → 400, like dataFiles.
+        if (!request.plugins().isEmpty()) {
+            try {
+                pluginStager.stage(artifactSource, runId, request.plugins());
+            } catch (IOException io) {
+                throw new StartRejection("ARTIFACT_FETCH_FAILED", 502,
+                        "Could not fetch plugin jar(s): " + io.getMessage());
             }
         }
     }
@@ -709,6 +724,13 @@ public class TestRunManager implements TestRunGate {
         // sink is DOCUMENT_SERVICE, omitting this key made from(env) throw and
         // strand the run at PREPARING.
         env.put("DOCUMENT_SERVICE_URL", defaults.getDocumentServiceUrl());
+        // UX-DYNAMICS T3 — plugin staging knobs. The per-run config is
+        // rebuilt from this hand-written map; anything not copied here is
+        // silently lost for the run.
+        env.put("PLUGINS_DIR",               defaults.getPluginsDir());
+        env.put("MAX_PLUGIN_SIZE_MB",        Integer.toString(defaults.getMaxPluginSizeMb()));
+        env.put("PLUGINS_CACHE_MAX_ENTRIES", Integer.toString(defaults.getPluginsCacheMaxEntries()));
+        env.put("PLUGINS_CACHE_MAX_BYTES",   Long.toString(defaults.getPluginsCacheMaxBytes()));
         // Null/missing → 0 (original-fleet);
         // non-null → propagated onto every WorkerMetricBatch so the
         // consumer can compute "live members at second X" rollups.
@@ -783,6 +805,17 @@ public class TestRunManager implements TestRunGate {
         // stop mechanism is OS signals (StopTestNow-equivalent), which
         // truncates the current iteration's samplers.
         command.add("-Jjmeterengine.nongui.port=" + perRun.getJmeterShutdownPort());
+        // UX-DYNAMICS T3 — run-scoped library plugin jars ride search_paths:
+        // JMeter adds those jars to its classloader AND scans them for
+        // components, so the one flag covers a plugin and its bundled
+        // dependency jars (no user.classpath — that would double-add).
+        // Placed before properties/jmeterArgs on purpose: a later operator-
+        // supplied -Jsearch_paths wins and disables the library jars for
+        // that run.
+        List<String> pluginJars = pluginStager.resolveJars(request.plugins());
+        if (!pluginJars.isEmpty()) {
+            command.add("-Jsearch_paths=" + String.join(";", pluginJars));
+        }
         // Track G (Step 31) — structured per-node properties forwarded
         // as -JKEY=VAL args. Validation in StartTestRequest's compact
         // constructor guarantees the keys/values are shell-safe by the

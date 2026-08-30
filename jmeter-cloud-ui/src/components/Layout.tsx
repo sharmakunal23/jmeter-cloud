@@ -36,6 +36,7 @@ export function Layout() {
           <NavLink to="/applications">Applications</NavLink>
           {dynamicScalingEnabled && <NavLink to="/capacity">Capacity</NavLink>}
           <NavLink to="/documents">Documents</NavLink>
+          <NavLink to="/plugins">Plugins</NavLink>
           <NavLink to="/templates">Templates</NavLink>
           <NavLink to="/automation">Automation</NavLink>
         </nav>

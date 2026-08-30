@@ -16,9 +16,10 @@ import java.util.Map;
  * byte-for-byte the run a click would have produced. Unknown fields are
  * ignored so the template schema can grow without breaking the scheduler.
  *
- * <p>{@code labelFilter} is the comma-separated form the UI stores; the
- * scheduler splits it into {@code StartRunRequest.labelFilter}. {@code v} is
- * the template schema version (forward-compat only — not used yet).
+ * <p>{@code v} is the template schema version: v2 (UX-DYNAMICS T3) added
+ * {@code pluginIds} and dropped the dead {@code labelFilter} — v1 bodies
+ * deserialize fine because the reader ignores unknown fields and defaults
+ * the missing ones.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record TemplateBody(
@@ -28,12 +29,13 @@ public record TemplateBody(
         String dataFilesBlobId,
         List<FleetAllocationEntry> fleetAllocation,
         Map<String, String> globalProperties,
-        String labelFilter,
+        List<String> pluginIds,
         Boolean saveResults,
         String initiatedBy) {
 
     public TemplateBody {
         fleetAllocation = fleetAllocation == null ? List.of() : List.copyOf(fleetAllocation);
+        pluginIds       = pluginIds       == null ? List.of() : List.copyOf(pluginIds);
     }
 
     /** Null-safe — a template with no explicit flag does not save results. */

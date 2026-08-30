@@ -3,6 +3,7 @@ package com.perf.globalorchestrator.repo;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.perf.globalorchestrator.domain.MemberState;
+import com.perf.globalorchestrator.domain.PluginRef;
 import com.perf.globalorchestrator.domain.Run;
 import com.perf.globalorchestrator.domain.RunFleetMember;
 import com.perf.globalorchestrator.domain.RunState;
@@ -31,16 +32,20 @@ public class RunRepository {
 
     private static final TypeReference<Map<String, String>> PROPERTIES_TYPE =
             new TypeReference<>() { };
+    private static final TypeReference<List<PluginRef>> PLUGINS_TYPE =
+            new TypeReference<>() { };
 
     private final JdbcTemplate jdbc;
     private final ObjectMapper json;
     private final RowMapper<RunFleetMember> memberRowMapper;
+    private final RowMapper<Run> runRowMapperNoMembers;
 
     public RunRepository(@Qualifier("runStateJdbcTemplate") JdbcTemplate jdbc,
                          ObjectMapper json) {
         this.jdbc = jdbc;
         this.json = json;
         this.memberRowMapper = buildMemberRowMapper(json);
+        this.runRowMapperNoMembers = buildRunRowMapper(json);
     }
 
     private static RowMapper<RunFleetMember> buildMemberRowMapper(ObjectMapper json) {
@@ -108,15 +113,24 @@ public class RunRepository {
     }
 
     public void insertRun(Run run) {
+        // plugins → the launch snapshot CLOB; '[]' when the run selected none
+        // (the column is NOT NULL and scale-up re-reads it verbatim).
+        String pluginsJson;
+        try {
+            pluginsJson = json.writeValueAsString(run.plugins() == null ? List.of() : run.plugins());
+        } catch (Exception e) {
+            throw new IllegalStateException("failed to serialise run plugins", e);
+        }
         jdbc.update(
                 "INSERT INTO ORCH_RUN "
                 + "(RUN_ID,ORIGIN_REGION,TEST_PLAN_BLOB_ID,DATA_FILES_BLOB_ID,"
-                + " APPLICATION,INITIATED_BY,STATE,CREATED_AT,SAVE_RESULTS,METRICS_GROUP_ID) "
-                + "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                + " APPLICATION,INITIATED_BY,STATE,CREATED_AT,SAVE_RESULTS,METRICS_GROUP_ID,PLUGINS) "
+                + "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 run.runId(), run.originRegion(), run.testPlanBlobId(),
                 run.dataFilesBlobId(), run.application(),
                 OracleBind.text(run.initiatedBy(), OracleBind.NAME_CHARS), run.state().name(),
-                OracleBind.ts(run.createdAt()), run.saveResults(), run.metricsGroupId());
+                OracleBind.ts(run.createdAt()), run.saveResults(), run.metricsGroupId(),
+                OracleBind.clob(pluginsJson));
     }
 
     public void insertFleetMember(RunFleetMember m) {
@@ -412,7 +426,7 @@ public class RunRepository {
         try {
             Run run = jdbc.queryForObject(
                     "SELECT * FROM ORCH_RUN WHERE RUN_ID=?",
-                    RUN_ROW_MAPPER_NO_MEMBERS, runId);
+                    runRowMapperNoMembers, runId);
             return Optional.of(withMembers(run, findMembers(runId)));
         } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
@@ -511,7 +525,7 @@ public class RunRepository {
         pageArgs[args.size()]     = c.offset();
         pageArgs[args.size() + 1] = c.limit();
 
-        List<Run> bare = jdbc.query(sql, RUN_ROW_MAPPER_NO_MEMBERS, pageArgs);
+        List<Run> bare = jdbc.query(sql, runRowMapperNoMembers, pageArgs);
         List<Run> hydrated = new ArrayList<>(bare.size());
         for (Run r : bare) {
             hydrated.add(withMembers(r, findMembers(r.runId())));
@@ -613,21 +627,39 @@ public class RunRepository {
     /** Page result for {@link #listRuns(ListRunsCriteria)} — runs + total count. */
     public record ListRunsPage(List<Run> runs, long total) {}
 
-    private static final RowMapper<Run> RUN_ROW_MAPPER_NO_MEMBERS = (rs, n) -> new Run(
-            rs.getString("RUN_ID"),
-            rs.getString("ORIGIN_REGION"),
-            rs.getString("TEST_PLAN_BLOB_ID"),
-            rs.getString("DATA_FILES_BLOB_ID"),
-            rs.getString("APPLICATION"),
-            rs.getString("INITIATED_BY"),
-            RunState.valueOf(rs.getString("STATE")),
-            rs.getString("STATE_REASON"),
-            instant(rs, "CREATED_AT"),
-            instant(rs, "STARTED_AT"),
-            instant(rs, "COMPLETED_AT"),
-            rs.getBoolean("SAVE_RESULTS"),
-            null,
-            rs.getString("METRICS_GROUP_ID"));
+    private static RowMapper<Run> buildRunRowMapper(ObjectMapper json) {
+        return (rs, n) -> {
+            // PLUGINS JSON → the launch snapshot; [] when absent (a SELECT list
+            // without the column, or a legacy row) so readers never see null.
+            List<PluginRef> plugins = List.of();
+            if (hasColumn(rs, "PLUGINS")) {
+                String raw = OracleBind.json(rs, "PLUGINS");
+                if (raw != null && !raw.isBlank()) {
+                    try {
+                        plugins = json.readValue(raw, PLUGINS_TYPE);
+                    } catch (Exception e) {
+                        throw new SQLException("failed to deserialise run.plugins", e);
+                    }
+                }
+            }
+            return new Run(
+                    rs.getString("RUN_ID"),
+                    rs.getString("ORIGIN_REGION"),
+                    rs.getString("TEST_PLAN_BLOB_ID"),
+                    rs.getString("DATA_FILES_BLOB_ID"),
+                    rs.getString("APPLICATION"),
+                    rs.getString("INITIATED_BY"),
+                    RunState.valueOf(rs.getString("STATE")),
+                    rs.getString("STATE_REASON"),
+                    instant(rs, "CREATED_AT"),
+                    instant(rs, "STARTED_AT"),
+                    instant(rs, "COMPLETED_AT"),
+                    rs.getBoolean("SAVE_RESULTS"),
+                    null,
+                    rs.getString("METRICS_GROUP_ID"),
+                    plugins);
+        };
+    }
 
     private static Instant instant(ResultSet rs, String col) throws SQLException {
         return OracleBind.instant(rs, col);
@@ -638,6 +670,7 @@ public class RunRepository {
                 base.runId(), base.originRegion(), base.testPlanBlobId(),
                 base.dataFilesBlobId(), base.application(), base.initiatedBy(),
                 base.state(), base.stateReason(), base.createdAt(),
-                base.startedAt(), base.completedAt(), base.saveResults(), members, base.metricsGroupId());
+                base.startedAt(), base.completedAt(), base.saveResults(), members, base.metricsGroupId(),
+                base.plugins());
     }
 }

@@ -127,6 +127,54 @@ public class DocumentServiceClient {
         }
     }
 
+    /**
+     * The slice of a blob's server-side metadata the plugin registry needs —
+     * sha256 and size are document-service's own computation at upload time,
+     * so registration never trusts caller-supplied hashes.
+     */
+    public record BlobMetadataView(String blobId, long sizeBytes, String sha256, String name, String type) { }
+
+    /**
+     * Fetches {@code GET /api/v1/blob/{blobId}/metadata}. Empty on 404;
+     * {@link BlobAccessException} when document-service is unreachable or
+     * answers any other non-2xx.
+     */
+    public java.util.Optional<BlobMetadataView> fetchBlobMetadata(String blobId) {
+        URI target = URI.create(baseUrl + "/api/v1/blob/"
+                + URLEncoder.encode(blobId, StandardCharsets.UTF_8) + "/metadata");
+        HttpResponse<String> resp;
+        try {
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(target)
+                    .timeout(REQUEST_TIMEOUT)
+                    .header("Accept", "application/json")
+                    .GET()
+                    .build();
+            resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+        } catch (Exception e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            throw new BlobAccessException("document-service GET " + target + " failed: " + e);
+        }
+        if (resp.statusCode() == 404) {
+            return java.util.Optional.empty();
+        }
+        if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
+            throw new BlobAccessException(
+                    "document-service returned " + resp.statusCode() + " for blob metadata " + blobId);
+        }
+        try {
+            JsonNode n = mapper.readTree(resp.body());
+            return java.util.Optional.of(new BlobMetadataView(
+                    n.path("blobId").asText(blobId),
+                    n.path("sizeBytes").asLong(0),
+                    n.path("sha256").asText(null),
+                    n.path("name").asText(null),
+                    n.path("type").asText(null)));
+        } catch (Exception e) {
+            throw new BlobAccessException("blob metadata " + blobId + " is not valid JSON: " + e.getMessage());
+        }
+    }
+
     // ── HARD-DELETE / purge ────────────────────────────────────────────
 
     /** Page size for the blob listing scan; mirrors BlobController's cap. */

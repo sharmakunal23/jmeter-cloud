@@ -13,6 +13,7 @@ import { DocumentsDetailPage } from "./pages/DocumentsDetailPage";
 import { HomePage } from "./pages/HomePage";
 import { NewRunPage } from "./pages/NewRunPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
+import { PluginsPage } from "./pages/PluginsPage";
 import { RunDetailPage } from "./pages/RunDetailPage";
 import { TemplatesListPage } from "./pages/TemplatesListPage";
 import { TemplatesDetailPage } from "./pages/TemplatesDetailPage";
@@ -80,6 +81,10 @@ export function App() {
           <Route path="documents"               element={<DocumentsListPage />} />
           <Route path="documents/:appName"       element={<DocumentsDetailPage />} />
           <Route path="documents/:appName/:type" element={<DocumentsDetailPage />} />
+
+          {/* UX-DYNAMICS T3 — the global plugin library. Flat page (plugins
+              are application-agnostic); selected per run in the launcher. */}
+          <Route path="plugins" element={<PluginsPage />} />
 
           {/* Phase IA-Templates (2026-05-13) — list-then-drill-in IA
               matching `/capacity` and `/documents`. /templates shows

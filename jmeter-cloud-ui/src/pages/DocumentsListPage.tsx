@@ -81,15 +81,15 @@ export function DocumentsListPage() {
         rowsByApp.set(app.name, {
           app,
           total: 0,
-          byType: { testPlan: 0, dataFiles: 0, result: 0, other: 0, template: 0 },
+          byType: { testPlan: 0, dataFiles: 0, result: 0, other: 0, template: 0, plugin: 0 },
         });
       }
       const totalsByType: Record<BlobType, number> = {
-        testPlan: 0, dataFiles: 0, result: 0, other: 0, template: 0,
+        testPlan: 0, dataFiles: 0, result: 0, other: 0, template: 0, plugin: 0,
       };
       for (const blob of listing.items) {
         if (!blob.application) continue;            // skip legacy untagged
-        if (blob.type === "template") continue;     // hidden from Documents tab by convention
+        if (blob.type === "template" || blob.type === "plugin") continue; // hidden from Documents by convention (managed surfaces own them)
         const row = rowsByApp.get(blob.application);
         if (!row) continue;                          // tagged with an app no longer in registry
         const t = (blob.type as BlobType) || "other";
