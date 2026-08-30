@@ -8,6 +8,8 @@ import { MetricsTabPanel } from "../components/MetricsTabPanel";
 import { StreamTabPanel } from "../components/StreamTabPanel";
 import { RunEventsTimeline } from "../components/RunEventsTimeline";
 import { ScaleUpRunModal } from "../components/ScaleUpRunModal";
+import { UpdateRunPropertiesDialog } from "../components/UpdateRunPropertiesDialog";
+import { ToastView, useToast } from "../components/Toast";
 import { DrainDialog, type DrainMode } from "../components/DrainDialog";
 import { AbortRunDialog } from "../components/AbortRunDialog";
 import { applicationsApi, type Application } from "../api/applications";
@@ -76,6 +78,9 @@ export function RunDetailPage() {
   const { runId = "" } = useParams<{ runId: string }>();
   const [state, setState] = useState<DetailState>({ status: "loading" });
   const [scaleUpOpen, setScaleUpOpen] = useState(false);
+  // UX-DYNAMICS T5 — runtime property push to running workers.
+  const [updatePropsOpen, setUpdatePropsOpen] = useState(false);
+  const { toast, showToast, dismiss } = useToast();
   const [drainTarget, setDrainTarget] = useState<DrainTarget>(null);
   const [abortOpen, setAbortOpen] = useState(false);
   const [pageTab, setPageTab] = useState<PageTab>(readActiveTab);
@@ -341,6 +346,7 @@ export function RunDetailPage() {
             run={run}
             isTerminal={isTerminal}
             onAddWorkers={() => setScaleUpOpen(true)}
+            onUpdateProperties={() => setUpdatePropsOpen(true)}
             onDrainSingle={(workerId) =>
               setDrainTarget({ workerIds: [workerId], mode: "single" })}
             onDrainBulk={(workerIds) =>
@@ -392,6 +398,19 @@ export function RunDetailPage() {
           }}
         />
       )}
+
+      {updatePropsOpen && (
+        <UpdateRunPropertiesDialog
+          run={run}
+          onClose={() => setUpdatePropsOpen(false)}
+          onSuccess={(n) => {
+            setUpdatePropsOpen(false);
+            showToast({ variant: "ok", text: `Properties sent to ${n} worker${n === 1 ? "" : "s"}` });
+          }}
+        />
+      )}
+
+      <ToastView toast={toast} onDismiss={dismiss} />
     </section>
   );
 }
@@ -401,11 +420,12 @@ export function RunDetailPage() {
 type StateFilter = "all" | "active" | "terminal";
 
 function FleetTab({
-  run, isTerminal, onAddWorkers, onDrainSingle, onDrainBulk, onStopTest,
+  run, isTerminal, onAddWorkers, onUpdateProperties, onDrainSingle, onDrainBulk, onStopTest,
 }: {
   run: Run;
   isTerminal: boolean;
   onAddWorkers: () => void;
+  onUpdateProperties: () => void;
   onDrainSingle: (workerId: string) => void;
   onDrainBulk: (workerIds: string[]) => void;
   onStopTest: (workerIds: string[]) => void;
@@ -499,6 +519,15 @@ function FleetTab({
             onClick={onAddWorkers}
           >
             + Add workers
+          </button>
+        )}
+        {run.state === "RUNNING" && liveWorkerIds.length > 0 && (
+          <button
+            type="button"
+            className="btn"
+            onClick={onUpdateProperties}
+          >
+            Update properties
           </button>
         )}
         {liveWorkerIds.length > 0 && (

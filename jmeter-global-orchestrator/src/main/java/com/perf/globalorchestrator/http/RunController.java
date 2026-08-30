@@ -129,6 +129,21 @@ public class RunController {
     }
 
     /**
+     * UX-DYNAMICS T5 — pushes runtime JMeter property values to the selected
+     * (default: all) ACCEPTED/RUNNING workers of a RUNNING run in one shot,
+     * via each worker's BeanShell server. Only plan values read through
+     * {@code ${__P(name)}} observe the update, at their next evaluation.
+     * A partial failure is a 200 — the per-worker rows carry the truth.
+     */
+    @PostMapping("/runs/{runId:" + Ulid.PATTERN + "}/properties")
+    public ResponseEntity<UpdateRunPropertiesResponse> updateRunProperties(
+            @PathVariable String runId,
+            @RequestBody UpdateRunPropertiesRequest request,
+            @RequestHeader(value = MdcEnrichmentFilter.HEADER_ACTOR, required = false) String actorHeader) {
+        return ResponseEntity.ok(runs.updateRunProperties(runId, request, Actor.fromHeader(actorHeader)));
+    }
+
+    /**
      * Force-terminates a run (the run-abort / zombie-run cleanup primitive).
      * Unlike {@link #scaleDownRun}'s graceful drain, abort rolls the WHOLE run
      * to ABORTED, best-effort hard-kills each live worker
@@ -490,6 +505,14 @@ public class RunController {
     ResponseEntity<Map<String, Object>> handleNotFound(RunNotFoundException e) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
                 "code",    "RUN_NOT_FOUND",
+                "message", e.getMessage()));
+    }
+
+    @ExceptionHandler(RunService.RunPropertiesNotUpdatableException.class)
+    ResponseEntity<Map<String, Object>> handlePropertiesNotUpdatable(
+            RunService.RunPropertiesNotUpdatableException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                "code",    "RUN_NOT_RUNNING",
                 "message", e.getMessage()));
     }
 

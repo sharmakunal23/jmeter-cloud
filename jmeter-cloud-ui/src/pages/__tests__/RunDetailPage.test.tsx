@@ -216,3 +216,33 @@ describe("RunDetailPage — one tab row: Metrics first, Console + Logs last and 
     expect(screen.getByRole("tab", { name: /^Metrics$/ })).toHaveAttribute("aria-selected", "true");
   });
 });
+
+describe("RunDetailPage — Update properties gate (UX-DYNAMICS T5)", () => {
+  beforeEach(() => {
+    api.get.mockReset();
+    api.status.mockReset();
+  });
+
+  const liveMember = {
+    runId: "01J000RUN", workerId: "jmeter-poc-na-east-worker-1", region: "na-east",
+    state: "RUNNING", stateReason: null, fanoutStatusCode: 202, podBaseUrl: "http://w:8080",
+    createdAt: "2026-08-28T18:00:00Z", startedAt: null, completedAt: null, properties: {}, runsServed: 1,
+  };
+
+  it("a RUNNING run with live workers shows the button on the Worker Fleet tab", async () => {
+    api.get.mockResolvedValue(run("RUNNING", null, [liveMember]));
+    api.status.mockResolvedValue({ runId: "01J000RUN", state: "RUNNING", stateReason: null, members: [liveMember] });
+    renderPage();
+    fireEvent.click(await screen.findByRole("tab", { name: /Worker Fleet/i }));
+    expect(await screen.findByRole("button", { name: /^Update properties$/ })).toBeInTheDocument();
+  });
+
+  it("a terminal run has no Update properties button", async () => {
+    const doneMember = { ...liveMember, state: "COMPLETED", completedAt: "2026-08-28T18:10:00Z" };
+    api.get.mockResolvedValue(run("COMPLETED", null, [doneMember]));
+    api.status.mockResolvedValue({ runId: "01J000RUN", state: "COMPLETED", stateReason: null, members: [doneMember] });
+    renderPage();
+    fireEvent.click(await screen.findByRole("tab", { name: /Worker Fleet/i }));
+    expect(screen.queryByRole("button", { name: /^Update properties$/ })).toBeNull();
+  });
+});

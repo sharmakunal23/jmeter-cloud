@@ -24,6 +24,14 @@ public enum RunEventType {
     DRAIN_WORKER,
     /** A run was aborted (force-terminate via {@code POST /runs/{id}/abort}). */
     ABORT,
+    /**
+     * Runtime JMeter properties were pushed to one or more RUNNING workers
+     * via {@code POST /runs/{id}/properties} (UX-DYNAMICS T5). The payload
+     * records the targets, the key/value map (they are the same {@code -J}
+     * values the run page already displays — not secrets) and the ok/failed
+     * split.
+     */
+    PROPERTIES_UPDATED,
     /** A run was stopped (future endpoint). */
     STOP,
     /**

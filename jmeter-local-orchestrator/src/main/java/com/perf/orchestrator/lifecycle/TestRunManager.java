@@ -68,6 +68,8 @@ public class TestRunManager implements TestRunGate {
     private final Clock clock;
     /** MID-TEST-SCALING Phase B — sends Shutdown / StopTestNow to JMeter's TCP shutdown port. */
     private final JmeterShutdownPortClient shutdownPortClient;
+    /** Null when {@code BEANSHELL_PORT=0} — runtime property pushes disabled. */
+    private final BeanShellPropsClient beanShellPropsClient;
     /**
      * Re-pointed at each per-run log file
      * ({@code logs/{runId}/jmeter.log}) before launch and cleared on
@@ -174,6 +176,8 @@ public class TestRunManager implements TestRunGate {
         // stateless; the port number is fixed at construction (matches
         // the launch-time -Jjmeterengine.nongui.port flag).
         this.shutdownPortClient = new JmeterShutdownPortClient(defaults.getJmeterShutdownPort());
+        this.beanShellPropsClient = defaults.getBeanshellPort() > 0
+                ? new BeanShellPropsClient(defaults.getBeanshellPort()) : null;
         this.pluginStager = new PluginStager(defaults);
 
         recoverFromCrashIfNeeded();
@@ -331,6 +335,20 @@ public class TestRunManager implements TestRunGate {
                         "Could not fetch plugin jar(s): " + io.getMessage());
             }
         }
+    }
+
+    /** Outcome of a runtime property push (UX-DYNAMICS T5). */
+    public enum PropsPushOutcome { DISABLED, SENT, UNREACHABLE }
+
+    /**
+     * Pushes JMeter properties into the RUNNING child via the BeanShell
+     * server. Only plan values read through {@code ${__P(name)}} observe the
+     * update, at their next evaluation — thread counts do not change.
+     */
+    public synchronized PropsPushOutcome pushProperties(java.util.Map<String, String> properties) {
+        if (beanShellPropsClient == null) return PropsPushOutcome.DISABLED;
+        return beanShellPropsClient.sendProperties(properties)
+                ? PropsPushOutcome.SENT : PropsPushOutcome.UNREACHABLE;
     }
 
     /** Graceful stop — SIGTERM, drain, then COMPLETED/ABORTED. Idempotent. */
@@ -749,6 +767,7 @@ public class TestRunManager implements TestRunGate {
         // rebuilt from this hand-written map; anything not copied here is
         // silently lost for the run.
         env.put("PLUGINS_DIR",               defaults.getPluginsDir());
+        env.put("BEANSHELL_PORT",            String.valueOf(defaults.getBeanshellPort()));
         env.put("MAX_PLUGIN_SIZE_MB",        Integer.toString(defaults.getMaxPluginSizeMb()));
         env.put("PLUGINS_CACHE_MAX_ENTRIES", Integer.toString(defaults.getPluginsCacheMaxEntries()));
         env.put("PLUGINS_CACHE_MAX_BYTES",   Long.toString(defaults.getPluginsCacheMaxBytes()));
@@ -826,6 +845,21 @@ public class TestRunManager implements TestRunGate {
         // stop mechanism is OS signals (StopTestNow-equivalent), which
         // truncates the current iteration's samplers.
         command.add("-Jjmeterengine.nongui.port=" + perRun.getJmeterShutdownPort());
+        // UX-DYNAMICS T5 — the BeanShell server accepts runtime props.put(...)
+        // pushes (POST /api/v1/test/properties). The ABSOLUTE startup-file path
+        // is required: the child's cwd is BASE_DIR, so the stock relative
+        // default (../extras/startup.bsh) would not resolve. Missing file →
+        // WARN + skip both flags (a slimmed image must not break launches).
+        if (perRun.getBeanshellPort() > 0) {
+            java.nio.file.Path startup =
+                    java.nio.file.Path.of(perRun.getJmeterHome(), "extras", "startup.bsh");
+            if (java.nio.file.Files.exists(startup)) {
+                command.add("-Jbeanshell.server.port=" + perRun.getBeanshellPort());
+                command.add("-Jbeanshell.server.file=" + startup);
+            } else {
+                LOG.warn("BeanShell startup file {} missing — runtime property updates disabled for this run", startup);
+            }
+        }
         // UX-DYNAMICS T3 — run-scoped library plugin jars ride search_paths:
         // JMeter adds those jars to its classloader AND scans them for
         // components, so the one flag covers a plugin and its bundled

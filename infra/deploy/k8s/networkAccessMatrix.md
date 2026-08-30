@@ -57,7 +57,7 @@ principal, at deploy time only.
 | | each regional | 8088 / 443 FQDN | control plane of every data center |
 | | document-service | 8084 / 443 FQDN | metadata, archive, purge, readiness probe |
 | | metrics-consumer | 8083 / 443 FQDN | `/actuator/health` probe only |
-| | declared workers (direct regions) | 8080 | fan-out, drain, abort, logs |
+| | declared workers (direct regions) | 8080 | fan-out, drain, abort, properties, logs |
 | | `api.anthropic.com` | 443 | AI run analysis (only when a key is set) |
 | | **the applications' health endpoints** (operator-configured URLs) | any | `ApplicationHealthPoller` — every minute |
 | `jmeter-metrics-consumer` | Oracle | 1521 | the only egress |
@@ -70,6 +70,13 @@ principal, at deploy time only.
 | `document-service` | nothing | — | (an S3 endpoint only under the `-Pcloud` S3 backend) |
 | Flyway Job | Oracle | 1521 | migrations |
 | everything | DNS | 53 | |
+
+**Worker-pod-internal only (UX-DYNAMICS T5):** the JMeter child's BeanShell
+server (`BEANSHELL_PORT`, default 4446, plus bsh's HTTP twin on 4447) binds all
+interfaces but is never a Service port — the worker's NetworkPolicy must NOT
+admit it (only 8080). Its only caller is the worker's own orchestrator on
+`127.0.0.1`, relaying `POST /api/v1/test/properties` as `props.put` statements
+(never scripts). Opt out per deployment with `BEANSHELL_PORT=0`.
 
 ## What is NOT in the picture (and must stay out)
 

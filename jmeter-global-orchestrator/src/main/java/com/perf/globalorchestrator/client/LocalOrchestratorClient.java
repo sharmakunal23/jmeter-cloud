@@ -102,6 +102,36 @@ public class LocalOrchestratorClient {
     }
 
     /**
+     * Pushes runtime JMeter properties to a RUNNING worker:
+     * {@code POST /api/v1/test/properties} (UX-DYNAMICS T5). Only plan values
+     * read through {@code ${__P(name)}} observe the update.
+     */
+    public UpdatePropertiesResult updateTestProperties(String runId, WorkerRef worker,
+                                                       java.util.Map<String, String> properties) {
+        URI target = URI.create(base(worker) + "/api/v1/test/properties");
+        try {
+            String payload = mapper.writeValueAsString(java.util.Map.of("properties", properties));
+            HttpRequest.Builder builder = HttpRequest.newBuilder()
+                    .uri(target)
+                    .timeout(Duration.ofSeconds(10))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(payload));
+            addRunIdHeader(builder, runId);
+            HttpResponse<String> resp = http.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+            return new UpdatePropertiesResult(resp.statusCode(), resp.body(), resp.statusCode() == 200);
+        } catch (Exception e) {
+            ErrorContext.logWarn(LOG,
+                    "updateTestProperties runId=" + runId + " worker=" + worker.podName(),
+                    "updateTestProperties call to " + target + " failed",
+                    e);
+            return new UpdatePropertiesResult(0, e.toString(), false);
+        }
+    }
+
+    /** Result of a {@code POST /api/v1/test/properties} fan-out call. */
+    public record UpdatePropertiesResult(int statusCode, String body, boolean ok) {}
+
+    /**
      * Fires {@code POST /api/v1/test/abort} on the pod's local-orchestrator —
      * the hard kill (SIGKILL → ABORTED), as opposed to {@link #drainTest}'s
      * graceful shutdown. Used by the run-abort endpoint to force a live worker

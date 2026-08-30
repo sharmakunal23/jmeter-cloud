@@ -120,9 +120,7 @@ public record StartTestRequest(
          */
         Boolean refreshDataFiles) {
 
-    private static final Pattern KEY_PATTERN  = Pattern.compile("[A-Za-z_][A-Za-z0-9_.]{0,63}");
     private static final Pattern GROUP_ID_PATTERN = Pattern.compile("[a-z][a-z0-9_]{0,29}");
-    private static final int MAX_VALUE_LENGTH = 256;
 
     public StartTestRequest {
         if (metricsGroupId != null && !GROUP_ID_PATTERN.matcher(metricsGroupId).matches()) {
@@ -135,49 +133,13 @@ public record StartTestRequest(
         jmeterArgs    = jmeterArgs    == null ? List.of() : List.copyOf(jmeterArgs);
         jmeterJvmArgs = jmeterJvmArgs == null ? List.of() : List.copyOf(jmeterJvmArgs);
         properties    = properties    == null ? Map.of()
-                : Map.copyOf(validateProperties(properties));
+                : Map.copyOf(JmeterProperties.validate(properties));
         // Each PluginSpec validates itself in its own compact constructor.
         plugins       = plugins       == null ? List.of() : List.copyOf(plugins);
     }
 
-    /**
-     * Enforces the {@code properties} contract:
-     * <ul>
-     *   <li>Keys match {@code [A-Za-z_][A-Za-z0-9_.]{0,63}} — no shell
-     *       metacharacters, no path separators, no leading digit.</li>
-     *   <li>Values ≤ 256 chars and contain no control characters.</li>
-     * </ul>
-     * Returns a defensively-ordered copy (LinkedHashMap) so the
-     * resulting command line is reproducible.
-     */
-    private static Map<String, String> validateProperties(Map<String, String> raw) {
-        LinkedHashMap<String, String> out = new LinkedHashMap<>(raw.size());
-        raw.forEach((k, v) -> {
-            if (k == null || !KEY_PATTERN.matcher(k).matches()) {
-                throw new IllegalArgumentException(
-                        "properties key '" + k + "' is invalid — must match "
-                        + "[A-Za-z_][A-Za-z0-9_.]{0,63}");
-            }
-            if (v == null) {
-                throw new IllegalArgumentException(
-                        "properties value for key '" + k + "' is null");
-            }
-            if (v.length() > MAX_VALUE_LENGTH) {
-                throw new IllegalArgumentException(
-                        "properties value for '" + k + "' exceeds "
-                        + MAX_VALUE_LENGTH + " chars");
-            }
-            for (int i = 0; i < v.length(); i++) {
-                char c = v.charAt(i);
-                if (c < 0x20 || c == 0x7F) {
-                    throw new IllegalArgumentException(
-                            "properties value for '" + k + "' contains a control character");
-                }
-            }
-            out.put(k, v);
-        });
-        return out;
-    }
+    // The properties contract lives in {@link JmeterProperties} — shared with
+    // the runtime-update path (UX-DYNAMICS T5).
 
     /**
      * Parses {@link #scheduledStartAt} as an ISO-8601 instant.

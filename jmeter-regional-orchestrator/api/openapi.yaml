@@ -268,7 +268,8 @@ paths:
         description: |
           The worker path — several segments, though OpenAPI notation shows
           one placeholder — one of the allow-list: `actuator/health`,
-          `api/v1/test`, `api/v1/test/drain`, `api/v1/test/abort`, `api/v1/logs`.
+          `api/v1/test`, `api/v1/test/drain`, `api/v1/test/abort`,
+          `api/v1/test/properties`, `api/v1/logs`.
           `X-Actor` and `X-Run-Id` are forwarded so the worker's logs carry them.
           `api/v1/logs` has one extra behaviour: when the worker cannot answer
           (`502`/`504`), the kubelet's container log is returned instead as

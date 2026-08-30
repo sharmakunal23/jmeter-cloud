@@ -159,6 +159,7 @@ public final class OrchestratorConfig {
     private final int    jmeterOomScoreAdj;
     private final int    jmxPort;
     private final int    jmeterShutdownPort;
+    private final int    beanshellPort;
     private final int    jmeterDrainTimeoutSeconds;
     private final int    jmeterTerminationGraceSeconds;
     private final int    orchestratorShutdownGraceSeconds;
@@ -358,6 +359,7 @@ public final class OrchestratorConfig {
         // and control planes don't collide. Default 4445 matches JMeter's own.
         this.jmeterShutdownPort = parsePositiveInt(env,
                 "JMETER_SHUTDOWN_PORT", 4445);
+        this.beanshellPort             = parseNonNegativeInt(env, "BEANSHELL_PORT", 4446);
         // Default drain budget: 60s. After this, the lifecycle escalates the
         // drain to abort (SIGKILL) and the run ends ABORTED.
         this.jmeterDrainTimeoutSeconds = parsePositiveInt(env,
@@ -704,6 +706,7 @@ public final class OrchestratorConfig {
     public int    getJmeterOomScoreAdj()             { return jmeterOomScoreAdj; }
     public int    getJmxPort()                       { return jmxPort; }
     public int    getJmeterShutdownPort()            { return jmeterShutdownPort; }
+    public int    getBeanshellPort()                 { return beanshellPort; }
     public int    getJmeterDrainTimeoutSeconds()     { return jmeterDrainTimeoutSeconds; }
     public int    getJmeterTerminationGraceSeconds()    { return jmeterTerminationGraceSeconds; }
     public long   getJoinedAtSecond()                { return joinedAtSecond; }

@@ -245,6 +245,39 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
+  /api/v1/test/properties:
+    post:
+      tags: [test]
+      summary: Push runtime JMeter properties (UX-DYNAMICS T5)
+      description: |
+        Forwards the map into the RUNNING JMeter child via the BeanShell
+        server as `props.put("k","v")` statements — raw scripts are never
+        accepted. Only plan values read through `${__P(name)}` /
+        `${__property(name)}` observe the update, at their next evaluation —
+        thread counts and once-read config do not change. At most 50 entries;
+        per-entry rules match `properties` on `POST /api/v1/test`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [properties]
+              properties:
+                properties:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: JMeter property values to push.
+      responses:
+        "200":
+          description: Pushed — `applied` lists the keys sent; `runId` names the run.
+        "404":
+          description: NO_ACTIVE_RUN — no test is running.
+        "502":
+          description: BEANSHELL_UNREACHABLE — the server refused the push (JMeter may still be starting).
+        "503":
+          description: BEANSHELL_DISABLED — `BEANSHELL_PORT=0` on this worker.
+
   /api/v1/test/abort:
     post:
       tags: [test]

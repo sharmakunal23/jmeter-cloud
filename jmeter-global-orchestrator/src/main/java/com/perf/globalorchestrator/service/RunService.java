@@ -1788,6 +1788,123 @@ public class RunService {
      * the repository's {@code ON CONFLICT DO NOTHING} makes a same-id retry a
      * no-op (decision #10).
      */
+    // ── UX-DYNAMICS T5 — runtime property updates ───────────────────────
+
+    /** 409 RUN_NOT_RUNNING — properties can only be pushed into a RUNNING run. */
+    public static final class RunPropertiesNotUpdatableException extends RuntimeException {
+        public RunPropertiesNotUpdatableException(String runId, RunState state) {
+            super("run " + runId + " is " + state + " — properties can only be updated while RUNNING");
+        }
+    }
+
+    /** Audit payload for {@link RunEventType#PROPERTIES_UPDATED}. */
+    record PropertiesUpdatedPayload(List<String> workerIds, Map<String, String> properties,
+                                    int ok, int failed) {}
+
+    /**
+     * Pushes JMeter property values to the selected (default: all)
+     * ACCEPTED/RUNNING members of a RUNNING run in one shot — each worker
+     * forwards them into its JMeter child via the BeanShell server. Only plan
+     * values read through {@code ${__P(name)}} observe the update. Applied
+     * values are merged into each successful member's persisted snapshot so
+     * run detail and later template saves stay truthful.
+     */
+    public com.perf.globalorchestrator.http.UpdateRunPropertiesResponse updateRunProperties(
+            String runId,
+            com.perf.globalorchestrator.http.UpdateRunPropertiesRequest request,
+            Actor actor) {
+        Run run = runs.findByRunId(runId).orElseThrow(() -> new RunNotFoundException(runId));
+        if (run.state() != RunState.RUNNING) {
+            throw new RunPropertiesNotUpdatableException(runId, run.state());
+        }
+        Map<String, String> properties = validateRuntimeProperties(
+                request == null ? null : request.properties());
+        List<RunFleetMember> active = run.fleetMembers().stream()
+                .filter(m -> m.state() == MemberState.ACCEPTED || m.state() == MemberState.RUNNING)
+                .toList();
+        List<RunFleetMember> targets;
+        if (request.workerIds().isEmpty()) {
+            targets = active;
+        } else {
+            Map<String, RunFleetMember> byId = new LinkedHashMap<>();
+            for (RunFleetMember m : active) byId.put(m.workerId(), m);
+            targets = new java.util.ArrayList<>(request.workerIds().size());
+            for (String id : request.workerIds()) {
+                RunFleetMember m = byId.get(id);
+                if (m == null) {
+                    throw new IllegalArgumentException(
+                            "workerId '" + id + "' is not an ACCEPTED/RUNNING member of run " + runId);
+                }
+                targets.add(m);
+            }
+        }
+        if (targets.isEmpty()) {
+            throw new IllegalArgumentException("run " + runId + " has no active workers to update");
+        }
+        Map<String, Future<LocalOrchestratorClient.UpdatePropertiesResult>> futures = new LinkedHashMap<>();
+        for (RunFleetMember m : targets) {
+            futures.put(m.workerId(), fanoutPool.submit(
+                    () -> localClient.updateTestProperties(runId, WorkerRef.of(m), properties)));
+        }
+        List<com.perf.globalorchestrator.http.UpdateRunPropertiesResponse.WorkerResult> results =
+                new java.util.ArrayList<>(targets.size());
+        int ok = 0;
+        for (RunFleetMember m : targets) {
+            LocalOrchestratorClient.UpdatePropertiesResult r;
+            try {
+                r = futures.get(m.workerId()).get();
+            } catch (Exception e) {
+                r = new LocalOrchestratorClient.UpdatePropertiesResult(0, e.toString(), false);
+            }
+            if (r.ok()) {
+                ok++;
+                // Merge into the persisted snapshot — never replace it: the
+                // launch-time keys the push didn't touch must survive.
+                Map<String, String> merged = new LinkedHashMap<>(
+                        m.properties() == null ? Map.of() : m.properties());
+                merged.putAll(properties);
+                runs.updateMemberProperties(runId, m.workerId(), merged);
+                results.add(new com.perf.globalorchestrator.http.UpdateRunPropertiesResponse.WorkerResult(
+                        m.workerId(), true, r.statusCode(), null));
+            } else {
+                results.add(new com.perf.globalorchestrator.http.UpdateRunPropertiesResponse.WorkerResult(
+                        m.workerId(), false, r.statusCode(),
+                        r.body() == null || r.body().isBlank() ? "unreachable" : truncate(r.body(), 240)));
+            }
+        }
+        int failed = targets.size() - ok;
+        recordEvent(runId, RunEventType.PROPERTIES_UPDATED, actor,
+                new PropertiesUpdatedPayload(
+                        targets.stream().map(RunFleetMember::workerId).toList(), properties, ok, failed),
+                failed == 0 ? "ok" : (ok == 0 ? "failed" : "partial"));
+        return new com.perf.globalorchestrator.http.UpdateRunPropertiesResponse(
+                runId, targets.size(), results, List.copyOf(properties.keySet()));
+    }
+
+    private static final java.util.regex.Pattern RUNTIME_PROP_KEY =
+            java.util.regex.Pattern.compile("[A-Za-z_][A-Za-z0-9_.]{0,63}");
+
+    /** Mirrors the worker's property rules so a bad map fails here, before any RPC. */
+    private static Map<String, String> validateRuntimeProperties(Map<String, String> raw) {
+        if (raw == null || raw.isEmpty()) {
+            throw new IllegalArgumentException("properties is required and must be non-empty");
+        }
+        if (raw.size() > 50) {
+            throw new IllegalArgumentException("at most 50 properties per update");
+        }
+        Map<String, String> out = new LinkedHashMap<>(raw.size());
+        raw.forEach((k, v) -> {
+            if (k == null || !RUNTIME_PROP_KEY.matcher(k).matches()) {
+                throw new IllegalArgumentException("properties key '" + k + "' is invalid — must match [A-Za-z_][A-Za-z0-9_.]{0,63}");
+            }
+            if (v == null || v.length() > 256 || v.chars().anyMatch(c -> c < 0x20 || c == 0x7F)) {
+                throw new IllegalArgumentException("properties value for '" + k + "' is invalid (≤256 chars, no control characters)");
+            }
+            out.put(k, v);
+        });
+        return out;
+    }
+
     private void recordEvent(String runId, RunEventType type, Actor actor,
                              Object payloadRecord, String result) {
         audit.record(runId, type, actor, payloadRecord, result);

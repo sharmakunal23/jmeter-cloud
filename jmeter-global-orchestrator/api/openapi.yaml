@@ -560,6 +560,39 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
+  /api/v1/runs/{runId}/properties:
+    parameters:
+      - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    post:
+      tags: [runs]
+      summary: Push runtime JMeter properties to a RUNNING run's workers
+      description: |
+        UX-DYNAMICS T5 — pushes property values to the selected (default:
+        all) ACCEPTED/RUNNING members in one shot; each worker forwards them
+        into its JMeter child via the BeanShell server. Only plan values read
+        through `${__P(name)}` observe the update, at their next evaluation —
+        thread counts do not change. Applied values merge into each
+        successful member's persisted snapshot, so run detail and later
+        template saves stay truthful. A partial failure is a 200 — the
+        per-worker rows carry the truth.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateRunPropertiesRequest" }
+      responses:
+        "200":
+          description: Per-worker results (`ok` / `error`) plus the applied key set.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpdateRunPropertiesResponse" }
+        "400":
+          description: Bad property map, or a workerId that is not an ACCEPTED/RUNNING member.
+        "404":
+          description: RUN_NOT_FOUND.
+        "409":
+          description: RUN_NOT_RUNNING — properties can only be pushed while the run is RUNNING.
+
   /api/v1/runs/{runId}/abort:
     parameters:
       - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
@@ -2861,6 +2894,42 @@ components:
             False when document-service was unreachable and the blob cleanup was
             skipped — the DB purge still completed; orphaned result blobs remain
             for a future retention sweep.
+
+    UpdateRunPropertiesRequest:
+      type: object
+      required: [properties]
+      description: |
+        Body of `POST /api/v1/runs/{runId}/properties`. Omit `workerIds` to
+        target every ACCEPTED/RUNNING member; an id that is not an active
+        member rejects the whole request 400. Property rules mirror the
+        worker's: keys `[A-Za-z_][A-Za-z0-9_.]{0,63}`, values ≤ 256 chars,
+        no control characters, at most 50 entries.
+      properties:
+        workerIds:
+          type: array
+          items: { type: string }
+        properties:
+          type: object
+          additionalProperties: { type: string }
+
+    UpdateRunPropertiesResponse:
+      type: object
+      description: One result row per targeted worker, plus the applied key set.
+      properties:
+        runId: { type: string }
+        requested: { type: integer }
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              workerId: { type: string }
+              ok: { type: boolean }
+              statusCode: { type: integer }
+              error: { type: string, nullable: true }
+        applied:
+          type: array
+          items: { type: string }
 
     ScaleDownRunRequest:
       type: object

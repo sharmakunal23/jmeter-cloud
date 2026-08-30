@@ -45,6 +45,7 @@ public class WorkerRelay {
             "api/v1/test",
             "api/v1/test/drain",
             "api/v1/test/abort",
+            "api/v1/test/properties",
             "api/v1/logs");
 
     private final Function<String, String> baseUrlFor;

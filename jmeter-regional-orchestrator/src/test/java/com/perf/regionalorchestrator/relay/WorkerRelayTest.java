@@ -125,6 +125,7 @@ class WorkerRelayTest {
         WorkerRelay relay = relayTo(port);
         assertThat(relay.isAllowed("api/v1/test")).isTrue();
         assertThat(relay.isAllowed("api/v1/test/drain")).isTrue();
+        assertThat(relay.isAllowed("api/v1/test/properties")).isTrue();
         assertThat(relay.isAllowed("api/v1/test/abort")).isTrue();
         assertThat(relay.isAllowed("api/v1/logs")).isTrue();
         assertThat(relay.isAllowed("actuator/health")).isTrue();

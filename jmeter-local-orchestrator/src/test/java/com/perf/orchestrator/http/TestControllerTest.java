@@ -237,6 +237,67 @@ class TestControllerTest {
     // Snapshot fixtures
     // -----------------------------------------------------------------------
 
+    @Nested
+    @DisplayName("POST /api/v1/test/properties (UX-DYNAMICS T5)")
+    class UpdateProps {
+
+        @Test
+        void notRunning_is404() throws Exception {
+            when(runManager.isRunning()).thenReturn(false);
+            mvc.perform(post("/api/v1/test/properties")
+                            .contentType("application/json")
+                            .content("{\"properties\":{\"rampSeconds\":\"60\"}}"))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.error").value("NO_ACTIVE_RUN"));
+            verify(runManager, never()).pushProperties(any());
+        }
+
+        @Test
+        void emptyProperties_is400() throws Exception {
+            when(runManager.isRunning()).thenReturn(true);
+            mvc.perform(post("/api/v1/test/properties")
+                            .contentType("application/json")
+                            .content("{\"properties\":{}}"))
+                    .andExpect(status().isBadRequest());
+            verify(runManager, never()).pushProperties(any());
+        }
+
+        @Test
+        void sent_is200_withAppliedKeys() throws Exception {
+            when(runManager.isRunning()).thenReturn(true);
+            when(runManager.pushProperties(any()))
+                    .thenReturn(TestRunManager.PropsPushOutcome.SENT);
+            when(runManager.snapshotIfPresent())
+                    .thenReturn(Optional.of(preparingSnapshot("props-run")));
+            mvc.perform(post("/api/v1/test/properties")
+                            .contentType("application/json")
+                            .content("{\"properties\":{\"rampSeconds\":\"60\"}}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.runId").value("props-run"))
+                    .andExpect(jsonPath("$.applied[0]").value("rampSeconds"));
+        }
+
+        @Test
+        void disabled_is503_andUnreachable_is502() throws Exception {
+            when(runManager.isRunning()).thenReturn(true);
+            when(runManager.pushProperties(any()))
+                    .thenReturn(TestRunManager.PropsPushOutcome.DISABLED);
+            mvc.perform(post("/api/v1/test/properties")
+                            .contentType("application/json")
+                            .content("{\"properties\":{\"k\":\"v\"}}"))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.error").value("BEANSHELL_DISABLED"));
+
+            when(runManager.pushProperties(any()))
+                    .thenReturn(TestRunManager.PropsPushOutcome.UNREACHABLE);
+            mvc.perform(post("/api/v1/test/properties")
+                            .contentType("application/json")
+                            .content("{\"properties\":{\"k\":\"v\"}}"))
+                    .andExpect(status().isBadGateway())
+                    .andExpect(jsonPath("$.error").value("BEANSHELL_UNREACHABLE"));
+        }
+    }
+
     private static CurrentRun.Snapshot preparingSnapshot(String runId) {
         return new CurrentRun.Snapshot(
                 TestState.PREPARING,

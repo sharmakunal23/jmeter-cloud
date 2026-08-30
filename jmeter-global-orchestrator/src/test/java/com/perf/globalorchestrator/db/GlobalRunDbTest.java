@@ -333,6 +333,28 @@ class GlobalRunDbTest extends OracleDbTestSupport {
     }
 
     @Test
+    void member_properties_update_round_trips() {
+        // UX-DYNAMICS T5 — the runtime push persists the merged map (JSON CLOB).
+        Application a = app("app-props", "propsapp", "props_t5");   // own group — a RUNNING member must not pollute the cps ceiling test
+        pods.declareStatic("props-w1", "na-east", "http://w1:8080", a.metricsGroupId());
+        Run run = new Run("01T5PRPS0AAAAAAAAAAAAAAAA", "na-east", "plan-blob", null, a.name(),
+                "tester", RunState.RUNNING, null, Instant.now(), Instant.now(), null,
+                false, List.of(), a.metricsGroupId());
+        runs.insertRun(run);
+        runs.insertFleetMember(new RunFleetMember(run.runId(), "props-w1", "na-east",
+                MemberState.RUNNING, null, null, "http://w1:8080", Instant.now(), Instant.now(), null,
+                Map.of("USER_OFFSET", "0"), null, null));
+
+        runs.updateMemberProperties(run.runId(), "props-w1",
+                Map.of("USER_OFFSET", "0", "rampSeconds", "60"));
+
+        RunFleetMember m = runs.findByRunId(run.runId()).orElseThrow().fleetMembers().get(0);
+        assertThat(m.properties())
+                .containsEntry("USER_OFFSET", "0")
+                .containsEntry("rampSeconds", "60");
+    }
+
+    @Test
     void run_plugins_snapshot_round_trips_the_clob_and_gates_the_delete() {
         List<PluginRef> refs = List.of(
                 new PluginRef("01T3PLGBBBBBBBBBBBBBBBBBB1", "casutg", "3.1", "01T3BLOBBBBBBBBBBBBBBBB01", "casutg.jar"),

@@ -4,6 +4,7 @@ import com.perf.orchestrator.lifecycle.CurrentRun;
 import com.perf.orchestrator.lifecycle.StartTestRequest;
 import com.perf.orchestrator.lifecycle.TestRunManager;
 import com.perf.orchestrator.lifecycle.TestState;
+import com.perf.orchestrator.lifecycle.UpdatePropertiesRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -106,6 +107,34 @@ public final class TestController {
         }
         runManager.drain();
         return ResponseEntity.accepted().build();
+    }
+
+    /**
+     * UX-DYNAMICS T5 — pushes JMeter property values into the RUNNING child
+     * via the BeanShell server. Only plan values read through
+     * {@code ${__P(name)}} / {@code ${__property(name)}} observe the update,
+     * at their next evaluation — thread counts and once-read config do not.
+     */
+    @PostMapping("/api/v1/test/properties")
+    public ResponseEntity<?> updateProperties(@RequestBody UpdatePropertiesRequest request) {
+        if (!runManager.isRunning()) {
+            return notFound("NO_ACTIVE_RUN", "No test is currently running.");
+        }
+        return switch (runManager.pushProperties(request.properties())) {
+            case DISABLED -> ResponseEntity.status(503).body(Map.of(
+                    "error", "BEANSHELL_DISABLED",
+                    "message", "The BeanShell server is disabled on this worker (BEANSHELL_PORT=0)."));
+            case UNREACHABLE -> ResponseEntity.status(502).body(Map.of(
+                    "error", "BEANSHELL_UNREACHABLE",
+                    "message", "The BeanShell server did not accept the push — JMeter may still be starting."));
+            case SENT -> {
+                Map<String, Object> body = new LinkedHashMap<>();
+                body.put("runId", runManager.snapshotIfPresent()
+                        .map(CurrentRun.Snapshot::runId).orElse(null));
+                body.put("applied", java.util.List.copyOf(request.properties().keySet()));
+                yield ResponseEntity.ok(body);
+            }
+        };
     }
 
     // -----------------------------------------------------------------------

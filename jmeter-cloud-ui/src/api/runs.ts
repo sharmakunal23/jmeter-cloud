@@ -88,6 +88,8 @@ export type RunEventType =
   | "DRAIN_WORKER"
   | "ABORT"
   | "STOP"
+  // UX-DYNAMICS T5 — runtime property push (POST /runs/{id}/properties).
+  | "PROPERTIES_UPDATED"
   // Platform-detected lifecycle events (actorSource = system).
   | "RESULTS_SAVED"
   | "RUN_COMPLETED"
@@ -418,6 +420,22 @@ export interface ApiError {
   max?: number;
 }
 
+/** UX-DYNAMICS T5 — body of {@code POST /runs/{runId}/properties}. */
+export interface UpdateRunPropertiesRequest {
+  /** Omit to target every ACCEPTED/RUNNING member of the run. */
+  workerIds?: string[];
+  /** Keys `[A-Za-z_][A-Za-z0-9_.]{0,63}`, values ≤256 chars, ≤50 entries. */
+  properties: Record<string, string>;
+}
+
+/** UX-DYNAMICS T5 — per-worker outcome of a runtime property push. */
+export interface UpdateRunPropertiesResult {
+  runId: string;
+  requested: number;
+  results: Array<{ workerId: string; ok: boolean; statusCode: number; error?: string | null }>;
+  applied: string[];
+}
+
 export class GlobalOrchestratorError extends Error {
   readonly code: string;
   readonly httpStatus: number;
@@ -578,6 +596,27 @@ export const runsApi = {
       signal,
     );
   },
+
+  /**
+   * UX-DYNAMICS T5 — pushes JMeter property values to the selected RUNNING
+   * workers (each worker feeds its JMeter's BeanShell server). Only plan
+   * values read through `${__P(name)}` react at runtime, at their next
+   * evaluation; thread counts don't change. Omit `workerIds` to target every
+   * ACCEPTED/RUNNING member.
+   *
+   * <p>May throw {@link GlobalOrchestratorError} with codes:
+   *   <ul>
+   *     <li>{@code RUN_NOT_FOUND} (404).</li>
+   *     <li>{@code RUN_NOT_RUNNING} (409) — the run is not RUNNING.</li>
+   *   </ul>
+   */
+  updateProperties: (runId: string, req: UpdateRunPropertiesRequest, signal?: AbortSignal) =>
+    request<UpdateRunPropertiesResult>(
+      "POST",
+      `/api/v1/runs/${encodeURIComponent(runId)}/properties`,
+      req,
+      signal,
+    ),
 
   /**
    * Soft-delete ("hide") a run so it drops out of the default listing — the

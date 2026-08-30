@@ -341,6 +341,22 @@ public class RunRepository {
     }
 
     /**
+     * UX-DYNAMICS T5 — persists a member's merged property map after a
+     * runtime push, so run detail and later template saves stay truthful.
+     */
+    public void updateMemberProperties(String runId, String workerId, Map<String, String> properties) {
+        String propsJson;
+        try {
+            propsJson = json.writeValueAsString(properties == null ? Map.of() : properties);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException("could not serialise member properties", e);
+        }
+        jdbc.update(
+                "UPDATE ORCH_RUN_FLEET_MEMBER SET PROPERTIES=? WHERE RUN_ID=? AND WORKER_ID=?",
+                OracleBind.clob(propsJson), runId, workerId);
+    }
+
+    /**
      * Forces every still-active fleet-member row for {@code workerId} to
      * ABORTED. "Active" matches the same states the claim/capacity paths
      * treat as occupying a pod ({@code PENDING / REQUESTED / ACCEPTED /
