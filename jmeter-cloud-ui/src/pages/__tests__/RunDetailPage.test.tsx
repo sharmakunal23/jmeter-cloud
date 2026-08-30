@@ -13,9 +13,23 @@ vi.mock("../../components/RunStreamsPanel", () => ({
 vi.mock("../../components/RunEventsTimeline", () => ({
   RunEventsTimeline: () => <div>events</div>,
 }));
+// "Open in Grafana" reads the run's application + group once.
+vi.mock("../../api/applications", async () => {
+  const actual = await vi.importActual<typeof import("../../api/applications")>("../../api/applications");
+  return { ...actual, applicationsApi: { ...actual.applicationsApi, list: vi.fn() } };
+});
+vi.mock("../../api/applicationGroups", async () => {
+  const actual = await vi.importActual<typeof import("../../api/applicationGroups")>("../../api/applicationGroups");
+  return { ...actual, applicationGroupsApi: { ...actual.applicationGroupsApi, get: vi.fn() } };
+});
 
 import { runsApi } from "../../api/runs";
+import { applicationsApi } from "../../api/applications";
+import { applicationGroupsApi } from "../../api/applicationGroups";
 import { RunDetailPage } from "../RunDetailPage";
+
+const appsApi = applicationsApi as unknown as { list: ReturnType<typeof vi.fn> };
+const groupsApi = applicationGroupsApi as unknown as { get: ReturnType<typeof vi.fn> };
 
 const api = runsApi as unknown as { get: ReturnType<typeof vi.fn>; status: ReturnType<typeof vi.fn> };
 
@@ -67,5 +81,53 @@ describe("RunDetailPage — async launch", () => {
 
     await waitFor(() => expect(screen.getByTestId("streamsPanel")).toBeInTheDocument());
     expect(screen.queryByTestId("provisioningPanel")).not.toBeInTheDocument();
+  });
+});
+
+describe("RunDetailPage — Open in Grafana", () => {
+  const app = { applicationId: "01J0APP", name: "jmeter-poc", healthEndpoints: [], createdAt: "2026-08-01T00:00:00Z",
+                recyclePolicy: "REUSE", alwaysOn: false, metricsGroupId: "cps", metricsApplication: "CPS-PCI" };
+  const group = { groupId: "cps", name: "Servicing MQ", createdAt: "2026-08-01T00:00:00Z", hotDays: 7,
+                  grafanaLiveUrl: "https://grafana.example.com/d/cpsProductMetrics/servicing-mq?orgId=1" };
+
+  beforeEach(() => {
+    api.get.mockReset();
+    api.status.mockReset();
+    appsApi.list.mockReset();
+    groupsApi.get.mockReset();
+  });
+
+  it("a terminal run links the group's dashboard with the run's exact range and var-application", async () => {
+    api.get.mockResolvedValue({ ...run("COMPLETED", null, []), startedAt: "2026-08-30T11:00:00Z", completedAt: "2026-08-30T11:30:00Z" });
+    api.status.mockResolvedValue({ runId: "01J000RUN", state: "COMPLETED", stateReason: null, members: [] });
+    appsApi.list.mockResolvedValue([app]);
+    groupsApi.get.mockResolvedValue(group);
+    renderPage();
+    const link = await screen.findByRole("link", { name: /open in grafana/i });
+    const href = new URL(link.getAttribute("href")!);
+    expect(href.pathname).toBe("/d/cpsProductMetrics/servicing-mq");
+    expect(href.searchParams.get("from")).toBe(String(Date.parse("2026-08-30T11:00:00Z")));
+    expect(href.searchParams.get("to")).toBe(String(Date.parse("2026-08-30T11:30:00Z")));
+    expect(href.searchParams.get("var-application")).toBe("CPS-PCI");
+    expect(href.searchParams.get("refresh")).toBeNull();
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(groupsApi.get).toHaveBeenCalledWith("cps", expect.anything());
+  });
+
+  it("the app's own URL wins over the group's; no URL anywhere hides the button", async () => {
+    api.get.mockResolvedValue(run("RUNNING", null, []));
+    api.status.mockResolvedValue({ runId: "01J000RUN", state: "RUNNING", stateReason: null, members: [] });
+    appsApi.list.mockResolvedValue([{ ...app, grafanaLiveUrl: "https://grafana.example.com/d/own?orgId=1" }]);
+    groupsApi.get.mockResolvedValue(group);
+    const { unmount } = renderPage();
+    const link = await screen.findByRole("link", { name: /open in grafana/i });
+    expect(link.getAttribute("href")).toMatch(/^https:\/\/grafana\.example\.com\/d\/own\?orgId=1&from=.*&to=now&refresh=15s/);
+    unmount();
+
+    appsApi.list.mockResolvedValue([{ ...app, metricsGroupId: null, metricsApplication: null }]);
+    renderPage();
+    await screen.findByTestId("streamsPanel");
+    await waitFor(() => expect(appsApi.list).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("link", { name: /open in grafana/i })).toBeNull();
   });
 });

@@ -9,6 +9,9 @@ import { RunEventsTimeline } from "../components/RunEventsTimeline";
 import { ScaleUpRunModal } from "../components/ScaleUpRunModal";
 import { DrainDialog, type DrainMode } from "../components/DrainDialog";
 import { AbortRunDialog } from "../components/AbortRunDialog";
+import { applicationsApi, type Application } from "../api/applications";
+import { applicationGroupsApi, type ApplicationGroup } from "../api/applicationGroups";
+import { grafanaLinkFor, type MetricsView } from "../lib/grafanaLink";
 
 /**
  * Run detail — page-level snapshot poller around a {@link RunStreamsPanel}
@@ -56,6 +59,11 @@ export function RunDetailPage() {
   const [drainTarget, setDrainTarget] = useState<DrainTarget>(null);
   const [abortOpen, setAbortOpen] = useState(false);
   const [pageTab, setPageTab] = useState<PageTab>("insights");
+  // "Open in Grafana": the run's application (its dashboard overrides) + group
+  // (the dashboards, hot days). Loaded once — neither changes during a run.
+  const [dashboards, setDashboards] = useState<{ app: Application | null; group: ApplicationGroup | null } | null>(null);
+  const [metricsView, setMetricsView] = useState<MetricsView>({ window: "all", granularity: "auto" });
+  const onMetricsViewChange = useCallback((v: MetricsView) => setMetricsView(v), []);
 
   const fetchOnce = useCallback(() => {
     if (!runId) return new AbortController();
@@ -89,6 +97,23 @@ export function RunDetailPage() {
     return () => ctl.abort();
   }, [fetchOnce]);
 
+  const appName = state.status === "ok" ? state.run.application ?? null : null;
+  useEffect(() => {
+    if (!appName) { setDashboards({ app: null, group: null }); return; }
+    const ctl = new AbortController();
+    (async () => {
+      try {
+        const apps = await applicationsApi.list(ctl.signal);
+        const app = apps.find((a) => a.name === appName) ?? null;
+        const group = app?.metricsGroupId ? await applicationGroupsApi.get(app.metricsGroupId, ctl.signal) : null;
+        setDashboards({ app, group });
+      } catch {
+        if (!ctl.signal.aborted) setDashboards({ app: null, group: null });
+      }
+    })();
+    return () => ctl.abort();
+  }, [appName]);
+
   const isTerminal =
     state.status === "ok" && isTerminalState(state.run.state);
   useInterval(fetchOnce, isTerminal ? null : POLL_INTERVAL_MS);
@@ -105,6 +130,19 @@ export function RunDetailPage() {
   }
 
   const run = state.run;
+  // The app's own dashboard URLs win over the group's; no URL anywhere = no button.
+  const grafanaHref = dashboards
+    ? grafanaLinkFor({
+        liveUrl: dashboards.app?.grafanaLiveUrl || dashboards.group?.grafanaLiveUrl,
+        historyUrl: dashboards.app?.grafanaHistoryUrl || dashboards.group?.grafanaHistoryUrl,
+        hotDays: dashboards.group?.hotDays,
+        run,
+        metricsApplication: dashboards.app?.metricsApplication,
+        window: metricsView.window,
+        granularity: metricsView.granularity,
+      })
+    : null;
+
   const counts = countByCategory(run.fleetMembers);
   // 2026-05-15 — "Back to runs" goes to the application detail page
   // (which shows that app's runs list). Falls back to /applications for
@@ -203,6 +241,19 @@ export function RunDetailPage() {
               ↓ Download results
             </a>
           )}
+          {grafanaHref && (
+            <a
+              className="btn btn--ghost"
+              href={grafanaHref}
+              target="_blank"
+              rel="noreferrer"
+              title={isTerminal
+                ? "Open the application's Grafana dashboard for this run's exact time range"
+                : "Open the application's Grafana dashboard on the Metrics tab's window, auto-refreshing"}
+            >
+              ↗ Open in Grafana
+            </a>
+          )}
         </div>
       </div>
 
@@ -222,6 +273,7 @@ export function RunDetailPage() {
         )}
         {run.state !== "PREPARING" && pageTab === "insights" && (
           <RunStreamsPanel
+            onMetricsViewChange={onMetricsViewChange}
             runId={run.runId}
             fleetMembers={run.fleetMembers}
             runState={run.state}

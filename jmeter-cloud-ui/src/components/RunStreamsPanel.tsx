@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import type { MemberState, RunFleetMember, RunState } from "../api/runs";
 import { LogTailPanel } from "./LogTailPanel";
 import { MetricsTabPanel } from "./MetricsTabPanel";
+import type { MetricsView } from "../lib/grafanaLink";
 
 /**
  * Tabbed run-detail streams pane. Replaces the previous
@@ -51,9 +52,11 @@ interface RunStreamsPanelProps {
   runId: string;
   fleetMembers: RunFleetMember[];
   runState: RunState;
+  /** Forwarded to the Metrics tab; the run page builds its Grafana link from it. */
+  onMetricsViewChange?: (view: MetricsView) => void;
 }
 
-export function RunStreamsPanel({ runId, fleetMembers, runState }: RunStreamsPanelProps) {
+export function RunStreamsPanel({ runId, fleetMembers, runState, onMetricsViewChange }: RunStreamsPanelProps) {
   const [activeTab, setActiveTab] = useState<TabId>(() => readActiveTab());
   useEffect(() => { writeActiveTab(activeTab); }, [activeTab]);
 
@@ -123,7 +126,9 @@ export function RunStreamsPanel({ runId, fleetMembers, runState }: RunStreamsPan
         {/* Conditional render — inactive panels fully unmount so their
             polling effects don't run. This is the load-bearing
             mechanism for fleet-scale safety. */}
-        {activeTab === "metrics" && <MetricsTabPanel runId={runId} runState={runState} />}
+        {activeTab === "metrics" && (
+          <MetricsTabPanel runId={runId} runState={runState} onViewChange={onMetricsViewChange} />
+        )}
         {activeTab === "console" && (
           <StreamTabPanel
             runId={runId}
