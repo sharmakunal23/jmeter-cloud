@@ -199,7 +199,7 @@ re-registration needed.
              │ INTERVAL-partitioned weekly on "windowSecond"
              ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  Oracle — metrics schema (one PDB)                                    │
+│  Oracle — CARDZATE_DB_GRAF metrics schema (one PDB)                                    │
 │                                                                       │
 │   metrics."workerMetric" + "workerMetricStatus" (one row per code)    │
 │     ├ SYS_P…  ← a week's partition, created on its first insert       │
@@ -328,7 +328,7 @@ flowchart LR
 
     GO -. "fan-out POST /test<br/>+ status poll<br/>+ log proxy" .-> LO[local-orchestrator:8080]
 
-    GR -. "SQL via provisioned<br/>datasource" .-> PG[(Database<br/>metrics schema)]
+    GR -. "SQL via provisioned<br/>datasource" .-> PG[(Database<br/>CARDZATE_DB_GRAF)]
 ```
 
 **Order matters in `nginx.conf`:** `^~ /api/v1/blob` must precede the general

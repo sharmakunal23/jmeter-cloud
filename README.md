@@ -1,7 +1,7 @@
 # jmeter-cloud
 
 JMeter as a service. Upload a `.jmx` plan in the UI, pick how many workers you
-want and where, hit **Start** — and watch per-second latency, throughput and
+want and where, hit **Start** — and watch latency, throughput and
 error rate stream in while the test is still running.
 
 The platform runs a fleet of JMeter workers instead of one, so a load test
@@ -33,11 +33,13 @@ never through an orchestrator, so no control plane is in the metrics hot path.
 ![Metrics pipeline and the technology at each hop](docs/diagrams/dataFlow.svg)
 
 JMeter writes a CSV row per request. The worker tails that file, folds every
-row into one-second windows with an HDRHistogram, and POSTs one JSON envelope
-per second. **It writes each envelope to a local disk buffer before sending it**,
-so a consumer outage or a network blip costs latency, not data.
+row into grid-aligned 15-second windows with an HDRHistogram, and POSTs one
+JSON envelope per window to the consumer with the run's application group
+(`?groupId=`). **It writes each envelope to a local disk buffer before sending
+it**, so a consumer outage or a network blip costs latency, not data.
 
-The consumer lands the rows and maintains its rollup tables *in the same SQL
-statement* — the insert's `RETURNING` feeds the rollups, so only rows that
-actually landed are counted and a replayed envelope adds nothing. That is what
-makes the whole path safe to retry.
+The consumer routes each envelope to its group's fact table and inserts with
+first-write-wins semantics (`IGNORE_ROW_ON_DUPKEY_INDEX` on the primary key),
+so a replayed envelope adds nothing — that is what makes the whole path safe
+to retry. There are no rollup tables: readers aggregate at query time, always
+by run and window range.

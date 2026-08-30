@@ -84,7 +84,7 @@ public class ApplicationHealthPoller {
     }
 
     @Scheduled(fixedDelayString =
-            "${globalOrchestrator.application.healthPoll.intervalMs:30000}",
+            "${globalOrchestrator.application.healthPoll.intervalMs:60000}",
                initialDelayString =
             "${globalOrchestrator.application.healthPoll.initialDelayMs:5000}")
     public void pollAll() {

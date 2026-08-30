@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 import { HomePage } from "../HomePage";
@@ -31,10 +31,25 @@ vi.mock("../../api/automation", async () => {
   return { ...actual, cronJobsApi: { list: vi.fn() } };
 });
 
+vi.mock("../../api/platformHealth", async () => {
+  const actual = await vi.importActual<typeof import("../../api/platformHealth")>("../../api/platformHealth");
+  return { ...actual, platformHealthApi: { ...actual.platformHealthApi, get: vi.fn() } };
+});
+vi.mock("../../api/applicationGroups", async () => {
+  const actual = await vi.importActual<typeof import("../../api/applicationGroups")>("../../api/applicationGroups");
+  return {
+    ...actual,
+    applicationGroupsApi: { list: vi.fn(), get: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
+  };
+});
 import { applicationsApi } from "../../api/applications";
 import { runsApi } from "../../api/runs";
 import { regionsApi } from "../../api/regions";
 import { cronJobsApi } from "../../api/automation";
+import { applicationGroupsApi } from "../../api/applicationGroups";
+import { platformHealthApi, type PlatformHealth } from "../../api/platformHealth";
+const healthMock = platformHealthApi as unknown as { get: ReturnType<typeof vi.fn> };
+const groupsMock = applicationGroupsApi as unknown as { list: ReturnType<typeof vi.fn> };
 const apps = applicationsApi as unknown as { list: ReturnType<typeof vi.fn> };
 const runs = runsApi as unknown as { listPage: ReturnType<typeof vi.fn> };
 const regions = regionsApi as unknown as { list: ReturnType<typeof vi.fn>; status: ReturnType<typeof vi.fn> };
@@ -51,6 +66,10 @@ beforeEach(() => {
   regions.status.mockResolvedValue([]);
   cronJobs.list.mockReset();
   cronJobs.list.mockResolvedValue([]);
+  groupsMock.list.mockReset();
+  groupsMock.list.mockResolvedValue([]);
+  healthMock.get.mockReset();
+  healthMock.get.mockResolvedValue(healthFixture());
   // Defaults — empty active runs + empty regions roll up to no capacity
   // section beyond the empty-state. Tests override per scenario.
   runs.listPage.mockResolvedValue({ runs: [], total: 0, offset: 0, limit: 200 });
@@ -74,6 +93,23 @@ function fixtureApp(name: string, overrides: Partial<Application> = {}): Applica
   };
 }
 
+function healthFixture(overrides: Partial<PlatformHealth> = {}): PlatformHealth {
+  return {
+    status: "UP", checkedAt: "2026-08-30T02:30:00Z",
+    components: [
+      { id: "global-orchestrator", name: "Global orchestrator", kind: "service", status: "UP", detail: "provisioning DYNAMIC",
+        components: [
+          { id: "db.globalrunDataSource", name: "Oracle · run state", kind: "dependency", status: "UP", detail: "Oracle" },
+          { id: "redis", name: "Cache", kind: "dependency", status: "UP" },
+        ] },
+      { id: "metrics-consumer", name: "Metrics consumer", kind: "service", status: "UP", detail: "idle — last envelope 12 min ago", latencyMs: 4 },
+      { id: "document-service", name: "Document service", kind: "service", status: "UP", detail: "721 GB free", latencyMs: 3 },
+      { id: "regions", name: "Data centers", kind: "regions", status: "UP", detail: "1 region(s) serving", components: [] },
+    ],
+    ...overrides,
+  };
+}
+
 function renderPage() {
   return render(<MemoryRouter><HomePage /></MemoryRouter>);
 }
@@ -89,34 +125,54 @@ describe("HomePage — health checklist", () => {
     expect(screen.getByRole("heading", { name: "Upcoming scheduled runs", level: 2 })).toBeInTheDocument();
   });
 
-  it("Platform section lists global-orchestrator, document-service, oracle", async () => {
+  it("Platform section renders the hub's health tree — services with their dependencies indented beneath", async () => {
     apps.list.mockResolvedValue([]);
     renderPage();
     await waitFor(() => {
-      const platform = document.querySelector('ul[aria-label="platform checks"]');
-      expect(platform).not.toBeNull();
-      expect(platform).toHaveTextContent("global-orchestrator");
-      expect(platform).toHaveTextContent("document-service");
-      expect(platform).toHaveTextContent("oracle");
+      const platform = screen.getByRole("list", { name: "platform checks" });
+      expect(platform).toHaveTextContent("Global orchestrator");
+      expect(platform).toHaveTextContent("Metrics consumer");
+      expect(platform).toHaveTextContent("Document service");
+      expect(platform).toHaveTextContent("Data centers");
     });
+    // Compact by default: dependencies stay folded while everything is UP …
+    expect(screen.queryByTestId("health-db.globalrunDataSource")).toBeNull();
+    expect(screen.getByTestId("health-metrics-consumer")).toHaveTextContent(/idle — last envelope 12 min ago · 4 ms/);
+    expect(screen.getByText(/All healthy/)).toBeInTheDocument();
+    // … and "Show details" unfolds the whole tree.
+    fireEvent.click(screen.getByRole("button", { name: "Show details" }));
+    expect(screen.getByTestId("health-db.globalrunDataSource")).toHaveClass("healthTree__row--depth1");
+    expect(screen.getByRole("button", { name: "Hide details" })).toBeInTheDocument();
   });
 
-
-  it("a routed region is a checklist row — HEALTHY when its regional orchestrator answered, UNHEALTHY with the probe error when it did not; direct regions are not rows", async () => {
+  it("data centers nest under the hub's tree: a region DOWN carries its regional's error, workers keep their counts; the header counts what needs attention", async () => {
     apps.list.mockResolvedValue([]);
-    regions.status.mockResolvedValue([
-      { region: "na-east", url: "http://na-east-control-plane:30088", routed: true, reachable: true },
-      { region: "na-west", url: "http://na-west-control-plane:30088", routed: true, reachable: false, lastError: "connection refused" },
-      { region: "lab", routed: false },
-    ]);
-    render(<MemoryRouter><HomePage /></MemoryRouter>);
-    await waitFor(() => expect(screen.getByText(/region na-east/)).toBeInTheDocument());
-    const east = screen.getByText(/region na-east/).closest("li") ?? screen.getByText(/region na-east/).parentElement!;
-    expect(east).toHaveTextContent(/HEALTHY/);
-    const west = screen.getByText(/region na-west/).closest("li") ?? screen.getByText(/region na-west/).parentElement!;
-    expect(west).toHaveTextContent(/UNHEALTHY/);
-    expect(west).toHaveTextContent(/connection refused/);
-    expect(screen.queryByText(/region lab/)).not.toBeInTheDocument();
+    healthMock.get.mockResolvedValue(healthFixture({
+      status: "DEGRADED",
+      components: [
+        ...healthFixture().components.slice(0, 3),
+        { id: "regions", name: "Data centers", kind: "regions", status: "DEGRADED", detail: "1 of 2 region(s) down", components: [
+          { id: "region.na-east", name: "na-east", kind: "region", status: "UP", detail: "1 idle · 0 busy", components: [
+            { id: "region.na-east.regional-orchestrator", name: "Regional orchestrator", kind: "regional-orchestrator", status: "UP", detail: "version dev", url: "http://na-east-control-plane:30088" },
+            { id: "region.na-east.workers", name: "Workers", kind: "workers", status: "UP", detail: "1 idle · 0 busy" },
+          ] },
+          { id: "region.na-west", name: "na-west", kind: "region", status: "DOWN", detail: "regional orchestrator unreachable", components: [
+            { id: "region.na-west.regional-orchestrator", name: "Regional orchestrator", kind: "regional-orchestrator", status: "DOWN", detail: "connection refused", url: "http://na-west-control-plane:30088" },
+            { id: "region.na-west.workers", name: "Workers", kind: "workers", status: "UP", detail: "no workers" },
+          ] },
+        ] },
+      ],
+    }));
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("health-region.na-west")).toBeInTheDocument());
+    expect(screen.getByTestId("health-region.na-west")).toHaveTextContent(/DOWN/);
+    expect(screen.getByTestId("health-region.na-west.regional-orchestrator")).toHaveTextContent(/connection refused/);
+    expect(screen.getByTestId("health-region.na-west.regional-orchestrator")).toHaveClass("healthTree__row--depth2");
+    // Only the failing branch unfolds: the healthy region and its children stay folded.
+    expect(screen.queryByTestId("health-region.na-east")).toBeNull();
+    expect(screen.queryByTestId("health-region.na-west.workers")).toBeNull();
+    expect(screen.getByText(/3 components need attention/)).toBeInTheDocument();
+    expect(regions.status).not.toHaveBeenCalled();
   });
 
   it("apps with HEALTHY status render a HEALTHY badge", async () => {
@@ -266,6 +322,24 @@ describe("HomePage — health checklist", () => {
     renderPage();
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Performance Platform", level: 1 })).toBeInTheDocument();
+    });
+  });
+});
+
+describe("HomePage — application groups", () => {
+  it("labels each run of grouped applications and puts ungrouped ones last", async () => {
+    groupsMock.list.mockResolvedValue([{ groupId: "cps", name: "Servicing MQ", createdAt: "2026-08-29T00:00:00Z", applicationCount: 1 }]);
+    apps.list.mockResolvedValue([
+      fixtureApp("zeta-svc"),
+      fixtureApp("cps-pci", { metricsGroupId: "cps" }),
+    ]);
+    renderPage();
+    await waitFor(() => {
+      const items = Array.from(document.querySelectorAll('ul[aria-label="application checks"] > li')).map((li) => li.textContent ?? "");
+      expect(items[0]).toBe("Servicing MQ");
+      expect(items[1]).toContain("cps-pci");
+      expect(items[2]).toBe("Ungrouped");
+      expect(items[3]).toContain("zeta-svc");
     });
   });
 });

@@ -3,7 +3,7 @@ import { formatRelative } from "../lib/time";
 
 /**
  * Reusable per-application health pill. Sourced from {@code lastHealthStatus}
- * (refreshed every ~30s by `ApplicationHealthPoller` server-side).
+ * (refreshed every minute by `ApplicationHealthPoller` server-side).
  *
  * <p>Originally inline on `<ApplicationsListPage>`; extracted in
  * Phase 5b so the Capacity list can render the same badge on each app

@@ -30,5 +30,20 @@ public record Run(
         Instant completedAt,
         /** Save Results: true → each worker uploads its JTL to the Document Service on COMPLETE. */
         boolean saveResults,
-        List<RunFleetMember> fleetMembers) {
+        List<RunFleetMember> fleetMembers,
+        /**
+         * The application's metrics group when the run launched. The run's rows
+         * live in that group's fact table for good, so the readers resolve
+         * through this — not through the application's current group, which an
+         * operator may change later. Null on legacy rows (then the app's group).
+         */
+        String metricsGroupId) {
+
+    /** Without a recorded group (legacy rows, tests): the readers fall back to the application's group. */
+    public Run(String runId, String originRegion, String testPlanBlobId, String dataFilesBlobId, String application,
+               String initiatedBy, RunState state, String stateReason, Instant createdAt, Instant startedAt,
+               Instant completedAt, boolean saveResults, List<RunFleetMember> fleetMembers) {
+        this(runId, originRegion, testPlanBlobId, dataFilesBlobId, application, initiatedBy, state, stateReason,
+                createdAt, startedAt, completedAt, saveResults, fleetMembers, null);
+    }
 }

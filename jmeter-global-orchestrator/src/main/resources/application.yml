@@ -5,14 +5,15 @@ spring:
     default: local
   # Three pools are wired manually in DataSourceConfig against the one
   # Oracle PDB — the run-state writer ("globalOrchestrator" schema), the
-  # metrics reader and the metrics purger ("metrics" schema). Spring Boot's
+  # metrics reader and the metrics purger (the CARDZATE_DB_GRAF metrics
+  # schema — both pools set CURRENT_SCHEMA to it, ORACLE_METRICS_SCHEMA). Spring Boot's
   # auto-config bows out because the beans are explicit. The
   # spring.datasource.* keys below feed the metrics READER pool. Usernames
   # are bare camelCase here; DataSourceConfig adds the quotes Oracle needs.
   datasource:
-    url: ${DB_METRICS_URL:jdbc:oracle:thin:@//oracle:1521/FREEPDB1}
-    username: ${DB_METRICS_READER_USER:metricsReader}
-    password: ${DB_METRICS_READER_PASSWORD:localdev}
+    url: ${ORACLE_METRICS_URL:jdbc:oracle:thin:@//oracle:1521/FREEPDB1}
+    username: ${ORACLE_METRICS_READER_USER:metricsReader}
+    password: ${ORACLE_METRICS_READER_PASSWORD:localdev}
   # Surface ISO-8601 Instants on the wire (default Spring Boot config).
   # Nine @Scheduled beans share this scheduler (probes, sweepers, cron). One
   # thread would let a slow tick — a region probe waiting on connect
@@ -57,10 +58,21 @@ management:
         # and the tracing stack are gone (hosting infra provides observability).
         # NEVER drop health: the compose healthcheck, the UI Home checklist and
         # operator probes all depend on it.
-        include: health,info
+        include: keepalive,health,info
   endpoint:
     health:
       show-details: always
+      # Three-probe pattern (PRIVATE-CLOUD-ALIGNMENT Track 7): startup +
+      # liveness → /actuator/keepalive (process only), readiness →
+      # /actuator/health/readiness (the Oracle pools). Aggregate health stays
+      # for humans and the UI Home checklist.
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState,db
   health:
     db:
       # /actuator/health includes the database connection in its aggregate;
@@ -90,6 +102,10 @@ springdoc:
 # PodProvisioner's per-pod documentServiceUrl).
 documentService:
   baseUrl: ${DOCUMENT_SERVICE_URL:http://document-service:8084}
+# The metrics-consumer's base URL — only for the platform-health probe (the
+# hub never sends metrics; workers do).
+metricsConsumer:
+  baseUrl: ${METRICS_CONSUMER_URL:http://metrics-consumer:8083}
 
 # Per-run timeseries (GET /runs/{id}/timeseries) trailing-edge trim. On a LIVE
 # run the newest `settleSeconds` of data are still in flight — each worker holds
@@ -102,10 +118,19 @@ documentService:
 # ingested. 5 s covers the worst-case end-to-end lag with headroom for
 # cross-worker clock skew. See MetricsTimeseriesRepository#timeseries(...,int).
 metrics:
+  # Trailing seconds dropped from a LIVE run's series: a 15 s window lands once
+  # every worker has published it, so the newest one is still filling for ~20 s.
   timeseries:
-    settleSeconds: ${METRICS_TIMESERIES_SETTLE_SECONDS:5}
+    settleSeconds: ${METRICS_TIMESERIES_SETTLE_SECONDS:20}
+  # How long a group's GROUP_REGISTRY row is cached per instance.
+  groupCacheSeconds: ${METRICS_GROUP_CACHE_SECONDS:300}
+  # Window width (s) sent to every worker at fan-out (the worker's
+  # FLUSH_WINDOW_SECONDS). 15 is the readers' finest bucket; keep it there.
+  windowSeconds: ${METRICS_WINDOW_SECONDS:15}
 
 globalOrchestrator:
+  # The metrics schema the reader/purge pools resolve unqualified names in.
+  metricsSchema: ${ORACLE_METRICS_SCHEMA:CARDZATE_DB_GRAF}
   # Comma-separated list of local-orchestrator base URLs the fan-out layer
   # talks to. Local-mode default points at orchestrator-1 (multi-region
   # adds orchestrator-2). Step 15 introduces registry-driven pod claiming;
@@ -118,9 +143,9 @@ globalOrchestrator:
   fanoutThreads: ${GLOBAL_ORCHESTRATOR_FANOUT_THREADS:32}
   # Run state lives in the "globalOrchestrator" schema — writes go through
   # the globalOrchestratorWriter least-privilege user. Same PDB as metrics.
-  runStateUrl:      ${DB_GLOBALRUN_URL:jdbc:oracle:thin:@//oracle:1521/FREEPDB1}
-  runStateUser:     ${DB_GLOBALRUN_WRITER_USER:globalOrchestratorWriter}
-  runStatePassword: ${DB_GLOBALRUN_WRITER_PASSWORD:localdev}
+  runStateUrl:      ${ORACLE_GLOBALRUN_URL:jdbc:oracle:thin:@//oracle:1521/FREEPDB1}
+  runStateUser:     ${ORACLE_GLOBALRUN_WRITER_USER:globalOrchestratorWriter}
+  runStatePassword: ${ORACLE_GLOBALRUN_WRITER_PASSWORD:localdev}
   runStateStatementTimeoutMs: ${RUN_STATE_STATEMENT_TIMEOUT_MS:30000}
 
   # HARD-DELETE / purge — a SEPARATE read-write pool used ONLY to DELETE a
@@ -128,9 +153,9 @@ globalOrchestrator:
   # DELETE); the hot metrics read pool above stays read-only. The query
   # timeout is generous (120 s) because a run-scoped DELETE removes every
   # row a whole test produced.
-  metricsPurgeUrl:               ${DB_METRICS_URL:jdbc:oracle:thin:@//oracle:1521/FREEPDB1}
-  metricsPurgeUser:              ${DB_METRICS_PURGER_USER:metricsPurger}
-  metricsPurgePassword:          ${DB_METRICS_PURGER_PASSWORD:localdev}
+  metricsPurgeUrl:               ${ORACLE_METRICS_URL:jdbc:oracle:thin:@//oracle:1521/FREEPDB1}
+  metricsPurgeUser:              ${ORACLE_METRICS_PURGER_USER:metricsPurger}
+  metricsPurgePassword:          ${ORACLE_METRICS_PURGER_PASSWORD:localdev}
   metricsPurgeStatementTimeoutMs: ${METRICS_PURGE_STATEMENT_TIMEOUT_MS:120000}
 
   # ── STATIC-FLEET: provisioning posture ─────────────────────────────
@@ -188,6 +213,17 @@ globalOrchestrator:
   regions: ${REGIONS:}
   # How often each routed region's /api/v1/capabilities is polled — the
   # only source of "reachable" and of the worker image the recycler diffs.
+  # GET /api/v1/platform/health is served from a snapshot the hub refreshes
+  # on this cadence — every minute, like the application health poll
+  # (probes in parallel, each bounded by probeTimeoutMs; ?refresh=true probes now).
+  platformHealth:
+    intervalMs:               ${PLATFORM_HEALTH_INTERVAL_MS:60000}
+  # Registered applications' health endpoints are polled on the same cadence.
+  application:
+    healthPoll:
+      intervalMs:             ${APPLICATION_HEALTH_POLL_INTERVAL_MS:60000}
+    initialDelayMs:           ${PLATFORM_HEALTH_INITIAL_DELAY_MS:1500}
+    probeTimeoutMs:           ${PLATFORM_HEALTH_PROBE_TIMEOUT_MS:3000}
   regionProbe:
     intervalMs:               ${REGION_PROBE_INTERVAL_MS:15000}
     initialDelayMs:           ${REGION_PROBE_INITIAL_DELAY_MS:2000}

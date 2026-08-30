@@ -4944,3 +4944,45 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
   gap: 0.5rem;
   justify-content: flex-end;
 }
+
+/* ── Application groups (Apps page headings + Home checklist labels) ───── */
+.appCardGrid__groupHeading { grid-column: 1 / -1; list-style: none; margin-top: 0.4rem; }
+.appCardGrid__groupHeading:first-child { margin-top: 0; }
+.appGroupHeading {
+  margin: 0;
+  font-size: var(--fs-md);
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.35rem 0 0.15rem;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+}
+.appGroupHeading__id { font-size: var(--fs-xs); font-weight: var(--weight-normal); }
+.appGroupRow td { padding: 0.6rem 0.5rem 0.2rem; background: transparent; }
+.appGroupRow .appGroupHeading { border-bottom: 0; padding: 0; }
+.checklist__group {
+  font-size: var(--fs-xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft, #64748b);
+  padding: 0.55rem 0 0.2rem;
+}
+.checklist__group + .checklistRow { border-top: 0; }
+
+/* Platform health tree (Home) — the hub's nested health, indented per depth. */
+.healthTree__row--depth1 .checklistRow__link { padding-left: 1.75rem; }
+.healthTree__row--depth2 .checklistRow__link { padding-left: 3rem; }
+.healthTree__row--depth3 .checklistRow__link { padding-left: 4.25rem; }
+.healthTree__row--depth1 .checklistRow__label::before,
+.healthTree__row--depth2 .checklistRow__label::before,
+.healthTree__row--depth3 .checklistRow__label::before {
+  content: "└";
+  color: var(--ink-soft, #64748b);
+  margin-right: 0.45rem;
+  font-family: monospace;
+}
+.healthTree__row--regions .checklistRow__label,
+.healthTree__row--service .checklistRow__label { font-weight: var(--weight-semibold, 600); }
+.checklist__head { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; }
+.checklist__toggle { margin-left: auto; }

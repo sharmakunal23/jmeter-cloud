@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -7,7 +7,9 @@ import {
   type HealthStatus,
 } from "../api/applications";
 import { runsApi, type Run } from "../api/runs";
-import { regionsApi, type RegionCapacity, type RegionStatus } from "../api/regions";
+import { applicationGroupsApi, sortByGroup, type ApplicationGroup } from "../api/applicationGroups";
+import { regionsApi, type RegionCapacity } from "../api/regions";
+import { platformHealthApi, hubUnreachable, unhealthy, type PlatformHealth, type PlatformHealthComponent, type PlatformStatus } from "../api/platformHealth";
 import { cronJobsApi, isReportKind, type CronJobKind } from "../api/automation";
 import { useVisiblePolling } from "../hooks/useVisiblePolling";
 import { describeCron, formatInZone } from "../lib/cron";
@@ -21,7 +23,8 @@ import { formatFuture, formatRelative } from "../lib/time";
  *   <li><strong>Health checklist</strong> — every backend service
  *       (global-orch, document-service, oracle) plus every registered
  *       application. Each row shows a HEALTHY / DEGRADED / UNHEALTHY /
- *       UNKNOWN badge. Backends use {@code /actuator/health}; apps use
+ *       UNKNOWN badge. The platform tree comes from the hub's
+ *       {@code GET /api/v1/platform/health} (it probes everything, regionals included); apps use
  *       the registry's poller-populated {@code lastHealthStatus}.</li>
  *   <li><strong>Upcoming CRON jobs</strong> — currently a stub. The
  *       Automation track ships the real scheduler; this section
@@ -32,36 +35,15 @@ import { formatFuture, formatRelative } from "../lib/time";
  * the browser tab is hidden.
  */
 
-const POLL_INTERVAL_MS = 10_000;
+const POLL_INTERVAL_MS = 60_000;   // health is a per-minute picture, server-side and here
 /** Home is a snapshot — every tile previews a bounded number of rows and links to
  *  its full page, so the dashboard never grows unbounded. Applications (the main
  *  health checklist) gets a larger cap than the secondary tiles. */
 const HOME_APPS_LIMIT = 15;
 const HOME_PREVIEW_LIMIT = 5;
 
-interface BackendCheck {
-  id: string;
-  label: string;
-  url: string;
-}
-
-const BACKEND_CHECKS: BackendCheck[] = [
-  { id: "global-orchestrator", label: "global-orchestrator", url: "/actuator/health" },
-  // document-service shares the nginx proxy via /api/v1/blob* but its
-  // actuator isn't exposed; ping the listing endpoint as a cheap liveness check.
-  { id: "document-service",    label: "document-service",    url: "/api/v1/blob?limit=1" },
-  // the database is upstream of global-orch's actuator (db check rolls up
-  // there); for a simple-row check we hit /api/v1/regions, which queries the
-  // "globalOrchestrator" schema.
-  { id: "oracle",              label: "oracle (run-state)",   url: "/api/v1/regions" },
-];
-
-interface PlatformCheck {
-  id: string;
-  label: string;
-  status: HealthStatus;
-  detail?: string;
-}
+/** Statuses of the hub's platform-health tree → the existing badge palette. */
+const BADGE: Record<PlatformStatus, string> = { UP: "healthy", DEGRADED: "degraded", DOWN: "unhealthy", UNKNOWN: "unknown" };
 
 interface CapacityRollupRow {
   region: string;
@@ -72,7 +54,8 @@ interface CapacityRollupRow {
 
 interface DashboardSummary {
   applications: Application[];
-  backends: PlatformCheck[];
+  groups: ApplicationGroup[];
+  health: PlatformHealth;
   capacityByRegion: CapacityRollupRow[];
   refreshedAt: Date;
 }
@@ -87,22 +70,23 @@ export function HomePage() {
 
   async function refresh(signal?: AbortSignal) {
     try {
-      const [apps, hubChecks, activeListing, regions, regionStatuses] = await Promise.all([
+      // One call for the whole platform's health: the hub is the only
+      // component that talks to every other one (regionals included), so the
+      // browser never probes a data-plane service or a regional itself.
+      const [apps, health, activeListing, regions, groups] = await Promise.all([
         applicationsApi.list(signal),
-        Promise.all(BACKEND_CHECKS.map((c) => probeBackend(c, signal))),
+        platformHealthApi.get(signal).catch((e: unknown) => hubUnreachable(e instanceof Error ? e.message : String(e))),
         runsApi.listPage({ activeOnly: true, limit: 200 }, signal),
         regionsApi.list().catch(() => [] as RegionCapacity[]),
-        regionsApi.status(signal).catch(() => [] as RegionStatus[]),
+        applicationGroupsApi.list(signal).catch(() => [] as ApplicationGroup[]),
       ]);
       const capacityByRegion = aggregateCapacityByRegion(apps, activeListing.runs, regions);
-      // Routed regions are checklist rows of their own: the regional
-      // orchestrator in that data center is a backend the hub depends on.
-      const backends = [...hubChecks, ...regionStatuses.filter((r) => r.routed).map(regionCheck)];
       setState({
         status: "ok",
         summary: {
-          applications: apps,
-          backends,
+          applications: sortByGroup(apps, groups),
+          groups,
+          health,
           capacityByRegion,
           refreshedAt: new Date(),
         },
@@ -128,12 +112,13 @@ export function HomePage() {
   if (state.status === "loading") return <p className="ink-soft">Loading dashboard…</p>;
   if (state.status === "error")   return <p className="text--error">{state.message}</p>;
 
-  const { applications, backends, capacityByRegion, refreshedAt } = state.summary;
+  const { applications, groups, health, capacityByRegion, refreshedAt } = state.summary;
+  const attention = unhealthy(health);
   const everythingHealthy =
-    backends.every((b) => b.status === "HEALTHY") &&
+    health.status === "UP" &&
     applications.every((a) => (a.lastHealthStatus ?? "UNKNOWN") === "HEALTHY");
   const failingChecks =
-    backends.filter((b) => b.status === "UNHEALTHY" || b.status === "DEGRADED").length +
+    attention.filter((c) => c.status === "DOWN" || c.status === "DEGRADED").length +
     applications.filter((a) => {
       const s = a.lastHealthStatus ?? "UNKNOWN";
       return s === "UNHEALTHY" || s === "DEGRADED";
@@ -171,12 +156,12 @@ export function HomePage() {
         {/* Left column — Applications. Home is a snapshot, so it caps at
             HOME_APPS_LIMIT (15) with a "view all" link rather than paginating;
             the full Applications tab paginates at 15/page (useClientPagination). */}
-        <ApplicationsChecklist applications={applications} />
+        <ApplicationsChecklist applications={applications} groups={groups} />
 
         {/* Right column — Platform + Scheduled runs stacked. Platform is
             small (3 rows today), Schedule is a stub for D6. */}
         <div className="homeGrid__right">
-          <PlatformChecklist backends={backends} />
+          <PlatformChecklist health={health} />
           <CapacityRollup rows={capacityByRegion} />
           <ScheduleChecklist />
         </div>
@@ -187,9 +172,12 @@ export function HomePage() {
 
 // ── Sub-sections ──────────────────────────────────────────────────
 
-function ApplicationsChecklist({ applications }: { applications: Application[] }) {
+function ApplicationsChecklist({ applications, groups }: { applications: Application[]; groups: ApplicationGroup[] }) {
   const total = applications.length;
   const visible = useMemo(() => applications.slice(0, HOME_APPS_LIMIT), [applications]);
+  // A label row opens each run of apps in the same group; only once a group exists.
+  const groupName = (a: Application) =>
+    a.metricsGroupId ? (groups.find((g) => g.groupId === a.metricsGroupId)?.name ?? a.metricsGroupId) : "Ungrouped";
 
   return (
     <section className="checklist homeGrid__apps">
@@ -210,20 +198,24 @@ function ApplicationsChecklist({ applications }: { applications: Application[] }
       ) : (
         <>
           <ul className="checklist__items" aria-label="application checks">
-            {visible.map((a) => (
-              <ChecklistRow
-                key={a.applicationId}
-                label={a.name}
-                href={`/applications/${encodeURIComponent(a.name)}`}
-                status={a.lastHealthStatus ?? "UNKNOWN"}
-                detail={
-                  a.healthEndpoints.length === 0
-                    ? "no health endpoints configured"
-                    : a.lastHealthCheckedAt
-                      ? `checked ${formatRelative(a.lastHealthCheckedAt)}`
-                      : "not yet polled"
-                }
-              />
+            {visible.map((a, i) => (
+              <Fragment key={a.applicationId}>
+                {groups.length > 0 && (i === 0 || groupName(visible[i - 1]) !== groupName(a)) && (
+                  <li className="checklist__group" role="presentation">{groupName(a)}</li>
+                )}
+                <ChecklistRow
+                  label={a.name}
+                  href={`/applications/${encodeURIComponent(a.name)}`}
+                  status={a.lastHealthStatus ?? "UNKNOWN"}
+                  detail={
+                    a.healthEndpoints.length === 0
+                      ? "no health endpoints configured"
+                      : a.lastHealthCheckedAt
+                        ? `checked ${formatRelative(a.lastHealthCheckedAt)}`
+                        : "not yet polled"
+                  }
+                />
+              </Fragment>
             ))}
           </ul>
           {total > visible.length && (
@@ -237,24 +229,68 @@ function ApplicationsChecklist({ applications }: { applications: Application[] }
   );
 }
 
-function PlatformChecklist({ backends }: { backends: PlatformCheck[] }) {
+function PlatformChecklist({ health }: { health: PlatformHealth }) {
+  const attention = unhealthy(health);
+  // Compact by default: one row per service (and one for the data centers).
+  // Only a branch that is not UP unfolds — the reason must stay visible —
+  // and "Show details" opens the whole tree.
+  const [expanded, setExpanded] = useState(false);
   return (
     <section className="checklist">
       <header className="checklist__head">
         <h2>Platform</h2>
-        <small className="ink-soft">Backend services + datastores</small>
+        <small className="ink-soft">
+          {health.status === "UP"
+            ? `All healthy · checked ${formatRelative(health.checkedAt)}`
+            : health.status === "UNKNOWN"
+              ? "Waiting for the first health round"
+              : `${attention.length} component${attention.length === 1 ? "" : "s"} need attention · checked ${formatRelative(health.checkedAt)}`}
+        </small>
+        <button type="button" className="btn btn--ghost btn--sm checklist__toggle"
+                onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
+          {expanded ? "Hide details" : "Show details"}
+        </button>
       </header>
-      <ul className="checklist__items" aria-label="platform checks">
-        {backends.map((b) => (
-          <ChecklistRow
-            key={b.id}
-            label={b.label}
-            status={b.status}
-            detail={b.detail}
-          />
-        ))}
+      <ul className="checklist__items healthTree" aria-label="platform checks">
+        {health.components.map((c) => <HealthTreeRow key={c.id} component={c} depth={0} expanded={expanded} />)}
       </ul>
     </section>
+  );
+}
+
+/**
+ * One node of the hub's health tree. Children render only when the tree is
+ * expanded or this node is not UP (then only the children that are not UP —
+ * the path to the reason). The detail line is the hub's one-liner; a service
+ * shows its probe latency.
+ */
+function HealthTreeRow({ component: c, depth, expanded }: { component: PlatformHealthComponent; depth: number; expanded: boolean }) {
+  const meta = c.latencyMs != null ? `${c.latencyMs} ms` : null;
+  const children = (c.components ?? []).filter((child) => expanded || child.status !== "UP");
+  return (
+    <>
+      <li className={`checklistRow healthTree__row healthTree__row--depth${Math.min(depth, 3)} healthTree__row--${c.kind}`}
+          data-testid={`health-${c.id}`}>
+        <div className="checklistRow__link checklistRow__link--static">
+          <span className={`checklistRow__label ${c.kind === "dependency" || c.kind === "workers" ? "" : "mono"}`}>
+            {c.name}
+          </span>
+          {(c.detail || meta) && (
+            <small className="checklistRow__detail ink-soft" title={c.url ?? undefined}>
+              {[c.detail, meta].filter(Boolean).join(" · ")}
+            </small>
+          )}
+          <span
+            className={`healthBadge healthBadge--${BADGE[c.status] ?? "unknown"} healthBadge--compact checklistRow__badge`}
+            aria-label={`status: ${c.status.toLowerCase()}`}
+          >
+            <span className="healthBadge__dot" aria-hidden="true" />
+            {c.status}
+          </span>
+        </div>
+      </li>
+      {children.map((child) => <HealthTreeRow key={child.id} component={child} depth={depth + 1} expanded={expanded} />)}
+    </>
   );
 }
 
@@ -470,41 +506,6 @@ function ChecklistRow({
         : <div className="checklistRow__link checklistRow__link--static">{inner}</div>}
     </li>
   );
-}
-
-// ── Backend probe ─────────────────────────────────────────────────
-
-/** A routed region's regional orchestrator, as the hub's probe last saw it. */
-function regionCheck(r: RegionStatus): PlatformCheck {
-  const status: HealthStatus =
-    r.reachable === true ? "HEALTHY" : r.reachable === false ? "UNHEALTHY" : "UNKNOWN";
-  return {
-    id: `region-${r.region}`,
-    label: `region ${r.region} (regional-orchestrator)`,
-    status,
-    detail: r.reachable === false ? (r.lastError ?? "unreachable") : r.url ?? undefined,
-  };
-}
-
-async function probeBackend(c: BackendCheck, signal?: AbortSignal): Promise<PlatformCheck> {
-  const started = performance.now();
-  try {
-    const resp = await fetch(c.url, { signal, headers: { Accept: "application/json" } });
-    const elapsed = Math.round(performance.now() - started);
-    return {
-      id: c.id,
-      label: c.label,
-      status: resp.ok ? "HEALTHY" : "UNHEALTHY",
-      detail: resp.ok ? `${elapsed}ms · HTTP ${resp.status}` : `HTTP ${resp.status}`,
-    };
-  } catch (err) {
-    return {
-      id: c.id,
-      label: c.label,
-      status: "UNHEALTHY",
-      detail: err instanceof Error ? err.message : String(err),
-    };
-  }
 }
 
 /**

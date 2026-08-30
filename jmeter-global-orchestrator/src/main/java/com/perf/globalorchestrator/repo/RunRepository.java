@@ -111,12 +111,12 @@ public class RunRepository {
         jdbc.update(
                 "INSERT INTO \"globalOrchestrator\".\"run\" "
                 + "(\"runId\",\"originRegion\",\"testPlanBlobId\",\"dataFilesBlobId\","
-                + " \"application\",\"initiatedBy\",\"state\",\"createdAt\",\"saveResults\") "
-                + "VALUES (?,?,?,?,?,?,?,?,?)",
+                + " \"application\",\"initiatedBy\",\"state\",\"createdAt\",\"saveResults\",\"metricsGroupId\") "
+                + "VALUES (?,?,?,?,?,?,?,?,?,?)",
                 run.runId(), run.originRegion(), run.testPlanBlobId(),
                 run.dataFilesBlobId(), run.application(),
                 OracleBind.text(run.initiatedBy(), OracleBind.NAME_CHARS), run.state().name(),
-                OracleBind.ts(run.createdAt()), run.saveResults());
+                OracleBind.ts(run.createdAt()), run.saveResults(), run.metricsGroupId());
     }
 
     public void insertFleetMember(RunFleetMember m) {
@@ -623,7 +623,8 @@ public class RunRepository {
             instant(rs, "startedAt"),
             instant(rs, "completedAt"),
             rs.getBoolean("saveResults"),
-            null);
+            null,
+            rs.getString("metricsGroupId"));
 
     private static Instant instant(ResultSet rs, String col) throws SQLException {
         return OracleBind.instant(rs, col);
@@ -634,6 +635,6 @@ public class RunRepository {
                 base.runId(), base.originRegion(), base.testPlanBlobId(),
                 base.dataFilesBlobId(), base.application(), base.initiatedBy(),
                 base.state(), base.stateReason(), base.createdAt(),
-                base.startedAt(), base.completedAt(), base.saveResults(), members);
+                base.startedAt(), base.completedAt(), base.saveResults(), members, base.metricsGroupId());
     }
 }

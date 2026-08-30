@@ -27,9 +27,24 @@ import java.util.List;
 public class PlatformController {
 
     private final ProvisioningProperties provisioning;
+    private final com.perf.globalorchestrator.health.PlatformHealthService platformHealth;
 
-    public PlatformController(ProvisioningProperties provisioning) {
+    public PlatformController(ProvisioningProperties provisioning,
+                              com.perf.globalorchestrator.health.PlatformHealthService platformHealth) {
         this.provisioning = provisioning;
+        this.platformHealth = platformHealth;
+    }
+
+    /**
+     * The whole platform's health as one tree, from the hub's last probe
+     * round (every minute, async): itself + its Oracle pools and cache, the
+     * metrics-consumer, the document-service, and every data center (regional
+     * orchestrator + workers). {@code ?refresh=true} probes now (bounded).
+     */
+    @GetMapping("/health")
+    public com.perf.globalorchestrator.health.PlatformHealth health(
+            @org.springframework.web.bind.annotation.RequestParam(defaultValue = "false") boolean refresh) {
+        return refresh ? platformHealth.refreshNow() : platformHealth.snapshot();
     }
 
     @GetMapping("/capabilities")

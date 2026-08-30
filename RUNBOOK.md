@@ -67,7 +67,7 @@ same host port. Ports are configurable in `.env`.
 
 | Port | Service | URL | Health check |
 |------|---------|-----|--------------|
-| `1521` | Oracle Database Free (`FREEPDB1`) | `localhost:1521/FREEPDB1` (`system` / `localdev`; schema owners `metrics`, `"globalOrchestrator"`) | `healthcheck.sh` (in the image) |
+| `1521` | Oracle Database Free (`FREEPDB1`) | `localhost:1521/FREEPDB1` (`system` / `localdev`; schema owners `CARDZATE_DB_GRAF` — the metrics schema, which the consumer connects as — and `"globalOrchestrator"`) | `healthcheck.sh` (in the image) |
 | `8025` | MailHog (dev SMTP) | http://localhost:8025 | — |
 | `8080` | Worker HTTP API (`jmeter-local-orchestrator`) | http://localhost:8080 | `GET /actuator/health` |
 | `8082` | global-orchestrator | http://localhost:8082 | `GET /actuator/health` |
@@ -101,7 +101,10 @@ The metric pipeline behind that run:
 
 ## 6. Watch it
 
-- **Live per-run charts:** the UI run-detail **Metrics** tab (native uPlot on the Oracle rollups).
+- **Platform health, one call:** `curl -s localhost:8082/api/v1/platform/health | jq` — the hub's tree
+  (itself + Oracle pools + cache, metrics-consumer, document-service, every data center's regional +
+  workers), refreshed every minute; the UI Home page renders exactly this. `?refresh=true` probes now.
+- **Live per-run charts:** the UI run-detail **Metrics** tab (native uPlot over the run's `<GROUP_ID>_METRICS` rows, bucketed 15/30/60 s).
   variable is auto-populated). It's the only provisioned dashboard — the infra dashboards and
   Jaeger tracing retired with the SLIMDOWN track (2026-07-21; hosting infra provides observability).
 - **Logs:** `docker compose logs -f <service>` — JSON, one record per line, each carrying
@@ -124,9 +127,10 @@ docker compose up -d --build global-orchestrator
 ## 8. Run it on Kubernetes (kind)
 
 The whole platform also runs in-cluster — every service ships Kustomize
-manifests in its `kube/` folder (base + `kind`/`privateCloud` overlays),
-composed by the umbrella at `infra/deploy/k8s/` (conventions + the full
-image inventory live in that directory's README). **Service names match
+manifests in `kube/kustomize/` (base + `local`/`dev`/`test`/`prod` overlays,
+the hosted blueprint); the `local` overlays are composed by the umbrella at
+`infra/deploy/k8s/kind` (conventions + the image inventory live in that
+directory's README). **Service names match
 compose names exactly**, so every inter-service URL default works unchanged.
 
 ```bash
@@ -171,13 +175,15 @@ under `PROVISIONING_MODE=DYNAMIC` — the kind overlay sets both; the compose
 stack alone has no cluster and stays STATIC (see §8b for the two-cluster
 setup).
 
-For a real private cloud use `kubectl apply -k infra/deploy/k8s/privateCloud`
-after creating the credential Secrets out-of-band (each service's
-`overlays/privateCloud/kustomization.yaml` documents its exact command)
-and setting the registry/Ingress placeholders — then work through
-`infra/deploy/k8s/privateCloudHardening.md` (KUBE-11: secrets sourcing,
-password rotation, NetworkPolicies, Ingress TLS, storage/backup, the
-log-based alerting obligation, and the auth exposure gate).
+On the hosted platform there is no umbrella: each service's `jules.yml`
+pipeline builds `Dockerfile.privateCloud` and applies
+`kube/kustomize/overlays/<env>` into the service's own namespace
+(`<sealId>d<appId>-<service>-<env>`), the credential Secrets created out of
+band first (each overlay's `kustomization.yml` lists the keys). Fill the
+`<sealId>`/`<cluster>`/`<platform-domain>` placeholders and work through
+`infra/deploy/k8s/privateCloudHardening.md` (secrets sourcing, password
+rotation, NetworkPolicies, TLS, storage, the log-based alerting obligation,
+the auth exposure gate).
 
 ## 8b. Two data centers locally (kind `na-east` + `na-west`)
 

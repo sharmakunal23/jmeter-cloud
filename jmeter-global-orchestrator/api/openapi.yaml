@@ -646,13 +646,13 @@ paths:
       - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
     get:
       tags: [runs]
-      summary: Per-label metrics rollup from the metrics DB
+      summary: Per-label aggregate from the run's group fact table
       description: |
-        Aggregates `metrics."workerMetric"` rows for the run across the
-        whole fleet, grouped by JMeter sampler label. Per-worker
-        percentiles are averaged — this is a crude proxy; faithful
-        cross-worker percentile aggregation needs HDRHistogram merging
-        (future enhancement).
+        Folds the run's rows in its application group's `<GROUP_ID>_METRICS`
+        (and the archived-day table) per JMeter label: totals, throughput-
+        weighted p50/p95/p99, max, and the label's `application` (the group
+        classifier's value). A run whose application has no group, or whose
+        rows have not landed, answers an empty `byLabel`.
       responses:
         "200":
           description: Per-label rollup.
@@ -714,34 +714,47 @@ paths:
       - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
     get:
       tags: [runs]
-      summary: Per-second timeseries for the run-detail Metrics tab (HM-1)
+      summary: Bucketed timeseries for the run-detail Metrics tab
       description: |
-        Per-second timeseries aggregated across the whole fleet:
-        `tps` (sum of throughput), `avgRtMs` (TPS-weighted mean of
-        per-label P50), `errorPct` (100 × errors / total), and
-        `statusCodes` (per-code counts exploded from each row's JSONB
-        status map).
+        Read from the run's application group fact table
+        (`<GROUP_ID>_METRICS`, plus the archived-day table for older data)
+        the way the hosted Grafana panels read it: rows bucketed by
+        `FLOOR(WINDOW_SECOND / g) * g`, `tps` = samples / g, `avgRtMs`,
+        `p95Ms`, `p99Ms` throughput-weighted, `errorPct` = 100 × errors /
+        samples, `statusCodes` keyed by HTTP class (`2xx` … `5xx`, `other`)
+        as counts per second. `bucketSize` is `g` — 15 (the workers' window),
+        30 or 60 — the smallest that keeps the response under 1500 points,
+        or the requested `granularity`.
 
-        Server-side downsamples when the raw second count exceeds 1500
-        (≈ 25 min runs); `bucketSize` reports the bucket width in
-        seconds. The UI uses `fromSecond` / `toSecond` to label the
-        time axis.
-
-        When `byRegion=true`, the response additionally carries a
-        `regions` map (region → the same four series) alongside the
-        all-regions total in `series`, driving the UI's "Split by
-        region" toggle (compare us-east vs us-west). The total stays
-        the exact fold of the per-region rows. Omitted (empty) by
-        default, so the aggregate payload is unchanged.
-
-        Empty arrays (200, not 404) during PREPARING when the metrics
-        consumer hasn't written any rows yet — friendly polling shape.
+        `byRegion=true` adds `regions` (per `WORKER.REGION`; hot rows only),
+        `byApplication=true` adds `applications` (per `LABEL.APPLICATION`);
+        `series` stays the exact fold of either split. A live run drops its
+        newest ~20 s (still being published). Empty series (200, not 404)
+        while the run has no group or no rows yet — the friendly polling
+        shape.
       parameters:
         - name: byRegion
           in: query
           required: false
           schema: { type: boolean, default: false }
           description: When true, include the per-region breakdown in `regions`.
+        - name: byApplication
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: When true, include the per-application split in `applications`.
+        - name: granularity
+          in: query
+          required: false
+          schema: { type: integer, enum: [15, 30, 60] }
+          description: Bucket width in seconds (the Grafana picker's values); omitted = the server's smallest bounded choice. Anything else is 400.
+        - name: window
+          in: query
+          required: false
+          schema: { type: string, enum: [5m, 10m, 15m, 30m, 1h, 2h, 4h, all], default: all }
+          description: |
+            Trailing window anchored at the run's latest data window (not wall
+            clock); `all` = the whole run. Anything else is 400.
       responses:
         "200":
           description: Per-second timeseries for the run.
@@ -967,6 +980,102 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/Pod" }
 
+  /api/v1/applicationGroups:
+    get:
+      tags: [applications]
+      summary: List application groups
+      description: |
+        A group is a team's set of applications; its `groupId` is what the
+        group's workers send as `?groupId=` on every metrics POST and, upper-cased,
+        the prefix of the group's fact tables (`cps` → `CPS_METRICS`), so it must
+        name a row of the metrics schema's `GROUP_REGISTRY`. Sorted by name;
+        each row carries `applicationCount` (visible + archived applications).
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ApplicationGroup" }
+    post:
+      tags: [applications]
+      summary: Create an application group
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateApplicationGroupRequest" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplicationGroup" }
+        "400":
+          description: INVALID_REQUEST — groupId not `[a-z][a-z0-9_]{0,29}`, name blank or > 255, description > 512.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: APPLICATION_GROUP_ID_TAKEN or APPLICATION_GROUP_NAME_TAKEN.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+  /api/v1/applicationGroups/{groupId}:
+    parameters:
+      - { name: groupId, in: path, required: true, schema: { type: string, pattern: "^[a-z][a-z0-9_]{0,29}$" } }
+    get:
+      tags: [applications]
+      summary: Get one application group
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplicationGroup" }
+        "404":
+          description: APPLICATION_GROUP_NOT_FOUND
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+    put:
+      tags: [applications]
+      summary: Rename / re-describe an application group
+      description: "`groupId` is immutable — it is the workers' routing key."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateApplicationGroupRequest" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplicationGroup" }
+        "400":
+          description: INVALID_REQUEST
+        "404":
+          description: APPLICATION_GROUP_NOT_FOUND
+        "409":
+          description: APPLICATION_GROUP_NAME_TAKEN
+    delete:
+      tags: [applications]
+      summary: Delete an application group
+      description: |
+        Hard delete, idempotent (an unknown group is 204). Refused while any
+        application — visible or archived — is still in the group: move them
+        to another group or purge them first.
+      responses:
+        "204":
+          description: Deleted (or never existed).
+        "409":
+          description: APPLICATION_GROUP_HAS_APPLICATIONS
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
   /api/v1/applications:
     get:
       tags: [applications]
@@ -976,7 +1085,7 @@ paths:
         by name. Each row carries operator-managed metadata (sealId,
         description, healthEndpoints) plus a health snapshot
         (`lastHealthStatus`, `lastHealthCheckedAt`, `lastHealthDetails`)
-        updated by `ApplicationHealthPoller` every ~30s.
+        updated by `ApplicationHealthPoller` every minute.
 
         Pass `hidden=true` for the "Archived applications" view — ONLY
         soft-deleted apps (the hard-delete / purge surface). Their `name` is
@@ -1585,6 +1694,38 @@ paths:
   # ────────────────────────────────────────────────────────────────────────
   # Platform capabilities
   # ────────────────────────────────────────────────────────────────────────
+  /api/v1/platform/health:
+    get:
+      tags: [platform]
+      summary: The whole platform's health as one tree
+      description: |
+        The hub is the only component that talks to every other one, so it
+        is the only place the whole picture exists: itself (Oracle pools,
+        cache), the metrics-consumer, the document-service, and every data
+        center (the regional orchestrator's last probe verdict + the worker
+        registry's idle/busy/lost counts). Served from a snapshot refreshed
+        every minute by parallel, bounded probes — a request never waits on a
+        probe. The UI renders the nesting as-is; it never probes a regional
+        or a data-plane service itself.
+
+        Statuses: `UP` · `DEGRADED` (serving, but a child or dependency is
+        not — a lost worker, a cold cache) · `DOWN` · `UNKNOWN` (not probed
+        yet). A parent is the worst of its children; the metrics-consumer's
+        `ingestProgress` is reported as a fact ("idle — last envelope 12 min
+        ago"), never as DOWN, because idle between runs is normal.
+      parameters:
+        - name: refresh
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: Probe now (bounded by the probe timeout) instead of returning the last snapshot.
+      responses:
+        "200":
+          description: The tree.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlatformHealth" }
+
   /api/v1/platform/capabilities:
     get:
       tags: [platform]
@@ -2101,6 +2242,40 @@ components:
         createdAt:     { type: string, format: date-time, nullable: true }
         updatedAt:     { type: string, format: date-time, nullable: true }
 
+    ApplicationGroup:
+      type: object
+      required: [groupId, name, createdAt]
+      properties:
+        groupId:          { type: string, pattern: "^[a-z][a-z0-9_]{0,29}$", description: "What the group's workers send as `?groupId=`; upper-cased it prefixes the group's tables in the metrics schema (`cps` → `CPS_METRICS`, `CPS_METRICS_H`) and it equals `GROUP_REGISTRY.GROUP_ID` there." }
+        name:             { type: string, description: "Display name, unique (e.g. `Servicing MQ`)." }
+        description:      { type: string, nullable: true }
+        grafanaLiveUrl:   { type: string, nullable: true, maxLength: 2000, description: "The group's live Grafana dashboard (reads `<P>_METRICS`) — the UI's \"Open in Grafana\" default for every application in the group. Absolute http(s) URL; the UI appends `from/to/refresh/var-application`." }
+        grafanaHistoryUrl: { type: string, nullable: true, maxLength: 2000, description: "The history dashboard (reads `<P>_METRICS_H`); optional — a run older than `hotDays` opens it, otherwise the live URL." }
+        hotDays:          { type: integer, minimum: 1, maximum: 3650, default: 7, description: "Days the live dashboard covers (the group's hot retention)." }
+        createdAt:        { type: string, format: date-time }
+        applicationCount: { type: integer, nullable: true, description: "Applications in the group, archived ones included. Present on every response from this controller." }
+
+    CreateApplicationGroupRequest:
+      type: object
+      required: [groupId, name]
+      properties:
+        groupId:     { type: string, description: "`[a-z][a-z0-9_]{0,29}` — an identifier stem (its upper-case form names the tables); immutable once created." }
+        name:        { type: string, description: "≤ 255 chars" }
+        description: { type: string, nullable: true, description: "≤ 512 chars" }
+        grafanaLiveUrl:    { type: string, nullable: true, description: "Absolute http(s) URL ≤ 2000 chars; 400 otherwise. Blank = none." }
+        grafanaHistoryUrl: { type: string, nullable: true, description: "Same rule; optional." }
+        hotDays:           { type: integer, nullable: true, description: "1..3650; null = 7." }
+
+    UpdateApplicationGroupRequest:
+      type: object
+      required: [name]
+      properties:
+        name:        { type: string }
+        description: { type: string, nullable: true }
+        grafanaLiveUrl:    { type: string, nullable: true, description: "Replaced wholesale; blank/null clears." }
+        grafanaHistoryUrl: { type: string, nullable: true, description: "Replaced wholesale; blank/null clears." }
+        hotDays:           { type: integer, nullable: true, description: "Replaced wholesale; null = 7." }
+
     Application:
       type: object
       required: [applicationId, name, healthEndpoints, createdAt]
@@ -2109,9 +2284,13 @@ components:
         name:                 { type: string, description: "DNS-friendly registered name. Drives URLs + cross-table joins on `run.application`." }
         sealId:               { type: string, nullable: true, description: "Operator-supplied identifier (e.g. internal catalog ID)." }
         description:          { type: string, nullable: true }
+        metricsGroupId:       { type: string, nullable: true, description: "The application group whose fact tables receive this app's metrics; its workers POST with `?groupId=` set to this. Null = ungrouped." }
+        metricsApplication:   { type: string, nullable: true, description: "The group classifier's value for this app's labels (`LABEL.APPLICATION`, e.g. `CPS-PCI`); defaults to the upper-cased name when grouped." }
+        grafanaLiveUrl:       { type: string, nullable: true, description: "Per-app override of the group's live dashboard URL; null = the group's applies." }
+        grafanaHistoryUrl:    { type: string, nullable: true, description: "Per-app override of the group's history dashboard URL; null = the group's applies." }
         healthEndpoints:
           type: array
-          description: "Health-check URLs polled every ~30s by ApplicationHealthPoller. Empty → polling disabled, status stays UNKNOWN."
+          description: "Health-check URLs polled every minute by ApplicationHealthPoller. Empty → polling disabled, status stays UNKNOWN."
           items: { type: string }
         capacity:
           type: array
@@ -2139,7 +2318,7 @@ components:
         recyclePolicy:
           type: string
           description: "WORKER-HYGIENE Phase C — pod recycle policy. Default REUSE."
-          enum: [REUSE, MAX_RUNS, MAX_AGE, BOTH, EVERY_RUN]
+          enum: [REUSE, MAX_RUNS, MAX_AGE, BOTH, EVERY_RUN, DRAIN_AFTER_RUN]
         maxRunsPerPod:
           type: integer
           nullable: true
@@ -2164,6 +2343,10 @@ components:
         name:            { type: string, description: "DNS-friendly: [a-z0-9]([-a-z0-9_]{0,62}[a-z0-9])?" }
         sealId:          { type: string, nullable: true, description: "≤ 128 chars" }
         description:     { type: string, nullable: true, description: "≤ 512 chars" }
+        metricsGroupId:  { type: string, nullable: true, description: "An existing application group's id; 400 when unknown. Null = ungrouped." }
+        metricsApplication: { type: string, nullable: true, description: "[A-Za-z0-9][A-Za-z0-9._-]{0,63}; null = upper-cased name when a group is set." }
+        grafanaLiveUrl:     { type: string, nullable: true, description: "Optional per-app override — absolute http(s) URL ≤ 2000 chars, 400 otherwise; blank = the group's." }
+        grafanaHistoryUrl:  { type: string, nullable: true, description: "Same rule." }
         healthEndpoints:
           type: array
           description: "Optional. Max 8 entries; each must be a valid http(s) URI ≤ 256 chars."
@@ -2177,7 +2360,7 @@ components:
           type: string
           nullable: true
           description: "WORKER-HYGIENE Phase C — null defaults to REUSE."
-          enum: [REUSE, MAX_RUNS, MAX_AGE, BOTH, EVERY_RUN]
+          enum: [REUSE, MAX_RUNS, MAX_AGE, BOTH, EVERY_RUN, DRAIN_AFTER_RUN]
         maxRunsPerPod:  { type: integer, nullable: true, minimum: 1, maximum: 10000 }
         podMaxAgeHours: { type: integer, nullable: true, minimum: 1, maximum: 720 }
         alwaysOn:
@@ -2192,6 +2375,10 @@ components:
         name:            { type: string }
         sealId:          { type: string, nullable: true }
         description:     { type: string, nullable: true }
+        metricsGroupId:  { type: string, nullable: true, description: "Replaced wholesale — omit or null to clear the group." }
+        metricsApplication: { type: string, nullable: true, description: "Replaced wholesale — null = upper-cased name when grouped." }
+        grafanaLiveUrl:     { type: string, nullable: true, description: "Replaced wholesale — blank/null = the group's." }
+        grafanaHistoryUrl:  { type: string, nullable: true, description: "Replaced wholesale — blank/null = the group's." }
         healthEndpoints:
           type: array
           items: { type: string }
@@ -2203,7 +2390,7 @@ components:
           type: string
           nullable: true
           description: "WORKER-HYGIENE Phase C — null = no policy change. Setting requires the matching threshold fields per policy."
-          enum: [REUSE, MAX_RUNS, MAX_AGE, BOTH, EVERY_RUN]
+          enum: [REUSE, MAX_RUNS, MAX_AGE, BOTH, EVERY_RUN, DRAIN_AFTER_RUN]
         maxRunsPerPod:  { type: integer, nullable: true, minimum: 1, maximum: 10000 }
         podMaxAgeHours: { type: integer, nullable: true, minimum: 1, maximum: 720 }
         alwaysOn:
@@ -2605,6 +2792,7 @@ components:
             type: object
             properties:
               label:            { type: string }
+              application:      { type: string, nullable: true, description: "The group classifier's value for the label (`LABEL.APPLICATION`)." }
               totalThroughput:  { type: integer, format: int64 }
               totalErrors:      { type: integer, format: int64 }
               errorRate:        { type: number, format: double }
@@ -2627,16 +2815,25 @@ components:
 
     MetricsSeries:
       type: object
-      description: "The four per-second series the UI charts consume (used for both the all-regions total and each per-region breakdown)."
+      description: "The series the UI charts (the total, and each region / application split)."
       required: [tps, avgRtMs, errorPct, statusCodes]
       properties:
         tps:
           type: array
+          description: "Samples per second in the bucket."
           items: { $ref: "#/components/schemas/TimeseriesPoint" }
         avgRtMs:
           type: array
+          description: "Throughput-weighted mean response time."
           items: { $ref: "#/components/schemas/TimeseriesPoint" }
         errorPct:
+          type: array
+          items: { $ref: "#/components/schemas/TimeseriesPoint" }
+        p95Ms:
+          type: array
+          description: "Throughput-weighted mean of the per-worker p95s."
+          items: { $ref: "#/components/schemas/TimeseriesPoint" }
+        p99Ms:
           type: array
           items: { $ref: "#/components/schemas/TimeseriesPoint" }
         statusCodes:
@@ -2653,18 +2850,18 @@ components:
         runId:      { type: string }
         bucketSize:
           type: integer
-          minimum: 1
-          description: "Number of raw seconds aggregated per returned point. `1` = no bucketing."
-        fromSecond: { type: integer, format: int64, nullable: true, description: "First raw windowSecond covered by the response (null when series are empty)." }
-        toSecond:   { type: integer, format: int64, nullable: true, description: "Last raw windowSecond covered by the response (null when series are empty)." }
+          enum: [15, 30, 60]
+          description: "Seconds per point — the bucket width."
+        fromSecond: { type: integer, format: int64, nullable: true, description: "First bucket start (epoch second); null when the series are empty." }
+        toSecond:   { type: integer, format: int64, nullable: true, description: "Last bucket start; null when the series are empty." }
         series: { $ref: "#/components/schemas/MetricsSeries" }
         regions:
           type: object
-          description: |
-            Per-region breakdown of the same four series, keyed by region
-            (e.g. `us-east-1`). Present only when the request passed
-            `byRegion=true`; omitted otherwise. The all-regions total in
-            `series` is the exact fold of these per-region entries.
+          description: "Per-region split (`WORKER.REGION`), present only with `byRegion=true`; `series` is its exact fold."
+          additionalProperties: { $ref: "#/components/schemas/MetricsSeries" }
+        applications:
+          type: object
+          description: "Per-application split (`LABEL.APPLICATION`), present only with `byApplication=true`."
           additionalProperties: { $ref: "#/components/schemas/MetricsSeries" }
 
     MetricsTimeseriesBatch:
@@ -2817,6 +3014,47 @@ components:
         ready:
           type: boolean
           description: "True when the kubelet reported the pod ready within the wait; false means it is still STARTING and becomes READY through the liveness probe."
+    PlatformHealth:
+      type: object
+      required: [status, checkedAt, components]
+      properties:
+        status:     { type: string, enum: [UP, DEGRADED, DOWN, UNKNOWN] }
+        checkedAt:  { type: string, format: date-time }
+        components:
+          type: array
+          items: { $ref: "#/components/schemas/PlatformHealthComponent" }
+      example:
+        status: DEGRADED
+        checkedAt: "2026-08-30T02:30:00Z"
+        components:
+          - { id: global-orchestrator, name: Global orchestrator, kind: service, status: UP, detail: provisioning DYNAMIC,
+              components: [ { id: db.globalrunDataSource, name: "Oracle · run state", kind: dependency, status: UP, detail: Oracle },
+                            { id: db.metricsDataSource, name: "Oracle · metrics", kind: dependency, status: UP, detail: Oracle },
+                            { id: redis, name: Cache, kind: dependency, status: UP } ] }
+          - { id: metrics-consumer, name: Metrics consumer, kind: service, status: UP, detail: "idle — last envelope 12 min ago (normal between runs)", url: "http://metrics-consumer:8083", latencyMs: 4 }
+          - { id: document-service, name: Document service, kind: service, status: UP, detail: 721 GB free, url: "http://document-service:8084", latencyMs: 3 }
+          - { id: regions, name: Data centers, kind: regions, status: DEGRADED, detail: 1 of 2 region(s) down,
+              components: [ { id: region.na-east, name: na-east, kind: region, status: DOWN, detail: regional orchestrator unreachable,
+                              components: [ { id: region.na-east.regional-orchestrator, name: Regional orchestrator, kind: regional-orchestrator, status: DOWN, detail: "HTTP connect timed out", url: "http://na-east-control-plane:30088" },
+                                            { id: region.na-east.workers, name: Workers, kind: workers, status: UP, detail: "1 idle · 0 busy", facts: { total: 1, idle: 1, busy: 0, lost: 0 } } ] } ] }
+    PlatformHealthComponent:
+      type: object
+      required: [id, name, kind, status]
+      properties:
+        id:         { type: string, description: "Stable identifier (`metrics-consumer`, `region.na-east.workers`)." }
+        name:       { type: string, description: "What the operator reads." }
+        kind:       { type: string, enum: [service, dependency, regions, region, regional-orchestrator, workers] }
+        status:     { type: string, enum: [UP, DEGRADED, DOWN, UNKNOWN] }
+        detail:     { type: string, nullable: true, description: "One line: the reason when not UP, the interesting fact when UP." }
+        url:        { type: string, nullable: true }
+        checkedAt:  { type: string, format: date-time, nullable: true }
+        latencyMs:  { type: integer, format: int64, nullable: true }
+        facts:      { type: object, nullable: true, additionalProperties: true, description: "Small typed facts (worker counts, versions, free space)." }
+        components:
+          type: array
+          nullable: true
+          items: { $ref: "#/components/schemas/PlatformHealthComponent" }
+
     PlatformCapabilities:
       type: object
       required: [provisioningMode, dynamicScalingEnabled, podRecyclingEnabled, regions, regionLabel]
