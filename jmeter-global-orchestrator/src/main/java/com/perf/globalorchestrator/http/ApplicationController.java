@@ -2,12 +2,8 @@ package com.perf.globalorchestrator.http;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.perf.globalorchestrator.domain.Application;
-import com.perf.globalorchestrator.domain.ApplicationCapacity;
-import com.perf.globalorchestrator.domain.RecyclePolicy;
 import com.perf.globalorchestrator.domain.Ulid;
 import com.perf.globalorchestrator.provision.ProvisioningProperties;
-import com.perf.globalorchestrator.config.CacheConfig;
-import com.perf.globalorchestrator.repo.ApplicationCapacityRepository;
 import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.RunRepository;
@@ -31,7 +27,6 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.cache.annotation.CacheEvict;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -118,20 +113,17 @@ public class ApplicationController {
     private static final Logger LOG = LoggerFactory.getLogger(ApplicationController.class);
 
     private final ApplicationRepository repo;
-    private final ApplicationCapacityRepository capacityRepo;
     private final ApplicationGroupRepository groupRepo;
     private final RunRepository runRepo;
     private final ApplicationPurgeService purgeService;
     private final ProvisioningProperties provisioning;
 
     public ApplicationController(ApplicationRepository repo,
-                                 ApplicationCapacityRepository capacityRepo,
                                  ApplicationGroupRepository groupRepo,
                                  RunRepository runRepo,
                                  ApplicationPurgeService purgeService,
                                  ProvisioningProperties provisioning) {
         this.repo = repo;
-        this.capacityRepo = capacityRepo;
         this.groupRepo = groupRepo;
         this.runRepo = runRepo;
         this.purgeService = purgeService;
@@ -139,20 +131,16 @@ public class ApplicationController {
     }
 
     /**
-     * The regions a newly-registered application starts with, seeded at 0.
+     * The regions a newly-registered group's pool starts with, seeded at 0
+     * (used by {@link ApplicationGroupController#create}).
      *
      * <p>A deployment that declares its own region vocabulary
-     * ({@code REGIONS} — the operator's data centers in static
-     * mode) seeds exactly those, so the app opens showing the places workers
-     * can actually be declared into. Otherwise the historical single primary
+     * ({@code REGIONS} — the operator's data centers in static mode) seeds
+     * exactly those, so the group opens showing the places workers can
+     * actually be declared into. Otherwise the historical single primary
      * region stands.
-     *
-     * <p>Registration goes through this controller rather than
-     * {@code CapacityController}, so without this the seed was always
-     * {@code us-east-1} — which in a private cloud that has never heard of
-     * AWS regions renders as an empty data center that does not exist.
      */
-    private List<String> seedRegions() {
+    static List<String> seedRegions(ProvisioningProperties provisioning) {
         List<String> declared = provisioning.regions();
         return declared.isEmpty() ? DEFAULT_SEEDED_REGIONS : declared;
     }
@@ -164,35 +152,21 @@ public class ApplicationController {
         // hidden=true is the "Archived applications" view (HARD-DELETE / purge
         // Phase 3): only soft-deleted apps, so the operator can permanently purge
         // them. Default lists only visible apps.
-        List<Application> apps = hidden ? repo.findHidden() : repo.findAll();
-        Map<String, List<ApplicationCapacity>> capacityByApp = capacityRepo.findAllGroupedByApp();
-        List<Application> hydrated = new ArrayList<>(apps.size());
-        for (Application a : apps) {
-            hydrated.add(withCapacity(a, capacityByApp.getOrDefault(a.applicationId(), List.of())));
-        }
-        return ResponseEntity.ok(hydrated);
+        return ResponseEntity.ok(hidden ? repo.findHidden() : repo.findAll());
     }
 
     @GetMapping("/{applicationId:" + Ulid.PATTERN + "}")
     public ResponseEntity<Application> get(@PathVariable String applicationId) {
         Application app = repo.findById(applicationId)
                 .orElseThrow(() -> new ApplicationNotFoundException(applicationId));
-        return ResponseEntity.ok(withCapacity(app, capacityRepo.findByApplicationId(applicationId)));
+        return ResponseEntity.ok(app);
     }
 
     @PostMapping
     public ResponseEntity<Application> create(@RequestBody CreateApplicationRequest req) {
-        // D-Capacity v2 polish — operator-supplied capacity is IGNORED.
-        // Capacity is sponsor-controlled; new apps always land at 0 for
-        // the default seeded regions. The "Request more capacity"
-        // workflow is the only path to a non-zero ceiling.
-        validate(req.name(), req.sealId(), req.description(), req.healthEndpoints(),
-                /* capacity */ null);
-        // RecyclePolicy default is REUSE (zero
-        // behavior change for new apps); operators opt-in to recycle by
-        // setting it on POST or via a subsequent PUT.
-        RecyclePolicy policy = resolveRecyclePolicy(req.recyclePolicy());
-        validateRecyclePolicy(policy, req.maxRunsPerPod(), req.podMaxAgeHours());
+        // Capacity and the recycle policy are the group's (GROUP-CAPACITY):
+        // an application carries neither, and it must belong to a group.
+        validate(req.name(), req.sealId(), req.description(), req.healthEndpoints());
         String metricsGroupId = resolveMetricsGroup(req.metricsGroupId());
         String metricsApplication = resolveMetricsApplication(
                 metricsGroupId, req.metricsApplication(), req.name().trim());
@@ -202,12 +176,8 @@ public class ApplicationController {
                 trimOrNull(req.sealId()),
                 trimOrNull(req.description()),
                 req.healthEndpoints() == null ? List.of() : List.copyOf(req.healthEndpoints()),
-                null,
                 Instant.now(),
                 null, null, null,
-                policy, req.maxRunsPerPod(), req.podMaxAgeHours(),
-                /* alwaysOn — AUTOMATION Phase C; null defaults to false. */
-                Boolean.TRUE.equals(req.alwaysOn()),
                 metricsGroupId, metricsApplication);
         Application stored;
         try {
@@ -215,43 +185,17 @@ public class ApplicationController {
         } catch (DuplicateKeyException e) {
             throw new ApplicationConflictException(req.name());
         }
-        // Auto-seed capacity rows at 0 for this deployment's starter regions.
-        List<ApplicationCapacity> seeded = seedRegions().stream()
-                .map(r -> new ApplicationCapacity(stored.applicationId(), r, 0, null, null))
-                .toList();
-        capacityRepo.replaceAll(stored.applicationId(), seeded);
-        // Registration is a pure DB operation —
-        // workers POST metrics straight to the metrics-consumer, so app
-        // registration is a pure DB operation.
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(withCapacity(stored, capacityRepo.findByApplicationId(stored.applicationId())));
+        // Registration is a pure DB operation — workers POST metrics straight
+        // to the metrics-consumer, and the pool is the group's.
+        return ResponseEntity.status(HttpStatus.CREATED).body(stored);
     }
 
     @PutMapping("/{applicationId:" + Ulid.PATTERN + "}")
     public ResponseEntity<Application> update(@PathVariable String applicationId,
                                               @RequestBody UpdateApplicationRequest req) {
         repo.findById(applicationId).orElseThrow(() -> new ApplicationNotFoundException(applicationId));
-        // D-Capacity v2 polish — capacity in the body is IGNORED on PUT
-        // for the same reason as POST: operator can never directly set
-        // it. App settings updates metadata only; capacity changes go
-        // through the "Request more capacity" sponsor workflow.
-        validate(req.name(), req.sealId(), req.description(), req.healthEndpoints(), /* capacity */ null);
-        // PUT body's recyclePolicy may be null
-        // (operator updated other metadata only). Repo treats null as
-        // "no change"; thresholds are only validated when policy is
-        // supplied.
-        RecyclePolicy policy = req.recyclePolicy() == null ? null : resolveRecyclePolicy(req.recyclePolicy());
-        if (policy != null) {
-            validateRecyclePolicy(policy, req.maxRunsPerPod(), req.podMaxAgeHours());
-        } else if (req.maxRunsPerPod() != null || req.podMaxAgeHours() != null) {
-            throw new ApplicationValidationException(
-                    "maxRunsPerPod / podMaxAgeHours can only be set together with recyclePolicy");
-        }
-        // alwaysOn — AUTOMATION Phase C. PUT body omitting it preserves the
-        // current value (no surprise flips for callers that don't know about it).
-        Application existing = repo.findById(applicationId).orElseThrow(
-                () -> new ApplicationNotFoundException(applicationId));
-        boolean alwaysOn = req.alwaysOn() == null ? existing.alwaysOn() : req.alwaysOn();
+        // App settings updates metadata only; the pool (capacity, policy) is the group's.
+        validate(req.name(), req.sealId(), req.description(), req.healthEndpoints());
         String metricsGroupId = resolveMetricsGroup(req.metricsGroupId());
         String metricsApplication = resolveMetricsApplication(
                 metricsGroupId, req.metricsApplication(), req.name().trim());
@@ -262,13 +206,9 @@ public class ApplicationController {
                     trimOrNull(req.sealId()),
                     trimOrNull(req.description()),
                     req.healthEndpoints() == null ? List.of() : req.healthEndpoints(),
-                    policy,
-                    req.maxRunsPerPod(),
-                    req.podMaxAgeHours(),
-                    alwaysOn,
                     metricsGroupId,
                     metricsApplication);
-            return ResponseEntity.ok(withCapacity(updated, capacityRepo.findByApplicationId(applicationId)));
+            return ResponseEntity.ok(updated);
         } catch (DuplicateKeyException e) {
             throw new ApplicationConflictException(req.name());
         }
@@ -276,15 +216,10 @@ public class ApplicationController {
 
     @DeleteMapping("/{applicationId:" + Ulid.PATTERN + "}")
     @Transactional("transactionManager")
-    // Soft-delete RETAINS the capacity rows (no ON DELETE CASCADE fires), so
-    // nothing in ApplicationCapacityRepository evicts the cached entry for the
-    // now-retired app. Evict the whole capacity cache here so a hidden app's
-    // stale capacity (per-app key AND the 'all' grouped key) can't linger.
-    @CacheEvict(cacheNames = CacheConfig.CACHE_APPLICATION_CAPACITY, allEntries = true)
     public ResponseEntity<Void> delete(@PathVariable String applicationId) {
-        // Soft delete ("hide") — the registry row, its capacity rows, this
-        // app's run history, metrics, audit events, and uploaded blobs are all
-        // RETAINED (a future purge job reclaims them).
+        // Soft delete ("hide") — the registry row, this app's run history,
+        // metrics, audit events, and uploaded blobs are all RETAINED (a future
+        // purge job reclaims them). The pool is the group's and is untouched.
         //
         // The original name is FREED: we rename the hidden row to an archived
         // name (original + "__deleted__" + id) and re-tag its runs to match,
@@ -368,7 +303,7 @@ public class ApplicationController {
     // ── Validation ─────────────────────────────────────────────────
 
     private static void validate(String name, String sealId, String description,
-                                 List<String> healthEndpoints, List<CapacityEntry> capacity) {
+                                 List<String> healthEndpoints) {
         if (name == null || name.isBlank()) {
             throw new ApplicationValidationException("name is required");
         }
@@ -406,24 +341,6 @@ public class ApplicationController {
                 }
             }
         }
-        if (capacity != null) {
-            java.util.Set<String> seenRegions = new java.util.HashSet<>();
-            for (CapacityEntry c : capacity) {
-                if (c.region() == null || !REGION_PATTERN.matcher(c.region()).matches()) {
-                    throw new ApplicationValidationException(
-                            "capacity.region must be DNS-friendly: " + c.region());
-                }
-                if (!seenRegions.add(c.region())) {
-                    throw new ApplicationValidationException(
-                            "duplicate region in capacity: " + c.region());
-                }
-                if (c.maxAvailable() < 0 || c.maxAvailable() > MAX_POD_BUDGET) {
-                    throw new ApplicationValidationException(
-                            "capacity.maxAvailable must be 0.." + MAX_POD_BUDGET
-                                    + " for region " + c.region() + "; got " + c.maxAvailable());
-                }
-            }
-        }
     }
 
     private static String trimOrNull(String s) {
@@ -435,9 +352,12 @@ public class ApplicationController {
     // ── Metrics group + classifier value ──────────────────────────
 
     /** Blank → ungrouped; otherwise the group must exist (400 — the operator picks from the registry). */
+    /** Required: an application always belongs to a group (its pool and its metrics tables). */
     private String resolveMetricsGroup(String raw) {
         String groupId = trimOrNull(raw);
-        if (groupId == null) return null;
+        if (groupId == null) {
+            throw new ApplicationValidationException("metricsGroupId is required — every application belongs to a group");
+        }
         if (groupRepo.findById(groupId).isEmpty()) {
             throw new ApplicationValidationException("unknown application group: " + groupId);
         }
@@ -458,113 +378,22 @@ public class ApplicationController {
         return value;
     }
 
-    // ── WORKER-HYGIENE Phase C — recycle policy validation ───────────
-
-    private static final int MAX_RUNS_PER_POD_CEILING = 10_000;
-    private static final int POD_MAX_AGE_HOURS_CEILING = 720; // 30 days
-
-    /** Returns REUSE when the input is null; otherwise parses the enum (400 on unknown). */
-    private static RecyclePolicy resolveRecyclePolicy(String raw) {
-        if (raw == null || raw.isBlank()) return RecyclePolicy.REUSE;
-        try {
-            return RecyclePolicy.valueOf(raw.trim());
-        } catch (IllegalArgumentException e) {
-            throw new ApplicationValidationException(
-                    "recyclePolicy must be one of REUSE, MAX_RUNS, MAX_AGE, BOTH, EVERY_RUN, DRAIN_AFTER_RUN — got " + raw);
-        }
-    }
-
-    /** Cross-field invariants per {@link RecyclePolicy}'s table. */
-    private static void validateRecyclePolicy(RecyclePolicy policy,
-                                              Integer maxRunsPerPod,
-                                              Integer podMaxAgeHours) {
-        if (maxRunsPerPod != null && (maxRunsPerPod < 1 || maxRunsPerPod > MAX_RUNS_PER_POD_CEILING)) {
-            throw new ApplicationValidationException(
-                    "maxRunsPerPod must be 1.." + MAX_RUNS_PER_POD_CEILING + "; got " + maxRunsPerPod);
-        }
-        if (podMaxAgeHours != null && (podMaxAgeHours < 1 || podMaxAgeHours > POD_MAX_AGE_HOURS_CEILING)) {
-            throw new ApplicationValidationException(
-                    "podMaxAgeHours must be 1.." + POD_MAX_AGE_HOURS_CEILING + "; got " + podMaxAgeHours);
-        }
-        switch (policy) {
-            case REUSE, EVERY_RUN, DRAIN_AFTER_RUN -> {
-                if (maxRunsPerPod != null || podMaxAgeHours != null) {
-                    throw new ApplicationValidationException(
-                            "policy=" + policy + " forbids maxRunsPerPod / podMaxAgeHours");
-                }
-            }
-            case MAX_RUNS -> {
-                if (maxRunsPerPod == null) {
-                    throw new ApplicationValidationException(
-                            "policy=MAX_RUNS requires maxRunsPerPod");
-                }
-                if (podMaxAgeHours != null) {
-                    throw new ApplicationValidationException(
-                            "policy=MAX_RUNS forbids podMaxAgeHours");
-                }
-            }
-            case MAX_AGE -> {
-                if (podMaxAgeHours == null) {
-                    throw new ApplicationValidationException(
-                            "policy=MAX_AGE requires podMaxAgeHours");
-                }
-                if (maxRunsPerPod != null) {
-                    throw new ApplicationValidationException(
-                            "policy=MAX_AGE forbids maxRunsPerPod");
-                }
-            }
-            case BOTH -> {
-                if (maxRunsPerPod == null || podMaxAgeHours == null) {
-                    throw new ApplicationValidationException(
-                            "policy=BOTH requires both maxRunsPerPod and podMaxAgeHours");
-                }
-            }
-        }
-    }
-
-    private static Application withCapacity(Application a, List<ApplicationCapacity> capacity) {
-        return new Application(
-                a.applicationId(), a.name(), a.sealId(), a.description(),
-                a.healthEndpoints(), capacity, a.createdAt(),
-                a.lastHealthCheckedAt(), a.lastHealthStatus(), a.lastHealthDetails(),
-                a.recyclePolicy(), a.maxRunsPerPod(), a.podMaxAgeHours(),
-                a.alwaysOn(), a.metricsGroupId(), a.metricsApplication());
-    }
-
     // ── Request bodies ─────────────────────────────────────────────
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public record CapacityEntry(String region, int maxAvailable) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record CreateApplicationRequest(
             String name, String sealId, String description, List<String> healthEndpoints,
-            /** D-Capacity v2 — per-region grid; empty/null = configure later. */
-            List<CapacityEntry> capacity,
-            /** WORKER-HYGIENE Phase C — null defaults to REUSE. */
-            String recyclePolicy,
-            Integer maxRunsPerPod,
-            Integer podMaxAgeHours,
-            /** AUTOMATION Phase C — null defaults to false (DRAIN_REGION jobs fire normally). */
-            Boolean alwaysOn,
-            /** An existing application group's id; null = ungrouped. */
+            /** An existing application group's id — required: the pool and the metrics tables are the group's. */
             String metricsGroupId,
-            /** The group classifier's value for this app's labels; null = upper-cased name when grouped. */
+            /** The group classifier's value for this app's labels; null = upper-cased name. */
             String metricsApplication) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record UpdateApplicationRequest(
             String name, String sealId, String description, List<String> healthEndpoints,
-            List<CapacityEntry> capacity,
-            /** WORKER-HYGIENE Phase C — null = no policy change. */
-            String recyclePolicy,
-            Integer maxRunsPerPod,
-            Integer podMaxAgeHours,
-            /** AUTOMATION Phase C — null = preserve current. */
-            Boolean alwaysOn,
-            /** Replaced wholesale: null clears the group. */
+            /** Replaced wholesale — required; an application always belongs to a group. */
             String metricsGroupId,
-            /** Replaced wholesale: null = upper-cased name when grouped. */
+            /** Replaced wholesale: null = upper-cased name. */
             String metricsApplication) {}
 
     // ── Exceptions + handlers ──────────────────────────────────────

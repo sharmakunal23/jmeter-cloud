@@ -10,7 +10,7 @@ package com.perf.globalorchestrator.domain;
  *       the regions.</li>
  *   <li>{@link #DRAIN_REGION} — drain every IDLE worker in
  *       {@code (applicationName, region)} without replacement. Skips IN_USE
- *       workers and is a no-op when {@code application.alwaysOn}. Requires
+ *       workers and is a no-op when {@code applicationGroup.alwaysOn}. Requires
  *       {@code region}.</li>
  *   <li>{@link #PROVISION_REGION} — bring {@code (applicationName, region)}
  *       back up to {@code applicationCapacity.maxAvailable}. Requires

@@ -49,8 +49,8 @@ export function App() {
           <Route path="applications/:appName/runs/new" element={<NewRunPage />} />
           <Route path="applications/:appName/runs/:runId" element={<RunDetailPage />} />
 
-          {/* Phase 5b — Capacity rework. List view + drill-in detail
-              following the Applications-tab IA pattern.
+          {/* Capacity — one row per application group (the worker pool is the
+              group's; GROUP-CAPACITY 2026-08-31), drill-in per group.
               STATIC-FLEET Phase 7 — both routes redirect to /applications on
               a deployment that does not provision its own workers; the whole
               surface is spin / restart / drain, which don't apply there. */}
@@ -63,7 +63,7 @@ export function App() {
             }
           />
           <Route
-            path="capacity/:appName"
+            path="capacity/:groupId"
             element={
               <DynamicScalingRoute>
                 <CapacityDetailPage />

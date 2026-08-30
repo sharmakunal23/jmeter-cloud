@@ -22,6 +22,7 @@ vi.mock("../../api/applicationGroups", async () => {
 import { applicationsApi, ApplicationApiError } from "../../api/applications";
 import { applicationGroupsApi } from "../../api/applicationGroups";
 const groupMocks = applicationGroupsApi as unknown as { list: ReturnType<typeof vi.fn> };
+const cpsGroup = { groupId: "cps", name: "Servicing MQ", createdAt: "2026-08-29T00:00:00Z", applicationCount: 0 };
 const apiMocks = applicationsApi as unknown as {
   create: ReturnType<typeof vi.fn>;
   delete: ReturnType<typeof vi.fn>;
@@ -31,7 +32,8 @@ beforeEach(() => {
   apiMocks.create.mockReset();
   apiMocks.delete.mockReset();
   groupMocks.list.mockReset();
-  groupMocks.list.mockResolvedValue([]);
+  // Every application needs a group — the default list carries one.
+  groupMocks.list.mockResolvedValue([cpsGroup]);
 });
 
 function fixtureApp(name = "checkout-svc"): Application {
@@ -41,6 +43,7 @@ function fixtureApp(name = "checkout-svc"): Application {
     sealId: null,
     description: null,
     healthEndpoints: [],
+    metricsGroupId: "cps",
     createdAt: "2026-05-11T12:00:00Z",
     lastHealthStatus: "UNKNOWN",
     lastHealthCheckedAt: null,
@@ -54,7 +57,9 @@ describe("CreateApplicationDialog — submit path", () => {
     const onCreated = vi.fn();
     const onClose = vi.fn();
     render(<MemoryRouter><CreateApplicationDialog onCreated={onCreated} onClose={onClose} /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByLabelText(/Application group/i)).not.toBeDisabled());
     fireEvent.change(screen.getByLabelText(/Name \*/i), { target: { value: "payment-api" } });
+    fireEvent.change(screen.getByLabelText(/Application group/i), { target: { value: "cps" } });
     fireEvent.change(screen.getByLabelText(/Seal ID/i), { target: { value: "PAY-001" } });
     fireEvent.change(screen.getByLabelText(/Description/i),
                      { target: { value: "payment processor" } });
@@ -67,14 +72,18 @@ describe("CreateApplicationDialog — submit path", () => {
     expect(body.sealId).toBe("PAY-001");
     expect(body.description).toBe("payment processor");
     expect(body.healthEndpoints).toEqual([]);
+    expect(body.metricsGroupId).toBe("cps");
     expect(body.capacity).toBeUndefined();
+    expect(body.alwaysOn).toBeUndefined();
     expect(onCreated).toHaveBeenCalledWith(expect.objectContaining({ name: "payment-api" }));
   });
 
   it("trims whitespace + omits blank optional fields from the request", async () => {
     apiMocks.create.mockResolvedValue(fixtureApp());
     render(<MemoryRouter><CreateApplicationDialog onCreated={vi.fn()} onClose={vi.fn()} /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByLabelText(/Application group/i)).not.toBeDisabled());
     fireEvent.change(screen.getByLabelText(/Name \*/i), { target: { value: "  checkout-svc  " } });
+    fireEvent.change(screen.getByLabelText(/Application group/i), { target: { value: "cps" } });
     fireEvent.click(screen.getByRole("button", { name: /^Register$/i }));
     await waitFor(() => expect(apiMocks.create).toHaveBeenCalled());
     const body = apiMocks.create.mock.calls[0][0];
@@ -99,9 +108,11 @@ describe("CreateApplicationDialog — validation", () => {
     expect(screen.getByText(/lowercase \/ digits/i)).toBeInTheDocument();
   });
 
-  it("name 'a' alone is valid — no capacity grid blocking submit (D-Capacity v2 polish)", () => {
+  it("name 'a' + a group is valid — no capacity grid blocking submit", async () => {
     render(<MemoryRouter><CreateApplicationDialog onCreated={vi.fn()} onClose={vi.fn()} /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByLabelText(/Application group/i)).not.toBeDisabled());
     fireEvent.change(screen.getByLabelText(/Name \*/i), { target: { value: "a" } });
+    fireEvent.change(screen.getByLabelText(/Application group/i), { target: { value: "cps" } });
     expect(screen.getByRole("button", { name: /^Register$/i })).not.toBeDisabled();
   });
 
@@ -127,10 +138,11 @@ describe("CreateApplicationDialog — validation", () => {
     expect(document.querySelectorAll('input[type="url"]')).toHaveLength(8);
   });
 
-  it("explicit capacity-grid copy points operators at the Capacity tab", () => {
+  it("carries no capacity copy and no always-on checkbox — both are the group's now", () => {
     render(<MemoryRouter><CreateApplicationDialog onCreated={vi.fn()} onClose={vi.fn()} /></MemoryRouter>);
-    expect(screen.getByText(/seeds at/i)).toHaveTextContent(/0/);
-    expect(screen.getByRole("link", { name: /Capacity/ })).toHaveAttribute("href", "/capacity");
+    expect(screen.queryByText(/seeds at/i)).toBeNull();
+    expect(screen.queryByRole("link", { name: /Capacity/ })).toBeNull();
+    expect(screen.queryByLabelText(/Always on/i)).toBeNull();
   });
 });
 
@@ -224,8 +236,8 @@ describe("CreateApplicationDialog — soft-delete (edit mode)", () => {
   });
 });
 
-describe("CreateApplicationDialog — metrics group", () => {
-  const cps = { groupId: "cps", name: "Servicing MQ", createdAt: "2026-08-29T00:00:00Z", applicationCount: 0 };
+describe("CreateApplicationDialog — application group", () => {
+  const cps = cpsGroup;
 
   it("posts metricsGroupId + metricsApplication when a group is picked", async () => {
     groupMocks.list.mockResolvedValue([cps]);
@@ -233,7 +245,7 @@ describe("CreateApplicationDialog — metrics group", () => {
     render(<MemoryRouter><CreateApplicationDialog onCreated={vi.fn()} onClose={vi.fn()} /></MemoryRouter>);
     await waitFor(() => expect(screen.getByRole("option", { name: "Servicing MQ (cps)" })).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText(/Name \*/i), { target: { value: "cps-pci" } });
-    fireEvent.change(screen.getByLabelText(/Metrics group/i), { target: { value: "cps" } });
+    fireEvent.change(screen.getByLabelText(/Application group/i), { target: { value: "cps" } });
     // The classifier value appears only once a group is chosen.
     fireEvent.change(screen.getByLabelText(/Metrics application/i), { target: { value: "CPS-PCI" } });
     fireEvent.click(screen.getByRole("button", { name: /^Register$/i }));
@@ -243,17 +255,24 @@ describe("CreateApplicationDialog — metrics group", () => {
     expect(body.metricsApplication).toBe("CPS-PCI");
   });
 
-  it("leaves both fields out when ungrouped, and the classifier field stays hidden", async () => {
-    apiMocks.create.mockResolvedValue(fixtureApp());
+  it("a group is required: no 'Ungrouped' option, Register stays disabled until one is picked", async () => {
+    groupMocks.list.mockResolvedValue([cps]);
     render(<MemoryRouter><CreateApplicationDialog onCreated={vi.fn()} onClose={vi.fn()} /></MemoryRouter>);
-    await waitFor(() => expect(screen.getByLabelText(/Metrics group/i)).not.toBeDisabled());
-    expect(screen.queryByLabelText(/Metrics application/i)).toBeNull();
+    await waitFor(() => expect(screen.getByRole("option", { name: "Servicing MQ (cps)" })).toBeInTheDocument());
+    expect(screen.queryByRole("option", { name: /Ungrouped/ })).toBeNull();
     fireEvent.change(screen.getByLabelText(/Name \*/i), { target: { value: "checkout-svc" } });
-    fireEvent.click(screen.getByRole("button", { name: /^Register$/i }));
-    await waitFor(() => expect(apiMocks.create).toHaveBeenCalled());
-    const body = apiMocks.create.mock.calls[0][0];
-    expect(body.metricsGroupId).toBeUndefined();
-    expect(body.metricsApplication).toBeUndefined();
+    expect(screen.getByRole("button", { name: /^Register$/i })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/Application group/i), { target: { value: "cps" } });
+    expect(screen.getByRole("button", { name: /^Register$/i })).not.toBeDisabled();
+  });
+
+  it("with no groups at all the form blocks and points at Manage groups", async () => {
+    groupMocks.list.mockResolvedValue([]);
+    render(<MemoryRouter><CreateApplicationDialog onCreated={vi.fn()} onClose={vi.fn()} /></MemoryRouter>);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Manage groups/);
+    fireEvent.change(screen.getByLabelText(/Name \*/i), { target: { value: "checkout-svc" } });
+    expect(screen.getByRole("button", { name: /^Register$/i })).toBeDisabled();
+    expect(screen.getByLabelText(/Application group/i)).toBeDisabled();
   });
 
   it("edit mode pre-selects the app's group and rejects a malformed classifier value", async () => {
@@ -261,7 +280,7 @@ describe("CreateApplicationDialog — metrics group", () => {
     const app = { ...fixtureApp("cps-pci"), metricsGroupId: "cps", metricsApplication: "CPS-PCI" };
     render(<MemoryRouter><CreateApplicationDialog mode="edit" initial={app} onCreated={vi.fn()} onClose={vi.fn()} /></MemoryRouter>);
     await waitFor(() => expect(screen.getByRole("option", { name: "Servicing MQ (cps)" })).toBeInTheDocument());
-    expect((screen.getByLabelText(/Metrics group/i) as HTMLSelectElement).value).toBe("cps");
+    expect((screen.getByLabelText(/Application group/i) as HTMLSelectElement).value).toBe("cps");
     expect((screen.getByLabelText(/Metrics application/i) as HTMLInputElement).value).toBe("CPS-PCI");
     fireEvent.change(screen.getByLabelText(/Metrics application/i), { target: { value: "has space" } });
     expect(screen.getByRole("button", { name: /Save changes/i })).toBeDisabled();

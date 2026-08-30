@@ -9,7 +9,7 @@ import java.time.Instant;
  */
 public record ProvisionedPod(
         String podName,
-        String applicationId,
+        String groupId,
         String region,
         String status,
         Instant startedAt,

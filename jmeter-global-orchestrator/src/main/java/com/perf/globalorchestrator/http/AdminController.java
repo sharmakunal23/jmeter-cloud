@@ -1,9 +1,8 @@
 package com.perf.globalorchestrator.http;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.perf.globalorchestrator.repo.ApplicationRepository;
+import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.repo.PodRepository;
-import com.perf.globalorchestrator.domain.Application;
 import com.perf.globalorchestrator.provision.PodNameAllocator;
 import com.perf.globalorchestrator.provision.PodProvisioner;
 import com.perf.globalorchestrator.provision.PodReconciler;
@@ -54,7 +53,7 @@ public class AdminController {
     private final ObjectProvider<PodRecycler> recycler;
     private final PodProvisioner provisioner;
     private final PodNameAllocator nameAllocator;
-    private final ApplicationRepository applications;
+    private final ApplicationGroupRepository groups;
     private final ProvisioningProperties provisioning;
     private final PodRepository pods;
 
@@ -63,14 +62,14 @@ public class AdminController {
             ObjectProvider<PodRecycler> recycler,
             PodProvisioner provisioner,
             PodNameAllocator nameAllocator,
-            ApplicationRepository applications,
+            ApplicationGroupRepository groups,
             ProvisioningProperties provisioning,
             PodRepository pods) {
         this.reconciler    = reconciler;
         this.recycler      = recycler;
         this.provisioner   = provisioner;
         this.nameAllocator = nameAllocator;
-        this.applications  = applications;
+        this.groups = groups;
         this.provisioning  = provisioning;
         this.pods = pods;
     }
@@ -105,24 +104,23 @@ public class AdminController {
     @PostMapping("/spinPod")
     public ResponseEntity<Map<String, Object>> spinPod(@RequestBody SpinPodRequest req) {
         provisioning.requireDynamic("spin a worker");
-        if (req == null || req.applicationId() == null || req.applicationId().isBlank()
+        if (req == null || req.groupId() == null || req.groupId().isBlank()
                 || req.region() == null || req.region().isBlank()) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
                     "code", "INVALID_REQUEST",
-                    "message", "applicationId and region are required"));
+                    "message", "groupId and region are required"));
         }
-        Optional<Application> app = applications.findById(req.applicationId());
-        if (app.isEmpty()) {
+        if (groups.findById(req.groupId()).isEmpty()) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
-                    "code", "APPLICATION_NOT_FOUND",
-                    "message", "applicationId=" + req.applicationId() + " is not registered"));
+                    "code", "APPLICATION_GROUP_NOT_FOUND",
+                    "message", "groupId=" + req.groupId() + " is not registered"));
         }
-        String podName = nameAllocator.allocate(req.applicationId(), app.get().name(), req.region());
-        PodSpec spec = new PodSpec(podName, req.applicationId(), app.get().name(), req.region());
+        String podName = nameAllocator.allocate(req.groupId(), req.region());
+        PodSpec spec = new PodSpec(podName, req.groupId(), req.region());
         com.perf.globalorchestrator.provision.ProvisionResult result = provisioner.createAndStart(spec);
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("podName",       podName);
-        body.put("applicationId", req.applicationId());
+        body.put("podName", podName);
+        body.put("groupId", req.groupId());
         body.put("region",        req.region());
         body.put("baseUrl",       result.baseUrl());
         return ResponseEntity.status(HttpStatus.CREATED).body(body);
@@ -165,5 +163,5 @@ public class AdminController {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record SpinPodRequest(String applicationId, String region) {}
+    public record SpinPodRequest(String groupId, String region) {}
 }

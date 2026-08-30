@@ -12,7 +12,7 @@ import java.util.List;
  * writes.
  *
  * <p>Pod name == network hostname == registry key, allocated as
- * {@code {applicationName}-{region}-worker-{n}}. {@link #createAndStart} is
+ * {@code {groupId}-{region}-worker-{n}}. {@link #createAndStart} is
  * idempotent on the name: a live pod is reused, a terminal one recreated.
  */
 public interface PodProvisioner {
@@ -43,13 +43,13 @@ public interface PodProvisioner {
     }
 
     /**
-     * Pods managed for an application, narrowed to a region or across all
-     * regions when {@code region} is null. {@code applicationId} is required.
+     * Pods managed for a group's pool, narrowed to a region or across all
+     * regions when {@code region} is null. {@code groupId} is required.
      */
-    List<ProvisionedPod> listFor(String applicationId, String region);
+    List<ProvisionedPod> listFor(String groupId, String region);
 
     /**
-     * Every pod the substrate manages in a region, whatever the application —
+     * Every pod the substrate manages in a region, whatever the group —
      * the reconciler's view after a registry wipe. Default: nothing.
      */
     default List<ProvisionedPod> listAll(String region) {

@@ -41,6 +41,9 @@ CREATE INDEX "globalOrchestrator"."run_createdAt_idx"
     ON "globalOrchestrator"."run" ("createdAt" DESC);
 CREATE INDEX "globalOrchestrator"."run_application_createdAt_idx"
     ON "globalOrchestrator"."run" ("application", "createdAt" DESC);
+-- The capacity ceiling: active members of the group's non-terminal runs in a region.
+CREATE INDEX "globalOrchestrator"."run_metricsGroupId_state_idx"
+    ON "globalOrchestrator"."run" ("metricsGroupId", "state");
 CREATE INDEX "globalOrchestrator"."run_state_createdAt_idx"
     ON "globalOrchestrator"."run" ("state", "createdAt" DESC);
 COMMENT ON TABLE "globalOrchestrator"."run" IS
@@ -87,26 +90,38 @@ CREATE TABLE "globalOrchestrator"."applicationGroup" (
     "grafanaLiveUrl"    VARCHAR2(2000 CHAR),                    -- the group's live dashboard (reads <P>_METRICS); the UI's "Open in Grafana" default
     "grafanaHistoryUrl" VARCHAR2(2000 CHAR),                    -- the history dashboard (reads <P>_METRICS_H); optional, falls back to live
     "hotDays"      NUMBER(5)           DEFAULT 7 NOT NULL,      -- days the live dashboard covers (= the group's hot retention); older runs open history
+    -- The worker pool's policy — the pool is the group's (GROUP-CAPACITY, 2026-08-31), so its rules are too.
+    "recyclePolicy"  VARCHAR2(32 CHAR) DEFAULT 'REUSE' NOT NULL,
+    "maxRunsPerPod"  NUMBER(10),
+    "podMaxAgeHours" NUMBER(10),
+    "alwaysOn"       NUMBER(1)         DEFAULT 0 NOT NULL,      -- DRAIN_REGION jobs skip this group's workers
     "createdAt"    TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT "applicationGroup_pk" PRIMARY KEY ("groupId"),
     CONSTRAINT "applicationGroup_hotDays_ck" CHECK ("hotDays" > 0),
-    CONSTRAINT "applicationGroup_name_uq" UNIQUE ("name")
+    CONSTRAINT "applicationGroup_name_uq" UNIQUE ("name"),
+    CONSTRAINT "applicationGroup_alwaysOn_chk" CHECK ("alwaysOn" IN (0, 1)),
+    CONSTRAINT "applicationGroup_recyclePolicy_chk"
+        CHECK ("recyclePolicy" IN ('REUSE', 'MAX_RUNS', 'MAX_AGE', 'BOTH', 'EVERY_RUN', 'DRAIN_AFTER_RUN')),
+    -- The thresholds exist exactly when the policy reads them.
+    CONSTRAINT "applicationGroup_recycleThresholds_chk" CHECK (
+           ("recyclePolicy" IN ('REUSE', 'EVERY_RUN', 'DRAIN_AFTER_RUN') AND "maxRunsPerPod" IS NULL     AND "podMaxAgeHours" IS NULL)
+        OR ("recyclePolicy" = 'MAX_RUNS'                                AND "maxRunsPerPod" IS NOT NULL AND "podMaxAgeHours" IS NULL)
+        OR ("recyclePolicy" = 'MAX_AGE'                                 AND "maxRunsPerPod" IS NULL     AND "podMaxAgeHours" IS NOT NULL)
+        OR ("recyclePolicy" = 'BOTH'                                    AND "maxRunsPerPod" IS NOT NULL AND "podMaxAgeHours" IS NOT NULL)),
+    CONSTRAINT "applicationGroup_maxRunsPerPod_chk"  CHECK ("maxRunsPerPod"  IS NULL OR "maxRunsPerPod"  BETWEEN 1 AND 10000),
+    CONSTRAINT "applicationGroup_podMaxAgeHours_chk" CHECK ("podMaxAgeHours" IS NULL OR "podMaxAgeHours" BETWEEN 1 AND 720)
 );
 COMMENT ON TABLE "globalOrchestrator"."applicationGroup" IS
-    'A team''s applications share one group: its groupId routes their metrics to the group''s own fact tables.';
+    'A team''s applications share one group: its groupId routes their metrics to the group''s own fact tables, and the group owns the worker pool (groupCapacity, pod) and its recycle policy.';
 
 CREATE TABLE "globalOrchestrator"."application" (
     "applicationId"       VARCHAR2(64 CHAR)   NOT NULL,
     "name"                VARCHAR2(255 CHAR)  NOT NULL,
     "sealId"              VARCHAR2(128 CHAR),
     "description"         VARCHAR2(4000 CHAR),
-    "metricsGroupId"      VARCHAR2(30 CHAR),                                 -- FK applicationGroup; NULL = ungrouped, metrics not routed
+    "metricsGroupId"      VARCHAR2(30 CHAR)   NOT NULL,                       -- FK applicationGroup: the team whose pool the app runs on and whose tables take its metrics
     "metricsApplication"  VARCHAR2(64 CHAR),                                 -- the group classifier's value for this app's labels (LABEL.APPLICATION); the dashboards are the group's
     "healthEndpoints"     CLOB                DEFAULT '[]' NOT NULL,  -- JSON array of URLs polled by ApplicationHealthPoller
-    "recyclePolicy"       VARCHAR2(32 CHAR)   DEFAULT 'REUSE' NOT NULL,
-    "maxRunsPerPod"       NUMBER(10),
-    "podMaxAgeHours"      NUMBER(10),
-    "alwaysOn"            NUMBER(1)           DEFAULT 0 NOT NULL,   -- DRAIN_REGION jobs skip this app
     "createdAt"           TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     "lastHealthCheckedAt" TIMESTAMP(3) WITH TIME ZONE,
     "lastHealthStatus"    VARCHAR2(32 CHAR),
@@ -116,17 +131,6 @@ CREATE TABLE "globalOrchestrator"."application" (
     CONSTRAINT "application_name_uq" UNIQUE ("name"),
     CONSTRAINT "application_healthEndpoints_chk" CHECK ("healthEndpoints" IS JSON),
     CONSTRAINT "application_lastHealthDetails_chk" CHECK ("lastHealthDetails" IS JSON),
-    CONSTRAINT "application_alwaysOn_chk" CHECK ("alwaysOn" IN (0, 1)),
-    CONSTRAINT "application_recyclePolicy_chk"
-        CHECK ("recyclePolicy" IN ('REUSE', 'MAX_RUNS', 'MAX_AGE', 'BOTH', 'EVERY_RUN', 'DRAIN_AFTER_RUN')),
-    -- The thresholds exist exactly when the policy reads them.
-    CONSTRAINT "application_recycleThresholds_chk" CHECK (
-           ("recyclePolicy" IN ('REUSE', 'EVERY_RUN', 'DRAIN_AFTER_RUN') AND "maxRunsPerPod" IS NULL     AND "podMaxAgeHours" IS NULL)
-        OR ("recyclePolicy" = 'MAX_RUNS'                                AND "maxRunsPerPod" IS NOT NULL AND "podMaxAgeHours" IS NULL)
-        OR ("recyclePolicy" = 'MAX_AGE'                                 AND "maxRunsPerPod" IS NULL     AND "podMaxAgeHours" IS NOT NULL)
-        OR ("recyclePolicy" = 'BOTH'                                    AND "maxRunsPerPod" IS NOT NULL AND "podMaxAgeHours" IS NOT NULL)),
-    CONSTRAINT "application_maxRunsPerPod_chk"  CHECK ("maxRunsPerPod"  IS NULL OR "maxRunsPerPod"  BETWEEN 1 AND 10000),
-    CONSTRAINT "application_podMaxAgeHours_chk" CHECK ("podMaxAgeHours" IS NULL OR "podMaxAgeHours" BETWEEN 1 AND 720),
     -- No ON DELETE action: a group with applications (visible or archived) cannot be deleted.
     CONSTRAINT "application_metricsGroup_fk" FOREIGN KEY ("metricsGroupId")
         REFERENCES "globalOrchestrator"."applicationGroup" ("groupId")
@@ -135,28 +139,28 @@ CREATE TABLE "globalOrchestrator"."application" (
 CREATE INDEX "globalOrchestrator"."application_metricsGroupId_idx"
     ON "globalOrchestrator"."application" ("metricsGroupId");
 COMMENT ON TABLE "globalOrchestrator"."application" IS
-    'Registered application: operator metadata, metrics group, worker recycle policy, last health snapshot.';
+    'Registered application: operator metadata, its group (required — the pool and the metrics tables are the group''s), last health snapshot.';
 
-CREATE TABLE "globalOrchestrator"."applicationCapacity" (
-    "applicationId"  VARCHAR2(64 CHAR)  NOT NULL,
+CREATE TABLE "globalOrchestrator"."groupCapacity" (
+    "groupId"        VARCHAR2(30 CHAR)  NOT NULL,
     "region"         VARCHAR2(64 CHAR)  NOT NULL,
-    "maxAvailable"   NUMBER(10)         NOT NULL,   -- workers budgeted for this app in this region; 0 allowed
+    "maxAvailable"   NUMBER(10)         NOT NULL,   -- workers budgeted for this group in this region; 0 allowed
     "createdAt"      TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     "updatedAt"      TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    CONSTRAINT "applicationCapacity_pk" PRIMARY KEY ("applicationId", "region"),
-    CONSTRAINT "applicationCapacity_app_fk" FOREIGN KEY ("applicationId")
-        REFERENCES "globalOrchestrator"."application" ("applicationId") ON DELETE CASCADE,
-    CONSTRAINT "applicationCapacity_maxAvailable_chk" CHECK ("maxAvailable" BETWEEN 0 AND 1000)
+    CONSTRAINT "groupCapacity_pk" PRIMARY KEY ("groupId", "region"),
+    CONSTRAINT "groupCapacity_group_fk" FOREIGN KEY ("groupId")
+        REFERENCES "globalOrchestrator"."applicationGroup" ("groupId") ON DELETE CASCADE,
+    CONSTRAINT "groupCapacity_maxAvailable_chk" CHECK ("maxAvailable" BETWEEN 0 AND 1000)
 );
-COMMENT ON TABLE "globalOrchestrator"."applicationCapacity" IS
-    'Per-(application, region) worker budget. "region" is the placement axis everywhere; the UI''s "data center" is display-only.';
+COMMENT ON TABLE "globalOrchestrator"."groupCapacity" IS
+    'Per-(group, region) worker budget — every application in the group draws on it. "region" is the placement axis everywhere; the UI''s "data center" is display-only.';
 
 CREATE TABLE "globalOrchestrator"."pod" (
     "podId"          VARCHAR2(64 CHAR)   NOT NULL,   -- DNS-1123 label
     "region"         VARCHAR2(64 CHAR)   NOT NULL,
     "baseUrl"        VARCHAR2(512 CHAR)  NOT NULL,
     "state"          VARCHAR2(32 CHAR)   NOT NULL,
-    "applicationId"  VARCHAR2(64 CHAR)   NOT NULL,
+    "groupId"        VARCHAR2(30 CHAR)   NOT NULL,                     -- the pool it belongs to; any application in the group may claim it
     "source"         VARCHAR2(16 CHAR)   DEFAULT 'DYNAMIC' NOT NULL,  -- DYNAMIC: control-plane owned; STATIC: operator-declared
     "runsServed"     NUMBER(19)          DEFAULT 0 NOT NULL,          -- bumped inside the claim transaction
     "imageDigest"    VARCHAR2(128 CHAR),
@@ -164,16 +168,16 @@ CREATE TABLE "globalOrchestrator"."pod" (
     "registeredAt"   TIMESTAMP(3) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     "provisionedAt"  TIMESTAMP(3) WITH TIME ZONE,                     -- container creation; survives a worker restart
     CONSTRAINT "pod_pk" PRIMARY KEY ("podId"),
-    CONSTRAINT "pod_application_fk" FOREIGN KEY ("applicationId")
-        REFERENCES "globalOrchestrator"."application" ("applicationId"),
+    CONSTRAINT "pod_group_fk" FOREIGN KEY ("groupId")
+        REFERENCES "globalOrchestrator"."applicationGroup" ("groupId"),
     CONSTRAINT "pod_source_chk" CHECK ("source" IN ('DYNAMIC', 'STATIC'))
 );
 CREATE INDEX "globalOrchestrator"."pod_state_lastHeartbeat_idx"
     ON "globalOrchestrator"."pod" ("state", "lastHeartbeat" DESC);
--- The claim's candidate scan; also indexes the FK so an application delete
--- never takes a table lock on "pod".
-CREATE INDEX "globalOrchestrator"."pod_application_region_state_idx"
-    ON "globalOrchestrator"."pod" ("applicationId", "region", "state", "lastHeartbeat" DESC);
+-- The claim's candidate scan; also indexes the FK so a group delete never
+-- takes a table lock on "pod".
+CREATE INDEX "globalOrchestrator"."pod_group_region_state_idx"
+    ON "globalOrchestrator"."pod" ("groupId", "region", "state", "lastHeartbeat" DESC);
 COMMENT ON TABLE "globalOrchestrator"."pod" IS
     'Worker registry, one row per worker. Claimed IDLE → run member through claims.claimIdlePods; LOST by heartbeat age (direct regions) or the kubelet (routed regions).';
 
@@ -329,11 +333,11 @@ CREATE OR REPLACE PACKAGE "globalOrchestrator"."claims" AUTHID DEFINER AS
 
     -- Locks up to p_limit IDLE workers that no non-terminal run member
     -- holds, freshest heartbeat first, and returns them as a cursor over
-    -- the "pod" columns. p_region / p_applicationId are filters when
+    -- the "pod" columns. p_region / p_groupId are filters when
     -- non-NULL. Rows another claimer holds are skipped, never waited on;
     -- the locks belong to the caller's transaction and release at commit,
     -- so the caller must insert its "runFleetMember" rows before committing.
-    PROCEDURE "claimIdlePods"(p_region IN VARCHAR2, p_applicationId IN VARCHAR2,
+    PROCEDURE "claimIdlePods"(p_region IN VARCHAR2, p_groupId IN VARCHAR2,
                               p_limit IN NUMBER, p_pods OUT SYS_REFCURSOR);
 
     -- Locks up to p_limit enabled schedules due at p_now, earliest first,
@@ -348,7 +352,7 @@ END "claims";
 
 CREATE OR REPLACE PACKAGE BODY "globalOrchestrator"."claims" AS
 
-    PROCEDURE "claimIdlePods"(p_region IN VARCHAR2, p_applicationId IN VARCHAR2,
+    PROCEDURE "claimIdlePods"(p_region IN VARCHAR2, p_groupId IN VARCHAR2,
                               p_limit IN NUMBER, p_pods OUT SYS_REFCURSOR) IS
         v_ids "globalOrchestrator"."idTable" := "globalOrchestrator"."idTable"();
         v_id  VARCHAR2(64 CHAR);
@@ -358,7 +362,7 @@ CREATE OR REPLACE PACKAGE BODY "globalOrchestrator"."claims" AS
                   FROM   "globalOrchestrator"."pod" p
                   WHERE  p."state" = 'IDLE'
                     AND  (p_region IS NULL OR p."region" = p_region)
-                    AND  (p_applicationId IS NULL OR p."applicationId" = p_applicationId)
+                    AND  (p_groupId IS NULL OR p."groupId" = p_groupId)
                     AND  NOT EXISTS (SELECT 1 FROM "globalOrchestrator"."runFleetMember" m
                                      WHERE m."workerId" = p."podId"
                                        AND m."state" IN ('PENDING', 'REQUESTED', 'ACCEPTED', 'RUNNING', 'DRAINING'))
@@ -385,7 +389,7 @@ CREATE OR REPLACE PACKAGE BODY "globalOrchestrator"."claims" AS
 
         OPEN p_pods FOR
             SELECT p."podId", p."region", p."baseUrl", p."state", p."lastHeartbeat",
-                   p."registeredAt", p."applicationId", p."runsServed", p."imageDigest",
+                   p."registeredAt", p."groupId", p."runsServed", p."imageDigest",
                    p."provisionedAt", p."source"
             FROM   "globalOrchestrator"."pod" p
             WHERE  p."podId" IN (SELECT COLUMN_VALUE FROM TABLE(v_ids))
@@ -437,7 +441,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON "globalOrchestrator"."runFleetMember"   
 GRANT SELECT, INSERT, UPDATE, DELETE ON "globalOrchestrator"."pod"                 TO "globalOrchestratorWriter";
 GRANT SELECT, INSERT, UPDATE, DELETE ON "globalOrchestrator"."applicationGroup"    TO "globalOrchestratorWriter";
 GRANT SELECT, INSERT, UPDATE, DELETE ON "globalOrchestrator"."application"         TO "globalOrchestratorWriter";
-GRANT SELECT, INSERT, UPDATE, DELETE ON "globalOrchestrator"."applicationCapacity" TO "globalOrchestratorWriter";
+GRANT SELECT, INSERT, UPDATE, DELETE ON "globalOrchestrator"."groupCapacity" TO "globalOrchestratorWriter";
 GRANT SELECT, INSERT, UPDATE, DELETE ON "globalOrchestrator"."cronJob"             TO "globalOrchestratorWriter";
 GRANT SELECT, INSERT, UPDATE, DELETE ON "globalOrchestrator"."aiResponse"          TO "globalOrchestratorWriter";
 -- Append-only surfaces; DELETE only where a purge path exists.

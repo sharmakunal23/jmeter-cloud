@@ -16,6 +16,9 @@ vi.mock("../../api/regions", () => ({
 vi.mock("../../api/applications", () => ({
   applicationsApi: { list: vi.fn() },
 }));
+vi.mock("../../api/applicationGroups", () => ({
+  applicationGroupsApi: { get: vi.fn() },
+}));
 vi.mock("../../api/runs", async () => {
   const actual = await vi.importActual<typeof import("../../api/runs")>("../../api/runs");
   return {
@@ -30,10 +33,12 @@ vi.mock("../../api/runs", async () => {
 });
 import { regionsApi } from "../../api/regions";
 import { applicationsApi } from "../../api/applications";
+import { applicationGroupsApi } from "../../api/applicationGroups";
 import { runsApi } from "../../api/runs";
 
 const regionsMock = regionsApi.list as unknown as ReturnType<typeof vi.fn>;
 const appsMock = applicationsApi.list as unknown as ReturnType<typeof vi.fn>;
+const groupGetMock = applicationGroupsApi.get as unknown as ReturnType<typeof vi.fn>;
 const scaleUpMock = runsApi.scaleUp as unknown as ReturnType<typeof vi.fn>;
 const statusMock = runsApi.status as unknown as ReturnType<typeof vi.fn>;
 const getMock = runsApi.get as unknown as ReturnType<typeof vi.fn>;
@@ -41,11 +46,13 @@ const getMock = runsApi.get as unknown as ReturnType<typeof vi.fn>;
 beforeEach(() => {
   regionsMock.mockReset();
   appsMock.mockReset();
+  groupGetMock.mockReset();
   scaleUpMock.mockReset();
   statusMock.mockReset();
   getMock.mockReset();
   regionsMock.mockResolvedValue(fixtureRegions());
-  appsMock.mockResolvedValue([appWithCapacity()]);
+  appsMock.mockResolvedValue([fixtureApp()]);
+  groupGetMock.mockResolvedValue(groupWithCapacity());
   // Default: no new members to wait on (resp has empty fleet) → poll skipped.
   statusMock.mockResolvedValue({ runId: "run-1", state: "RUNNING", members: [] });
   getMock.mockResolvedValue(fixtureRun());
@@ -58,20 +65,25 @@ function fixtureRegions(): RegionCapacity[] {
   ];
 }
 
-/** Application fixture matching propRun()'s `application` ("checkout-svc"). */
-function appWithCapacity(
+/** Application fixture matching propRun()'s `application` ("checkout-svc") — in group `cps`. */
+function fixtureApp() {
+  return {
+    applicationId: "app-checkout",
+    name: "checkout-svc",
+    healthEndpoints: [],
+    metricsGroupId: "cps",
+    createdAt: "2026-05-15T12:00:00Z",
+  };
+}
+
+/** The app's GROUP carries the capacity grid — the ceiling comes from it. */
+function groupWithCapacity(
   capacity: Array<{ region: string; maxAvailable: number }> = [
     { region: "local-east-1", maxAvailable: 10 },
     { region: "local-west-2", maxAvailable: 10 },
   ],
 ) {
-  return {
-    applicationId: "app-checkout",
-    name: "checkout-svc",
-    healthEndpoints: [],
-    capacity,
-    createdAt: "2026-05-15T12:00:00Z",
-  };
+  return { groupId: "cps", name: "Servicing MQ", capacity, createdAt: "2026-05-15T12:00:00Z" };
 }
 
 /** The scaleUp RESPONSE run (post-scale snapshot). Empty fleet → poll skipped. */
@@ -156,14 +168,14 @@ describe("ScaleUpRunModal — happy path", () => {
 });
 
 describe("ScaleUpRunModal — capacity-aware ceiling (problem #1)", () => {
-  it("clamps the ceiling at maxAvailable − this run's active workers", async () => {
-    // 2 workers already RUNNING in local-east-1, max is 5 → can add only 3.
-    appsMock.mockResolvedValue([appWithCapacity([{ region: "local-east-1", maxAvailable: 5 }])]);
+  it("clamps the ceiling at the group's maxAvailable − this run's active workers (app → group hop)", async () => {
+    // 2 workers already RUNNING in local-east-1, the group's max is 5 → can add only 3.
+    groupGetMock.mockResolvedValue(groupWithCapacity([{ region: "local-east-1", maxAvailable: 5 }]));
     const run = propRun({
       fleetMembers: [member("w1"), member("w2")],
     });
     render(<ScaleUpRunModal run={run} onClose={vi.fn()} onSuccess={vi.fn()} />);
-    await waitFor(() => expect(appsMock).toHaveBeenCalled());
+    await waitFor(() => expect(groupGetMock).toHaveBeenCalledWith("cps", expect.anything()));
 
     const countInput = await screen.findByLabelText(/number of workers to add to local-east-1/i);
     // Ask for 5; the cap-aware ceiling (5 − 2 = 3) clamps it to 3.
@@ -173,7 +185,7 @@ describe("ScaleUpRunModal — capacity-aware ceiling (problem #1)", () => {
   });
 
   it("with no active workers the ceiling is the full maxAvailable", async () => {
-    appsMock.mockResolvedValue([appWithCapacity([{ region: "local-east-1", maxAvailable: 5 }])]);
+    groupGetMock.mockResolvedValue(groupWithCapacity([{ region: "local-east-1", maxAvailable: 5 }]));
     // Only 2 IDLE pods, but max is 5 and no active workers → can pick 5.
     regionsMock.mockResolvedValue([{ region: "local-east-1", totalPods: 5, idlePods: 2, lostPods: 0 }]);
 
@@ -293,7 +305,7 @@ describe("ScaleUpRunModal — INSUFFICIENT_CAPACITY recovery prompt", () => {
 describe("ScaleUpRunModal — predicted shortfall skips the doomed strict POST", () => {
   it("when the pick exceeds idle pods, shows the prompt WITHOUT calling scaleUp; Provision fires exactly once", async () => {
     // Headroom allows 5 (max 10, no active workers) but only 2 pods are idle.
-    appsMock.mockResolvedValue([appWithCapacity([{ region: "local-east-1", maxAvailable: 10 }])]);
+    groupGetMock.mockResolvedValue(groupWithCapacity([{ region: "local-east-1", maxAvailable: 10 }]));
     regionsMock.mockResolvedValue([{ region: "local-east-1", totalPods: 10, idlePods: 2, lostPods: 0 }]);
     scaleUpMock.mockResolvedValue({
       run: fixtureRun(), requested: 5, granted: 5, partial: false,

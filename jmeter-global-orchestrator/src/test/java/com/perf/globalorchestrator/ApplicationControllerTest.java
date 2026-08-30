@@ -2,10 +2,8 @@ package com.perf.globalorchestrator;
 
 import com.perf.globalorchestrator.domain.Application;
 import com.perf.globalorchestrator.domain.ApplicationGroup;
-import com.perf.globalorchestrator.domain.RecyclePolicy;
 import com.perf.globalorchestrator.http.ApplicationController;
 import com.perf.globalorchestrator.provision.ProvisioningProperties;
-import com.perf.globalorchestrator.repo.ApplicationCapacityRepository;
 import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.RunRepository;
@@ -59,7 +57,7 @@ class ApplicationControllerTest {
         when(groups.findById("nope")).thenReturn(Optional.empty());
         when(repo.insert(any())).thenAnswer(inv -> inv.getArgument(0));
         ApplicationController controller = new ApplicationController(
-                repo, mock(ApplicationCapacityRepository.class), groups, mock(RunRepository.class),
+                repo, groups, mock(RunRepository.class),
                 mock(ApplicationPurgeService.class), provisioning);
         mvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
@@ -79,16 +77,6 @@ class ApplicationControllerTest {
     }
 
     @Test
-    @DisplayName("POST without a group stores neither field")
-    void create_ungrouped() throws Exception {
-        mvc.perform(post("/api/v1/applications").contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"checkout\"}"))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.metricsGroupId").doesNotExist())
-                .andExpect(jsonPath("$.metricsApplication").doesNotExist());
-    }
-
-    @Test
     @DisplayName("POST with an unknown group or a malformed metricsApplication is 400 INVALID_REQUEST")
     void create_rejectsBadGroupFields() throws Exception {
         mvc.perform(post("/api/v1/applications").contentType(MediaType.APPLICATION_JSON)
@@ -104,28 +92,40 @@ class ApplicationControllerTest {
     }
 
     @Test
-    @DisplayName("PUT replaces both fields wholesale — a body without them clears the group")
+    @DisplayName("PUT replaces both fields wholesale — and a body without a group is 400: every application belongs to one")
     void update_replacesWholesale() throws Exception {
-        Application existing = new Application(ID, "cps-pci", null, null, List.of(), null, Instant.now(),
-                null, null, null, RecyclePolicy.REUSE, null, null, false, "cps", "CPS-PCI");
+        Application existing = new Application(ID, "cps-pci", null, null, List.of(), Instant.now(),
+                null, null, null, "cps", "CPS-PCI");
         when(repo.findById(ID)).thenReturn(Optional.of(existing));
-        when(repo.update(eq(ID), eq("cps-pci"), isNull(), isNull(), anyList(), isNull(), isNull(), isNull(),
-                anyBoolean(), eq("cps"), eq("CPP")))
-                .thenReturn(new Application(ID, "cps-pci", null, null, List.of(), null, existing.createdAt(),
-                        null, null, null, RecyclePolicy.REUSE, null, null, false, "cps", "CPP"));
+        when(repo.update(eq(ID), eq("cps-pci"), isNull(), isNull(), anyList(), eq("cps"), eq("CPP")))
+                .thenReturn(new Application(ID, "cps-pci", null, null, List.of(), existing.createdAt(),
+                        null, null, null, "cps", "CPP"));
         mvc.perform(put("/api/v1/applications/" + ID).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"cps-pci\",\"metricsGroupId\":\"cps\",\"metricsApplication\":\"CPP\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.metricsApplication").value("CPP"));
 
-        when(repo.update(eq(ID), eq("cps-pci"), isNull(), isNull(), anyList(), isNull(), isNull(), isNull(),
-                anyBoolean(), isNull(), isNull()))
-                .thenReturn(new Application(ID, "cps-pci", null, null, List.of(), null, existing.createdAt(),
-                        null, null, null, RecyclePolicy.REUSE, null, null, false, null, null));
         mvc.perform(put("/api/v1/applications/" + ID).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"cps-pci\"}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.metricsGroupId").doesNotExist());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("metricsGroupId is required")));
+        verify(repo, times(1)).update(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("POST without a group is 400 — capacity and the recycle policy live on the group, so the fields are ignored here")
+    void create_requiresGroup() throws Exception {
+        mvc.perform(post("/api/v1/applications").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"checkout\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("metricsGroupId is required")));
+        mvc.perform(post("/api/v1/applications").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"checkout\",\"metricsGroupId\":\"cps\",\"recyclePolicy\":\"MAX_RUNS\",\"maxRunsPerPod\":3,\"capacity\":[{\"region\":\"na-east\",\"maxAvailable\":9}]}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.recyclePolicy").doesNotExist())
+                .andExpect(jsonPath("$.capacity").doesNotExist())
+                .andExpect(jsonPath("$.metricsGroupId").value("cps"));
     }
 
     @Test

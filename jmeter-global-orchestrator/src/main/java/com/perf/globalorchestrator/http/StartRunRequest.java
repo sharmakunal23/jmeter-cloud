@@ -37,7 +37,7 @@ public record StartRunRequest(
          * When true, a shortfall in the claim
          * phase triggers an on-the-fly spin to fill the gap rather than
          * a 503 INSUFFICIENT_CAPACITY. Subject to the per-region
-         * {@code applicationCapacity.maxAvailable} ceiling: if the
+         * {@code groupCapacity.maxAvailable} ceiling: if the
          * spin would exceed it, a 409 CAPACITY_EXCEEDED is returned
          * instead. Default false (today's behavior). The UI's
          * NewRunPage sets this to true only after the operator confirms

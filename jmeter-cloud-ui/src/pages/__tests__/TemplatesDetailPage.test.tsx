@@ -43,7 +43,7 @@ function fixtureApp(): Application {
     applicationId: "01CHK",
     name: "checkout",
     sealId: null, description: null, healthEndpoints: [],
-    capacity: [{ region: "us-east", maxAvailable: 1 }],
+    metricsGroupId: "cps",
     createdAt: "2026-05-12T00:00:00Z",
   };
 }

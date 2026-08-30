@@ -11,7 +11,7 @@ import com.perf.globalorchestrator.domain.CronJobFire;
 import com.perf.globalorchestrator.domain.CronJobKind;
 import com.perf.globalorchestrator.domain.Ulid;
 import com.perf.globalorchestrator.observability.MdcEnrichmentFilter;
-import com.perf.globalorchestrator.repo.ApplicationCapacityRepository;
+import com.perf.globalorchestrator.repo.GroupCapacityRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.CronJobFireHistoryRepository;
 import com.perf.globalorchestrator.repo.CronJobRepository;
@@ -69,14 +69,14 @@ public class CronJobController {
     private final CronJobRepository cronJobs;
     private final CronJobFireHistoryRepository fireHistory;
     private final ApplicationRepository applications;
-    private final ApplicationCapacityRepository capacities;
+    private final GroupCapacityRepository capacities;
     private final DocumentServiceClient documentService;
     private final CronFireService fireService;
 
     public CronJobController(CronJobRepository cronJobs,
                              CronJobFireHistoryRepository fireHistory,
                              ApplicationRepository applications,
-                             ApplicationCapacityRepository capacities,
+                             GroupCapacityRepository capacities,
                              DocumentServiceClient documentService,
                              CronFireService fireService) {
         this.cronJobs = cronJobs;
@@ -344,7 +344,7 @@ public class CronJobController {
                             "region is required for kind=" + kind);
                 }
                 String trimmed = region.trim();
-                if (capacities.find(app.applicationId(), trimmed).isEmpty()) {
+                if (capacities.find(app.metricsGroupId(), trimmed).isEmpty()) {
                     throw new RegionNotConfiguredException(app.name(), trimmed);
                 }
                 return new Normalised(null, trimmed);

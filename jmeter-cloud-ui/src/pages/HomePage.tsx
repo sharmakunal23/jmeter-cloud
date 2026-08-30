@@ -80,7 +80,7 @@ export function HomePage() {
         regionsApi.list().catch(() => [] as RegionCapacity[]),
         applicationGroupsApi.list(signal).catch(() => [] as ApplicationGroup[]),
       ]);
-      const capacityByRegion = aggregateCapacityByRegion(apps, activeListing.runs, regions);
+      const capacityByRegion = aggregateCapacityByRegion(groups, activeListing.runs, regions);
       setState({
         status: "ok",
         summary: {
@@ -175,9 +175,8 @@ export function HomePage() {
 function ApplicationsChecklist({ applications, groups }: { applications: Application[]; groups: ApplicationGroup[] }) {
   const total = applications.length;
   const visible = useMemo(() => applications.slice(0, HOME_APPS_LIMIT), [applications]);
-  // A label row opens each run of apps in the same group; only once a group exists.
-  const groupName = (a: Application) =>
-    a.metricsGroupId ? (groups.find((g) => g.groupId === a.metricsGroupId)?.name ?? a.metricsGroupId) : "Ungrouped";
+  // A label row opens each run of apps in the same group.
+  const groupName = (a: Application) => groups.find((g) => g.groupId === a.metricsGroupId)?.name ?? a.metricsGroupId;
 
   return (
     <section className="checklist homeGrid__apps">
@@ -200,7 +199,7 @@ function ApplicationsChecklist({ applications, groups }: { applications: Applica
           <ul className="checklist__items" aria-label="application checks">
             {visible.map((a, i) => (
               <Fragment key={a.applicationId}>
-                {groups.length > 0 && (i === 0 || groupName(visible[i - 1]) !== groupName(a)) && (
+                {(i === 0 || groupName(visible[i - 1]) !== groupName(a)) && (
                   <li className="checklist__group" role="presentation">{groupName(a)}</li>
                 )}
                 <ChecklistRow
@@ -296,8 +295,8 @@ function HealthTreeRow({ component: c, depth, expanded }: { component: PlatformH
 
 /**
  * Platform-wide capacity rollup — sums maxAvailable + inUse across all
- * apps for each region. Click-through goes to /capacity for the per-app
- * breakdown. Empty state renders when no apps are registered.
+ * application groups for each region. Click-through goes to /capacity for
+ * the per-group breakdown. Empty state renders when no group has capacity.
  */
 function CapacityRollup({ rows }: { rows: CapacityRollupRow[] }) {
   const totals = rows.reduce(
@@ -312,12 +311,12 @@ function CapacityRollup({ rows }: { rows: CapacityRollupRow[] }) {
       <header className="checklist__head">
         <h2>Capacity</h2>
         <small className="ink-soft">
-          <Link to="/capacity">Per-app breakdown →</Link>
+          <Link to="/capacity">Per-group breakdown →</Link>
         </small>
       </header>
       {rows.length === 0 ? (
         <div className="emptyState emptyState--compact">
-          <p className="ink-soft">No applications registered — nothing to roll up yet.</p>
+          <p className="ink-soft">No application group has capacity — nothing to roll up yet.</p>
         </div>
       ) : (
         <>
@@ -343,7 +342,7 @@ function CapacityRollup({ rows }: { rows: CapacityRollupRow[] }) {
                     <td className="mono num">{r.readyToUse}</td>
                     <td className="mono num">{r.maxAvailable}</td>
                     <td>
-                      {/* Same inline bar + % as the per-app Capacity detail
+                      {/* Same inline bar + % as the per-group Capacity detail
                           page (.regionPanel__util) so they render identically. */}
                       <span className="regionPanel__util" title={`${Math.round(ratio * 100)}% utilized`}>
                         <span
@@ -509,21 +508,21 @@ function ChecklistRow({
 }
 
 /**
- * Sums per-(app, region) capacity into per-region totals + computes
+ * Sums per-(group, region) capacity into per-region totals + computes
  * inUse from the active runs' fleet members. readyToUse is bounded by
  * the actual pods registered in the region (post-Capacity-rework, pods
  * are provisioned on demand — a region with `maxAvailable=8` but no
  * provisioned pods has `readyToUse=0`, not `8`).
  */
 function aggregateCapacityByRegion(
-  apps: Application[],
+  groups: ApplicationGroup[],
   activeRuns: Run[],
   regions: RegionCapacity[],
 ): CapacityRollupRow[] {
-  // Sum maxAvailable across all apps per region.
+  // Sum maxAvailable across all groups per region.
   const maxByRegion = new Map<string, number>();
-  for (const app of apps) {
-    for (const c of app.capacity ?? []) {
+  for (const group of groups) {
+    for (const c of group.capacity ?? []) {
       maxByRegion.set(c.region, (maxByRegion.get(c.region) ?? 0) + c.maxAvailable);
     }
   }

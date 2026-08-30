@@ -3,12 +3,12 @@ package com.perf.globalorchestrator.provision;
 import com.perf.globalorchestrator.client.LocalOrchestratorClient;
 import com.perf.globalorchestrator.client.WorkerRef;
 import com.perf.globalorchestrator.client.LocalOrchestratorClient.LogsResult;
-import com.perf.globalorchestrator.domain.Application;
+import com.perf.globalorchestrator.domain.ApplicationGroup;
 import com.perf.globalorchestrator.domain.Pod;
 import com.perf.globalorchestrator.domain.PodState;
 import com.perf.globalorchestrator.domain.RecyclePolicy;
 import com.perf.globalorchestrator.provision.RecycleEvaluator.RecycleReason;
-import com.perf.globalorchestrator.repo.ApplicationRepository;
+import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.repo.PodRepository;
 import com.perf.globalorchestrator.repo.RunRepository;
 import com.perf.globalorchestrator.service.RunAuditWriter;
@@ -38,7 +38,7 @@ class PodRecyclerTest {
     private static final String POD = "jmeter-poc-us-east-1-worker-2";
 
     private PodRepository pods;
-    private ApplicationRepository apps;
+    private ApplicationGroupRepository groups;
     private PodProvisioner provisioner;
     private PodSpinService spinService;
     private LocalOrchestratorClient localClient;
@@ -50,18 +50,18 @@ class PodRecyclerTest {
     @BeforeEach
     void setUp() {
         pods = mock(PodRepository.class);
-        apps = mock(ApplicationRepository.class);
+        groups = mock(ApplicationGroupRepository.class);
         provisioner = mock(PodProvisioner.class);
         spinService = mock(PodSpinService.class);
         localClient = mock(LocalOrchestratorClient.class);
         evaluator = mock(RecycleEvaluator.class);
         runs = mock(RunRepository.class);
         audit = mock(RunAuditWriter.class);
-        recycler = new PodRecycler(pods, apps, provisioner, spinService, localClient,
+        recycler = new PodRecycler(pods, groups, provisioner, spinService, localClient,
                 evaluator, runs, audit);
 
         when(provisioner.currentImageDigest(any())).thenReturn("img-current");
-        when(apps.findById("appId")).thenReturn(Optional.of(app(RecyclePolicy.DRAIN_AFTER_RUN)));
+        when(groups.findById("cps")).thenReturn(Optional.of(group(RecyclePolicy.DRAIN_AFTER_RUN)));
     }
 
     @Test
@@ -99,19 +99,18 @@ class PodRecyclerTest {
         ordered.verify(localClient).getLogs(WorkerRef.of(pod), 200, "jmeter");
         ordered.verify(provisioner).stopAndRemove(anyString(), eq(POD));
         // DRAIN_AFTER_RUN drains without a replacement.
-        verify(spinService, never()).spin(anyString(), anyString(), anyString());
+        verify(spinService, never()).spin(anyString(), anyString());
     }
 
     // ── helpers ──────────────────────────────────────────────────────────
     private Pod pod(long runsServed) {
         return new Pod(POD, "us-east-1", "http://" + POD + ":8080",
-                PodState.IDLE, NOW, NOW.minusSeconds(60), "appId",
+                PodState.IDLE, NOW, NOW.minusSeconds(60), "cps",
                 runsServed, "img-current", NOW.minusSeconds(600),
                 com.perf.globalorchestrator.domain.PodSource.DYNAMIC);
     }
 
-    private Application app(RecyclePolicy policy) {
-        return new Application("appId", "demo", null, null, List.of(),
-                null, NOW, null, null, null, policy, null, null, false, null, null);
+    private ApplicationGroup group(RecyclePolicy policy) {
+        return new ApplicationGroup("cps", "Servicing MQ", null, null, null, 7, policy, null, null, false, NOW, null, null);
     }
 }

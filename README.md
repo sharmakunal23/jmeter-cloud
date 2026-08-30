@@ -15,7 +15,7 @@ and folds their metrics back into one view. It runs on a laptop with
 ![Service topology and data flow](docs/diagrams/architecture.svg)
 
 The **control plane** is the UI talking to the global-orchestrator, which owns
-run state, per-application capacity and the worker registry — and holds no
+run state, per-group capacity (an application group owns its worker pool) and the worker registry — and holds no
 cluster credential. Each data center runs one stateless
 **regional-orchestrator**: it creates that region's worker Pods, reports their
 liveness straight from the Pod list, and relays the global's calls to them. The

@@ -19,8 +19,8 @@
 #
 # Worker containers (formerly the static `orchestrator-1` / `orchestrator-2`
 # services) are no longer in compose — they're spun up dynamically per
-# application by the global-orchestrator's PodProvisioner. See the
-# Capacity tab in the UI (`/capacity/{appName}`) to add workers.
+# application group by the global-orchestrator's PodProvisioner. See the
+# Capacity tab in the UI (`/capacity/{groupId}`) to add workers.
 
 include:
   - path: ./oracle/docker-compose.yml

@@ -1,6 +1,6 @@
 package com.perf.globalorchestrator.provision;
 
-import com.perf.globalorchestrator.domain.Application;
+import com.perf.globalorchestrator.domain.ApplicationGroup;
 import com.perf.globalorchestrator.domain.Pod;
 import com.perf.globalorchestrator.domain.PodState;
 import com.perf.globalorchestrator.domain.RecyclePolicy;
@@ -34,7 +34,7 @@ class RecycleEvaluatorTest {
     @DisplayName("REUSE — never recycles, regardless of runsServed or age")
     void reuseNeverRecycles() {
         Pod pod = pod("p1", 9999, daysAgo(60), CURRENT_IMAGE);
-        Application app = app(RecyclePolicy.REUSE, null, null);
+        ApplicationGroup app = app(RecyclePolicy.REUSE, null, null);
         assertThat(evaluator.decide(pod, app, CURRENT_IMAGE)).isEqualTo(RecycleReason.NONE);
     }
 
@@ -44,7 +44,7 @@ class RecycleEvaluatorTest {
         // Provisioned a day ago — well past the multi-instance grace window.
         Pod pod = pod("p1", 0, daysAgo(1), STALE_IMAGE);
         // Even REUSE recycles on image mismatch.
-        Application app = app(RecyclePolicy.REUSE, null, null);
+        ApplicationGroup app = app(RecyclePolicy.REUSE, null, null);
         assertThat(evaluator.decide(pod, app, CURRENT_IMAGE))
                 .isEqualTo(RecycleReason.IMAGE_MISMATCH);
     }
@@ -53,7 +53,7 @@ class RecycleEvaluatorTest {
     @DisplayName("Image mismatch — grace window: a freshly-provisioned pod is left alone "
             + "(MULTI-INSTANCE rollout ping-pong guard); null provisionedAt keeps old behavior")
     void imageMismatchGraceWindow() {
-        Application app = app(RecyclePolicy.REUSE, null, null);
+        ApplicationGroup app = app(RecyclePolicy.REUSE, null, null);
 
         // 2 min old — inside the 10-min default grace: not recycled this tick.
         assertThat(evaluator.decide(
@@ -82,7 +82,7 @@ class RecycleEvaluatorTest {
     @DisplayName("Image mismatch — null currentImage or null pod.imageDigest → skip the check")
     void nullDigestsSkipImageCheck() {
         Pod podMissingDigest = pod("p1", 0, daysAgo(0), null);
-        Application reuse = app(RecyclePolicy.REUSE, null, null);
+        ApplicationGroup reuse = app(RecyclePolicy.REUSE, null, null);
         assertThat(evaluator.decide(podMissingDigest, reuse, CURRENT_IMAGE))
                 .isEqualTo(RecycleReason.NONE);
         Pod podWithDigest = pod("p2", 0, daysAgo(0), CURRENT_IMAGE);
@@ -93,7 +93,7 @@ class RecycleEvaluatorTest {
     @Test
     @DisplayName("MAX_RUNS — fires when runsServed >= maxRunsPerPod")
     void maxRunsThreshold() {
-        Application app = app(RecyclePolicy.MAX_RUNS, 5, null);
+        ApplicationGroup app = app(RecyclePolicy.MAX_RUNS, 5, null);
 
         assertThat(evaluator.decide(pod("p1", 4, daysAgo(0), CURRENT_IMAGE), app, CURRENT_IMAGE))
                 .as("below threshold").isEqualTo(RecycleReason.NONE);
@@ -106,7 +106,7 @@ class RecycleEvaluatorTest {
     @Test
     @DisplayName("MAX_AGE — fires when age >= podMaxAgeHours")
     void maxAgeThreshold() {
-        Application app = app(RecyclePolicy.MAX_AGE, null, 24);
+        ApplicationGroup app = app(RecyclePolicy.MAX_AGE, null, 24);
 
         assertThat(evaluator.decide(pod("p1", 0, hoursAgo(23), CURRENT_IMAGE), app, CURRENT_IMAGE))
                 .as("below threshold").isEqualTo(RecycleReason.NONE);
@@ -119,7 +119,7 @@ class RecycleEvaluatorTest {
     @Test
     @DisplayName("MAX_AGE — null provisionedAt is treated as 'cannot decide; no-op'")
     void maxAgeWithNullProvisionedAt() {
-        Application app = app(RecyclePolicy.MAX_AGE, null, 24);
+        ApplicationGroup app = app(RecyclePolicy.MAX_AGE, null, 24);
         Pod p = pod("p1", 0, null, CURRENT_IMAGE);
         assertThat(evaluator.decide(p, app, CURRENT_IMAGE)).isEqualTo(RecycleReason.NONE);
     }
@@ -127,7 +127,7 @@ class RecycleEvaluatorTest {
     @Test
     @DisplayName("BOTH — MAX_RUNS hit reports MAX_RUNS; otherwise MAX_AGE; otherwise NONE")
     void bothPolicy() {
-        Application app = app(RecyclePolicy.BOTH, 5, 24);
+        ApplicationGroup app = app(RecyclePolicy.BOTH, 5, 24);
 
         assertThat(evaluator.decide(pod("p1", 1, hoursAgo(1), CURRENT_IMAGE), app, CURRENT_IMAGE))
                 .as("neither threshold tripped").isEqualTo(RecycleReason.NONE);
@@ -142,7 +142,7 @@ class RecycleEvaluatorTest {
     @Test
     @DisplayName("EVERY_RUN — fires on first run served")
     void everyRunPolicy() {
-        Application app = app(RecyclePolicy.EVERY_RUN, null, null);
+        ApplicationGroup app = app(RecyclePolicy.EVERY_RUN, null, null);
         assertThat(evaluator.decide(pod("p1", 0, daysAgo(0), CURRENT_IMAGE), app, CURRENT_IMAGE))
                 .as("fresh pod (no runs) — not yet").isEqualTo(RecycleReason.NONE);
         assertThat(evaluator.decide(pod("p1", 1, daysAgo(0), CURRENT_IMAGE), app, CURRENT_IMAGE))
@@ -152,7 +152,7 @@ class RecycleEvaluatorTest {
     @Test
     @DisplayName("DRAIN_AFTER_RUN — fires on first run served, same trigger as EVERY_RUN")
     void drainAfterRunPolicy() {
-        Application app = app(RecyclePolicy.DRAIN_AFTER_RUN, null, null);
+        ApplicationGroup app = app(RecyclePolicy.DRAIN_AFTER_RUN, null, null);
         assertThat(evaluator.decide(pod("p1", 0, daysAgo(0), CURRENT_IMAGE), app, CURRENT_IMAGE))
                 .as("fresh pod (no runs) — not yet").isEqualTo(RecycleReason.NONE);
         assertThat(evaluator.decide(pod("p1", 1, daysAgo(0), CURRENT_IMAGE), app, CURRENT_IMAGE))
@@ -171,7 +171,7 @@ class RecycleEvaluatorTest {
     }
 
     @Test
-    @DisplayName("Null application → NONE (defensive against a deleted-app race)")
+    @DisplayName("Null group → NONE (defensive against a deleted-group race)")
     void nullApplicationIsNone() {
         Pod pod = pod("p1", 999, daysAgo(0), STALE_IMAGE);
         assertThat(evaluator.decide(pod, null, CURRENT_IMAGE)).isEqualTo(RecycleReason.NONE);
@@ -182,16 +182,14 @@ class RecycleEvaluatorTest {
     private Pod pod(String id, long runsServed, Instant provisionedAt, String imageDigest) {
         return new Pod(id, "us-east", "http://" + id + ":8080",
                 PodState.IDLE,
-                NOW, NOW.minusSeconds(60), "appId",
+                NOW, NOW.minusSeconds(60), "cps",
                 runsServed, imageDigest, provisionedAt,
                 com.perf.globalorchestrator.domain.PodSource.DYNAMIC);
     }
 
-    private Application app(RecyclePolicy policy, Integer maxRuns, Integer maxAgeHours) {
-        return new Application(
-                "appId", "demo", null, null, List.of(),
-                null, NOW, null, null, null,
-                policy, maxRuns, maxAgeHours, /* alwaysOn */ false, null, null);
+    private ApplicationGroup app(RecyclePolicy policy, Integer maxRuns, Integer maxAgeHours) {
+        return new ApplicationGroup("cps", "Servicing MQ", null, null, null, 7,
+                policy, maxRuns, maxAgeHours, /* alwaysOn */ false, NOW, null, null);
     }
 
     private Instant daysAgo(int days) {

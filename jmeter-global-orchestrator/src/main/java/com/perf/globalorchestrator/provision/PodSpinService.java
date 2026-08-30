@@ -60,8 +60,8 @@ public class PodSpinService {
      * (under the proxy's timeout) and answers {@code ready=false} if the pod
      * is still starting — the liveness probe admits it later.
      */
-    public SpinResult spin(String applicationId, String applicationName, String region) {
-        return start(applicationId, applicationName, region, reserve(applicationId, applicationName, region), capacityWaitMs);
+    public SpinResult spin(String groupId, String region) {
+        return start(groupId, region, reserve(groupId, region), capacityWaitMs);
     }
 
     /**
@@ -71,17 +71,17 @@ public class PodSpinService {
      * simply allocates again. Cheap; call it serially, then {@link #start} in
      * parallel.
      */
-    public String reserve(String applicationId, String applicationName, String region) {
+    public String reserve(String groupId, String region) {
         for (int attempt = 0; attempt < 20; attempt++) {
-            String podName = allocator.allocate(applicationId, applicationName, region);
+            String podName = allocator.allocate(groupId, region);
             try {
-                pods.registerStarting(podName, region, provisioner.baseUrlFor(region, podName), applicationId);
+                pods.registerStarting(podName, region, provisioner.baseUrlFor(region, podName), groupId);
                 return podName;
             } catch (DuplicateKeyException race) {
                 LOG.debug("reserve: {} taken concurrently, allocating again", podName);
             }
         }
-        throw new IllegalStateException("could not reserve a worker name for " + applicationName + " in " + region);
+        throw new IllegalStateException("could not reserve a worker name for group " + groupId + " in " + region);
     }
 
     /**
@@ -110,12 +110,12 @@ public class PodSpinService {
         }
     }
 
-    public SpinResult start(String applicationId, String applicationName, String region, String podName) {
-        return start(applicationId, applicationName, region, podName, readyTimeoutMs);
+    public SpinResult start(String groupId, String region, String podName) {
+        return start(groupId, region, podName, readyTimeoutMs);
     }
 
-    public SpinResult start(String applicationId, String applicationName, String region, String podName, long waitMs) {
-        PodSpec spec = new PodSpec(podName, applicationId, applicationName, region);
+    public SpinResult start(String groupId, String region, String podName, long waitMs) {
+        PodSpec spec = new PodSpec(podName, groupId, region);
         ProvisionResult result;
         try {
             result = provisioner.createAndStart(spec);

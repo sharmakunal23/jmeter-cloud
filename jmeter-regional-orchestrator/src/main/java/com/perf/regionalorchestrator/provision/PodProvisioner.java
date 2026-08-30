@@ -30,10 +30,10 @@ public interface PodProvisioner {
     boolean isRunning(String podName);
 
     /**
-     * Pods this provisioner manages for an application, optionally narrowed
-     * to a region (null = all).
+     * Pods this provisioner manages for an application group, optionally
+     * narrowed to a region (null = all).
      */
-    List<ProvisionedPod> listFor(String applicationId, String region);
+    List<ProvisionedPod> listFor(String groupId, String region);
 
     /** Every managed Pod with its kubelet-reported liveness — the hub's LOST source. */
     List<WorkerState> listWorkers();

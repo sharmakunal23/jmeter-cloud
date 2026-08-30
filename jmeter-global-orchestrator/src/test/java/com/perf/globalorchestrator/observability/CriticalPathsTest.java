@@ -15,7 +15,7 @@ class CriticalPathsTest {
             "/api/v1/runs/abc-123",
             "/api/v1/applications/payments",
             "/api/v1/admin/recyclePods",
-            "/api/v1/applications/payments/capacity/us-east-1/pods/foo",
+            "/api/v1/applicationGroups/cps/capacity/us-east-1/pods/foo",
             // The capabilities endpoint the UI gates on.
             "/api/v1/platform/capabilities"
     })

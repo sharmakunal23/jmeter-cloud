@@ -1,7 +1,7 @@
 package com.perf.globalorchestrator.config;
 
 import com.perf.globalorchestrator.client.LocalOrchestratorClient.LogsResult;
-import com.perf.globalorchestrator.domain.ApplicationCapacity;
+import com.perf.globalorchestrator.domain.GroupCapacity;
 import com.perf.globalorchestrator.domain.MemberState;
 import com.perf.globalorchestrator.domain.MetricsTimeseries;
 import com.perf.globalorchestrator.domain.RunSummary;
@@ -88,16 +88,16 @@ class CacheSerializationTest {
     }
 
     @Test
-    @DisplayName("capacity grid: grouped Map<String,List<ApplicationCapacity>> (Instant fields) round-trips")
+    @DisplayName("capacity grid: grouped Map<String,List<GroupCapacity>> (Instant fields) round-trips")
     void capacityGridRoundTrips() {
-        // Shape stored by ApplicationCapacityRepository.findAllGroupedByApp() —
+        // Shape stored by GroupCapacityRepository.findAllGroupedByGroup() —
         // exercises Instant fields (JavaTimeModule) inside a nested
         // Map → List → record graph.
-        Map<String, List<ApplicationCapacity>> original = new LinkedHashMap<>();
-        original.put("01JAPP000000000000000000AA", List.of(
-                new ApplicationCapacity("01JAPP000000000000000000AA", "us-east", 5,
+        Map<String, List<GroupCapacity>> original = new LinkedHashMap<>();
+        original.put("cps", List.of(
+                new GroupCapacity("cps", "us-east", 5,
                         Instant.parse("2026-05-26T10:00:00Z"), Instant.parse("2026-05-26T11:00:00Z")),
-                new ApplicationCapacity("01JAPP000000000000000000AA", "us-west", 0, null, null)));
+                new GroupCapacity("cps", "us-west", 0, null, null)));
 
         byte[] bytes = serializer.serialize(original);
         Object back = serializer.deserialize(bytes);

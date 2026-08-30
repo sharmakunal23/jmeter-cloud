@@ -46,6 +46,14 @@ function renderAt(path: string) {
               </DynamicScalingRoute>
             }
           />
+          <Route
+            path="capacity/:groupId"
+            element={
+              <DynamicScalingRoute>
+                <h1>Group capacity page</h1>
+              </DynamicScalingRoute>
+            }
+          />
         </Route>
       </Routes>
     </MemoryRouter>,
@@ -80,6 +88,13 @@ describe("static-fleet UI gating", () => {
 
     expect(await screen.findByText("Applications page")).toBeInTheDocument();
     expect(screen.queryByText("Capacity page")).not.toBeInTheDocument();
+  });
+
+  it("a bookmarked per-group /capacity/{groupId} redirects the same way on a static fleet", async () => {
+    stubCapabilities(false);
+    renderAt("/capacity/cps");
+    expect(await screen.findByText("Applications page")).toBeInTheDocument();
+    expect(screen.queryByText("Group capacity page")).not.toBeInTheDocument();
   });
 
   it("/capacity still renders normally when provisioning is enabled", async () => {

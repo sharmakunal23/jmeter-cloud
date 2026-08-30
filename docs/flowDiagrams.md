@@ -35,7 +35,7 @@ sequenceDiagram
     rect rgba(200,220,255,0.25)
         Note over GO,PG: Atomic claim transaction
         loop once per fleetAllocation entry
-            GO->>PG: SELECT … FROM "globalOrchestrator"."pod"<br/>WHERE state='IDLE' AND region=? AND applicationId=?<br/>AND NOT EXISTS (active runFleetMember)<br/>FOR UPDATE SKIP LOCKED LIMIT count
+            GO->>PG: SELECT … FROM "globalOrchestrator"."pod"<br/>WHERE state='IDLE' AND region=? AND groupId=?<br/>AND NOT EXISTS (active runFleetMember)<br/>FOR UPDATE SKIP LOCKED LIMIT count
         end
         GO->>PG: INSERT INTO "globalOrchestrator"."run" (state=PREPARING)
         GO->>PG: INSERT "runFleetMember" rows (state=PENDING) per claimed pod
@@ -47,7 +47,7 @@ sequenceDiagram
         GO-->>NX: 201 Created + Run JSON (PREPARING)
         NX-->>U: launch modal stays on "Provisioning workers"
         Note over GO,RO: a virtual thread reserves names serially (PK-guarded),<br/>then creates every pod in parallel and waits for readiness
-        GO->>RO: POST /api/v1/pods { podName, applicationId, region } × N
+        GO->>RO: POST /api/v1/pods { podName, groupId, region } × N
         loop until ready (readiness probe = Tomcat answering)
             GO->>RO: GET /api/v1/pods/{podName}
             GO->>PG: UPDATE "run" SET stateReason='… k/N ready'
@@ -90,7 +90,7 @@ sequenceDiagram
     participant K8 as Kubernetes API
     participant PG as Database<br/>(globalOrchestrator.pod)
 
-    Note over GO,PG: POST …/capacity/{region}/pods registers the pod LOST<br/>(unclaimable), asks the regional to create it, and waits up to 20 s<br/>for readiness. Slower pods answer ready=false and this loop flips them IDLE.
+    Note over GO,PG: POST /api/v1/applicationGroups/{groupId}/capacity/{region}/pods registers the pod LOST<br/>(unclaimable), asks the regional to create it, and waits up to 20 s<br/>for readiness. Slower pods answer ready=false and this loop flips them IDLE.
 
     loop every 15 s, once per routed region
         GO->>RO: GET /api/v1/workers

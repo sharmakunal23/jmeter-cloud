@@ -13,7 +13,7 @@ import { useState } from "react";
  */
 
 export interface RequestCapacityDialogProps {
-  applicationName: string;
+  groupName: string;
   region: string;
   current: number;
   /** Submit handler — receives the new max. Throws on backend failure (404/409). */
@@ -24,7 +24,7 @@ export interface RequestCapacityDialogProps {
 const MAX_BUDGET = 1000;
 
 export function RequestCapacityDialog({
-  applicationName, region, current, onSubmit, onCancel,
+  groupName, region, current, onSubmit, onCancel,
 }: RequestCapacityDialogProps) {
   // Default the requested max to "what would let me Provision Worker once
   // beyond the current ceiling." Most common case is +1; saves a click.
@@ -69,7 +69,7 @@ export function RequestCapacityDialog({
           <div>
             <h3 id="reqCapTitle">Request capacity</h3>
             <small className="ink-soft">
-              <span className="mono">{applicationName}</span> ·{" "}
+              <span className="mono">{groupName}</span> ·{" "}
               <span className="mono">{region}</span> · current cap{" "}
               <span className="mono">{current}</span>
             </small>

@@ -1,6 +1,6 @@
 package com.perf.globalorchestrator.provision;
 
-import com.perf.globalorchestrator.domain.Application;
+import com.perf.globalorchestrator.domain.ApplicationGroup;
 import com.perf.globalorchestrator.domain.Pod;
 import com.perf.globalorchestrator.domain.RecyclePolicy;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -60,9 +60,9 @@ public class RecycleEvaluator {
         this.imageMismatchMinAge = Duration.ofMillis(imageMismatchMinAgeMs);
     }
 
-    public RecycleReason decide(Pod pod, Application application, String currentImageDigest) {
-        if (application == null) {
-            // Defensive — caller should filter applicationId-null rows out.
+    public RecycleReason decide(Pod pod, ApplicationGroup group, String currentImageDigest) {
+        if (group == null) {
+            // Defensive — a pod whose group no longer resolves is never recycled here.
             return RecycleReason.NONE;
         }
         // (1) Image-mismatch — highest priority. We need both digests to
@@ -77,16 +77,16 @@ public class RecycleEvaluator {
         }
 
         // (2) Policy-driven triggers.
-        RecyclePolicy policy = application.recyclePolicy();
+        RecyclePolicy policy = group.recyclePolicy();
         return switch (policy) {
             case REUSE     -> RecycleReason.NONE;
             case EVERY_RUN -> pod.runsServed() >= 1 ? RecycleReason.EVERY_RUN : RecycleReason.NONE;
             case DRAIN_AFTER_RUN -> pod.runsServed() >= 1 ? RecycleReason.DRAIN_AFTER_RUN : RecycleReason.NONE;
-            case MAX_RUNS  -> tripsMaxRuns(pod, application) ? RecycleReason.MAX_RUNS : RecycleReason.NONE;
-            case MAX_AGE   -> tripsMaxAge(pod, application)  ? RecycleReason.MAX_AGE  : RecycleReason.NONE;
+            case MAX_RUNS  -> tripsMaxRuns(pod, group) ? RecycleReason.MAX_RUNS : RecycleReason.NONE;
+            case MAX_AGE   -> tripsMaxAge(pod, group)  ? RecycleReason.MAX_AGE  : RecycleReason.NONE;
             case BOTH      -> {
-                if (tripsMaxRuns(pod, application)) yield RecycleReason.MAX_RUNS;
-                if (tripsMaxAge(pod, application))  yield RecycleReason.MAX_AGE;
+                if (tripsMaxRuns(pod, group)) yield RecycleReason.MAX_RUNS;
+                if (tripsMaxAge(pod, group))  yield RecycleReason.MAX_AGE;
                 yield RecycleReason.NONE;
             }
         };
@@ -109,13 +109,13 @@ public class RecycleEvaluator {
                         .compareTo(imageMismatchMinAge) < 0;
     }
 
-    private boolean tripsMaxRuns(Pod pod, Application app) {
-        Integer max = app.maxRunsPerPod();
+    private boolean tripsMaxRuns(Pod pod, ApplicationGroup group) {
+        Integer max = group.maxRunsPerPod();
         return max != null && pod.runsServed() >= max;
     }
 
-    private boolean tripsMaxAge(Pod pod, Application app) {
-        Integer hours = app.podMaxAgeHours();
+    private boolean tripsMaxAge(Pod pod, ApplicationGroup group) {
+        Integer hours = group.podMaxAgeHours();
         if (hours == null || pod.provisionedAt() == null) {
             // No threshold or no anchor — can't decide; treat as not-yet.
             return false;

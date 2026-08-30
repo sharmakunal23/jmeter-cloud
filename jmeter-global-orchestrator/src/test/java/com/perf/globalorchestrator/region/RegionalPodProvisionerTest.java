@@ -47,8 +47,8 @@ class RegionalPodProvisionerTest {
             } else if (path.equals("/api/v1/pods") && method.equals("POST")) {
                 out = "{\"baseUrl\":\"http://payments-na-east-worker-1.workers:8080\",\"imageDigest\":\"jmeter-local-orchestrator:v2\","
                         + "\"createdAt\":\"2026-08-28T10:00:00Z\"}";
-            } else if (path.startsWith("/api/v1/pods?applicationId=")) {
-                out = "[{\"podName\":\"payments-na-east-worker-1\",\"applicationId\":\"APP\",\"region\":\"na-east\","
+            } else if (path.startsWith("/api/v1/pods?groupId=")) {
+                out = "[{\"podName\":\"payments-na-east-worker-1\",\"groupId\":\"APP\",\"region\":\"na-east\","
                         + "\"status\":\"running\",\"startedAt\":\"2026-08-28T10:00:00Z\",\"imageDigest\":\"jmeter-local-orchestrator:v2\"}]";
             } else if (path.equals("/api/v1/pods/payments-na-east-worker-1") && method.equals("GET")) {
                 out = "{\"podName\":\"payments-na-east-worker-1\",\"exists\":true,\"running\":true}";
@@ -81,7 +81,7 @@ class RegionalPodProvisionerTest {
     @Test
     @DisplayName("createAndStart POSTs the spec and returns the regional's ProvisionResult")
     void createAndStart() {
-        ProvisionResult r = provisioner.createAndStart(new PodSpec("payments-na-east-worker-1", "APP", "payments", "na-east"));
+        ProvisionResult r = provisioner.createAndStart(new PodSpec("payments-na-east-worker-1", "APP", "na-east"));
 
         assertThat(r.baseUrl()).isEqualTo("http://payments-na-east-worker-1.workers:8080");
         assertThat(r.imageDigest()).isEqualTo("jmeter-local-orchestrator:v2");
@@ -111,7 +111,7 @@ class RegionalPodProvisionerTest {
         assertThat(seen).containsExactly(
                 "GET /api/v1/pods/payments-na-east-worker-1",
                 "GET /api/v1/pods/payments-na-east-worker-1",
-                "GET /api/v1/pods?applicationId=APP&region=na-east",
+                "GET /api/v1/pods?groupId=APP&region=na-east",
                 "POST /api/v1/pods/w-1/stop",
                 "POST /api/v1/pods/w-1/start",
                 "POST /api/v1/pods/w-1/restart",
@@ -122,13 +122,13 @@ class RegionalPodProvisionerTest {
     @DisplayName("listFor across all regions asks every routed region and skips the direct ones")
     void listForAllRegions() {
         assertThat(provisioner.listFor("APP", null)).hasSize(1);
-        assertThat(seen).containsExactly("GET /api/v1/pods?applicationId=APP&region=na-east");
+        assertThat(seen).containsExactly("GET /api/v1/pods?groupId=APP&region=na-east");
     }
 
     @Test
     @DisplayName("a direct region cannot provision — RegionUnavailableException names the REGIONS fix")
     void directRegionCannotProvision() {
-        assertThatThrownBy(() -> provisioner.createAndStart(new PodSpec("w-1", "APP", "payments", "na-west")))
+        assertThatThrownBy(() -> provisioner.createAndStart(new PodSpec("w-1", "APP", "na-west")))
                 .isInstanceOf(RegionUnavailableException.class)
                 .hasMessageContaining("na-west=http://");
         assertThat(seen).isEmpty();

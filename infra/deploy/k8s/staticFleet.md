@@ -27,7 +27,7 @@ fan out to them, collect per-second metrics, and save results.
 |---|---|---|
 | Who creates workers | the control plane (`PodProvisioner`) | **you**, with `kubectl` |
 | Capacity tab | the worker-management surface | **hidden** — redirects to Applications |
-| Worker management | Capacity → spin / restart / drain | Application detail → **Data centers** → declare / release |
+| Worker management | Capacity (per group) → spin / restart / drain | Application detail → **Data centers** → declare / release into the app's group pool |
 | `maxAvailable` | you set it; spin enforces it | **derived** — always equals the declared count |
 | Liveness | the kubelet, read through the regional's Pod list (`WorkerLivenessProbe`, 15 s) | platform probes the worker (`StaticPodProbe`, 30 s) |
 | Releasing a worker | stops + removes the container | removes the registry row; **your worker keeps running** |
@@ -84,7 +84,7 @@ substrate uses. What it needs:
 | `METRICS_INGEST_URL` | **yes** | where per-second metrics are POSTed. Without it the run produces no data. |
 | `BASE_DIR` | yes (image default is fine) | working root; also how the worker recognises its own JMeter processes |
 | `POD_ID` | recommended | the worker's id. **Must equal the name you declare** — it is also the `workerId` stamped on every metric, so the metrics join breaks if they differ. Defaults to the hostname, which is normally what you want. |
-| `GLOBAL_ORCHESTRATOR_URL` + `APPLICATION_ID` | optional | enables self-registration. Harmless alongside declaring — the two converge on one row, and your declared address wins. |
+| `GLOBAL_ORCHESTRATOR_URL` + `GROUP_ID` | optional | enables self-registration (the group whose pool the worker joins). Harmless alongside declaring — the two converge on one row, and your declared address wins. |
 
 ```bash
 klogin -a na-east
@@ -102,7 +102,8 @@ probe) and each worker must reach the metrics-consumer
 ## Declare your workers
 
 **UI:** Applications → *your app* → **Data centers** → *Declare a worker*.
-Give it the pod name and the address **the platform can reach it at** —
+The worker joins the pool of the app's group — every application in that
+group can claim it. Give it the pod name and the address **the platform can reach it at** —
 which is not necessarily the address the worker sees itself as. The address
 is probed before the declaration is accepted, so a typo fails immediately
 rather than at your next run; *Declare anyway* skips that check for a worker
@@ -112,7 +113,7 @@ that is deployed but not up yet.
 
 ```bash
 curl -X PUT \
-  "localhost:8082/api/v1/applications/${APP_ID}/capacity/na-east/pods/payments-na-east-worker-1" \
+  "localhost:8082/api/v1/applicationGroups/${GROUP_ID}/capacity/na-east/pods/payments-na-east-worker-1" \
   -H 'Content-Type: application/json' \
   -d '{"baseUrl":"http://payments-na-east-worker-1.workers:8080"}'
 # 201 {"podName":"…","source":"STATIC","reachable":true,"declared":1,"maxAvailable":1}
@@ -124,12 +125,12 @@ Add `?force=true` to accept an address that doesn't answer yet.
 **The data center does not need to exist first.** Declaring into a new one
 creates its capacity row, because capacity is derived from the declared
 count. (Releasing the last worker drives it back to 0 rather than removing
-the row; remove the data center itself under **App settings** if you want it
-gone from the picker.)
+the row; remove the data center itself on the group's Capacity page if you
+want it gone from the picker.)
 
-> **A freshly registered application already lists your data centers.**
-> Registration seeds a capacity row at 0 for each region in
-> `REGIONS`, so a new app opens showing exactly the places you
+> **A freshly created group already lists your data centers.**
+> Creating a group seeds a capacity row at 0 for each region in
+> `REGIONS`, so its applications open showing exactly the places you
 > can declare workers into. (A deployment that sets no regions still gets
 > the historical single `us-east-1` starter row.)
 
@@ -139,7 +140,8 @@ gone from the picker.)
 
 Unchanged. Launch from Applications → *your app* → **Start a new run**,
 allocating workers per data center. Capacity is derived, so "how many can I
-ask for" is simply "how many you declared".
+ask for" is simply "how many you declared into the group" — minus what the
+group's other applications are running right now.
 
 If you ask for more than are ready you get the shortfall prompt — on a
 static fleet it offers *proceed with what's ready* and tells you to deploy

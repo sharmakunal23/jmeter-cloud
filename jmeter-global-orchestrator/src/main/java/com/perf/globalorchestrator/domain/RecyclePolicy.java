@@ -20,9 +20,9 @@ package com.perf.globalorchestrator.domain;
 public enum RecyclePolicy {
     /** No automatic recycle. Today's default; pods live until the operator manually drains. */
     REUSE,
-    /** Recycle after {@code pod.runsServed >= application.maxRunsPerPod}. */
+    /** Recycle after {@code pod.runsServed >= applicationGroup.maxRunsPerPod}. */
     MAX_RUNS,
-    /** Recycle after {@code now - pod.provisionedAt >= application.podMaxAgeHours}. */
+    /** Recycle after {@code now - pod.provisionedAt >= applicationGroup.podMaxAgeHours}. */
     MAX_AGE,
     /** Recycle when either MAX_RUNS or MAX_AGE threshold fires. */
     BOTH,

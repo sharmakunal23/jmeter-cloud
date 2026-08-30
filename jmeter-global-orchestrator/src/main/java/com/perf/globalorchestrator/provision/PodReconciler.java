@@ -80,16 +80,14 @@ public class PodReconciler {
         ReconcileSummary summary = new ReconcileSummary();
 
         // ── Pass 1 — container-first (adopt + start) ────────────────────
-        // listFor(null, null) returns every managed container regardless of
-        // app/region — we'll filter by label client-side. The provisioner's
-        // listFor takes a specific applicationId, so we walk the registry's
-        // distinct applicationIds first (via PodRepository.findAll) to find
-        // candidate apps, then query per-app.
+        // The provisioner's listFor takes a specific groupId, so we walk the
+        // registry's distinct (group, region) pairs first (via
+        // PodRepository.findAll) to find candidate pools, then query per pool.
         //
         // For the boot-time case where ALL rows are gone but containers
-        // remain, we don't have any applicationIds to ask about. The
-        // provisioner exposes labels on the containers themselves — we read
-        // the label and adopt without needing the registry.
+        // remain, we don't have any groupIds to ask about. The provisioner
+        // exposes labels on the containers themselves — we read the label and
+        // adopt without needing the registry.
         List<ProvisionedPod> allManaged;
         try {
             allManaged = listAllManaged();
@@ -101,13 +99,13 @@ public class PodReconciler {
 
         Map<String, ProvisionedPod> containerByPodId = new LinkedHashMap<>();
         for (ProvisionedPod c : allManaged) {
-            if (c.podName() == null || c.applicationId() == null) continue;
+            if (c.podName() == null || c.groupId() == null) continue;
             containerByPodId.put(c.podName(), c);
         }
 
         for (ProvisionedPod c : containerByPodId.values()) {
             try {
-                List<Pod> rows = pods.findByApplicationAndRegion(c.applicationId(), c.region());
+                List<Pod> rows = pods.findByGroupAndRegion(c.groupId(), c.region());
                 Pod existing = rows.stream()
                         .filter(p -> c.podName().equals(p.podId()))
                         .findFirst()
@@ -116,10 +114,10 @@ public class PodReconciler {
                     // Adopt — insert the row using the pod's container as authority.
                     // baseUrl is reconstructed from podName + the configured local-orch port.
                     // LOST-until-ready, like a spun pod: the liveness probe admits it.
-                    pods.registerStarting(c.podName(), c.region(), defaultBaseUrlFor(c.region(), c.podName()), c.applicationId());
+                    pods.registerStarting(c.podName(), c.region(), defaultBaseUrlFor(c.region(), c.podName()), c.groupId());
                     summary.adopted.add(c.podName());
-                    LOG.info("PodReconciler adopted orphan container {} (app={}, region={})",
-                            c.podName(), c.applicationId(), c.region());
+                    LOG.info("PodReconciler adopted orphan container {} (group={}, region={})",
+                            c.podName(), c.groupId(), c.region());
                 }
                 // Back-fill the recycle-tracking
                 // columns from the container's daemon-truth. recordProvisionMetadata
@@ -143,11 +141,9 @@ public class PodReconciler {
         }
 
         // ── Pass 2 — row-first (orphan deletion) ────────────────────────
-        // Walk every pod row whose applicationId is set; if no container
-        // matches, the row is an orphan. Legacy static rows (applicationId
-        // NULL) are skipped — they belong to the static compose services.
+        // Walk every pod row; if no container matches, the row is an orphan.
         for (Pod row : pods.findAll()) {
-            if (row.applicationId() == null) continue;
+            if (row.groupId() == null) continue;
             if (containerByPodId.containsKey(row.podId())) continue;
             try {
                 int n = pods.deleteByPodId(row.podId());
@@ -165,7 +161,7 @@ public class PodReconciler {
     }
 
     /**
-     * Every pod the provisioner manages: once per (app, region) pair the
+     * Every pod the provisioner manages: once per (group, region) pair the
      * registry knows, plus each routed region's whole Pod list — which is what
      * lets a wiped registry adopt its fleet back.
      */
@@ -173,14 +169,14 @@ public class PodReconciler {
         Map<String, ProvisionedPod> merged = new LinkedHashMap<>();
         java.util.Set<String> pairs = new java.util.HashSet<>();
         for (Pod row : pods.findAll()) {
-            if (row.applicationId() == null || !pairs.add(row.applicationId() + "|" + row.region())) continue;
+            if (row.groupId() == null || !pairs.add(row.groupId() + "|" + row.region())) continue;
             try {
-                for (ProvisionedPod c : provisioner.listFor(row.applicationId(), row.region())) {
+                for (ProvisionedPod c : provisioner.listFor(row.groupId(), row.region())) {
                     if (c.podName() != null) merged.put(c.podName(), c);
                 }
             } catch (Exception e) {
                 LOG.warn("PodReconciler: listFor({},{}) failed: {}",
-                        row.applicationId(), row.region(), e.toString());
+                        row.groupId(), row.region(), e.toString());
             }
         }
         for (String region : regions.routedIds()) {

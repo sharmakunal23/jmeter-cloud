@@ -18,32 +18,22 @@ export interface HealthEndpointResult {
   error?: string;
 }
 
-/** D-Capacity v2 — per-(app, region) capacity entry. */
-export interface ApplicationCapacityEntry {
-  region: string;
-  maxAvailable: number;
-}
-
 export interface Application {
   applicationId: string;
   name: string;
   sealId?: string | null;
   description?: string | null;
   healthEndpoints: string[];
-  /** D-Capacity v2 — per-region max-pod budget; null when not hydrated. */
-  capacity?: ApplicationCapacityEntry[] | null;
   createdAt: string;
   lastHealthCheckedAt?: string | null;
   lastHealthStatus?: HealthStatus | null;
   lastHealthDetails?: HealthEndpointResult[] | null;
-  /** WORKER-HYGIENE Phase C — pod recycle policy. */
-  recyclePolicy?: "REUSE" | "MAX_RUNS" | "MAX_AGE" | "BOTH" | "EVERY_RUN" | "DRAIN_AFTER_RUN" | null;
-  maxRunsPerPod?: number | null;
-  podMaxAgeHours?: number | null;
-  /** AUTOMATION Phase C — when true, scheduled DRAIN_REGION jobs skip this app. */
-  alwaysOn?: boolean;
-  /** The application group whose tables receive this app's metrics (workers send it as `?groupId=`); null = ungrouped. */
-  metricsGroupId?: string | null;
+  /**
+   * The application group this app belongs to — required. Its workers send it as
+   * `?groupId=`, its metrics land in the group's tables, and its runs draw on the
+   * group's worker pool (capacity and recycle policy live on the group).
+   */
+  metricsGroupId: string;
   /** The group classifier's value for this app's labels (`LABEL.APPLICATION`, e.g. `CPS-PCI`). */
   metricsApplication?: string | null;
 }
@@ -53,14 +43,8 @@ export interface CreateApplicationRequest {
   sealId?: string | null;
   description?: string | null;
   healthEndpoints?: string[];
-  capacity?: ApplicationCapacityEntry[];
-  recyclePolicy?: "REUSE" | "MAX_RUNS" | "MAX_AGE" | "BOTH" | "EVERY_RUN" | "DRAIN_AFTER_RUN" | null;
-  maxRunsPerPod?: number | null;
-  podMaxAgeHours?: number | null;
-  /** AUTOMATION Phase C — defaults to false. */
-  alwaysOn?: boolean;
-  /** An existing group's id; omitted/null = ungrouped (PUT replaces wholesale). */
-  metricsGroupId?: string | null;
+  /** An existing group's id — required (400 without it); PUT replaces wholesale. */
+  metricsGroupId: string;
   /** Omitted/null = upper-cased name when grouped. */
   metricsApplication?: string | null;
 }
@@ -155,8 +139,9 @@ export const applicationsApi = {
 
   /**
    * HARD-DELETE / purge — PERMANENTLY deletes a HIDDEN application and its whole
-   * footprint (its runs + blobs + metric rows, pods, capacity, health history,
-   * the app row). Irreversible. Precondition: the app must already be hidden.
+   * footprint (its runs + blobs + metric rows, health history, the app row).
+   * Workers and capacity belong to the group and are untouched. Irreversible.
+   * Precondition: the app must already be hidden.
    *
    * <p>Throws {@link ApplicationApiError}:
    *   {@code APPLICATION_NOT_FOUND} (404) — unknown id;

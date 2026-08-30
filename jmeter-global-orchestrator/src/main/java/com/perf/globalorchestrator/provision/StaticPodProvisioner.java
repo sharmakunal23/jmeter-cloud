@@ -91,19 +91,19 @@ public class StaticPodProvisioner implements PodProvisioner {
      * {@code "running"} / {@code "unreachable"} rather than a Pod phase —
      * there is no cluster to report one.
      *
-     * @param region nullable — when null, every region for the application
+     * @param region nullable — when null, every region for the group
      */
     @Override
-    public List<ProvisionedPod> listFor(String applicationId, String region) {
+    public List<ProvisionedPod> listFor(String groupId, String region) {
         List<Pod> rows = (region == null)
                 ? pods.findAll().stream()
-                        .filter(p -> applicationId != null && applicationId.equals(p.applicationId()))
+                        .filter(p -> groupId != null && groupId.equals(p.groupId()))
                         .toList()
-                : pods.findByApplicationAndRegion(applicationId, region);
+                : pods.findByGroupAndRegion(groupId, region);
         return rows.stream()
                 .map(p -> new ProvisionedPod(
                         p.podId(),
-                        p.applicationId(),
+                        p.groupId(),
                         p.region(),
                         p.state() == PodState.LOST ? "unreachable" : "running",
                         // Declared workers have no provisionedAt until they

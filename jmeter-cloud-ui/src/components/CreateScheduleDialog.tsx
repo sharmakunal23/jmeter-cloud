@@ -34,7 +34,9 @@ const PER_APP_KINDS: ReadonlyArray<{ kind: CronJobKind; label: string }> = [
 
 export interface CreateScheduleDialogProps {
   application: string;
-  /** The app's configured regions (from its capacity grid) — for DRAIN / PROVISION. */
+  /** The app's group — its Capacity page is where regions are added. */
+  groupId?: string;
+  /** The group's configured regions (its capacity grid) — for DRAIN / PROVISION. */
   regions: string[];
   /** When set, the dialog edits this schedule (PUT) instead of creating a new one. */
   editing?: CronJobSummary;
@@ -42,7 +44,7 @@ export interface CreateScheduleDialogProps {
   onClose: () => void;
 }
 
-export function CreateScheduleDialog({ application, regions, editing, onCreated, onClose }: CreateScheduleDialogProps) {
+export function CreateScheduleDialog({ application, groupId, regions, editing, onCreated, onClose }: CreateScheduleDialogProps) {
   const isEdit = editing != null;
   const [name, setName] = useState(editing?.name ?? "");
   const [kind, setKind] = useState<CronJobKind>(editing?.kind ?? "LAUNCH_RUN");
@@ -202,8 +204,10 @@ export function CreateScheduleDialog({ application, regions, editing, onCreated,
               <label htmlFor="schedRegion">Region *</label>
               {regions.length === 0 ? (
                 <p className="ink-soft" style={{ fontSize: "0.82rem" }}>
-                  No regions configured for <span className="mono">{application}</span>. Add capacity on the{" "}
-                  <Link to={`/capacity/${encodeURIComponent(application)}`}>Capacity tab</Link> first.
+                  No regions configured for <span className="mono">{application}</span>'s group. Add capacity on the{" "}
+                  {groupId
+                    ? <Link to={`/capacity/${encodeURIComponent(groupId)}`}>group's Capacity page</Link>
+                    : <Link to="/capacity">Capacity tab</Link>} first.
                 </p>
               ) : (
                 <select id="schedRegion" value={region} onChange={(e) => setRegion(e.target.value)} required>

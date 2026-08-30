@@ -2,10 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { formatRelative } from "../lib/time";
 
-import {
-  applicationsApi,
-  type Application,
-} from "../api/applications";
+import { applicationGroupsApi, type ApplicationGroup } from "../api/applicationGroups";
 import { capacityApi, type ReconcileWorkersResult } from "../api/capacity";
 import { useVisiblePolling } from "../hooks/useVisiblePolling";
 import { AppListToolbar } from "../components/AppListToolbar";
@@ -22,33 +19,26 @@ import {
 const VIEW_MODE_STORAGE_KEY = "jmeterCloud.capacity.listViewMode";
 
 /**
- * Phase 5c — Capacity list view, restyled per 2026-05-12 user feedback:
- *
- *  - **Health column dropped** (irrelevant in this context — health-status
- *    confusion was a distraction in the capacity view; it lives on the
- *    Applications tab where it's the primary signal).
- *  - **Manage column dropped**; the entire row is the click target now,
- *    so app-name and "Manage →" no longer duplicate. The app name still
- *    renders as a real `<Link>` so right-click / middle-click still work.
- *  - **`Provisioned` → `Usage`** — single column showing
- *    `{provisioned}/{max}` next to the utilization bar.
- *  - **Recent-activity chip** per row — derived from the most recent
- *    `pod.lastHeartbeat` across the app's regions; surfaces "active 5m
- *    ago" without requiring the operator to drill in.
- *  - **`/` keyboard shortcut** focuses the search box.
- *  - **Loading skeleton rows** during initial fetch (no layout shift).
+ * Capacity list — one row per application group, since the worker pool is
+ * the group's (GROUP-CAPACITY, 2026-08-31): every application in a group
+ * draws on the same per-region budget. Per row: regions, ready, in use,
+ * `{provisioned}/{max}` with a utilization bar, and a recent-activity chip
+ * from the most recent `pod.lastHeartbeat` across the group's regions. The
+ * whole row is the click target (the name is a real `<Link>` too), `/`
+ * focuses the search box, and skeleton rows hold the layout during the
+ * initial fetch.
  */
 
 const POLL_INTERVAL_MS = 10_000;
 
 interface RowAggregate {
-  app: Application;
+  group: ApplicationGroup;
   regions: number;
   maxAvailable: number;
   provisioned: number;
   ready: number;
   inUse: number;
-  /** Most recent `pod.lastHeartbeat` across all regions for this app. */
+  /** Most recent `pod.lastHeartbeat` across all regions for this group. */
   mostRecentActivity?: Date;
 }
 
@@ -85,26 +75,26 @@ export function CapacityListPage() {
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
-      const apps = await applicationsApi.list(signal);
-      const fetches = apps.flatMap((app) =>
-        (app.capacity ?? []).map((c) =>
+      const groups = await applicationGroupsApi.list(signal);
+      const fetches = groups.flatMap((group) =>
+        (group.capacity ?? []).map((c) =>
           capacityApi
-            .listPods(app.applicationId, c.region, signal)
+            .listPods(group.groupId, c.region, signal)
             .catch(() => null)
-            .then((snap) => ({ appId: app.applicationId, region: c.region, snap, max: c.maxAvailable })),
+            .then((snap) => ({ groupId: group.groupId, region: c.region, snap, max: c.maxAvailable })),
         ),
       );
       const fetched = await Promise.all(fetches);
 
-      const rowsByApp = new Map<string, RowAggregate>();
+      const rowsByGroup = new Map<string, RowAggregate>();
       const regionTotals: Record<string, RegionTotal> = {};
-      for (const app of apps) {
-        rowsByApp.set(app.applicationId, {
-          app, regions: 0, maxAvailable: 0, provisioned: 0, ready: 0, inUse: 0,
+      for (const group of groups) {
+        rowsByGroup.set(group.groupId, {
+          group, regions: 0, maxAvailable: 0, provisioned: 0, ready: 0, inUse: 0,
         });
       }
-      for (const { appId, region, snap, max } of fetched) {
-        const row = rowsByApp.get(appId);
+      for (const { groupId, region, snap, max } of fetched) {
+        const row = rowsByGroup.get(groupId);
         if (!row) continue;
         row.regions += 1;
         row.maxAvailable += max;
@@ -128,7 +118,7 @@ export function CapacityListPage() {
 
       setState({
         status: "ok",
-        rows: Array.from(rowsByApp.values()),
+        rows: Array.from(rowsByGroup.values()),
         refreshedAt: new Date(),
         regionTotals,
       });
@@ -157,7 +147,8 @@ export function CapacityListPage() {
     if (state.status !== "ok") return [] as RowAggregate[];
     const needle = search.trim().toLowerCase();
     const filtered = needle
-      ? state.rows.filter((r) => r.app.name.toLowerCase().includes(needle))
+      ? state.rows.filter((r) =>
+          r.group.name.toLowerCase().includes(needle) || r.group.groupId.toLowerCase().includes(needle))
       : state.rows;
     const sorted = [...filtered].sort((a, b) => {
       const cmp = compareRows(a, b, sortKey);
@@ -207,7 +198,7 @@ export function CapacityListPage() {
           ) : regionEntries.length === 0 ? (
             <span className="ink-soft" style={{ fontSize: "0.85rem" }}>No regions configured.</span>
           ) : regionEntries.map(([region, t]) => (
-            <span key={region} className="chip" title="Across all applications">
+            <span key={region} className="chip" title="Across all application groups">
               <span className="mono">{region}</span>
               <span className="mono">{t.provisioned} worker{t.provisioned === 1 ? "" : "s"}</span>
               {t.inUse > 0 && <span className="mono ink-soft">· {t.inUse} in use</span>}
@@ -230,6 +221,7 @@ export function CapacityListPage() {
       </header>
 
       <AppListToolbar
+        noun="group"
         search={search}
         onSearchChange={setSearch}
         count={sortedFiltered.length}
@@ -243,26 +235,26 @@ export function CapacityListPage() {
         <div className="emptyState">
           {totalRowCount === 0 ? (
             <>
-              <p>No applications registered yet.</p>
+              <p>No application groups yet.</p>
               <p className="ink-soft">
-                Register one in <Link to="/applications">Applications</Link> to allocate capacity.
+                Create one with "Manage groups" in <Link to="/applications">Applications</Link> — the worker pool is the group's.
               </p>
             </>
           ) : (
-            <p className="ink-soft">No applications match "{search}".</p>
+            <p className="ink-soft">No groups match "{search}".</p>
           )}
         </div>
       ) : viewMode === "grid" ? (
-        <ul className="appCardGrid" aria-label="application capacity cards">
+        <ul className="appCardGrid" aria-label="application group capacity cards">
           {pageItems.map((r) => (
-            <CapacityCard key={r.app.applicationId} row={r} />
+            <CapacityCard key={r.group.groupId} row={r} />
           ))}
         </ul>
       ) : (
         <table className="runsTable capacityListTable">
           <thead>
             <tr>
-              <SortHeader label="Application" k="name"        cur={sortKey} dir={sortDir} onClick={toggleSort} />
+              <SortHeader label="Group"       k="name"        cur={sortKey} dir={sortDir} onClick={toggleSort} />
               <th>Activity</th>
               <SortHeader label="Regions"     k="regions"     cur={sortKey} dir={sortDir} onClick={toggleSort} numeric />
               <SortHeader label="Ready"       k="ready"       cur={sortKey} dir={sortDir} onClick={toggleSort} numeric />
@@ -273,14 +265,14 @@ export function CapacityListPage() {
           </thead>
           <tbody>
             {pageItems.map((r) => (
-              <CapacityListRow key={r.app.applicationId} row={r} />
+              <CapacityListRow key={r.group.groupId} row={r} />
             ))}
           </tbody>
         </table>
       )}
 
       {!loading && sortedFiltered.length > 0 && (
-        <Paginator page={page} pageSize={pageSize} total={total} label="applications" onChange={setPage} />
+        <Paginator page={page} pageSize={pageSize} total={total} label="groups" onChange={setPage} />
       )}
 
       {reconcileOpen && (
@@ -334,12 +326,12 @@ function CapacityCard({ row }: { row: RowAggregate }) {
   const ratio = row.maxAvailable > 0 ? (row.ready + row.inUse) / row.maxAvailable : 0;
   const variant: "ok" | "warn" | "err" =
     ratio >= 1 ? "err" : ratio >= 0.8 ? "warn" : "ok";
-  const href = `/capacity/${encodeURIComponent(row.app.name)}`;
+  const href = `/capacity/${encodeURIComponent(row.group.groupId)}`;
   return (
     <li>
-      <Link to={href} className="appCard" aria-label={`Open capacity for ${row.app.name}`}>
+      <Link to={href} className="appCard" aria-label={`Open capacity for ${row.group.name}`}>
         <div className="appCard__head">
-          <h3 className="appCard__name">{row.app.name}</h3>
+          <h3 className="appCard__name">{row.group.name} <span className="mono ink-soft appGroupHeading__id">{row.group.groupId}</span></h3>
           <ActivityChip lastActivity={row.mostRecentActivity} hasWorkers={row.provisioned > 0} />
         </div>
         <div className="appCard__body">
@@ -366,7 +358,7 @@ function CapacityListRow({ row }: { row: RowAggregate }) {
   const ratio = row.maxAvailable > 0 ? (row.ready + row.inUse) / row.maxAvailable : 0;
   const variant: "ok" | "warn" | "err" =
     ratio >= 1 ? "err" : ratio >= 0.8 ? "warn" : "ok";
-  const href = `/capacity/${encodeURIComponent(row.app.name)}`;
+  const href = `/capacity/${encodeURIComponent(row.group.groupId)}`;
   function open() { navigate(href); }
   function onKey(e: React.KeyboardEvent<HTMLTableRowElement>) {
     if (e.key === "Enter" || e.key === " ") {
@@ -381,16 +373,17 @@ function CapacityListRow({ row }: { row: RowAggregate }) {
       onKeyDown={onKey}
       tabIndex={0}
       role="link"
-      aria-label={`Open capacity for ${row.app.name}`}
+      aria-label={`Open capacity for ${row.group.name}`}
     >
       <td>
         <Link
           to={href}
-          className="mono capacityListRow__name"
+          className="capacityListRow__name"
           onClick={(e) => e.stopPropagation()}
         >
-          {row.app.name}
+          {row.group.name}
         </Link>
+        <span className="mono ink-soft appGroupHeading__id">{row.group.groupId}</span>
       </td>
       <td>
         <ActivityChip lastActivity={row.mostRecentActivity} hasWorkers={row.provisioned > 0} />
@@ -467,7 +460,7 @@ function SkeletonTable() {
     <table className="runsTable capacityListTable" aria-busy="true">
       <thead>
         <tr>
-          <th>Application</th>
+          <th>Group</th>
           <th>Activity</th>
           <th className="num">Regions</th>
           <th className="num">Ready</th>
@@ -497,7 +490,7 @@ function SkeletonTable() {
 
 function compareRows(a: RowAggregate, b: RowAggregate, key: SortKey): number {
   switch (key) {
-    case "name":        return a.app.name.localeCompare(b.app.name);
+    case "name":        return a.group.name.localeCompare(b.group.name);
     case "regions":     return a.regions - b.regions;
     case "provisioned": return a.provisioned - b.provisioned;
     case "ready":       return a.ready - b.ready;

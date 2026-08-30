@@ -3,12 +3,12 @@ package com.perf.globalorchestrator.provision;
 import com.perf.globalorchestrator.client.LocalOrchestratorClient;
 import com.perf.globalorchestrator.client.WorkerRef;
 import com.perf.globalorchestrator.domain.Actor;
-import com.perf.globalorchestrator.domain.Application;
+import com.perf.globalorchestrator.domain.ApplicationGroup;
 import com.perf.globalorchestrator.domain.Pod;
 import com.perf.globalorchestrator.domain.RunEventPayloads;
 import com.perf.globalorchestrator.domain.RunEventType;
 import com.perf.globalorchestrator.provision.RecycleEvaluator.RecycleReason;
-import com.perf.globalorchestrator.repo.ApplicationRepository;
+import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.repo.PodRepository;
 import com.perf.globalorchestrator.repo.RunRepository;
 import com.perf.globalorchestrator.service.RunAuditWriter;
@@ -59,7 +59,7 @@ public class PodRecycler {
     private static final Logger LOG = LoggerFactory.getLogger(PodRecycler.class);
 
     private final PodRepository pods;
-    private final ApplicationRepository apps;
+    private final ApplicationGroupRepository groups;
     private final PodProvisioner provisioner;
     private final PodSpinService spinService;
     private final LocalOrchestratorClient localClient;
@@ -70,7 +70,7 @@ public class PodRecycler {
 
     public PodRecycler(
             PodRepository pods,
-            ApplicationRepository apps,
+            ApplicationGroupRepository groups,
             PodProvisioner provisioner,
             PodSpinService spinService,
             LocalOrchestratorClient localClient,
@@ -78,7 +78,7 @@ public class PodRecycler {
             RunRepository runs,
             RunAuditWriter audit) {
         this.pods = pods;
-        this.apps = apps;
+        this.groups = groups;
         this.provisioner = provisioner;
         this.spinService = spinService;
         this.localClient = localClient;
@@ -101,13 +101,12 @@ public class PodRecycler {
     public RecycleSummary doSweep() {
         RecycleSummary summary = new RecycleSummary();
 
-        // Cache application lookups by id — typical fleet has a small handful
-        // of apps with many pods each.
-        Map<String, Application> appCache = new HashMap<>();
+        // Cache group lookups by id — a fleet is a handful of pools with many pods each.
+        Map<String, ApplicationGroup> groupCache = new HashMap<>();
 
         for (Pod pod : pods.findAll()) {
-            if (pod.applicationId() == null) {
-                continue; // legacy static pod — never auto-recycled
+            if (pod.groupId() == null) {
+                continue; // never auto-recycle a pod whose pool is unknown
             }
             if (pod.state() != com.perf.globalorchestrator.domain.PodState.IDLE) {
                 // LOST → operator decision. DRAINING_FOR_RECYCLE → already
@@ -127,17 +126,17 @@ public class PodRecycler {
             if (pods.isWorkerBoundToNonTerminalRun(pod.podId())) {
                 continue;
             }
-            Application app = appCache.computeIfAbsent(pod.applicationId(),
-                    id -> apps.findById(id).orElse(null));
-            if (app == null) {
+            ApplicationGroup group = groupCache.computeIfAbsent(pod.groupId(),
+                    id -> groups.findById(id).orElse(null));
+            if (group == null) {
                 continue;
             }
-            RecycleReason reason = evaluator.decide(pod, app, provisioner.currentImageDigest(pod.region()));
+            RecycleReason reason = evaluator.decide(pod, group, provisioner.currentImageDigest(pod.region()));
             if (reason == RecycleReason.NONE) {
                 continue;
             }
             try {
-                if (recycle(pod, app, reason)) {
+                if (recycle(pod, group, reason)) {
                     summary.recycled.put(pod.podId(), reason);
                 } else {
                     summary.skipped.add(pod.podId());
@@ -192,8 +191,8 @@ public class PodRecycler {
      * {@link RecycleReason#replacesPod()}). Returns false when the race
      * guard lost (the pod is no longer IDLE); true on a successful drain.
      */
-    public boolean drainOne(Pod pod, Application app, RecycleReason reason) {
-        return recycle(pod, app, reason);
+    public boolean drainOne(Pod pod, ApplicationGroup group, RecycleReason reason) {
+        return recycle(pod, group, reason);
     }
 
     /**
@@ -201,7 +200,7 @@ public class PodRecycler {
      * when the markDrainingForRecycle guard lost a race with a concurrent
      * claim (zero rowcount); true otherwise.
      */
-    private boolean recycle(Pod pod, Application app, RecycleReason reason) {
+    private boolean recycle(Pod pod, ApplicationGroup group, RecycleReason reason) {
         // (1) Atomic cut-over IDLE → DRAINING_FOR_RECYCLE. Claim queries
         // can no longer see this pod after this commits.
         int marked = pods.markDrainingForRecycle(pod.podId());
@@ -212,7 +211,7 @@ public class PodRecycler {
         }
         LOG.info("Recycling pod {} (app={}, region={}, reason={}, runsServed={}, " +
                 "imageDigest={})",
-                pod.podId(), app.name(), pod.region(), reason,
+                pod.podId(), group.groupId(), pod.region(), reason,
                 pod.runsServed(), shorten(pod.imageDigest()));
 
         // (2) Drain — idempotent against an idle pod (returns 404
@@ -250,16 +249,15 @@ public class PodRecycler {
         // DRAIN_AFTER_RUN, which spins nothing back up).
         pods.deleteByPodId(pod.podId());
 
-        // (5) Spin replacement under the same (applicationId, region) —
+        // (5) Spin replacement under the same (groupId, region) —
         // unless the policy is DRAIN_AFTER_RUN, which deliberately leaves
         // the slot empty (cost-saving; the operator re-provisions on demand).
         if (!reason.replacesPod()) {
-            LOG.info("Drained {} (app={}, region={}) — no replacement (DRAIN_AFTER_RUN)",
-                    pod.podId(), app.name(), pod.region());
+            LOG.info("Drained {} (group={}, region={}) — no replacement (DRAIN_AFTER_RUN)",
+                    pod.podId(), group.groupId(), pod.region());
             return true;
         }
-        PodSpinService.SpinResult result = spinService.spin(
-                pod.applicationId(), app.name(), pod.region());
+        PodSpinService.SpinResult result = spinService.spin(pod.groupId(), pod.region());
         LOG.info("Recycled {} → replacement {} (digest={})",
                 pod.podId(), result.podName(), shorten(result.imageDigest()));
         return true;
@@ -277,8 +275,8 @@ public class PodRecycler {
             LocalOrchestratorClient.LogsResult logs =
                     localClient.getLogs(WorkerRef.of(pod), 200, "jmeter");
             if (logs.statusCode() == 200 && logs.body() != null && !logs.body().isBlank()) {
-                LOG.info("[DRAINED-FORENSICS] pod={} app={} region={} runsServed={} — JMeter log tail (≤200 lines):\n{}",
-                        pod.podId(), pod.applicationId(), pod.region(), pod.runsServed(), logs.body());
+                LOG.info("[DRAINED-FORENSICS] pod={} group={} region={} runsServed={} — JMeter log tail (≤200 lines):\n{}",
+                        pod.podId(), pod.groupId(), pod.region(), pod.runsServed(), logs.body());
             } else {
                 LOG.info("[DRAINED-FORENSICS] pod={} — no JMeter log tail captured (status={})",
                         pod.podId(), logs.statusCode());

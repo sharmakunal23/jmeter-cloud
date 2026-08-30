@@ -27,7 +27,7 @@ class PodsControllerCapacityTest {
         MockMvc mvc = MockMvcBuilders.standaloneSetup(new PodsController(provisioner, new RegionalProperties("na-east")))
                 .setControllerAdvice(new ApiExceptionHandler()).build();
         mvc.perform(post("/api/v1/pods").contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"podName\":\"payments-na-east-worker-1\",\"applicationId\":\"01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"applicationName\":\"payments\",\"region\":\"na-east\"}"))
+                        .content("{\"podName\":\"payments-na-east-worker-1\",\"groupId\":\"cps\",\"region\":\"na-east\"}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("CAPACITY_EXHAUSTED"))
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("pods=0")));

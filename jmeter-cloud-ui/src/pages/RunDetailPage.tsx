@@ -127,7 +127,7 @@ export function RunDetailPage() {
       try {
         const apps = await applicationsApi.list(ctl.signal);
         const app = apps.find((a) => a.name === appName) ?? null;
-        const group = app?.metricsGroupId ? await applicationGroupsApi.get(app.metricsGroupId, ctl.signal) : null;
+        const group = app ? await applicationGroupsApi.get(app.metricsGroupId, ctl.signal) : null;
         setDashboards({ app, group });
       } catch {
         if (!ctl.signal.aborted) setDashboards({ app: null, group: null });

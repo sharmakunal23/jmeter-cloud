@@ -2,7 +2,11 @@ package com.perf.globalorchestrator.http;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.perf.globalorchestrator.domain.ApplicationGroup;
+import com.perf.globalorchestrator.domain.GroupCapacity;
+import com.perf.globalorchestrator.domain.RecyclePolicy;
+import com.perf.globalorchestrator.provision.ProvisioningProperties;
 import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
+import com.perf.globalorchestrator.repo.GroupCapacityRepository;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -27,9 +31,11 @@ import java.util.regex.Pattern;
  * The application-group registry. A group's {@code groupId} is what workers
  * send as {@code ?groupId=} on metrics POSTs and, upper-cased, the prefix of the
  * group's tables in {@code CARDZATE_DB_GRAF} ({@code cps} → {@code CPS_METRICS});
- * it must equal a {@code GROUP_REGISTRY.GROUP_ID} there. Groups are hard-deleted
- * and a delete is refused while any application (visible or archived) is in
- * the group.
+ * it must equal a {@code GROUP_REGISTRY.GROUP_ID} there. The group owns the
+ * worker pool (GROUP-CAPACITY, 2026-08-31): its per-region capacity rows are
+ * seeded at 0 on create and edited through {@link CapacityController}, and its
+ * recycle policy is set here. Groups are hard-deleted; a delete is refused while
+ * any application (visible or archived), worker or capacity row is in the group.
  */
 @RestController
 @RequestMapping("/api/v1/applicationGroups")
@@ -42,22 +48,29 @@ public class ApplicationGroupController {
      */
     static final String GROUP_ID_REGEX = "[a-z][a-z0-9_]{0,29}";
     private static final Pattern GROUP_ID_PATTERN = Pattern.compile("^" + GROUP_ID_REGEX + "$");
-    /** The same regex serves as the path constraint (no capture groups). */
-    private static final String GROUP_ID_PATH = GROUP_ID_REGEX;
+    /** The same regex serves as the path constraint (no capture groups); the capacity routes reuse it. */
+    static final String GROUP_ID_PATH = GROUP_ID_REGEX;
     private static final int MAX_NAME_LEN = 255;
     private static final int MAX_DESCRIPTION_LEN = 512;
 
     private final ApplicationGroupRepository repo;
+    private final GroupCapacityRepository capacityRepo;
+    private final ProvisioningProperties provisioning;
 
-    public ApplicationGroupController(ApplicationGroupRepository repo) {
+    public ApplicationGroupController(ApplicationGroupRepository repo, GroupCapacityRepository capacityRepo,
+                                      ProvisioningProperties provisioning) {
         this.repo = repo;
+        this.capacityRepo = capacityRepo;
+        this.provisioning = provisioning;
     }
 
     @GetMapping
     public ResponseEntity<List<ApplicationGroup>> list() {
         Map<String, Integer> counts = repo.applicationCounts();
+        Map<String, List<GroupCapacity>> capacity = capacityRepo.findAllGroupedByGroup();
         return ResponseEntity.ok(repo.findAll().stream()
-                .map(g -> g.withApplicationCount(counts.getOrDefault(g.groupId(), 0)))
+                .map(g -> g.withApplicationCount(counts.getOrDefault(g.groupId(), 0))
+                        .withCapacity(capacity.getOrDefault(g.groupId(), List.of())))
                 .toList());
     }
 
@@ -65,7 +78,7 @@ public class ApplicationGroupController {
     public ResponseEntity<ApplicationGroup> get(@PathVariable String groupId) {
         ApplicationGroup group = repo.findById(groupId)
                 .orElseThrow(() -> new GroupNotFoundException(groupId));
-        return ResponseEntity.ok(group.withApplicationCount(repo.countApplications(groupId)));
+        return ResponseEntity.ok(hydrate(group));
     }
 
     @PostMapping
@@ -76,49 +89,130 @@ public class ApplicationGroupController {
         String grafanaLiveUrl = validateUrl("grafanaLiveUrl", req.grafanaLiveUrl());
         String grafanaHistoryUrl = validateUrl("grafanaHistoryUrl", req.grafanaHistoryUrl());
         int hotDays = validateHotDays(req.hotDays());
+        RecyclePolicy policy = resolveRecyclePolicy(req.recyclePolicy());
+        validateRecyclePolicy(policy, req.maxRunsPerPod(), req.podMaxAgeHours());
         if (repo.findById(groupId).isPresent()) {
             throw new GroupIdTakenException(groupId);
         }
         ApplicationGroup stored;
         try {
-            stored = repo.insert(new ApplicationGroup(groupId, name, description, grafanaLiveUrl, grafanaHistoryUrl, hotDays, Instant.now(), null));
+            stored = repo.insert(new ApplicationGroup(groupId, name, description, grafanaLiveUrl, grafanaHistoryUrl,
+                    hotDays, policy, req.maxRunsPerPod(), req.podMaxAgeHours(), Boolean.TRUE.equals(req.alwaysOn()),
+                    Instant.now(), null, null));
         } catch (DuplicateKeyException e) {
             throw new GroupNameTakenException(name);
         }
-        return ResponseEntity.status(HttpStatus.CREATED).body(stored.withApplicationCount(0));
+        // The pool starts empty in every region the deployment knows: a
+        // capacity row at 0 per region, raised through the Capacity tab.
+        for (String region : ApplicationController.seedRegions(provisioning)) {
+            capacityRepo.upsert(groupId, region, 0);
+        }
+        return ResponseEntity.status(HttpStatus.CREATED).body(hydrate(stored.withApplicationCount(0)));
     }
 
     @PutMapping("/{groupId:" + GROUP_ID_PATH + "}")
     public ResponseEntity<ApplicationGroup> update(@PathVariable String groupId,
                                                    @RequestBody UpdateApplicationGroupRequest req) {
-        repo.findById(groupId).orElseThrow(() -> new GroupNotFoundException(groupId));
+        ApplicationGroup existing = repo.findById(groupId).orElseThrow(() -> new GroupNotFoundException(groupId));
         String name = validateName(req.name());
         String description = validateDescription(req.description());
         String grafanaLiveUrl = validateUrl("grafanaLiveUrl", req.grafanaLiveUrl());
         String grafanaHistoryUrl = validateUrl("grafanaHistoryUrl", req.grafanaHistoryUrl());
         int hotDays = validateHotDays(req.hotDays());
+        // The policy is replaced wholesale when sent (null = keep REUSE's
+        // shape); alwaysOn omitted preserves the current value — no surprise
+        // flips for callers that don't know about it.
+        RecyclePolicy policy = resolveRecyclePolicy(req.recyclePolicy());
+        validateRecyclePolicy(policy, req.maxRunsPerPod(), req.podMaxAgeHours());
+        boolean alwaysOn = req.alwaysOn() == null ? existing.alwaysOn() : req.alwaysOn();
         try {
-            ApplicationGroup updated = repo.update(groupId, name, description, grafanaLiveUrl, grafanaHistoryUrl, hotDays);
-            return ResponseEntity.ok(updated.withApplicationCount(repo.countApplications(groupId)));
+            ApplicationGroup updated = repo.update(groupId, name, description, grafanaLiveUrl, grafanaHistoryUrl, hotDays,
+                    policy, req.maxRunsPerPod(), req.podMaxAgeHours(), alwaysOn);
+            return ResponseEntity.ok(hydrate(updated));
         } catch (DuplicateKeyException e) {
             throw new GroupNameTakenException(name);
         }
     }
 
-    /** Idempotent: an unknown group is already gone (204); a group with applications is 409. */
+    /**
+     * Idempotent: an unknown group is already gone (204); a group with
+     * applications, workers or capacity rows is 409 — drain and release the
+     * pool first, then move or purge the applications.
+     */
     @DeleteMapping("/{groupId:" + GROUP_ID_PATH + "}")
     public ResponseEntity<Void> delete(@PathVariable String groupId) {
         int inUse = repo.countApplications(groupId);
         if (inUse > 0) {
             throw new GroupHasApplicationsException(groupId, inUse);
         }
+        int pods = repo.countPods(groupId);
+        int capacity = capacityRepo.countByGroupId(groupId);
+        if (pods > 0 || capacity > 0) {
+            throw new GroupHasWorkersException(groupId, pods, capacity);
+        }
         try {
             repo.delete(groupId);
         } catch (DataIntegrityViolationException e) {
-            // An application was assigned between the count and the delete.
-            throw new GroupHasApplicationsException(groupId, repo.countApplications(groupId));
+            // An application or worker was assigned between the count and the delete.
+            int apps = repo.countApplications(groupId);
+            if (apps > 0) {
+                throw new GroupHasApplicationsException(groupId, apps);
+            }
+            throw new GroupHasWorkersException(groupId, repo.countPods(groupId), capacityRepo.countByGroupId(groupId));
         }
         return ResponseEntity.noContent().build();
+    }
+
+    private ApplicationGroup hydrate(ApplicationGroup group) {
+        return group.withApplicationCount(repo.countApplications(group.groupId()))
+                .withCapacity(capacityRepo.findByGroupId(group.groupId()));
+    }
+
+    // ── Recycle policy (moved from the application with the pool) ───
+
+    /** Null → REUSE; otherwise a {@link RecyclePolicy} name (400 on anything else). */
+    static RecyclePolicy resolveRecyclePolicy(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return RecyclePolicy.REUSE;
+        }
+        try {
+            return RecyclePolicy.valueOf(raw.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new GroupValidationException("unknown recyclePolicy '" + raw + "'; allowed: "
+                    + java.util.Arrays.toString(RecyclePolicy.values()));
+        }
+    }
+
+    /** The thresholds exist exactly when the policy reads them — the schema's CHECK, said first. */
+    static void validateRecyclePolicy(RecyclePolicy policy, Integer maxRunsPerPod, Integer podMaxAgeHours) {
+        if (maxRunsPerPod != null && (maxRunsPerPod < 1 || maxRunsPerPod > 10_000)) {
+            throw new GroupValidationException("maxRunsPerPod must be 1..10000");
+        }
+        if (podMaxAgeHours != null && (podMaxAgeHours < 1 || podMaxAgeHours > 720)) {
+            throw new GroupValidationException("podMaxAgeHours must be 1..720");
+        }
+        switch (policy) {
+            case REUSE, EVERY_RUN, DRAIN_AFTER_RUN -> {
+                if (maxRunsPerPod != null || podMaxAgeHours != null) {
+                    throw new GroupValidationException("policy=" + policy + " takes no thresholds");
+                }
+            }
+            case MAX_RUNS -> {
+                if (maxRunsPerPod == null || podMaxAgeHours != null) {
+                    throw new GroupValidationException("policy=MAX_RUNS requires maxRunsPerPod only");
+                }
+            }
+            case MAX_AGE -> {
+                if (podMaxAgeHours == null || maxRunsPerPod != null) {
+                    throw new GroupValidationException("policy=MAX_AGE requires podMaxAgeHours only");
+                }
+            }
+            case BOTH -> {
+                if (maxRunsPerPod == null || podMaxAgeHours == null) {
+                    throw new GroupValidationException("policy=BOTH requires both maxRunsPerPod and podMaxAgeHours");
+                }
+            }
+        }
     }
 
     // ── Validation ─────────────────────────────────────────────────
@@ -196,11 +290,19 @@ public class ApplicationGroupController {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record CreateApplicationGroupRequest(String groupId, String name, String description,
-                                                String grafanaLiveUrl, String grafanaHistoryUrl, Integer hotDays) {}
+                                                String grafanaLiveUrl, String grafanaHistoryUrl, Integer hotDays,
+                                                /** The pool's policy; null defaults to REUSE. */
+                                                String recyclePolicy, Integer maxRunsPerPod, Integer podMaxAgeHours,
+                                                /** null defaults to false. */
+                                                Boolean alwaysOn) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record UpdateApplicationGroupRequest(String name, String description,
-                                                String grafanaLiveUrl, String grafanaHistoryUrl, Integer hotDays) {}
+                                                String grafanaLiveUrl, String grafanaHistoryUrl, Integer hotDays,
+                                                /** Replaced wholesale; null = REUSE with no thresholds. */
+                                                String recyclePolicy, Integer maxRunsPerPod, Integer podMaxAgeHours,
+                                                /** null = preserve the current value. */
+                                                Boolean alwaysOn) {}
 
     // ── Exceptions + handlers ──────────────────────────────────────
 
@@ -215,6 +317,13 @@ public class ApplicationGroupController {
     }
     static final class GroupNameTakenException extends RuntimeException {
         GroupNameTakenException(String name) { super("application group name already exists: " + name); }
+    }
+    static final class GroupHasWorkersException extends RuntimeException {
+        GroupHasWorkersException(String id, int pods, int capacity) {
+            super("application group '" + id + "' still owns " + pods + " worker" + (pods == 1 ? "" : "s")
+                    + " and " + capacity + " capacity row" + (capacity == 1 ? "" : "s")
+                    + " — drain its workers and remove its regions before deleting the group");
+        }
     }
     static final class GroupHasApplicationsException extends RuntimeException {
         GroupHasApplicationsException(String id, int n) {
@@ -251,6 +360,12 @@ public class ApplicationGroupController {
     public ResponseEntity<Map<String, String>> handleHasApplications(GroupHasApplicationsException e) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(Map.of("code", "APPLICATION_GROUP_HAS_APPLICATIONS", "message", e.getMessage()));
+    }
+
+    @ExceptionHandler(GroupHasWorkersException.class)
+    public ResponseEntity<Map<String, String>> handleHasWorkers(GroupHasWorkersException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(Map.of("code", "APPLICATION_GROUP_HAS_WORKERS", "message", e.getMessage()));
     }
 
     @ExceptionHandler(EmptyResultDataAccessException.class)

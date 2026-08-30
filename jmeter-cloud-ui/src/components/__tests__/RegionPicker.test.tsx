@@ -14,7 +14,7 @@ function rowFor(container: HTMLElement, regionId: string): HTMLElement {
 describe("RegionPicker", () => {
   it("renders the 4 USA region checkboxes + map pins and pre-selects current", () => {
     const { container } = render(
-      <RegionPicker appName="checkout-svc" current={["us-east-1"]} onSubmit={vi.fn()} onCancel={vi.fn()} />,
+      <RegionPicker groupName="checkout-svc" current={["us-east-1"]} onSubmit={vi.fn()} onCancel={vi.fn()} />,
     );
     const inputs = container.querySelectorAll<HTMLInputElement>('.regionChecklist input[type="checkbox"]');
     expect(inputs).toHaveLength(4);
@@ -25,7 +25,7 @@ describe("RegionPicker", () => {
   it("toggling a region on and saving submits the new selection", () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     const { container } = render(
-      <RegionPicker appName="x" current={["us-east-1"]} onSubmit={onSubmit} onCancel={vi.fn()} />,
+      <RegionPicker groupName="x" current={["us-east-1"]} onSubmit={onSubmit} onCancel={vi.fn()} />,
     );
     fireEvent.click(rowFor(container, "us-west-2").querySelector('input[type="checkbox"]')!);
     fireEvent.click(screen.getByRole("button", { name: /Save regions/ }));
@@ -37,7 +37,7 @@ describe("RegionPicker", () => {
   it("a locked region (has workers) cannot be deselected", () => {
     const { container } = render(
       <RegionPicker
-        appName="x"
+        groupName="x"
         current={["us-east-1"]}
         lockedRegions={new Set(["us-east-1"])}
         onSubmit={vi.fn()}
@@ -49,7 +49,7 @@ describe("RegionPicker", () => {
   });
 
   it("Save is disabled with no changes", () => {
-    render(<RegionPicker appName="x" current={["us-east-1"]} onSubmit={vi.fn()} onCancel={vi.fn()} />);
+    render(<RegionPicker groupName="x" current={["us-east-1"]} onSubmit={vi.fn()} onCancel={vi.fn()} />);
     expect(screen.getByRole("button", { name: /Save regions/ })).toBeDisabled();
   });
 
@@ -77,7 +77,7 @@ describe("RegionPicker", () => {
 
     it("offers the deployment's data centers instead of the four AWS regions", async () => {
       const { container } = render(
-        <RegionPicker appName="x" current={["na-east"]} onSubmit={vi.fn()} onCancel={vi.fn()} />,
+        <RegionPicker groupName="x" current={["na-east"]} onSubmit={vi.fn()} onCancel={vi.fn()} />,
       );
 
       await waitFor(() => {
@@ -90,7 +90,7 @@ describe("RegionPicker", () => {
     it("drops the US map — a data center has no place on it, and a pin in the wrong "
        + "spot is worse than no map", async () => {
       const { container } = render(
-        <RegionPicker appName="x" current={["na-east"]} onSubmit={vi.fn()} onCancel={vi.fn()} />,
+        <RegionPicker groupName="x" current={["na-east"]} onSubmit={vi.fn()} onCancel={vi.fn()} />,
       );
 
       await waitFor(() => expect(container.querySelector(".regionChecklist")).toBeTruthy());
@@ -99,14 +99,14 @@ describe("RegionPicker", () => {
     });
 
     it("uses the data-center vocabulary in its copy", async () => {
-      render(<RegionPicker appName="x" current={["na-east"]} onSubmit={vi.fn()} onCancel={vi.fn()} />);
+      render(<RegionPicker groupName="x" current={["na-east"]} onSubmit={vi.fn()} onCancel={vi.fn()} />);
       expect(await screen.findByRole("button", { name: /Save data centers/ })).toBeInTheDocument();
     });
 
     it("surfaces a placement the deployment no longer offers so it can be removed", async () => {
       const { container } = render(
         <RegionPicker
-          appName="x"
+          groupName="x"
           current={["na-east", "retired-dc"]}
           onSubmit={vi.fn()}
           onCancel={vi.fn()}

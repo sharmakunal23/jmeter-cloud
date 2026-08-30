@@ -3,14 +3,15 @@ import { render, screen, waitFor, fireEvent, within } from "@testing-library/rea
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { CapacityDetailPage } from "../CapacityDetailPage";
-import type { Application } from "../../api/applications";
+import type { ApplicationGroup } from "../../api/applicationGroups";
 import type { CapacitySnapshot, PodView } from "../../api/capacity";
+import { ApplicationApiError } from "../../api/applications";
 
-vi.mock("../../api/applications", async () => {
-  const actual = await vi.importActual<typeof import("../../api/applications")>("../../api/applications");
+vi.mock("../../api/applicationGroups", async () => {
+  const actual = await vi.importActual<typeof import("../../api/applicationGroups")>("../../api/applicationGroups");
   return {
     ...actual,
-    applicationsApi: { list: vi.fn(), get: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
+    applicationGroupsApi: { list: vi.fn(), get: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
   };
 });
 vi.mock("../../api/capacity", async () => {
@@ -27,9 +28,9 @@ vi.mock("../../api/capacity", async () => {
   };
 });
 
-import { applicationsApi } from "../../api/applications";
+import { applicationGroupsApi } from "../../api/applicationGroups";
 import { capacityApi } from "../../api/capacity";
-const apps = applicationsApi as unknown as { list: ReturnType<typeof vi.fn> };
+const groups = applicationGroupsApi as unknown as { get: ReturnType<typeof vi.fn> };
 const cap = capacityApi as unknown as {
   setMax: ReturnType<typeof vi.fn>;
   listPods: ReturnType<typeof vi.fn>;
@@ -39,7 +40,7 @@ const cap = capacityApi as unknown as {
 };
 
 beforeEach(() => {
-  apps.list.mockReset();
+  groups.get.mockReset();
   cap.setMax.mockReset();
   cap.listPods.mockReset();
   cap.spinPod.mockReset();
@@ -47,16 +48,14 @@ beforeEach(() => {
   cap.drainPod.mockReset();
 });
 
-function fixtureApp(): Application {
+function fixtureGroup(): ApplicationGroup {
   return {
-    applicationId: "01CAP",
-    name: "checkout",
-    sealId: null,
+    groupId: "cps",
+    name: "Servicing MQ",
     description: null,
-    healthEndpoints: [],
     capacity: [{ region: "us-east", maxAvailable: 3 }],
     createdAt: "2026-05-12T00:00:00Z",
-    lastHealthStatus: "HEALTHY",
+    applicationCount: 2,
   };
 }
 function pod(podName: string, state: PodView["state"], blocked?: PodView["blockedBy"]): PodView {
@@ -69,26 +68,26 @@ function pod(podName: string, state: PodView["state"], blocked?: PodView["blocke
 }
 function snap(partial: Partial<CapacitySnapshot> = {}): CapacitySnapshot {
   return {
-    applicationId: "01CAP", region: "us-east",
+    groupId: "cps", region: "us-east",
     maxAvailable: 3, provisioned: 0, ready: 0, inUse: 0, spinnable: 3, pods: [],
     ...partial,
   };
 }
 
-function renderAt(appName: string) {
+function renderAt(groupId: string) {
   return render(
-    <MemoryRouter initialEntries={[`/capacity/${encodeURIComponent(appName)}`]}>
+    <MemoryRouter initialEntries={[`/capacity/${encodeURIComponent(groupId)}`]}>
       <Routes>
-        <Route path="/capacity/:appName" element={<CapacityDetailPage />} />
+        <Route path="/capacity/:groupId" element={<CapacityDetailPage />} />
         <Route path="/capacity" element={<div>capacity-list-stub</div>} />
       </Routes>
     </MemoryRouter>,
   );
 }
 
-describe("CapacityDetailPage — Phase 5b", () => {
-  it("shows notFound message when the app name doesn't exist", async () => {
-    apps.list.mockResolvedValue([fixtureApp()]);
+describe("CapacityDetailPage — per application group", () => {
+  it("shows notFound message when the group doesn't exist", async () => {
+    groups.get.mockRejectedValue(new ApplicationApiError(404, "APPLICATION_GROUP_NOT_FOUND", "no such group"));
     cap.listPods.mockResolvedValue(snap());
 
     renderAt("does-not-exist");
@@ -96,8 +95,8 @@ describe("CapacityDetailPage — Phase 5b", () => {
     expect(await screen.findByText(/not found/i)).toBeInTheDocument();
   });
 
-  it("renders the region panel with chips + worker table", async () => {
-    apps.list.mockResolvedValue([fixtureApp()]);
+  it("renders the group's name and the region panel with chips + worker table, fetched by group id", async () => {
+    groups.get.mockResolvedValue(fixtureGroup());
     cap.listPods.mockResolvedValue(snap({
       provisioned: 2, ready: 1, inUse: 1, spinnable: 1,
       pods: [
@@ -108,37 +107,37 @@ describe("CapacityDetailPage — Phase 5b", () => {
       ],
     }));
 
-    renderAt("checkout");
+    renderAt("cps");
 
     expect(await screen.findByText("checkout-us-east-worker-1")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Servicing MQ");
+    expect(cap.listPods).toHaveBeenCalledWith("cps", "us-east", expect.anything());
     expect(screen.getByText("Ready 1")).toBeInTheDocument();
     expect(screen.getByText("In Use 1")).toBeInTheDocument();
     // Phase 5c — "Provisioned" chip renamed to "Usage 2/3".
     expect(screen.getByText(/Usage 2\/3/)).toBeInTheDocument();
   });
 
-  it("Phase 5c — header has Open Application + Launch a Run links", async () => {
-    apps.list.mockResolvedValue([fixtureApp()]);
+  it("header links to the group's applications — a group has many, so there is no single launcher", async () => {
+    groups.get.mockResolvedValue(fixtureGroup());
     cap.listPods.mockResolvedValue(snap());
 
-    renderAt("checkout");
+    renderAt("cps");
 
-    expect(await screen.findByRole("link", { name: /Open Application/ })).toHaveAttribute(
-      "href", "/applications/checkout",
-    );
-    expect(screen.getByRole("link", { name: /Launch a Run/ })).toHaveAttribute(
-      "href", "/applications/checkout/runs/new",
-    );
+    expect(await screen.findByRole("link", { name: /Applications \(2\)/ })).toHaveAttribute("href", "/applications");
+    expect(screen.queryByRole("link", { name: /Launch a Run/ })).toBeNull();
+    // The pool's lifecycle policy is edited with the group, not here.
+    expect(screen.queryByText(/Worker lifecycle policy/)).toBeNull();
   });
 
-  it("Phase 5c — Request Capacity success toast carries an Open Application CTA", async () => {
-    apps.list.mockResolvedValue([fixtureApp()]);
+  it("Request Capacity success toast carries an Open Applications CTA", async () => {
+    groups.get.mockResolvedValue(fixtureGroup());
     cap.listPods.mockResolvedValue(snap());
     cap.setMax.mockResolvedValue({
-      applicationId: "01CAP", region: "us-east", maxAvailable: 5,
+      groupId: "cps", region: "us-east", maxAvailable: 5,
     });
 
-    renderAt("checkout");
+    renderAt("cps");
 
     fireEvent.click(await screen.findByRole("button", { name: /Request Capacity/ }));
     const dialog = await screen.findByRole("dialog");
@@ -146,15 +145,15 @@ describe("CapacityDetailPage — Phase 5b", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: /Set max to 5/ }));
 
     await waitFor(() => {
-      // Toast appears with the follow-up CTA pointing at the Application page.
+      // Toast appears with the follow-up CTA pointing at the Applications list.
       const toast = screen.getByRole("status");
-      const cta = within(toast).getByRole("link", { name: /Open Application/ });
-      expect(cta).toHaveAttribute("href", "/applications/checkout");
+      const cta = within(toast).getByRole("link", { name: /Open Applications/ });
+      expect(cta).toHaveAttribute("href", "/applications");
     });
   });
 
   it("Phase 5c — Drain All Ready opens the bulk dialog with only READY pods", async () => {
-    apps.list.mockResolvedValue([fixtureApp()]);
+    groups.get.mockResolvedValue(fixtureGroup());
     cap.listPods.mockResolvedValue(snap({
       ready: 1, inUse: 1, provisioned: 2, spinnable: 1,
       pods: [
@@ -166,7 +165,7 @@ describe("CapacityDetailPage — Phase 5b", () => {
       ],
     }));
 
-    renderAt("checkout");
+    renderAt("cps");
 
     const drainAll = await screen.findByRole("button", { name: /Drain All Ready/ });
     fireEvent.click(drainAll);
@@ -179,14 +178,14 @@ describe("CapacityDetailPage — Phase 5b", () => {
   });
 
   it("Provision Workers — count input + button calls spinPod N times", async () => {
-    apps.list.mockResolvedValue([fixtureApp()]);
+    groups.get.mockResolvedValue(fixtureGroup());
     cap.listPods.mockResolvedValue(snap({ spinnable: 3 }));
     cap.spinPod.mockResolvedValue({
-      podName: "x", applicationId: "01CAP", region: "us-east",
+      podName: "x", groupId: "cps", region: "us-east",
       baseUrl: "http://x:8080", provisioned: 1, maxAvailable: 3,
     });
 
-    renderAt("checkout");
+    renderAt("cps");
 
     const input = await screen.findByLabelText(/Number of workers to provision/);
     fireEvent.change(input, { target: { value: "2" } });
@@ -194,17 +193,18 @@ describe("CapacityDetailPage — Phase 5b", () => {
 
     await waitFor(() => {
       expect(cap.spinPod).toHaveBeenCalledTimes(2);
+      expect(cap.spinPod).toHaveBeenCalledWith("cps", "us-east");
     });
   });
 
   it("selecting workers reveals bulk toolbar with Restart + Drain Selected", async () => {
-    apps.list.mockResolvedValue([fixtureApp()]);
+    groups.get.mockResolvedValue(fixtureGroup());
     cap.listPods.mockResolvedValue(snap({
       ready: 2, provisioned: 2, spinnable: 1,
       pods: [pod("w-1", "READY"), pod("w-2", "READY")],
     }));
 
-    renderAt("checkout");
+    renderAt("cps");
 
     const checkboxes = await screen.findAllByRole("checkbox");
     // checkboxes[0] = select-all; toggle it.
@@ -216,7 +216,7 @@ describe("CapacityDetailPage — Phase 5b", () => {
   });
 
   it("Drain Selected dialog partitions selection into 'will drain' vs 'skipped (IN_USE)'", async () => {
-    apps.list.mockResolvedValue([fixtureApp()]);
+    groups.get.mockResolvedValue(fixtureGroup());
     cap.listPods.mockResolvedValue(snap({
       ready: 1, inUse: 1, provisioned: 2, spinnable: 1,
       pods: [
@@ -229,7 +229,7 @@ describe("CapacityDetailPage — Phase 5b", () => {
     }));
     cap.drainPod.mockResolvedValue({ podName: "ready-w", drained: true });
 
-    renderAt("checkout");
+    renderAt("cps");
 
     const checkboxes = await screen.findAllByRole("checkbox");
     fireEvent.click(checkboxes[0]); // select all
@@ -251,18 +251,18 @@ describe("CapacityDetailPage — Phase 5b", () => {
 
     await waitFor(() => {
       expect(cap.drainPod).toHaveBeenCalledTimes(1);
-      expect(cap.drainPod).toHaveBeenCalledWith("01CAP", "us-east", "ready-w");
+      expect(cap.drainPod).toHaveBeenCalledWith("cps", "us-east", "ready-w");
     });
   });
 
   it("Request Capacity dialog → setMax(newMax) on submit", async () => {
-    apps.list.mockResolvedValue([fixtureApp()]);
+    groups.get.mockResolvedValue(fixtureGroup());
     cap.listPods.mockResolvedValue(snap());
     cap.setMax.mockResolvedValue({
-      applicationId: "01CAP", region: "us-east", maxAvailable: 5,
+      groupId: "cps", region: "us-east", maxAvailable: 5,
     });
 
-    renderAt("checkout");
+    renderAt("cps");
 
     fireEvent.click(await screen.findByRole("button", { name: /Request Capacity/ }));
     const dialog = await screen.findByRole("dialog");
@@ -271,7 +271,7 @@ describe("CapacityDetailPage — Phase 5b", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: /Set max to 5/ }));
 
     await waitFor(() => {
-      expect(cap.setMax).toHaveBeenCalledWith("01CAP", "us-east", 5);
+      expect(cap.setMax).toHaveBeenCalledWith("cps", "us-east", 5);
     });
   });
 });

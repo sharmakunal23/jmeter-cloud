@@ -8,7 +8,7 @@ import {
   type Application,
 } from "../api/applications";
 import { runsApi, type Run } from "../api/runs";
-import { applicationGroupsApi, sortByGroup, type ApplicationGroup } from "../api/applicationGroups";
+import { applicationGroupsApi, groupOfApplication, sortByGroup, type ApplicationGroup } from "../api/applicationGroups";
 import { CreateApplicationDialog } from "../components/CreateApplicationDialog";
 import { ApplicationGroupsDialog } from "../components/ApplicationGroupsDialog";
 import { PurgeConfirmDialog } from "../components/PurgeConfirmDialog";
@@ -60,15 +60,10 @@ type State =
   | { status: "ok"; apps: Application[]; groups: ApplicationGroup[]; aggregates: Record<string, AppAggregates>; refreshedAt: Date }
   | { status: "error"; message: string };
 
-/** The group an application is filed under on this page, or null when ungrouped / unknown. */
-function groupOf(app: Application, groups: ApplicationGroup[]): ApplicationGroup | null {
-  return app.metricsGroupId ? groups.find((g) => g.groupId === app.metricsGroupId) ?? null : null;
-}
-
-/** Heading text for a run of apps in the same group; shown only once any group exists. */
-function groupHeading(app: Application, groups: ApplicationGroup[]): { key: string; name: string; id: string | null } {
-  const g = groupOf(app, groups);
-  return g ? { key: g.groupId, name: g.name, id: g.groupId } : { key: "", name: "Ungrouped", id: null };
+/** Heading for a run of apps in the same group (every app has one; the id stands in until the groups list catches up). */
+function groupHeading(app: Application, groups: ApplicationGroup[]): { key: string; name: string; id: string } {
+  const g = groupOfApplication(groups, app);
+  return { key: app.metricsGroupId, name: g?.name ?? app.metricsGroupId, id: app.metricsGroupId };
 }
 
 export function ApplicationsListPage() {
@@ -119,7 +114,7 @@ export function ApplicationsListPage() {
     if (!needle) return state.apps;
     return state.apps.filter((a) => {
       if (a.name.toLowerCase().includes(needle)) return true;
-      const g = groupOf(a, state.groups);
+      const g = groupOfApplication(state.groups, a);
       return g != null && (g.name.toLowerCase().includes(needle) || g.groupId.includes(needle));
     });
   }, [state, search]);
@@ -157,7 +152,7 @@ export function ApplicationsListPage() {
               type="button"
               className="btn"
               onClick={() => setShowGroups(true)}
-              title="Application groups — each routes its apps' metrics to its own tables"
+              title="Application groups — each owns its apps' worker pool and routes their metrics to its own tables"
             >
               Manage groups
             </button>
@@ -229,7 +224,7 @@ export function ApplicationsListPage() {
             const first = i === 0 || groupHeading(pageItems[i - 1], groups).key !== heading.key;
             return (
               <Fragment key={app.applicationId}>
-                {groups.length > 0 && first && (
+                {first && (
                   <li className="appCardGrid__groupHeading" role="presentation">
                     <GroupHeading name={heading.name} id={heading.id} />
                   </li>
@@ -268,12 +263,12 @@ export function ApplicationsListPage() {
   );
 }
 
-/** One heading per run of applications in the same group ("Ungrouped" closes the list). */
-function GroupHeading({ name, id }: { name: string; id: string | null }) {
+/** One heading per run of applications in the same group. */
+function GroupHeading({ name, id }: { name: string; id: string }) {
   return (
     <h2 className="appGroupHeading">
       {name}
-      {id && <span className="mono ink-soft appGroupHeading__id">{id}</span>}
+      <span className="mono ink-soft appGroupHeading__id">{id}</span>
     </h2>
   );
 }
@@ -364,7 +359,7 @@ function ArchivedApplicationsView() {
           summary={
             <ul>
               <li>every run of this app (result files + metric data + records)</li>
-              <li>its worker pods, capacity, and health history</li>
+              <li>its health history (workers and capacity are the group's and stay)</li>
               <li>the application record itself</li>
             </ul>
           }
@@ -459,7 +454,7 @@ function ApplicationListView({
           const first = i === 0 || groupHeading(apps[i - 1], groups).key !== heading.key;
           return (
             <Fragment key={app.applicationId}>
-            {groups.length > 0 && first && (
+            {first && (
               <tr className="appGroupRow">
                 <td colSpan={7}><GroupHeading name={heading.name} id={heading.id} /></td>
               </tr>

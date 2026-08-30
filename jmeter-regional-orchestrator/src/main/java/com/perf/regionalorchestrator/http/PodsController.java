@@ -59,9 +59,9 @@ public class PodsController {
     }
 
     @GetMapping("/pods")
-    public List<ProvisionedPod> list(@RequestParam String applicationId,
+    public List<ProvisionedPod> list(@RequestParam String groupId,
                                      @RequestParam(required = false) String region) {
-        return provisioner.listFor(applicationId, region);
+        return provisioner.listFor(groupId, region);
     }
 
     @GetMapping("/pods/{podName}")

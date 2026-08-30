@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 
 import {
   applicationsApi,
@@ -9,11 +8,8 @@ import {
 } from "../api/applications";
 import { applicationGroupsApi, type ApplicationGroup } from "../api/applicationGroups";
 
-/* D-Capacity v2 polish — capacity is sponsor-controlled, NOT operator-set.
- * The form no longer collects per-region maxAvailable. Newly-registered
- * apps land at 0 across the default regions (us-east + us-west, seeded
- * by ApplicationController on POST). Operator's only path to a non-zero
- * ceiling is the "Request more capacity" workflow on /capacity. */
+/* Capacity and the worker lifecycle policy are the application GROUP's
+ * (GROUP-CAPACITY, 2026-08-31) — this form only picks the group. */
 
 /**
  * D-AppRegistry — modal form for registering a new application.
@@ -24,6 +20,7 @@ import { applicationGroupsApi, type ApplicationGroup } from "../api/applicationG
  *   <li>{@code sealId} optional, ≤ 128 chars.</li>
  *   <li>{@code description} optional, ≤ 512 chars.</li>
  *   <li>{@code healthEndpoints} optional, max 8 entries; each must be http(s).</li>
+ *   <li>{@code metricsGroupId} required — every application belongs to a group.</li>
  * </ul>
  *
  * <p>Server-side errors (409 name-taken, 400 validation) are surfaced
@@ -63,10 +60,8 @@ export function CreateApplicationDialog({
   const [sealId, setSealId] = useState(initial?.sealId ?? "");
   const [description, setDescription] = useState(initial?.description ?? "");
   const [healthEndpoints, setHealthEndpoints] = useState<string[]>(initial?.healthEndpoints ?? []);
-  // When true, scheduled DRAIN_REGION jobs skip this app.
-  const [alwaysOn, setAlwaysOn] = useState<boolean>(initial?.alwaysOn ?? false);
-  // Metrics routing: the group whose tables receive this app's rows, and the
-  // classifier value its labels carry there. null = groups not loaded yet.
+  // The group: its tables receive this app's rows, its pool runs the tests, and
+  // the classifier value the app's labels carry there. null = groups not loaded yet.
   const [groups, setGroups] = useState<ApplicationGroup[] | null>(null);
   const [metricsGroupId, setMetricsGroupId] = useState(initial?.metricsGroupId ?? "");
   const [metricsApplication, setMetricsApplication] = useState(initial?.metricsApplication ?? "");
@@ -110,29 +105,28 @@ export function CreateApplicationDialog({
   const allEndpointsValid = endpointErrors.every((e) => e === null);
   const trimmedMetricsApplication = metricsApplication.trim();
   const metricsApplicationError =
-    metricsGroupId && trimmedMetricsApplication && !METRICS_APPLICATION_PATTERN.test(trimmedMetricsApplication)
+    trimmedMetricsApplication && !METRICS_APPLICATION_PATTERN.test(trimmedMetricsApplication)
       ? "letters / digits / . _ - only; max 64 chars"
       : null;
+  const groupError = metricsGroupId === "" ? "an application group is required" : null;
 
-  const canSubmit = !submitting && nameError === null && allEndpointsValid && metricsApplicationError === null;
+  const canSubmit = !submitting && nameError === null && allEndpointsValid
+    && metricsApplicationError === null && groupError === null;
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!canSubmit) return;
     setSubmitting(true);
     setServerError(null);
-    // Capacity is intentionally NOT in the request body — sponsor-controlled
-    // post-D-Capacity-v2-polish; the backend ignores it on POST/PUT and
-    // auto-seeds new apps at 0 across us-east + us-west on create.
+    // Capacity and the lifecycle policy are the group's — not in this body.
     const body: CreateApplicationRequest = {
       name: trimmedName,
       sealId: sealId.trim() || undefined,
       description: description.trim() || undefined,
       healthEndpoints: healthEndpoints.map((u) => u.trim()).filter(Boolean),
-      alwaysOn,
-      // Omitted = ungrouped; the server defaults a blank metricsApplication to the upper-cased name.
-      metricsGroupId: metricsGroupId || undefined,
-      metricsApplication: metricsGroupId ? (trimmedMetricsApplication || undefined) : undefined,
+      metricsGroupId,
+      // The server defaults a blank metricsApplication to the upper-cased name.
+      metricsApplication: trimmedMetricsApplication || undefined,
     };
     try {
       const result = isEdit
@@ -209,7 +203,7 @@ export function CreateApplicationDialog({
 
           <div className="modal__body">
             <p>Soft-deleting <span className="mono">{initial!.name}</span> will remove it from
-              the applications list, launcher, and capacity views.</p>
+              the applications list and the launcher. Its group's workers and capacity are untouched.</p>
             <p className="ink-soft" style={{ margin: "0.5rem 0" }}>
               <strong>Retained:</strong> this app's run history, metrics, and uploaded files
               (test plans, data files, results). A future cleanup job will purge them.
@@ -257,9 +251,8 @@ export function CreateApplicationDialog({
             <h3>{isEdit ? "Edit application" : "Register application"}</h3>
             <small className="ink-soft">
               {isEdit
-                ? <>Updating <span className="mono">{initial!.name}</span>. Capacity rows
-                   replaced wholesale on save; health snapshot is owned by the poller
-                   and isn't touched.</>
+                ? <>Updating <span className="mono">{initial!.name}</span>. The health snapshot is
+                   owned by the poller and isn't touched.</>
                 : "Persisted in the global registry. Health endpoints, when supplied, are polled every minute."}
             </small>
           </div>
@@ -318,24 +311,31 @@ export function CreateApplicationDialog({
           </div>
 
           <div className="formField">
-            <label htmlFor="appMetricsGroup">Metrics group</label>
+            <label htmlFor="appMetricsGroup">Application group *</label>
             <select
               id="appMetricsGroup"
               className="formSelect"
               value={metricsGroupId}
               onChange={(e) => setMetricsGroupId(e.target.value)}
-              disabled={groups === null}
+              disabled={groups === null || groups.length === 0}
+              required
+              aria-invalid={groupError != null && groups !== null}
             >
-              <option value="">Ungrouped — metrics not routed</option>
+              <option value="" disabled>{groups === null ? "Loading groups…" : "Pick a group"}</option>
               {(groups ?? []).map((g) => (
                 <option key={g.groupId} value={g.groupId}>{g.name} ({g.groupId})</option>
               ))}
             </select>
             <small>
-              Its id is what this app's workers send as <code>?groupId=</code> with every metrics
-              batch, so the rows land in the group's own tables.
-              {groups !== null && groups.length === 0 && " No groups yet — add one with \"Manage groups\" on the Applications page."}
+              The team this app belongs to: its workers send the group's id as <code>?groupId=</code>
+              with every metrics batch, its runs draw on the group's worker pool, and its dashboards
+              are the group's.
             </small>
+            {groups !== null && groups.length === 0 && (
+              <p className="text--error" role="alert" style={{ fontSize: "0.78rem" }}>
+                No groups yet — create one with "Manage groups" on the Applications page before registering an application.
+              </p>
+            )}
           </div>
 
           {metricsGroupId && (
@@ -362,36 +362,6 @@ export function CreateApplicationDialog({
             </div>
           )}
 
-
-          {/* Capacity is intentionally NOT in this form post D-Capacity v2 polish.
-              Compute costs money; capacity is sponsor-controlled. New apps land
-              at 0 across us-east + us-west; the operator's only path to a
-              non-zero ceiling is the "Request more capacity" workflow on
-              the Capacity tab (auto-routes through the sponsor for approval). */}
-          {!isEdit && (
-            <p className="ink-soft" style={{ fontSize: "0.82rem", margin: "0.5rem 0 1rem" }}>
-              <strong>Capacity</strong> seeds at <code>0</code> for us-east + us-west;
-              request a non-zero ceiling on the{" "}
-              <Link to="/capacity">Capacity</Link> tab once registered.
-            </p>
-          )}
-
-          <div className="formField">
-            <label htmlFor="appAlwaysOn" style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-              <input
-                id="appAlwaysOn"
-                type="checkbox"
-                checked={alwaysOn}
-                onChange={(e) => setAlwaysOn(e.target.checked)}
-                style={{ width: "auto" }}
-              />
-              Always on (production-like)
-            </label>
-            <small>
-              When checked, scheduled <strong>drain-region</strong> automation jobs skip this app —
-              its workers are never auto-drained for overnight cost saving. Provision + launch jobs are unaffected.
-            </small>
-          </div>
 
           <fieldset className="createApp__endpoints">
             <legend>Health-check endpoints</legend>

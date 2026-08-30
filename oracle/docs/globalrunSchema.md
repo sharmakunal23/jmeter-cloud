@@ -12,10 +12,10 @@ repositories (OM-5) or adding a table.
 |---|---|---|
 | `"run"` | `runId` | `saveResults NUMBER(1)`; `hiddenAt` = soft delete; indexes on `createdAt`, `(application, createdAt)`, `(state, createdAt)` — the Postgres partial indexes have no Oracle form and the table is small |
 | `"runFleetMember"` | `(runId, workerId)` | FK → run `ON DELETE CASCADE`; `properties CLOB IS JSON`; `(workerId, state, createdAt)` index serves the claim's `NOT EXISTS` |
-| `"applicationGroup"` | `groupId`, unique `name` | a team's applications; `groupId` (`[a-z][a-z0-9_]{0,29}`) = the metrics schema's `GROUP_REGISTRY.GROUP_ID`, what workers send as `?groupId=`; `UPPER(groupId)` prefixes the group's `_METRICS` / `_METRICS_H` tables |
-| `"application"` | `applicationId`, unique `name` | `metricsGroupId` FK → applicationGroup (no ON DELETE: a group with applications cannot be deleted; indexed) + `metricsApplication` (the group classifier's `LABEL.APPLICATION` value); recycle policy CHECKs as last stated (V17); `healthEndpoints`/`lastHealthDetails` CLOB `IS JSON`; `alwaysOn NUMBER(1)` |
-| `"applicationCapacity"` | `(applicationId, region)` | FK cascade; `maxAvailable BETWEEN 0 AND 1000` |
-| `"pod"` | `podId` | FK → application (no action); `source IN (DYNAMIC, STATIC)`; `(applicationId, region, state, lastHeartbeat)` is the claim's candidate index **and** the FK index — without one, deleting an application takes a table lock on `pod` |
+| `"applicationGroup"` | `groupId`, unique `name` | a team's applications **and their worker pool**; `groupId` (`[a-z][a-z0-9_]{0,29}`) = the metrics schema's `GROUP_REGISTRY.GROUP_ID`, what workers send as `?groupId=`; `UPPER(groupId)` prefixes the group's `_METRICS` / `_METRICS_H` tables; carries the pod policy (`recyclePolicy` CHECKs + thresholds, `alwaysOn NUMBER(1)`) |
+| `"application"` | `applicationId`, unique `name` | `metricsGroupId` **NOT NULL** FK → applicationGroup (no ON DELETE: a group with applications cannot be deleted; indexed) + `metricsApplication` (the group classifier's `LABEL.APPLICATION` value); `healthEndpoints`/`lastHealthDetails` CLOB `IS JSON`. No pool policy here — it is the group's |
+| `"groupCapacity"` | `(groupId, region)` | FK → applicationGroup cascade; `maxAvailable BETWEEN 0 AND 1000` — every application in the group draws on it |
+| `"pod"` | `podId` | FK → applicationGroup (no action: a group with workers cannot be deleted); `source IN (DYNAMIC, STATIC)`; `(groupId, region, state, lastHeartbeat)` is the claim's candidate index **and** the FK index — without one, deleting a group takes a table lock on `pod` |
 | `"runEvent"` | `eventId` | FK → run cascade; `payload CLOB IS JSON`; append-only |
 | `"cronJob"` | `cronJobId`, unique `(applicationName, name)` | kind + kindFields CHECKs as last stated (V23); `(enabled, nextFireAt)` index is the claim's candidate scan |
 | `"cronJobFireHistory"`, `"applicationHealthHistory"`, `"purgeAudit"` | id | deliberately FK-less — they outlive their subjects |
@@ -35,7 +35,7 @@ Don't add the emulation back.
 
 `FETCH FIRST n ROWS ONLY` cannot be combined with `FOR UPDATE` (ORA-02014), and
 a `FOR UPDATE` cursor with an `ORDER BY` locks its **whole** result set at open,
-so a cursor-with-limit would lock every idle worker of the application for the
+so a cursor-with-limit would lock every idle worker of the group for the
 length of the launch transaction. `"claims"` therefore does:
 
 ```
@@ -48,7 +48,7 @@ OPEN cursor FOR SELECT <pod columns> WHERE podId IN (TABLE(held)) ORDER BY lastH
 
 | Procedure | Returns | Caller's contract |
 |---|---|---|
-| `"claimIdlePods"(region, applicationId, limit, OUT cursor)` — either filter may be NULL | the `"pod"` columns the Java row mapper reads, freshest first | insert the `"runFleetMember"` rows **before** committing — the row locks are the reservation until then |
+| `"claimIdlePods"(region, groupId, limit, OUT cursor)` — either filter may be NULL | the `"pod"` columns the Java row mapper reads, freshest first | insert the `"runFleetMember"` rows **before** committing — the row locks are the reservation until then |
 | `"claimDueCronJobs"(now, limit, OUT cursor)` | the `"cronJob"` columns, earliest `nextFireAt` first | advance `nextFireAt` before committing — that is what makes a fire exactly-once across replicas |
 
 Both are called from a `BEGIN … END;` block with a `REF CURSOR` out parameter
@@ -64,7 +64,7 @@ Both are called from a `BEGIN … END;` block with a `REF CURSOR` out parameter
 ## Roles
 
 `"globalOrchestratorWriter"` — the service's only user: full DML on `run`,
-`runFleetMember`, `pod`, `applicationGroup`, `application`, `applicationCapacity`, `cronJob`,
+`runFleetMember`, `pod`, `applicationGroup`, `application`, `groupCapacity`, `cronJob`,
 `aiResponse`; `SELECT, INSERT` on the append-only tables (plus `DELETE` where a
 purge path exists: `runTrend`, `applicationHealthHistory`); `EXECUTE` on
 `"claims"` and the `"idTable"` type. The owner keeps DDL.

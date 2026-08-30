@@ -84,7 +84,7 @@ export interface FleetFlowDiagramProps {
      */
     onWorkerClick?: (region: string, nodeIndex: number) => void;
     /**
-     * Per-region capacity ceiling from the application's
+     * Per-region capacity ceiling from the application group's
      * `capacity[]` grid. Displayed as the denominator in "X / max"
      * instead of IDLE-pod count, so the operator sees the policy
      * ceiling, not the live registry view.

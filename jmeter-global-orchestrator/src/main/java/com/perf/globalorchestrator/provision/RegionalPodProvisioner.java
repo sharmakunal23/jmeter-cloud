@@ -77,16 +77,16 @@ public class RegionalPodProvisioner implements PodProvisioner {
     }
 
     @Override
-    public List<ProvisionedPod> listFor(String applicationId, String region) {
+    public List<ProvisionedPod> listFor(String groupId, String region) {
         if (region != null) {
-            return client.listPods(regions.requireUrl(region), applicationId, region);
+            return client.listPods(regions.requireUrl(region), groupId, region);
         }
         List<ProvisionedPod> all = new ArrayList<>();
         for (String id : regions.routedIds()) {
             try {
-                all.addAll(client.listPods(regions.requireUrl(id), applicationId, id));
+                all.addAll(client.listPods(regions.requireUrl(id), groupId, id));
             } catch (RuntimeException e) {
-                LOG.warn("listFor(app={}, region={}) skipped: {}", applicationId, id, e.getMessage());
+                LOG.warn("listFor(group={}, region={}) skipped: {}", groupId, id, e.getMessage());
             }
         }
         return all;
@@ -97,7 +97,7 @@ public class RegionalPodProvisioner implements PodProvisioner {
         Optional<String> url = regions.urlOf(region);
         if (url.isEmpty()) return List.of();
         return client.listWorkers(url.get()).stream()
-                .map(w -> new ProvisionedPod(w.podName(), w.applicationId(), region,
+                .map(w -> new ProvisionedPod(w.podName(), w.groupId(), region,
                         w.dead() ? "exited" : (w.ready() ? "running" : "created"), java.time.Instant.now(), null))
                 .toList();
     }

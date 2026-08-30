@@ -2,7 +2,10 @@ package com.perf.globalorchestrator;
 
 import com.perf.globalorchestrator.domain.ApplicationGroup;
 import com.perf.globalorchestrator.http.ApplicationGroupController;
+import com.perf.globalorchestrator.domain.RecyclePolicy;
+import com.perf.globalorchestrator.provision.ProvisioningProperties;
 import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
+import com.perf.globalorchestrator.repo.GroupCapacityRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -36,6 +39,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class ApplicationGroupControllerTest {
 
     private ApplicationGroupRepository repo;
+    private GroupCapacityRepository capacity;
     private MockMvc mvc;
 
     private static final ApplicationGroup CPS =
@@ -44,7 +48,10 @@ class ApplicationGroupControllerTest {
     @BeforeEach
     void setUp() {
         repo = mock(ApplicationGroupRepository.class);
-        mvc = MockMvcBuilders.standaloneSetup(new ApplicationGroupController(repo)).build();
+        capacity = mock(GroupCapacityRepository.class);
+        ProvisioningProperties provisioning = mock(ProvisioningProperties.class);
+        when(provisioning.regions()).thenReturn(List.of("na-east", "na-west"));
+        mvc = MockMvcBuilders.standaloneSetup(new ApplicationGroupController(repo, capacity, provisioning)).build();
     }
 
     @Test
@@ -126,7 +133,7 @@ class ApplicationGroupControllerTest {
     @DisplayName("PUT updates name + description and echoes the count")
     void update_happyPath() throws Exception {
         when(repo.findById("cps")).thenReturn(Optional.of(CPS));
-        when(repo.update("cps", "Servicing MQ (Card)", "the MQ apps", null, null, 7))
+        when(repo.update("cps", "Servicing MQ (Card)", "the MQ apps", null, null, 7, RecyclePolicy.REUSE, null, null, false))
                 .thenReturn(new ApplicationGroup("cps", "Servicing MQ (Card)", "the MQ apps", CPS.createdAt(), null));
         when(repo.countApplications("cps")).thenReturn(2);
         mvc.perform(put("/api/v1/applicationGroups/cps").contentType(MediaType.APPLICATION_JSON)
@@ -184,12 +191,57 @@ class ApplicationGroupControllerTest {
                 .andExpect(status().isBadRequest());
         // PUT replaces wholesale.
         when(repo.findById("cps")).thenReturn(Optional.of(CPS));
-        when(repo.update(eq("cps"), eq("Servicing MQ"), any(), eq("https://g.example.com/d/cps"), isNull(), eq(30)))
+        when(repo.update(eq("cps"), eq("Servicing MQ"), any(), eq("https://g.example.com/d/cps"), isNull(), eq(30),
+                eq(RecyclePolicy.REUSE), isNull(), isNull(), eq(false)))
                 .thenReturn(new ApplicationGroup("cps", "Servicing MQ", null, "https://g.example.com/d/cps", null, 30, CPS.createdAt(), null));
         mvc.perform(put("/api/v1/applicationGroups/cps").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"Servicing MQ\",\"grafanaLiveUrl\":\"https://g.example.com/d/cps\",\"hotDays\":30}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.grafanaLiveUrl").value("https://g.example.com/d/cps"))
                 .andExpect(jsonPath("$.hotDays").value(30));
+    }
+
+    @Test
+    @DisplayName("the pool's policy lives on the group: POST validates it, seeds capacity at 0 per region; PUT replaces it; alwaysOn omitted is preserved")
+    void policyOnTheGroup() throws Exception {
+        when(repo.findById("mq")).thenReturn(Optional.empty());
+        when(repo.insert(any())).thenAnswer(inv -> inv.getArgument(0));
+        mvc.perform(post("/api/v1/applicationGroups").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"groupId\":\"mq\",\"name\":\"MQ\",\"recyclePolicy\":\"MAX_RUNS\",\"maxRunsPerPod\":3,\"alwaysOn\":true}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.recyclePolicy").value("MAX_RUNS"))
+                .andExpect(jsonPath("$.maxRunsPerPod").value(3))
+                .andExpect(jsonPath("$.alwaysOn").value(true));
+        verify(capacity).upsert("mq", "na-east", 0);
+        verify(capacity).upsert("mq", "na-west", 0);
+        mvc.perform(post("/api/v1/applicationGroups").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"groupId\":\"mq2\",\"name\":\"MQ2\",\"recyclePolicy\":\"MAX_AGE\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+
+        ApplicationGroup on = new ApplicationGroup("cps", "Servicing MQ", null, null, null, 7,
+                RecyclePolicy.REUSE, null, null, true, CPS.createdAt(), null, null);
+        when(repo.findById("cps")).thenReturn(Optional.of(on));
+        when(repo.update(eq("cps"), eq("Servicing MQ"), any(), isNull(), isNull(), eq(7),
+                eq(RecyclePolicy.EVERY_RUN), isNull(), isNull(), eq(true)))
+                .thenReturn(new ApplicationGroup("cps", "Servicing MQ", null, null, null, 7,
+                        RecyclePolicy.EVERY_RUN, null, null, true, CPS.createdAt(), null, null));
+        mvc.perform(put("/api/v1/applicationGroups/cps").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Servicing MQ\",\"recyclePolicy\":\"EVERY_RUN\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.recyclePolicy").value("EVERY_RUN"))
+                .andExpect(jsonPath("$.alwaysOn").value(true));
+    }
+
+    @Test
+    @DisplayName("DELETE is refused while the group still owns workers or capacity rows")
+    void delete_refusedWithWorkers() throws Exception {
+        when(repo.countApplications("cps")).thenReturn(0);
+        when(repo.countPods("cps")).thenReturn(2);
+        when(capacity.countByGroupId("cps")).thenReturn(1);
+        mvc.perform(delete("/api/v1/applicationGroups/cps"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("APPLICATION_GROUP_HAS_WORKERS"));
+        verify(repo, never()).delete(any());
     }
 }

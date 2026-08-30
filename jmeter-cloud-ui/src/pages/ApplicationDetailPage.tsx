@@ -68,7 +68,7 @@ function ApplicationDetailBody({ appName }: { appName: string }) {
   const [state, setState] = useState<State>({ status: "loading" });
   // App-settings dialog state. We fetch the full Application record on
   // demand (the runs listing only carries the name) so the dialog can
-  // hydrate sealId / description / healthEndpoints / capacity correctly.
+  // hydrate sealId / description / healthEndpoints / group correctly.
   const [editingApp, setEditingApp] = useState<Application | null>(null);
   const [editLoading, setEditLoading] = useState(false);
   // Bumped to force a re-fetch (after a delete) without changing the page.
@@ -343,8 +343,9 @@ function ApplicationDetailBody({ appName }: { appName: string }) {
       )}
 
       {/* STATIC-FLEET Phase 7 — the operator-facing worker surface on a fleet
-          this platform does not provision. Mutually exclusive with the
-          Capacity tab, which is hidden in that mode. */}
+          this platform does not provision: the application's GROUP pool,
+          declared from here. Mutually exclusive with the Capacity tab, which
+          is hidden in that mode. */}
       {isStaticFleet && <DataCentersSectionForApp appName={appName} />}
 
       {deleteTargets && deleteTargets.length > 0 && (

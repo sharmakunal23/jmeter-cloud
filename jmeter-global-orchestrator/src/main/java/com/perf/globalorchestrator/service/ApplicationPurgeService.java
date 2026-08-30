@@ -31,10 +31,9 @@ import java.util.Map;
  * <ol>
  *   <li>every one of the app's runs — purged via {@link RunPurgeService}
  *       (result/testPlan/dataFiles blobs, metrics rows, run-state rows);</li>
- *   <li>the app's {@code pod} registry rows (cleared BEFORE the app row — the
- *       {@code pod.applicationId} FK is {@code ON DELETE RESTRICT});</li>
  *   <li>its {@code applicationHealthHistory};</li>
- *   <li>the {@code application} row itself ({@code applicationCapacity} cascades);</li>
+ *   <li>the {@code application} row itself. Workers and capacity are the
+ *       group's (GROUP-CAPACITY), so nothing of the pool is touched;</li>
  *   <li>a single {@code purgeAudit} tombstone for the whole sweep.</li>
  * </ol>
  *
@@ -116,7 +115,7 @@ public class ApplicationPurgeService {
             if (!r.blobStepComplete()) blobStepComplete = false;
         }
 
-        // Pods + health history + the app row + tombstone — one transaction.
+        // Health history + the app row + tombstone — one transaction.
         String detailsJson = writeDetails(blobStepComplete);
         self.commitApplicationPurge(applicationId, archivedName, actor, reason,
                 totalMetricRows, totalBlobs, childRunsPurged, detailsJson);
@@ -130,17 +129,16 @@ public class ApplicationPurgeService {
     }
 
     /**
-     * Transactional tail: delete the app's pod rows (clearing the RESTRICT FK),
-     * its health-transition log, the application row ({@code applicationCapacity}
-     * cascades), and write the single application tombstone — atomically.
+     * Transactional tail: delete the app's health-transition log and the
+     * application row, and write the single application tombstone — atomically.
+     * The pool (pods, capacity) belongs to the group and stays.
      */
     @Transactional("transactionManager")
     protected void commitApplicationPurge(String applicationId, String archivedName, Actor actor,
                                           String reason, long metricRows, int blobs, int childRuns,
                                           String detailsJson) {
-        pods.deleteByApplicationId(applicationId);
         healthHistory.deleteByApplicationId(applicationId);
-        applications.delete(applicationId);   // applicationCapacity cascades
+        applications.delete(applicationId);
         purgeAudit.record(Ulid.generate(), "application", applicationId, archivedName,
                 actor.name(), reason, metricRows, blobs, childRuns, detailsJson);
     }

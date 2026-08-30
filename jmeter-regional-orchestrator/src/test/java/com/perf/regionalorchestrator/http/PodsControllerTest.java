@@ -44,8 +44,7 @@ class PodsControllerTest {
     @MockitoBean PodProvisioner provisioner;
 
     private static final String SPEC = """
-            {"podName":"payments-na-east-worker-1","applicationId":"01ARZ3NDEKTSV4RRFFQ69G5FAV",
-             "applicationName":"payments","region":"%s"}""";
+            {"podName":"payments-na-east-worker-1","groupId":"cps","region":"%s"}""";
 
     @Test
     @DisplayName("POST /pods creates and returns the ProvisionResult")
@@ -79,15 +78,16 @@ class PodsControllerTest {
     }
 
     @Test
-    @DisplayName("GET /pods?applicationId= lists; a missing applicationId is 400")
+    @DisplayName("GET /pods?groupId= lists; a missing groupId is 400")
     void list() throws Exception {
-        when(provisioner.listFor("01ARZ3NDEKTSV4RRFFQ69G5FAV", null)).thenReturn(List.of(
-                new ProvisionedPod("payments-na-east-worker-1", "01ARZ3NDEKTSV4RRFFQ69G5FAV", "na-east",
+        when(provisioner.listFor("cps", null)).thenReturn(List.of(
+                new ProvisionedPod("payments-na-east-worker-1", "cps", "na-east",
                         "running", Instant.parse("2026-08-28T10:00:00Z"), "jmeter-local-orchestrator:dev")));
 
-        mvc.perform(get("/api/v1/pods").param("applicationId", "01ARZ3NDEKTSV4RRFFQ69G5FAV"))
+        mvc.perform(get("/api/v1/pods").param("groupId", "cps"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].podName").value("payments-na-east-worker-1"))
+                .andExpect(jsonPath("$[0].groupId").value("cps"))
                 .andExpect(jsonPath("$[0].status").value("running"));
 
         mvc.perform(get("/api/v1/pods")).andExpect(status().isBadRequest());

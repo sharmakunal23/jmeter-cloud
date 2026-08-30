@@ -26,7 +26,7 @@ knobs in `kube/kustomize/overlays/<env>/deployment.yml`.
 | `PODPROVISIONER_SERVICE_ACCOUNT_NAME` | the Pod's SA (token never mounted) | the namespace default |
 | `PODPROVISIONER_IMAGE_PULL_SECRET` | pod-level `imagePullSecrets` for a private worker image | none |
 | `PODPROVISIONER_RUN_AS_USER` / `RUN_AS_GROUP` / `FS_GROUP` | pod `securityContext` (`runAsNonRoot` follows) | the image's user |
-| `PODPROVISIONER_EXTRA_LABELS` | `k=v,k2=v2` on every worker Pod | none |
+| `PODPROVISIONER_EXTRA_LABELS` | `k=v,k2=v2` on every worker Pod (always alongside `com.perf.jmeterCloud.groupId` — the pool the Pod belongs to, also stamped as the `GROUP_ID` env) | none |
 | `PODPROVISIONER_WORKER_JAVA_OPTS` | the orchestrator JVM's flags (`JAVA_OPTS`) | the image default |
 
 Every worker gets the three-probe pattern — startup and readiness on

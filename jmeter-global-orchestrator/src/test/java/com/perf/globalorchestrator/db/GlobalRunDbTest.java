@@ -2,12 +2,14 @@ package com.perf.globalorchestrator.db;
 
 import com.perf.globalorchestrator.domain.Application;
 import com.perf.globalorchestrator.domain.ApplicationGroup;
+import com.perf.globalorchestrator.domain.RecyclePolicy;
+import com.perf.globalorchestrator.repo.GroupCapacityRepository;
+import com.perf.globalorchestrator.domain.GroupCapacity;
 import com.perf.globalorchestrator.domain.CronJob;
 import com.perf.globalorchestrator.domain.CronJobKind;
 import com.perf.globalorchestrator.domain.MemberState;
 import com.perf.globalorchestrator.domain.Pod;
 import com.perf.globalorchestrator.domain.PodSource;
-import com.perf.globalorchestrator.domain.RecyclePolicy;
 import com.perf.globalorchestrator.domain.Run;
 import com.perf.globalorchestrator.domain.RunFleetMember;
 import com.perf.globalorchestrator.domain.RunState;
@@ -58,6 +60,7 @@ class GlobalRunDbTest extends OracleDbTestSupport {
 
     @Autowired ApplicationRepository applications;
     @Autowired ApplicationGroupRepository groups;
+    @Autowired GroupCapacityRepository groupCapacity;
     @Autowired PodRepository pods;
     @Autowired RunRepository runs;
     @Autowired CronJobRepository cronJobs;
@@ -68,10 +71,18 @@ class GlobalRunDbTest extends OracleDbTestSupport {
     private final JdbcTemplate globalOwner = globalOwner();
     private final JdbcTemplate metricsOwner = metricsOwner();
 
+    /** An application in the {@code cps} group (created on first use) — every application has a group. */
     private Application app(String id, String name) {
+        return app(id, name, "cps");
+    }
+
+    private Application app(String id, String name, String groupId) {
+        if (groups.findById(groupId).isEmpty()) {
+            groups.insert(new ApplicationGroup(groupId, "Group " + groupId, "db contract test", Instant.now(), null));
+        }
         return applications.insert(new Application(id, name, null, "db contract test",
-                List.of("http://" + name + "/health"), null, Instant.now(), null, null, null,
-                RecyclePolicy.REUSE, null, null, false, null, null));
+                List.of("http://" + name + "/health"), Instant.now(), null, null, null,
+                groupId, name.toUpperCase()));
     }
 
     @Test
@@ -86,8 +97,8 @@ class GlobalRunDbTest extends OracleDbTestSupport {
         Application a = app("app-life", "lifecycle");
         assertThat(a.healthEndpoints()).containsExactly("http://lifecycle/health");   // CLOB JSON → list
 
-        pods.declareStatic("life-w1", "na-east", "http://w1:8080", a.applicationId());
-        pods.register("life-w1", "na-east", "http://w1-self:8080", a.applicationId());   // MERGE matched: declared address wins
+        pods.declareStatic("life-w1", "na-east", "http://w1:8080", a.metricsGroupId());
+        pods.register("life-w1", "na-east", "http://w1-self:8080", a.metricsGroupId());   // MERGE matched: declared address wins
         Pod p = pods.findByPodId("life-w1").orElseThrow();
         assertThat(p.baseUrl()).isEqualTo("http://w1:8080");
         assertThat(p.source()).isEqualTo(PodSource.STATIC);
@@ -132,7 +143,7 @@ class GlobalRunDbTest extends OracleDbTestSupport {
     void concurrent_claims_never_share_a_worker() throws Exception {
         Application a = app("app-claim", "claims");
         for (int i = 1; i <= 5; i++) {
-            pods.declareStatic("claim-w" + i, "na-east", "http://claim-w" + i + ":8080", a.applicationId());
+            pods.declareStatic("claim-w" + i, "na-east", "http://claim-w" + i + ":8080", a.metricsGroupId());
         }
         TransactionTemplate tx = new TransactionTemplate(txManager);
         CountDownLatch firstHolds = new CountDownLatch(1);
@@ -140,7 +151,7 @@ class GlobalRunDbTest extends OracleDbTestSupport {
         ExecutorService pool = Executors.newFixedThreadPool(2);
 
         Future<List<String>> first = pool.submit(() -> tx.execute(status -> {
-            List<String> ids = idsOf(pods.claimIdleByRegionAndApp("na-east", a.applicationId(), 2));
+            List<String> ids = idsOf(pods.claimIdleByGroup("na-east", a.metricsGroupId(), 2));
             firstHolds.countDown();
             try { secondDone.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
             return ids;     // commit only after the second claimer has run
@@ -148,7 +159,7 @@ class GlobalRunDbTest extends OracleDbTestSupport {
         Future<List<String>> second = pool.submit(() -> {
             firstHolds.await();
             try {
-                return tx.execute(status -> idsOf(pods.claimIdleByRegionAndApp("na-east", a.applicationId(), 5)));
+                return tx.execute(status -> idsOf(pods.claimIdleByGroup("na-east", a.metricsGroupId(), 5)));
             } finally {
                 secondDone.countDown();
             }
@@ -160,7 +171,51 @@ class GlobalRunDbTest extends OracleDbTestSupport {
         assertThat(held).hasSize(2);
         assertThat(rest).hasSize(3);
         assertThat(rest).doesNotContainAnyElementsOf(held);
-        assertThat(pods.claimIdleByRegionAndApp("na-west", a.applicationId(), 5)).isEmpty();   // region filter
+        assertThat(pods.claimIdleByGroup("na-west", a.metricsGroupId(), 5)).isEmpty();   // region filter
+        assertThat(pods.claimIdleByGroup("na-east", "demo", 5)).isEmpty();               // group filter
+    }
+
+    @Test
+    void two_applications_in_one_group_share_the_pool_and_the_ceiling() {
+        Application pci = app("app-pool-pci", "pool-pci", "pool");
+        Application cpp = app("app-pool-cpp", "pool-cpp", "pool");
+        assertThat(cpp.metricsGroupId()).isEqualTo(pci.metricsGroupId());
+        for (int i = 1; i <= 3; i++) {
+            pods.declareStatic("pool-w" + i, "na-east", "http://pool-w" + i + ":8080", "pool");
+        }
+        assertThat(pods.countByGroupAndRegion("pool", "na-east")).isEqualTo(3);
+        assertThat(pods.findPodIdsByGroupAndRegion("pool", "na-east")).containsExactlyInAnyOrder("pool-w1", "pool-w2", "pool-w3");
+
+        // Each application claims from the same pool: the first app's run holds 2 (its members make them
+        // non-claimable), so the second app — whichever it is — gets the 1 left.
+        Instant now = Instant.now();
+        List<Pod> first = pods.claimIdleByGroup("na-east", pci.metricsGroupId(), 2);
+        assertThat(first).hasSize(2);
+        runs.insertRun(new Run("01J0POOLRUNPCIAAAAAAAAAAAA", "na-east", "b", null, pci.name(), "t", RunState.RUNNING, null,
+                now, now, null, false, null, "pool"));
+        for (Pod p : first) {
+            runs.insertFleetMember(new RunFleetMember("01J0POOLRUNPCIAAAAAAAAAAAA", p.podId(), "na-east", MemberState.RUNNING, null,
+                    null, p.baseUrl(), now, null, null));
+        }
+        List<Pod> second = pods.claimIdleByGroup("na-east", cpp.metricsGroupId(), 5);
+        assertThat(second).hasSize(1);
+        assertThat(idsOf(second)).doesNotContainAnyElementsOf(idsOf(first));
+        runs.insertRun(new Run("01J0POOLRUNCPPAAAAAAAAAAAA", "na-east", "b", null, cpp.name(), "t", RunState.RUNNING, null,
+                now, now, null, false, null, "pool"));
+        runs.insertFleetMember(new RunFleetMember("01J0POOLRUNCPPAAAAAAAAAAAA", second.get(0).podId(), "na-east", MemberState.RUNNING,
+                null, null, second.get(0).baseUrl(), now, null, null));
+
+        // The ceiling counts active members of BOTH applications' runs by the run's group.
+        assertThat(groupCapacity.countActivePodsForGroupRegion("pool", "na-east")).isEqualTo(3);
+        assertThat(groupCapacity.countActivePodsForGroupRegion("pool", "na-west")).isZero();
+        assertThat(groupCapacity.countActivePodsForGroupRegion("cps", "na-east")).isZero();
+
+        // The group's capacity rows: upsert, read back, the delete guard sees the pool.
+        groupCapacity.upsert("pool", "na-east", 3);
+        assertThat(groupCapacity.find("pool", "na-east").orElseThrow().maxAvailable()).isEqualTo(3);
+        assertThat(groupCapacity.findByGroupId("pool")).extracting(GroupCapacity::region).containsExactly("na-east");
+        assertThat(groupCapacity.countByGroupId("pool")).isEqualTo(1);
+        assertThat(groups.countPods("pool")).isEqualTo(3);
     }
 
     private static List<String> idsOf(List<Pod> claimed) {
@@ -200,21 +255,34 @@ class GlobalRunDbTest extends OracleDbTestSupport {
 
     @Test
     void application_group_round_trips_and_the_fk_refuses_a_delete_while_apps_remain() {
-        ApplicationGroup g = groups.insert(new ApplicationGroup("cps", "Servicing MQ", "db contract test", Instant.now(), null));
-        assertThat(g.groupId()).isEqualTo("cps");
-        assertThat(groups.countApplications("cps")).isZero();
+        ApplicationGroup g = groups.insert(new ApplicationGroup("grp", "Group under test", "db contract test", Instant.now(), null));
+        assertThat(g.groupId()).isEqualTo("grp");
+        assertThat(g.recyclePolicy()).isEqualTo(RecyclePolicy.REUSE);
+        assertThat(groups.countApplications("grp")).isZero();
 
-        Application a = applications.insert(new Application("app-grp", "cps-pci", null, null, List.of(), null,
-                Instant.now(), null, null, null, RecyclePolicy.REUSE, null, null, false, "cps", "CPS-PCI"));
-        assertThat(a.metricsGroupId()).isEqualTo("cps");
-        assertThat(a.metricsApplication()).isEqualTo("CPS-PCI");
-        assertThat(groups.applicationCounts()).containsEntry("cps", 1);
+        Application a = applications.insert(new Application("app-grp", "grp-pci", null, null, List.of(),
+                Instant.now(), null, null, null, "grp", "GRP-PCI"));
+        assertThat(a.metricsGroupId()).isEqualTo("grp");
+        assertThat(a.metricsApplication()).isEqualTo("GRP-PCI");
+        assertThat(groups.applicationCounts()).containsEntry("grp", 1);
 
-        assertThatThrownBy(() -> groups.delete("cps")).isInstanceOf(DataIntegrityViolationException.class);   // ORA-02292
+        // The policy round-trips through the group row.
+        ApplicationGroup tuned = groups.update("grp", "Group under test", null, null, null, 7, RecyclePolicy.MAX_RUNS, 5, null, true);
+        assertThat(tuned.recyclePolicy()).isEqualTo(RecyclePolicy.MAX_RUNS);
+        assertThat(tuned.maxRunsPerPod()).isEqualTo(5);
+        assertThat(tuned.alwaysOn()).isTrue();
 
-        applications.update(a.applicationId(), a.name(), null, null, List.of(), null, null, null, false, null, null);
-        assertThat(applications.findById(a.applicationId()).orElseThrow().metricsGroupId()).isNull();
-        assertThat(groups.delete("cps")).isTrue();
-        assertThat(groups.findById("cps")).isEmpty();
+        assertThatThrownBy(() -> groups.delete("grp")).isInstanceOf(DataIntegrityViolationException.class);   // ORA-02292
+
+        // The group is required (NOT NULL): an application moves, it never becomes ungrouped.
+        if (groups.findById("demo").isEmpty()) {
+            groups.insert(new ApplicationGroup("demo", "Demo", null, Instant.now(), null));
+        }
+        applications.update(a.applicationId(), a.name(), null, null, List.of(), "demo", "GRP-PCI");
+        assertThat(applications.findById(a.applicationId()).orElseThrow().metricsGroupId()).isEqualTo("demo");
+        assertThatThrownBy(() -> applications.update(a.applicationId(), a.name(), null, null, List.of(), null, null))
+                .isInstanceOf(org.springframework.dao.DataAccessException.class);   // ORA-01407: NOT NULL
+        assertThat(groups.delete("grp")).isTrue();
+        assertThat(groups.findById("grp")).isEmpty();
     }
 }

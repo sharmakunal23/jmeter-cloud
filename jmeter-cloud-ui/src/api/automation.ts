@@ -15,7 +15,7 @@ export type CronJobFireStatus = "LAUNCHED" | "SKIPPED" | "FAILED" | "DISABLED";
 /**
  * What a fire does:
  *   LAUNCH_RUN       fire a saved template;
- *   DRAIN_REGION     drain every IDLE worker in (app, region) (cost saving);
+ *   DRAIN_REGION     drain every IDLE worker of the app's group in that region (cost saving; skipped when the group is always on);
  *   PROVISION_REGION spin workers up to the configured cap.
  */
 export type CronJobKind =

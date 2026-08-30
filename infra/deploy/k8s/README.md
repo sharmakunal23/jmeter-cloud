@@ -148,8 +148,9 @@ hacks; fix a service only if it fails to converge after the DB is ready.
 If the control plane can't create worker Pods on demand — no API rights in
 the worker namespace, or a quota that caps allocation — set
 `PROVISIONING_MODE=STATIC` on the global-orchestrator and declare the
-workers you deployed with `kubectl`. The Capacity tab is replaced by a
-per-application **Data centers** section, `maxAvailable` becomes derived
+workers you deployed with `kubectl`. The Capacity tab is replaced by the
+application page's **Data centers** section (declaring into the app's group
+pool), `maxAvailable` becomes derived
 from the declared count, liveness is probed rather than heartbeated, and
 the reconciler + recycler are not wired (the reconciler would otherwise
 delete the declared fleet at every boot).

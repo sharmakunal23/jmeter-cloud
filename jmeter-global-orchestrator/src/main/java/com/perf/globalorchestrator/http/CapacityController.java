@@ -4,8 +4,8 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.perf.globalorchestrator.client.LocalOrchestratorClient;
 import com.perf.globalorchestrator.client.WorkerRef;
-import com.perf.globalorchestrator.domain.Application;
-import com.perf.globalorchestrator.domain.ApplicationCapacity;
+import com.perf.globalorchestrator.domain.ApplicationGroup;
+import com.perf.globalorchestrator.domain.GroupCapacity;
 import com.perf.globalorchestrator.domain.Pod;
 import com.perf.globalorchestrator.domain.PodSource;
 import com.perf.globalorchestrator.domain.Ulid;
@@ -17,8 +17,8 @@ import com.perf.globalorchestrator.provision.ProvisioningDisabledException;
 import com.perf.globalorchestrator.provision.ProvisioningProperties;
 import com.perf.globalorchestrator.provision.ProvisioningRequiresStaticException;
 import com.perf.globalorchestrator.provision.StaticPodDeclaration;
-import com.perf.globalorchestrator.repo.ApplicationCapacityRepository;
-import com.perf.globalorchestrator.repo.ApplicationRepository;
+import com.perf.globalorchestrator.repo.GroupCapacityRepository;
+import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.repo.PodRepository;
 import com.perf.globalorchestrator.repo.PodRepository.ActiveRunBinding;
 import com.perf.globalorchestrator.repo.RunRepository;
@@ -46,7 +46,8 @@ import java.util.Optional;
 
 /**
  * The operator-facing capacity surface, every route scoped to one
- * {@code (applicationId, region)}: set {@code maxAvailable}, list the pods
+ * {@code (groupId, region)} — the worker pool is the application group's
+ * (GROUP-CAPACITY, 2026-08-31): set {@code maxAvailable}, list the pods
  * provisioned for that pair, and spin, restart or drain one. The routes and
  * their responses are specified in {@code api/openapi.yaml}.
  *
@@ -56,14 +57,14 @@ import java.util.Optional;
  * {@code blockedBy: { runId, ... }} when an in-flight run still holds the pod.
  */
 @RestController
-@RequestMapping("/api/v1/applications/{applicationId:" + Ulid.PATTERN + "}/capacity/{region}")
+@RequestMapping("/api/v1/applicationGroups/{groupId:" + ApplicationGroupController.GROUP_ID_PATH + "}/capacity/{region}")
 public class CapacityController {
 
     private static final int MAX_POD_BUDGET = 1000;
     private static final Logger LOG = LoggerFactory.getLogger(CapacityController.class);
 
-    private final ApplicationRepository apps;
-    private final ApplicationCapacityRepository capacityRepo;
+    private final ApplicationGroupRepository groups;
+    private final GroupCapacityRepository capacityRepo;
     private final PodRepository pods;
     private final RunRepository runs;
     private final PodProvisioner provisioner;
@@ -74,8 +75,8 @@ public class CapacityController {
     private final LocalOrchestratorClient localOrchestrators;
 
     public CapacityController(
-            ApplicationRepository apps,
-            ApplicationCapacityRepository capacityRepo,
+            ApplicationGroupRepository groups,
+            GroupCapacityRepository capacityRepo,
             PodRepository pods,
             RunRepository runs,
             PodProvisioner provisioner,
@@ -84,7 +85,7 @@ public class CapacityController {
             ProvisioningProperties provisioning,
             LocalOrchestratorClient localOrchestrators) {
         this.localOrchestrators = localOrchestrators;
-        this.apps         = apps;
+        this.groups       = groups;
         this.capacityRepo = capacityRepo;
         this.pods         = pods;
         this.runs         = runs;
@@ -97,8 +98,8 @@ public class CapacityController {
     // ── PUT /capacity/{region} — set maxAvailable directly ────────────
 
     @PutMapping
-    public ResponseEntity<ApplicationCapacity> setMax(
-            @PathVariable String applicationId,
+    public ResponseEntity<GroupCapacity> setMax(
+            @PathVariable String groupId,
             @PathVariable String region,
             @RequestBody SetMaxRequest req) {
         // Capacity is DERIVED from the declared worker
@@ -109,7 +110,7 @@ public class CapacityController {
         provisioning.requireDynamic("set maxAvailable manually",
                 "capacity is derived from the declared worker count — declare or "
                 + "release workers instead");
-        requireApp(applicationId);
+        requireGroup(groupId);
         if (req == null) {
             throw new CapacityValidationException("request body is required");
         }
@@ -120,12 +121,12 @@ public class CapacityController {
         // Sanity guard: don't let the operator shrink Max below the number of
         // currently-provisioned pods. Forces them to drain first, which keeps
         // the registry consistent with the budget at all times.
-        int provisioned = pods.countByApplicationAndRegion(applicationId, region);
+        int provisioned = pods.countByGroupAndRegion(groupId, region);
         if (req.maxAvailable() < provisioned) {
             throw new CapacityShrinkBelowProvisionedException(provisioned, req.maxAvailable());
         }
-        capacityRepo.upsert(applicationId, region, req.maxAvailable());
-        ApplicationCapacity updated = capacityRepo.find(applicationId, region)
+        capacityRepo.upsert(groupId, region, req.maxAvailable());
+        GroupCapacity updated = capacityRepo.find(groupId, region)
                 .orElseThrow(() -> new IllegalStateException("upsert produced no row"));
         return ResponseEntity.ok(updated);
     }
@@ -134,19 +135,19 @@ public class CapacityController {
 
     @GetMapping("/pods")
     public ResponseEntity<CapacitySnapshot> listPods(
-            @PathVariable String applicationId,
+            @PathVariable String groupId,
             @PathVariable String region) {
-        requireApp(applicationId);
-        int max = capacityRepo.find(applicationId, region)
-                .map(ApplicationCapacity::maxAvailable)
+        requireGroup(groupId);
+        int max = capacityRepo.find(groupId, region)
+                .map(GroupCapacity::maxAvailable)
                 .orElse(0);
-        List<Pod> rows = pods.findByApplicationAndRegion(applicationId, region);
+        List<Pod> rows = pods.findByGroupAndRegion(groupId, region);
         // One substrate call for the whole list — per-pod isRunning would be
         // one HTTP round-trip to the region per row.
         java.util.Map<String, String> liveStatus = new java.util.HashMap<>();
         boolean substrateReachable = true;
         try {
-            for (com.perf.globalorchestrator.provision.ProvisionedPod c : provisioner.listFor(applicationId, region)) {
+            for (com.perf.globalorchestrator.provision.ProvisionedPod c : provisioner.listFor(groupId, region)) {
                 liveStatus.put(c.podName(), c.status());
             }
         } catch (Exception e) {
@@ -197,30 +198,30 @@ public class CapacityController {
         int ready = views.size() - inUse;
         int spinnable = Math.max(0, max - views.size());
         return ResponseEntity.ok(new CapacitySnapshot(
-                applicationId, region, max, views.size(), ready, inUse, spinnable, views));
+                groupId, region, max, views.size(), ready, inUse, spinnable, views));
     }
 
     // ── POST /capacity/{region}/pods — spin a new Ready pod ────────────
 
     @PostMapping("/pods")
     public ResponseEntity<Map<String, Object>> spin(
-            @PathVariable String applicationId,
+            @PathVariable String groupId,
             @PathVariable String region) {
         // Guard BEFORE the capacity lookups so the
         // operator gets "provisioning is disabled", not "no capacity row".
         provisioning.requireDynamic("spin a worker");
-        Application app = requireApp(applicationId);
-        int max = capacityRepo.find(applicationId, region)
-                .map(ApplicationCapacity::maxAvailable)
-                .orElseThrow(() -> new CapacityRegionNotFoundException(applicationId, region));
-        int provisioned = pods.countByApplicationAndRegion(applicationId, region);
+        requireGroup(groupId);
+        int max = capacityRepo.find(groupId, region)
+                .map(GroupCapacity::maxAvailable)
+                .orElseThrow(() -> new CapacityRegionNotFoundException(groupId, region));
+        int provisioned = pods.countByGroupAndRegion(groupId, region);
         if (provisioned + 1 > max) {
             throw new CapacityExceededException(provisioned, max);
         }
-        PodSpinService.SpinResult result = spinService.spin(applicationId, app.name(), region);
+        PodSpinService.SpinResult result = spinService.spin(groupId, region);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("podName",       result.podName());
-        body.put("applicationId", applicationId);
+        body.put("groupId",       groupId);
         body.put("region",        region);
         body.put("baseUrl",       result.baseUrl());
         body.put("ready",         result.ready());
@@ -233,7 +234,7 @@ public class CapacityController {
 
     /**
      * Declares an operator-deployed worker against
-     * this (application, region). Static mode only; {@code 409
+     * this (group, region). Static mode only; {@code 409
      * PROVISIONING_REQUIRES_STATIC} otherwise.
      *
      * <p>PUT rather than a parallel {@code /staticPods} collection: the
@@ -254,13 +255,13 @@ public class CapacityController {
      */
     @PutMapping("/pods/{podName}")
     public ResponseEntity<Map<String, Object>> declare(
-            @PathVariable String applicationId,
+            @PathVariable String groupId,
             @PathVariable String region,
             @PathVariable String podName,
             @RequestParam(name = "force", defaultValue = "false") boolean force,
             @RequestBody DeclarePodRequest req) {
         provisioning.requireStatic("declare worker " + podName);
-        requireApp(applicationId);
+        requireGroup(groupId);
         if (req == null) {
             throw new CapacityValidationException("request body is required");
         }
@@ -276,10 +277,10 @@ public class CapacityController {
         if (existing.isPresent()) {
             Pod pod = existing.get();
             // Never let a declaration silently steal a worker from another
-            // application — that would let two apps' runs land on one worker.
-            if (!applicationId.equals(pod.applicationId())) {
+            // group — that would let two pools' runs land on one worker.
+            if (!groupId.equals(pod.groupId())) {
                 throw new PodBoundElsewhereException(
-                        declaration.podName(), pod.applicationId(), pod.region());
+                        declaration.podName(), pod.groupId(), pod.region());
             }
             // Re-addressing a worker mid-run would break every follow-up call
             // the run makes to it (status polls, drain, abort).
@@ -297,22 +298,22 @@ public class CapacityController {
             throw new WorkerUnreachableException(declaration.podName(), declaration.baseUrl());
         }
 
-        pods.declareStatic(declaration.podName(), region, declaration.baseUrl(), applicationId);
-        int maxAvailable = syncDerivedCapacity(applicationId, region);
+        pods.declareStatic(declaration.podName(), region, declaration.baseUrl(), groupId);
+        int maxAvailable = syncDerivedCapacity(groupId, region);
 
-        LOG.info("Declared operator-managed worker {} at {} for applicationId={} region={} "
+        LOG.info("Declared operator-managed worker {} at {} for groupId={} region={} "
                 + "(new={}, reachable={}, derived maxAvailable={})",
-                declaration.podName(), declaration.baseUrl(), applicationId, region,
+                declaration.podName(), declaration.baseUrl(), groupId, region,
                 isNew, reachable, maxAvailable);
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("podName",       declaration.podName());
-        body.put("applicationId", applicationId);
+        body.put("groupId",       groupId);
         body.put("region",        region);
         body.put("baseUrl",       declaration.baseUrl());
         body.put("source",        PodSource.STATIC.name());
         body.put("reachable",     reachable);
-        body.put("declared",      pods.countByApplicationAndRegion(applicationId, region));
+        body.put("declared",      pods.countByGroupAndRegion(groupId, region));
         body.put("maxAvailable",  maxAvailable);
         return ResponseEntity.status(isNew ? HttpStatus.CREATED : HttpStatus.OK).body(body);
     }
@@ -320,7 +321,7 @@ public class CapacityController {
     /**
      * STATIC-FLEET Phase 3 (D8) — in static mode {@code maxAvailable} is
      * DERIVED: it always equals the number of declared workers for this
-     * (application, region). The operator controls the count by declaring
+     * (group, region). The operator controls the count by declaring
      * and releasing, so there is nothing to approve and no second knob to
      * drift. Keeping the row in sync means every downstream capacity check
      * (run-launch cap, the capacity snapshot, the shortfall message) keeps
@@ -328,9 +329,9 @@ public class CapacityController {
      *
      * @return the value written
      */
-    private int syncDerivedCapacity(String applicationId, String region) {
-        int declared = pods.countByApplicationAndRegion(applicationId, region);
-        capacityRepo.upsert(applicationId, region, declared);
+    private int syncDerivedCapacity(String groupId, String region) {
+        int declared = pods.countByGroupAndRegion(groupId, region);
+        capacityRepo.upsert(groupId, region, declared);
         return declared;
     }
 
@@ -338,12 +339,12 @@ public class CapacityController {
 
     @PostMapping("/pods/{podName}/restart")
     public ResponseEntity<Map<String, Object>> restart(
-            @PathVariable String applicationId,
+            @PathVariable String groupId,
             @PathVariable String region,
             @PathVariable String podName) {
         provisioning.requireDynamic("restart worker " + podName);
-        requireApp(applicationId);
-        requirePodBoundToAppRegion(applicationId, region, podName);
+        requireGroup(groupId);
+        requirePodBoundToGroupRegion(groupId, region, podName);
         provisioner.restart(region, podName);
         return ResponseEntity.ok(Map.of("podName", podName, "restarted", true));
     }
@@ -351,7 +352,7 @@ public class CapacityController {
     // ── DELETE /capacity/{region}/pods/{podName} — drain ───────────────
 
     /**
-     * Releases a worker from this (application, region).
+     * Releases a worker from this (group, region).
      *
      * <p>Under {@code PROVISIONING_MODE=DYNAMIC} this is a full drain: the
      * container is stopped and removed, then the registry row is deleted.
@@ -369,11 +370,11 @@ public class CapacityController {
      */
     @DeleteMapping("/pods/{podName}")
     public ResponseEntity<Map<String, Object>> drain(
-            @PathVariable String applicationId,
+            @PathVariable String groupId,
             @PathVariable String region,
             @PathVariable String podName) {
-        requireApp(applicationId);
-        requirePodBoundToAppRegion(applicationId, region, podName);
+        requireGroup(groupId);
+        requirePodBoundToGroupRegion(groupId, region, podName);
         Optional<ActiveRunBinding> blocker = pods.findActiveRunBindingFor(podName);
         boolean staleBindingReleased = false;
         if (blocker.isPresent()) {
@@ -409,9 +410,9 @@ public class CapacityController {
         if (containerStopped) {
             provisioner.stopAndRemove(region, podName);
         } else {
-            LOG.info("Undeclared operator-managed worker {} from applicationId={} region={} — "
+            LOG.info("Undeclared operator-managed worker {} from groupId={} region={} — "
                     + "registry row removed; the worker itself is left running.",
-                    podName, applicationId, region);
+                    podName, groupId, region);
         }
         pods.deleteByPodId(podName);
         Map<String, Object> body = new LinkedHashMap<>();
@@ -420,7 +421,7 @@ public class CapacityController {
         body.put("containerStopped", containerStopped);
         if (provisioning.isStatic()) {
             // D8 — Max tracks the declared count, so releasing lowers it.
-            body.put("maxAvailable", syncDerivedCapacity(applicationId, region));
+            body.put("maxAvailable", syncDerivedCapacity(groupId, region));
         }
         if (staleBindingReleased) {
             body.put("staleBindingReleased", true);
@@ -431,40 +432,40 @@ public class CapacityController {
     // ── DELETE /capacity/{region} — remove a region from the application ─
 
     /**
-     * Removes a region (capacity row) from an application — the "deselect a
+     * Removes a region (capacity row) from a group — the "deselect a
      * region" half of the Capacity tab's region picker. Drain-first: a region
      * with any provisioned worker is refused with 409 {@code REGION_NOT_EMPTY}
      * so its pod rows + containers can't be orphaned. 404 when the region
-     * isn't configured for the app.
+     * isn't configured for the group.
      */
     @DeleteMapping
     public ResponseEntity<Void> removeRegion(
-            @PathVariable String applicationId,
+            @PathVariable String groupId,
             @PathVariable String region) {
-        requireApp(applicationId);
-        if (capacityRepo.find(applicationId, region).isEmpty()) {
-            throw new CapacityRegionNotFoundException(applicationId, region);
+        requireGroup(groupId);
+        if (capacityRepo.find(groupId, region).isEmpty()) {
+            throw new CapacityRegionNotFoundException(groupId, region);
         }
-        int provisioned = pods.countByApplicationAndRegion(applicationId, region);
+        int provisioned = pods.countByGroupAndRegion(groupId, region);
         if (provisioned > 0) {
             throw new RegionNotEmptyException(region, provisioned);
         }
-        capacityRepo.delete(applicationId, region);
+        capacityRepo.delete(groupId, region);
         return ResponseEntity.noContent().build();
     }
 
     // ── helpers ────────────────────────────────────────────────────────
 
-    private Application requireApp(String applicationId) {
-        return apps.findById(applicationId)
-                .orElseThrow(() -> new ApplicationNotFoundException(applicationId));
+    private ApplicationGroup requireGroup(String groupId) {
+        return groups.findById(groupId)
+                .orElseThrow(() -> new ApplicationGroupController.GroupNotFoundException(groupId));
     }
 
-    private void requirePodBoundToAppRegion(String applicationId, String region, String podName) {
-        boolean bound = pods.findByApplicationAndRegion(applicationId, region).stream()
+    private void requirePodBoundToGroupRegion(String groupId, String region, String podName) {
+        boolean bound = pods.findByGroupAndRegion(groupId, region).stream()
                 .anyMatch(p -> podName.equals(p.podId()));
         if (!bound) {
-            throw new PodNotBoundException(podName, applicationId, region);
+            throw new PodNotBoundException(podName, groupId, region);
         }
     }
 
@@ -499,7 +500,7 @@ public class CapacityController {
     public record BlockedBy(String runId, String state, Instant startedAt, String initiatedBy) {}
 
     public record CapacitySnapshot(
-            String applicationId,
+            String groupId,
             String region,
             int maxAvailable,
             int provisioned,            // == ready + inUse
@@ -510,12 +511,9 @@ public class CapacityController {
 
     // ── Exceptions ─────────────────────────────────────────────────────
 
-    static final class ApplicationNotFoundException extends RuntimeException {
-        ApplicationNotFoundException(String id) { super("application not found: " + id); }
-    }
     static final class CapacityRegionNotFoundException extends RuntimeException {
-        CapacityRegionNotFoundException(String appId, String region) {
-            super("no capacity row for applicationId=" + appId + " region=" + region
+        CapacityRegionNotFoundException(String groupId, String region) {
+            super("no capacity row for groupId=" + groupId + " region=" + region
                     + "; PUT /capacity/" + region + " first");
         }
     }
@@ -540,8 +538,8 @@ public class CapacityController {
         }
     }
     static final class PodNotBoundException extends RuntimeException {
-        PodNotBoundException(String podName, String appId, String region) {
-            super("pod " + podName + " is not bound to applicationId=" + appId + " region=" + region);
+        PodNotBoundException(String podName, String groupId, String region) {
+            super("pod " + podName + " is not bound to groupId=" + groupId + " region=" + region);
         }
     }
     static final class PodInUseException extends RuntimeException {
@@ -553,15 +551,15 @@ public class CapacityController {
             this.podName = podName;
         }
     }
-    /** STATIC-FLEET Phase 3 — declaring a worker another application already owns. */
+    /** STATIC-FLEET Phase 3 — declaring a worker another group already owns. */
     static final class PodBoundElsewhereException extends RuntimeException {
-        final String podName, boundApplicationId, boundRegion;
-        PodBoundElsewhereException(String podName, String boundApplicationId, String boundRegion) {
-            super("worker " + podName + " is already declared to applicationId="
-                    + boundApplicationId + " region=" + boundRegion
+        final String podName, boundGroupId, boundRegion;
+        PodBoundElsewhereException(String podName, String boundGroupId, String boundRegion) {
+            super("worker " + podName + " is already declared to groupId="
+                    + boundGroupId + " region=" + boundRegion
                     + "; release it there before declaring it here");
             this.podName = podName;
-            this.boundApplicationId = boundApplicationId;
+            this.boundGroupId = boundGroupId;
             this.boundRegion = boundRegion;
         }
     }
@@ -587,10 +585,10 @@ public class CapacityController {
 
     // ── Exception → HTTP mapping ────────────────────────────────────────
 
-    @ExceptionHandler(ApplicationNotFoundException.class)
-    public ResponseEntity<Map<String, String>> handleAppNotFound(ApplicationNotFoundException e) {
+    @ExceptionHandler(ApplicationGroupController.GroupNotFoundException.class)
+    public ResponseEntity<Map<String, String>> handleGroupNotFound(ApplicationGroupController.GroupNotFoundException e) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(Map.of("code", "APPLICATION_NOT_FOUND", "message", e.getMessage()));
+                .body(Map.of("code", "APPLICATION_GROUP_NOT_FOUND", "message", e.getMessage()));
     }
     @ExceptionHandler(CapacityRegionNotFoundException.class)
     public ResponseEntity<Map<String, String>> handleRegionNotFound(CapacityRegionNotFoundException e) {
@@ -661,7 +659,7 @@ public class CapacityController {
                 "code",               "POD_BOUND_ELSEWHERE",
                 "message",            e.getMessage(),
                 "podName",            e.podName,
-                "boundApplicationId", e.boundApplicationId,
+                "boundGroupId",       e.boundGroupId,
                 "boundRegion",        e.boundRegion));
     }
     /**

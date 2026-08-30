@@ -12,7 +12,7 @@ import { usePlatformCapabilities } from "../hooks/usePlatformCapabilities";
  * deployment does not use, and a 404 would read as "the platform is
  * misconfigured". A bookmark or a shared link therefore lands somewhere
  * useful — on a static fleet, worker management lives under the
- * application's Data centers section.
+ * application's Data centers section (the group's pool).
  *
  * <p>Renders nothing while the capability probe is in flight, so a bookmark
  * never flashes the Capacity page before redirecting.

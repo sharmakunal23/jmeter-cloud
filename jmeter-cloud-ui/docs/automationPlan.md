@@ -29,7 +29,7 @@ Three operator stories drive the scope:
    webhook (out of scope for this design — handled at the CI side via
    the launcher API).
 3. **Periodic capacity drill** — a CRON that fires a "sustained 30
-   minutes at 80 % maxAvailable" run weekly, validating the pod fleet
+   minutes at 80 % of the group's maxAvailable" run weekly, validating the pod fleet
    actually scales to the configured budget without surprises.
 
 ## Data model
@@ -147,7 +147,7 @@ ascending.
 Per fire attempt, four outcomes; record on the row:
 
 - **LAUNCHED** — `POST /api/v1/runs` returned 201; persist `lastFiredRunId`.
-- **SKIPPED** — capacity 409 or the application is unhealthy. Log + leave
+- **SKIPPED** — the group's capacity 409 or the application is unhealthy. Log + leave
   a row in a future `cronJobFireHistory` table for audit.
 - **FAILED** — backend 5xx or template body malformed. Same audit row.
 - **DISABLED** — operator turned the CRON off mid-fire-window; ignore.
@@ -163,7 +163,7 @@ on FAILED, optional Slack integration.
 - `POST /cronJobs` requires the caller to have write access to the
   application (once auth ships).
 - The sponsor-approval workflow for capacity is unaffected — a CRON
-  asking for more capacity than its app has provisioned still 409s
+  asking for more capacity than its application's group has provisioned still 409s
   at run-launch. Operator must request more *before* the CRON window.
 
 ## Phasing

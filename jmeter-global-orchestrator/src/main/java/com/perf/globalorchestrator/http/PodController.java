@@ -39,24 +39,22 @@ public class PodController {
     public ResponseEntity<Map<String, Object>> register(@RequestBody RegisterPodRequest req) {
         if (req == null || req.podId() == null || req.podId().isBlank()
                 || req.baseUrl() == null || req.baseUrl().isBlank()
-                || req.applicationId() == null || req.applicationId().isBlank()) {
+                || req.groupId() == null || req.groupId().isBlank()) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
                     "code", "INVALID_REQUEST",
-                    "message", "podId, baseUrl and applicationId are required"));
+                    "message", "podId, baseUrl and groupId are required"));
         }
         String region = req.region() != null && !req.region().isBlank() ? req.region() : "us-east-1";
-        // Phase 6b capacity rework: applicationId is required — every pod is a
-        // per-app container bound at provision time. The legacy null-app pool
-        // (static orchestrator-1 / -2) was removed in Phase 6, and the column
-        // is NOT NULL as of migration V16.
-        String applicationId = req.applicationId();
-        pods.register(req.podId(), region, req.baseUrl(), applicationId);
+        // groupId is required — every pod belongs to one group's pool
+        // (GROUP-CAPACITY); the column is NOT NULL and an FK to applicationGroup.
+        String groupId = req.groupId();
+        pods.register(req.podId(), region, req.baseUrl(), groupId);
         Map<String, Object> body = new java.util.LinkedHashMap<>();
-        body.put("podId",         req.podId());
-        body.put("region",        region);
-        body.put("baseUrl",       req.baseUrl());
-        body.put("state",         "IDLE");
-        body.put("applicationId", applicationId);
+        body.put("podId",   req.podId());
+        body.put("region",  region);
+        body.put("baseUrl", req.baseUrl());
+        body.put("state",   "IDLE");
+        body.put("groupId", groupId);
         return ResponseEntity.ok(body);
     }
 
@@ -101,7 +99,7 @@ public class PodController {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record RegisterPodRequest(String podId, String region, String baseUrl, String applicationId) {}
+    public record RegisterPodRequest(String podId, String region, String baseUrl, String groupId) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record HeartbeatRequest(String podId) {}

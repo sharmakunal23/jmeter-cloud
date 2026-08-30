@@ -57,8 +57,9 @@ docker compose logs -f global-orchestrator          # follow one service's logs
 ```
 
 Worker pods (`local-orchestrator`) are **not** started by Compose. They are provisioned on
-demand per application from the UI **Capacity** tab (or the capacity API). That is by design —
-the global-orchestrator owns worker lifecycle so pods can scale per (app, region).
+demand per application group from the UI **Capacity** tab (or the capacity API). That is by design —
+the global-orchestrator owns worker lifecycle so pods scale per (group, region), and every
+application in the group draws on the same pool.
 
 ## 4. Service endpoints & ports
 
@@ -84,7 +85,7 @@ Overrides: `HTTP_PORT` on each service, `JMX_PORT` for the JMX bridge.
 Easiest path is the UI:
 
 1. Open **http://localhost:8086**.
-2. **Capacity** → pick/register an app → add a worker for a region (provisions a `local-orchestrator` pod).
+2. **Capacity** → pick the application's group → add a worker for a region (provisions a `local-orchestrator` pod into the group's pool).
 3. **Documents** → upload a `.jmx` test plan.
 4. **Runs → New run** → choose the plan, set fleet size/region → **Start**.
 5. You land on `/runs/{runId}` with the live fleet table, the native uPlot **Metrics** tab,

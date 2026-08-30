@@ -355,7 +355,7 @@ export interface StartRunRequest {
   initiatedBy?: string;
   /**
    * When true, a shortfall during claim
-   * triggers an on-the-fly spin (subject to the application capacity
+   * triggers an on-the-fly spin (subject to the application group's capacity
    * ceiling). Default false. The launcher sets this only after the
    * operator confirms a shortfall dialog rendered from the 503 body.
    */
@@ -490,7 +490,7 @@ export const runsApi = {
    * Throws {@link GlobalOrchestratorError} with:
    *   - `RUN_NOT_FOUND` (404)
    *   - `RUN_NOT_SCALABLE` (409) — run is not RUNNING
-   *   - `RUN_NOT_SCALABLE_NO_APPLICATION` (409) — untagged run cannot gate capacity
+   *   - `RUN_NOT_SCALABLE_NO_APPLICATION` (409) — untagged run has no group whose capacity could gate it
    *   - `APPLICATION_CAPACITY_EXCEEDED` (409) — per-(app, region) ceiling hit
    *   - `INSUFFICIENT_CAPACITY` (503) — strict-mode shortfall; the body carries
    *     a structured {@link ApiError.shortfall}

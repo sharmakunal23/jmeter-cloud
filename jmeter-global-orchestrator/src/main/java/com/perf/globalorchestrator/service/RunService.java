@@ -23,7 +23,7 @@ import com.perf.globalorchestrator.http.ScaleUpRunResponse;
 import com.perf.globalorchestrator.http.StartRunRequest;
 import com.perf.globalorchestrator.observability.ErrorContext;
 import com.perf.globalorchestrator.repo.PodRepository;
-import com.perf.globalorchestrator.repo.ApplicationCapacityRepository;
+import com.perf.globalorchestrator.repo.GroupCapacityRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.RunEventRepository;
 import com.perf.globalorchestrator.config.CacheConfig;
@@ -105,7 +105,7 @@ public class RunService {
      */
     @org.springframework.beans.factory.annotation.Value("${metrics.windowSeconds:15}")
     private int metricsWindowSeconds = 15;
-    private final ApplicationCapacityRepository applicationCapacity;
+    private final GroupCapacityRepository groupCapacity;
     private final LocalOrchestratorClient localClient;
     private final WorkerStatusFetcher statusFetcher;
     /** Async launches: one virtual thread per provisioning launch, nothing pooled. */
@@ -143,7 +143,7 @@ public class RunService {
             RunAuditWriter audit,
             PodRepository pods,
             ApplicationRepository applications,
-            ApplicationCapacityRepository applicationCapacity,
+            GroupCapacityRepository groupCapacity,
             LocalOrchestratorClient localClient,
             WorkerStatusFetcher statusFetcher,
             RunMetricsRepository runMetrics,
@@ -161,7 +161,7 @@ public class RunService {
         this.audit = audit;
         this.pods = pods;
         this.applications = applications;
-        this.applicationCapacity = applicationCapacity;
+        this.groupCapacity = groupCapacity;
         this.localClient = localClient;
         this.statusFetcher = statusFetcher;
         this.runMetrics = runMetrics;
@@ -323,7 +323,7 @@ public class RunService {
      * reachable. The caller (startRun) then retries the claim.
      *
      * <p>Cap-check: per region, if {@code provisioned + gap > maxAvailable},
-     * surface {@link ApplicationCapacityExceededException} so the UI can
+     * surface {@link GroupCapacityExceededException} so the UI can
      * tell the operator "raise the ceiling first." Bypasses the spin —
      * partial filling would leave the operator confused and the cap rule
      * is sponsor-mandated.
@@ -353,15 +353,14 @@ public class RunService {
         for (Map.Entry<String, RegionShortfall> e : shortfall.entrySet()) {
             String regionName = e.getKey();
             int gap = e.getValue().requested() - e.getValue().claimed();
-            int provisioned = pods.countByApplicationAndRegion(
-                    boundApp.applicationId(), regionName);
-            int max = applicationCapacity.find(boundApp.applicationId(), regionName)
+            int provisioned = pods.countByGroupAndRegion(boundApp.metricsGroupId(), regionName);
+            int max = groupCapacity.find(boundApp.metricsGroupId(), regionName)
                     .map(c -> c.maxAvailable())
                     .orElse(0);
             if (provisioned + gap > max) {
-                throw new ApplicationCapacityExceededException(
-                        boundApp.name(), regionName, max, provisioned, gap,
-                        "spinShortfall would exceed maxAvailable — operator must raise the ceiling first");
+                throw new GroupCapacityExceededException(
+                        boundApp.metricsGroupId(), regionName, max, provisioned, gap,
+                        "spinShortfall would exceed maxAvailable — operator must raise the group's ceiling first");
             }
             // Track 8: the region's namespace quota, as it last reported it —
             // refuse before reserving names and creating Pods that would only Pend.
@@ -381,7 +380,7 @@ public class RunService {
             int gap = e.getValue().requested() - e.getValue().claimed();
             for (int i = 0; i < gap; i++) {
                 reserved.add(Map.entry(e.getKey(),
-                        spinService.reserve(boundApp.applicationId(), boundApp.name(), e.getKey())));
+                        spinService.reserve(boundApp.metricsGroupId(), e.getKey())));
             }
         }
         List<java.util.concurrent.Future<?>> spins = new ArrayList<>();
@@ -392,10 +391,10 @@ public class RunService {
                 {
                     spins.add(pool.submit(() -> {
                         com.perf.globalorchestrator.provision.PodSpinService.SpinResult r =
-                                spinService.start(boundApp.applicationId(), boundApp.name(), regionName, podName);
+                                spinService.start(boundApp.metricsGroupId(), regionName, podName);
                         newWorkers.add(new WorkerRef(regionName, r.podName(), r.baseUrl()));
-                        LOG.info("spinShortfall: spun {} for app={} region={} ready={}",
-                                r.podName(), boundApp.name(), regionName, r.ready());
+                        LOG.info("spinShortfall: spun {} for group={} app={} region={} ready={}",
+                                r.podName(), boundApp.metricsGroupId(), boundApp.name(), regionName, r.ready());
                         if (r.ready()) progress.accept(ready.incrementAndGet());
                     }));
                 }
@@ -539,7 +538,7 @@ public class RunService {
         } catch (FleetSizeExceededException e) {
             recordScaleUpRejected(runId, request, bestEffort, actor, "FLEET_SIZE_EXCEEDED");
             throw e;
-        } catch (ApplicationCapacityExceededException e) {
+        } catch (GroupCapacityExceededException e) {
             recordScaleUpRejected(runId, request, bestEffort, actor, "APPLICATION_CAPACITY_EXCEEDED");
             throw e;
         } catch (InsufficientCapacityException e) {
@@ -599,37 +598,34 @@ public class RunService {
             boundApp = applications.findByName(request.application()).orElse(null);
         }
         if (!allocation.isEmpty()) {
-            // An allocation-based run claims exclusively from its target
-            // application's own pod pool, so it MUST resolve to a registered
-            // application. A run naming no app (or an unregistered one) has
-            // no pool to claim from now that the legacy null-app pool is
-            // gone — reject it up front with the same 409 surface as a
-            // capacity miss (the app effectively has zero configured
-            // capacity). The legacy UNKNOWN_REGION pre-check that used to
-            // live here only fired for the null-app path; for a registered
-            // app the per-region capacity-grid check below is the
-            // authoritative region validator (a never-configured region
-            // yields a clearer 409 "no capacity configured ... in region X").
+            // An allocation-based run claims from its application's GROUP pool
+            // (GROUP-CAPACITY), so it MUST resolve to a registered application.
+            // A run naming no app (or an unregistered one) has no pool to claim
+            // from — reject it up front with the same 409 surface as a
+            // capacity miss. For a registered app the per-region capacity-grid
+            // check below is the authoritative region validator (a
+            // never-configured region yields a clearer 409 "no capacity
+            // configured ... in region X").
             if (boundApp == null) {
                 String name = (request.application() == null || request.application().isBlank())
                         ? "(none)" : request.application();
-                throw new ApplicationCapacityExceededException(
+                throw new GroupCapacityExceededException(
                         name, allocation.get(0).region(), 0, 0, allocation.get(0).count(),
                         "run targets unregistered application '" + name + "'; allocation-based "
-                        + "runs require a registered application with configured capacity");
+                        + "runs require a registered application whose group has configured capacity");
             }
+            String groupId = boundApp.metricsGroupId();
             for (FleetAllocationEntry e : allocation) {
-                var capacityRow = applicationCapacity.find(boundApp.applicationId(), e.region());
+                var capacityRow = groupCapacity.find(groupId, e.region());
                 if (capacityRow.isEmpty()) {
-                    throw new ApplicationCapacityExceededException(
-                            boundApp.name(), e.region(), 0, 0, e.count(),
-                            "no capacity configured for this app in region '" + e.region() + "'");
+                    throw new GroupCapacityExceededException(
+                            groupId, e.region(), 0, 0, e.count(),
+                            "no capacity configured for group '" + groupId + "' in region '" + e.region() + "'");
                 }
                 int max = capacityRow.get().maxAvailable();
-                int active = applicationCapacity.countActivePodsForAppRegion(boundApp.name(), e.region());
+                int active = groupCapacity.countActivePodsForGroupRegion(groupId, e.region());
                 if (active + e.count() > max) {
-                    throw new ApplicationCapacityExceededException(
-                            boundApp.name(), e.region(), max, active, e.count(), null);
+                    throw new GroupCapacityExceededException(groupId, e.region(), max, active, e.count(), null);
                 }
             }
         }
@@ -653,13 +649,12 @@ public class RunService {
             }
         } else {
             for (FleetAllocationEntry e : allocation) {
-                // Phase 6b: every allocation-based run claims from its target
-                // application's own pod pool. boundApp is guaranteed non-null
-                // here — the validation above rejects an allocation run that
-                // names no registered application (the legacy null-app pool
-                // and its claimIdleByRegion fallback are gone).
-                List<Pod> regionClaim = pods.claimIdleByRegionAndApp(
-                        e.region(), boundApp.applicationId(), e.count());
+                // Every allocation-based run claims from its application's
+                // group pool. boundApp is guaranteed non-null here — the
+                // validation above rejects an allocation run that names no
+                // registered application.
+                List<Pod> regionClaim = pods.claimIdleByGroup(
+                        e.region(), boundApp.metricsGroupId(), e.count());
                 for (int i = 0; i < regionClaim.size(); i++) {
                     Pod p = regionClaim.get(i);
                     Map<String, String> props = e.propertiesFor(i);
@@ -1186,32 +1181,32 @@ public class RunService {
     protected ScaleUpTransactionResult openMembersInExistingRun(
             Run run, List<FleetAllocationEntry> allocation,
             long joinedAtSecond, boolean bestEffort, Actor actor) {
-        // Look up the application by name to get its applicationId for
-        // the per-app claim path. The run row carries the app *name*, but
-        // the pod table is keyed on applicationId.
+        // Look up the application by name to get its group for the claim
+        // path. The run row carries the app *name*, but the pod table is
+        // keyed on the group.
         com.perf.globalorchestrator.domain.Application boundApp = applications
                 .findByName(run.application())
                 .orElseThrow(() -> new IllegalStateException(
                         "run " + run.runId() + " references unknown application '" + run.application() + "'"));
 
-        // Per-(app, region) capacity gate — same shape as
+        // Per-(group, region) capacity gate — same shape as
         // openRunAndClaimPods. Applied BEFORE claim so a rejected scale-up
         // never holds capacity. The active count INCLUDES the run's own
-        // existing members (they're counted by countActivePodsForAppRegion
+        // existing members (they're counted by countActivePodsForGroupRegion
         // because they're in active member states), so the gate naturally
         // honors the cumulative-fleet cap across the run's lifetime.
+        String groupId = boundApp.metricsGroupId();
         for (FleetAllocationEntry e : allocation) {
-            var capacityRow = applicationCapacity.find(boundApp.applicationId(), e.region());
+            var capacityRow = groupCapacity.find(groupId, e.region());
             if (capacityRow.isEmpty()) {
-                throw new ApplicationCapacityExceededException(
-                        boundApp.name(), e.region(), 0, 0, e.count(),
-                        "no capacity configured for this app in region '" + e.region() + "'");
+                throw new GroupCapacityExceededException(
+                        groupId, e.region(), 0, 0, e.count(),
+                        "no capacity configured for group '" + groupId + "' in region '" + e.region() + "'");
             }
             int max = capacityRow.get().maxAvailable();
-            int active = applicationCapacity.countActivePodsForAppRegion(boundApp.name(), e.region());
+            int active = groupCapacity.countActivePodsForGroupRegion(groupId, e.region());
             if (active + e.count() > max) {
-                throw new ApplicationCapacityExceededException(
-                        boundApp.name(), e.region(), max, active, e.count(), null);
+                throw new GroupCapacityExceededException(groupId, e.region(), max, active, e.count(), null);
             }
         }
 
@@ -1229,8 +1224,8 @@ public class RunService {
         Map<String, RegionShortfall> shortfall = new LinkedHashMap<>();
 
         for (FleetAllocationEntry e : allocation) {
-            List<Pod> regionClaim = pods.claimIdleByRegionAndApp(
-                    e.region(), boundApp.applicationId(), e.count());
+            List<Pod> regionClaim = pods.claimIdleByGroup(
+                    e.region(), boundApp.metricsGroupId(), e.count());
             for (int i = 0; i < regionClaim.size(); i++) {
                 Pod p = regionClaim.get(i);
                 Map<String, String> props = e.propertiesFor(i);
@@ -2047,29 +2042,30 @@ public class RunService {
      * can render a clear "you have X of Y in use in region Z; this run wants
      * W more" message.
      */
-    public static class ApplicationCapacityExceededException extends RuntimeException {
-        private final String application;
+    /** The group's per-region ceiling would be exceeded (409 {@code APPLICATION_CAPACITY_EXCEEDED}). */
+    public static class GroupCapacityExceededException extends RuntimeException {
+        private final String group;
         private final String region;
         private final int max;
         private final int active;
         private final int requested;
 
-        public ApplicationCapacityExceededException(String application, String region,
-                                                    int max, int active, int requested,
-                                                    String customMessage) {
+        public GroupCapacityExceededException(String group, String region,
+                                              int max, int active, int requested,
+                                              String customMessage) {
             super(customMessage != null
                     ? customMessage
-                    : "application '" + application + "' in region '" + region
+                    : "group '" + group + "' in region '" + region
                     + "' would exceed maxAvailable cap " + max
                     + " (currently " + active + " active + " + requested + " requested)");
-            this.application = application;
+            this.group = group;
             this.region = region;
             this.max = max;
             this.active = active;
             this.requested = requested;
         }
 
-        public String application() { return application; }
+        public String group() { return group; }
         public String region() { return region; }
         public int max() { return max; }
         public int active() { return active; }

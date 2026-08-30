@@ -50,7 +50,12 @@ import java.util.stream.Collectors;
  * never on a local image rebuild. The kubelet owns log rotation.
  *
  * <p>Pods carry the {@code com.perf.jmeterCloud.*} labels so the global's
- * reconciler can list and adopt by app and region with server-side selectors.
+ * reconciler can list and adopt by group and region with server-side
+ * selectors. The pool is the application group's (GROUP-CAPACITY, 2026-08-31):
+ * the label is {@code com.perf.jmeterCloud.groupId}, and a worker Pod created
+ * before that change (labelled {@code applicationId}) does not match
+ * {@link #listFor} — recreate such Pods; the local kind clusters are recycled
+ * by the smoke run.
  */
 @Component
 public class K8sPodProvisioner implements PodProvisioner {
@@ -152,10 +157,10 @@ public class K8sPodProvisioner implements PodProvisioner {
     }
 
     @Override
-    public List<ProvisionedPod> listFor(String applicationId, String region) {
+    public List<ProvisionedPod> listFor(String groupId, String region) {
         Map<String, String> selector = new LinkedHashMap<>();
         selector.put(ProvisionerProperties.LABEL_MANAGED_BY, ProvisionerProperties.MANAGED_BY);
-        selector.put(ProvisionerProperties.LABEL_APPLICATION_ID, applicationId);
+        selector.put(ProvisionerProperties.LABEL_GROUP_ID, groupId);
         if (region != null) {
             // Server-side region filter.
             selector.put(ProvisionerProperties.LABEL_REGION, region);
@@ -163,7 +168,7 @@ public class K8sPodProvisioner implements PodProvisioner {
         return k8s.pods().inNamespace(props.namespace()).withLabels(selector).list().getItems().stream()
                 .map(p -> new ProvisionedPod(
                         p.getMetadata().getName(),
-                        p.getMetadata().getLabels().get(ProvisionerProperties.LABEL_APPLICATION_ID),
+                        p.getMetadata().getLabels().get(ProvisionerProperties.LABEL_GROUP_ID),
                         p.getMetadata().getLabels().get(ProvisionerProperties.LABEL_REGION),
                         statusOf(p),
                         creationInstant(p),
@@ -229,9 +234,9 @@ public class K8sPodProvisioner implements PodProvisioner {
     private Pod create(Pod pod) {
         try {
             Pod created = k8s.pods().inNamespace(props.namespace()).resource(pod).create();
-            LOG.info("Created pod {} (app={}, region={})",
+            LOG.info("Created pod {} (group={}, region={})",
                     pod.getMetadata().getName(),
-                    pod.getMetadata().getLabels().get(ProvisionerProperties.LABEL_APPLICATION_NAME),
+                    pod.getMetadata().getLabels().get(ProvisionerProperties.LABEL_GROUP_ID),
                     pod.getMetadata().getLabels().get(ProvisionerProperties.LABEL_REGION));
             return created;
         } catch (KubernetesClientException e) {
@@ -272,8 +277,7 @@ public class K8sPodProvisioner implements PodProvisioner {
         Map<String, String> labels = pod.getMetadata().getLabels();
         PodSpec spec = new PodSpec(
                 pod.getMetadata().getName(),
-                labels.get(ProvisionerProperties.LABEL_APPLICATION_ID),
-                labels.get(ProvisionerProperties.LABEL_APPLICATION_NAME),
+                labels.get(ProvisionerProperties.LABEL_GROUP_ID),
                 labels.get(ProvisionerProperties.LABEL_REGION));
         deleteAndAwait(spec.podName());
         create(buildPod(spec));
@@ -294,8 +298,7 @@ public class K8sPodProvisioner implements PodProvisioner {
                 .map(e -> new EnvVar(e.getKey(), e.getValue(), null))
                 .collect(Collectors.toList());
         Map<String, String> labels = new LinkedHashMap<>(shape.extraLabels());
-        labels.put(ProvisionerProperties.LABEL_APPLICATION_ID,   spec.applicationId());
-        labels.put(ProvisionerProperties.LABEL_APPLICATION_NAME, spec.applicationName());
+        labels.put(ProvisionerProperties.LABEL_GROUP_ID,         spec.groupId());
         labels.put(ProvisionerProperties.LABEL_REGION,           spec.region());
         labels.put(ProvisionerProperties.LABEL_ROLE,             ProvisionerProperties.ROLE_LOCAL_ORCHESTRATOR);
         labels.put(ProvisionerProperties.LABEL_MANAGED_BY,       ProvisionerProperties.MANAGED_BY);
@@ -450,7 +453,7 @@ public class K8sPodProvisioner implements PodProvisioner {
         e.put("POD_BASE_URL",            baseUrlFor(spec.podName()));
         e.put("REGION",                  spec.region());
         e.put("TEST_REGION",             spec.region());
-        e.put("APPLICATION_ID",          spec.applicationId());
+        e.put("GROUP_ID",                spec.groupId());
         // No GLOBAL_ORCHESTRATOR_URL: the worker's PodRegistrar is conditional
         // on it, so the worker never registers or heartbeats — the Pod list is
         // the hub's liveness truth. Workers POST straight to the metrics-consumer.

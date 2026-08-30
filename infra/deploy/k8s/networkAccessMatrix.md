@@ -30,7 +30,7 @@ principal, at deploy time only.
 |---|---|---|---|
 | `jmeter-cloud-ui` | 80 | the ingress controller (browsers) | the SPA |
 | `jmeter-global-orchestrator` | 8082 | the UI's nginx (`/api/*`, `/actuator/*` proxied) | every UI call |
-| | 8082 | **declared (STATIC) workers only** | `POST /api/v1/registerPod` + heartbeats — dynamic workers never call the hub |
+| | 8082 | **declared (STATIC) workers only** | `POST /api/v1/registerPod` (carries `groupId`) + heartbeats — dynamic workers never call the hub |
 | `jmeter-metrics-consumer` | 8083 | workers | `POST /api/v1/ingest?groupId=` (bearer under `cloud`/`dev`/`test`/`prod`) |
 | | 8083 | the hub | `GET /actuator/health` (platform-health probe only) |
 | `document-service` | 8084 | the UI's nginx (`/api/v1/blob*`) | uploads / downloads |

@@ -85,6 +85,7 @@ function fixtureApp(name: string, overrides: Partial<Application> = {}): Applica
     sealId: null,
     description: null,
     healthEndpoints: [],
+    metricsGroupId: "cps",
     createdAt: "2026-05-11T12:00:00Z",
     lastHealthStatus: "UNKNOWN",
     lastHealthCheckedAt: null,
@@ -229,15 +230,16 @@ describe("HomePage — health checklist", () => {
     });
   });
 
-  it("Capacity section sits between Platform and Schedule + sums capacity per region", async () => {
-    apps.list.mockResolvedValue([
-      fixtureApp("checkout-svc", { capacity: [
+  it("Capacity section sits between Platform and Schedule + sums the groups' capacity per region", async () => {
+    apps.list.mockResolvedValue([fixtureApp("checkout-svc"), fixtureApp("payment-api", { metricsGroupId: "demo" })]);
+    groupsMock.list.mockResolvedValue([
+      { groupId: "cps", name: "Servicing MQ", createdAt: "2026-08-29T00:00:00Z", capacity: [
         { region: "us-east", maxAvailable: 10 },
         { region: "us-west", maxAvailable: 5 },
-      ] }),
-      fixtureApp("payment-api", { capacity: [
+      ] },
+      { groupId: "demo", name: "Demo", createdAt: "2026-08-29T00:00:00Z", capacity: [
         { region: "us-east", maxAvailable: 4 },
-      ] }),
+      ] },
     ]);
     renderPage();
     await waitFor(() =>
@@ -255,14 +257,14 @@ describe("HomePage — health checklist", () => {
       .toHaveTextContent(/0.*of.*19.*workers in use/);
   });
 
-  it("Capacity section shows the empty state when no apps are registered", async () => {
+  it("Capacity section shows the empty state when no group has capacity, linking the per-group breakdown", async () => {
     apps.list.mockResolvedValue([]);
     renderPage();
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: "Capacity", level: 2 })).toBeInTheDocument(),
     );
     expect(screen.getByText(/nothing to roll up yet/i)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Per-app breakdown/i }))
+    expect(screen.getByRole("link", { name: /Per-group breakdown/i }))
       .toHaveAttribute("href", "/capacity");
   });
 
@@ -306,8 +308,9 @@ describe("HomePage — health checklist", () => {
     await waitFor(() => {
       const appList = document.querySelector('ul[aria-label="application checks"]');
       expect(appList).not.toBeNull();
-      // Capped to the apps preview limit (15) so the dashboard can't grow long.
-      expect(appList!.querySelectorAll('li')).toHaveLength(15);
+      // Capped to the apps preview limit (15) so the dashboard can't grow long —
+      // the group heading rows (one per run of apps in a group) are not apps.
+      expect(appList!.querySelectorAll('li:not(.checklist__group)')).toHaveLength(15);
     });
     // No paginator on Home any more; a "view all" footer links to the full list.
     expect(document.querySelector('.paginator')).toBeNull();
@@ -327,10 +330,13 @@ describe("HomePage — health checklist", () => {
 });
 
 describe("HomePage — application groups", () => {
-  it("labels each run of grouped applications and puts ungrouped ones last", async () => {
-    groupsMock.list.mockResolvedValue([{ groupId: "cps", name: "Servicing MQ", createdAt: "2026-08-29T00:00:00Z", applicationCount: 1 }]);
+  it("labels each run of applications with its group, groups in name order — every app has one", async () => {
+    groupsMock.list.mockResolvedValue([
+      { groupId: "cps", name: "Servicing MQ", createdAt: "2026-08-29T00:00:00Z", applicationCount: 1 },
+      { groupId: "zed", name: "Zed team", createdAt: "2026-08-29T00:00:00Z", applicationCount: 1 },
+    ]);
     apps.list.mockResolvedValue([
-      fixtureApp("zeta-svc"),
+      fixtureApp("zeta-svc", { metricsGroupId: "zed" }),
       fixtureApp("cps-pci", { metricsGroupId: "cps" }),
     ]);
     renderPage();
@@ -338,8 +344,9 @@ describe("HomePage — application groups", () => {
       const items = Array.from(document.querySelectorAll('ul[aria-label="application checks"] > li')).map((li) => li.textContent ?? "");
       expect(items[0]).toBe("Servicing MQ");
       expect(items[1]).toContain("cps-pci");
-      expect(items[2]).toBe("Ungrouped");
+      expect(items[2]).toBe("Zed team");
       expect(items[3]).toContain("zeta-svc");
+      expect(items).not.toContain("Ungrouped");
     });
   });
 });

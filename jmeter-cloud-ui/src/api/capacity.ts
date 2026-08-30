@@ -1,11 +1,12 @@
 /**
- * Typed client for the per-(application, region) capacity surface.
+ * Typed client for the per-(group, region) capacity surface — the worker pool
+ * belongs to the application group, and every application in it draws on it.
  *
- *   PUT    /api/v1/applications/{id}/capacity/{region}                 → setMax
- *   GET    /api/v1/applications/{id}/capacity/{region}/pods            → listPods
- *   POST   /api/v1/applications/{id}/capacity/{region}/pods            → spinPod
- *   POST   /api/v1/applications/{id}/capacity/{region}/pods/{name}/restart
- *   DELETE /api/v1/applications/{id}/capacity/{region}/pods/{name}     → drainPod
+ *   PUT    /api/v1/applicationGroups/{groupId}/capacity/{region}                 → setMax
+ *   GET    /api/v1/applicationGroups/{groupId}/capacity/{region}/pods            → listPods
+ *   POST   /api/v1/applicationGroups/{groupId}/capacity/{region}/pods            → spinPod
+ *   POST   /api/v1/applicationGroups/{groupId}/capacity/{region}/pods/{name}/restart
+ *   DELETE /api/v1/applicationGroups/{groupId}/capacity/{region}/pods/{name}     → drainPod
  *
  * Wraps non-2xx responses in `CapacityApiError` carrying the structured
  * `code`, the HTTP status, and any `blockedBy` payload — the UI uses
@@ -36,7 +37,7 @@ export interface PodView {
 }
 
 export interface CapacitySnapshot {
-  applicationId: string;
+  groupId: string;
   region: string;
   maxAvailable: number;
   /** ready + inUse — pods that exist as containers right now. */
@@ -51,20 +52,20 @@ export interface CapacitySnapshot {
 /** STATIC-FLEET Phase 7 — response to declaring an operator-deployed worker. */
 export interface DeclaredWorkerResponse {
   podName: string;
-  applicationId: string;
+  groupId: string;
   region: string;
   baseUrl: string;
   source: "STATIC";
   /** False only when `force` was used — the worker did not answer. */
   reachable: boolean;
-  /** Declared workers for this (application, region) after the call. */
+  /** Declared workers for this (group, region) after the call. */
   declared: number;
   /** Derived capacity written — always equal to `declared` in static mode. */
   maxAvailable: number;
 }
 
-export interface ApplicationCapacityRow {
-  applicationId: string;
+export interface ApplicationGroupCapacityRow {
+  groupId: string;
   region: string;
   maxAvailable: number;
   createdAt?: string | null;
@@ -73,7 +74,7 @@ export interface ApplicationCapacityRow {
 
 export interface SpinPodResponse {
   podName: string;
-  applicationId: string;
+  groupId: string;
   region: string;
   baseUrl: string;
   provisioned: number;
@@ -149,27 +150,39 @@ async function request<T>(
   return parsed as T;
 }
 
-const base = (applicationId: string, region: string) =>
-  `/api/v1/applications/${encodeURIComponent(applicationId)}/capacity/${encodeURIComponent(region)}`;
+const base = (groupId: string, region: string) =>
+  `/api/v1/applicationGroups/${encodeURIComponent(groupId)}/capacity/${encodeURIComponent(region)}`;
+
+/** The server's cap-exceeded code; both spellings are accepted. */
+export function isCapacityExceeded(err: unknown): boolean {
+  return err instanceof CapacityApiError
+    && (err.code === "GROUP_CAPACITY_EXCEEDED" || err.code === "APPLICATION_CAPACITY_EXCEEDED");
+}
+
+/** The group a worker is already declared to, from a 409 `POD_BOUND_ELSEWHERE` body. */
+export function boundGroupOf(err: CapacityApiError): string | null {
+  const g = err.extra?.boundGroupId ?? err.extra?.boundApplicationId;
+  return typeof g === "string" ? g : null;
+}
 
 export const capacityApi = {
   /** PUT /capacity/{region} — direct UPDATE of maxAvailable, no sponsor gate. */
-  setMax: (applicationId: string, region: string, maxAvailable: number, signal?: AbortSignal) =>
-    request<ApplicationCapacityRow>("PUT", base(applicationId, region), { maxAvailable }, signal),
+  setMax: (groupId: string, region: string, maxAvailable: number, signal?: AbortSignal) =>
+    request<ApplicationGroupCapacityRow>("PUT", base(groupId, region), { maxAvailable }, signal),
 
-  /** GET /capacity/{region}/pods — full per-(app, region) snapshot. */
-  listPods: (applicationId: string, region: string, signal?: AbortSignal) =>
-    request<CapacitySnapshot>("GET", `${base(applicationId, region)}/pods`, undefined, signal),
+  /** GET /capacity/{region}/pods — full per-(group, region) snapshot. */
+  listPods: (groupId: string, region: string, signal?: AbortSignal) =>
+    request<CapacitySnapshot>("GET", `${base(groupId, region)}/pods`, undefined, signal),
 
   /** POST /capacity/{region}/pods — spin one new Ready pod. 409 on cap-exceed. */
-  spinPod: (applicationId: string, region: string, signal?: AbortSignal) =>
-    request<SpinPodResponse>("POST", `${base(applicationId, region)}/pods`, undefined, signal),
+  spinPod: (groupId: string, region: string, signal?: AbortSignal) =>
+    request<SpinPodResponse>("POST", `${base(groupId, region)}/pods`, undefined, signal),
 
   /** POST /capacity/{region}/pods/{name}/restart — recycle in place. */
-  restartPod: (applicationId: string, region: string, podName: string, signal?: AbortSignal) =>
+  restartPod: (groupId: string, region: string, podName: string, signal?: AbortSignal) =>
     request<{ podName: string; restarted: boolean }>(
       "POST",
-      `${base(applicationId, region)}/pods/${encodeURIComponent(podName)}/restart`,
+      `${base(groupId, region)}/pods/${encodeURIComponent(podName)}/restart`,
       undefined,
       signal,
     ),
@@ -180,10 +193,10 @@ export const capacityApi = {
    * STATIC mode it undeclares (registry row removed, the operator's worker
    * left running) — `containerStopped` in the response says which happened.
    */
-  drainPod: (applicationId: string, region: string, podName: string, signal?: AbortSignal) =>
+  drainPod: (groupId: string, region: string, podName: string, signal?: AbortSignal) =>
     request<{ podName: string; drained: boolean; containerStopped?: boolean }>(
       "DELETE",
-      `${base(applicationId, region)}/pods/${encodeURIComponent(podName)}`,
+      `${base(groupId, region)}/pods/${encodeURIComponent(podName)}`,
       undefined,
       signal,
     ),
@@ -198,7 +211,7 @@ export const capacityApi = {
    * WORKER_UNREACHABLE so a typo fails here rather than at the next run.
    */
   declareWorker: (
-    applicationId: string,
+    groupId: string,
     region: string,
     podName: string,
     baseUrl: string,
@@ -207,21 +220,21 @@ export const capacityApi = {
   ) =>
     request<DeclaredWorkerResponse>(
       "PUT",
-      `${base(applicationId, region)}/pods/${encodeURIComponent(podName)}${force ? "?force=true" : ""}`,
+      `${base(groupId, region)}/pods/${encodeURIComponent(podName)}${force ? "?force=true" : ""}`,
       { baseUrl },
       signal,
     ),
 
-  /** PUT /capacity/{region} with max=0 — add a region to the app (upsert). */
-  addRegion: (applicationId: string, region: string, signal?: AbortSignal) =>
-    request<ApplicationCapacityRow>("PUT", base(applicationId, region), { maxAvailable: 0 }, signal),
+  /** PUT /capacity/{region} with max=0 — add a region to the group (upsert). */
+  addRegion: (groupId: string, region: string, signal?: AbortSignal) =>
+    request<ApplicationGroupCapacityRow>("PUT", base(groupId, region), { maxAvailable: 0 }, signal),
 
   /** DELETE /capacity/{region} — remove a region. 409 REGION_NOT_EMPTY if workers exist. */
-  removeRegion: (applicationId: string, region: string, signal?: AbortSignal) =>
-    request<void>("DELETE", base(applicationId, region), undefined, signal),
+  removeRegion: (groupId: string, region: string, signal?: AbortSignal) =>
+    request<void>("DELETE", base(groupId, region), undefined, signal),
 
   /**
-   * POST /api/v1/admin/reconcilePods — registry-wide reconcile (NOT per-app).
+   * POST /api/v1/admin/reconcilePods — registry-wide reconcile (NOT per-group).
    * Deletes registry rows whose container is gone (the usual fix for a worker
    * stuck after its container died), adopts managed containers missing a row,
    * and starts ones found stopped. Idempotent + safe — a healthy, heart-beating

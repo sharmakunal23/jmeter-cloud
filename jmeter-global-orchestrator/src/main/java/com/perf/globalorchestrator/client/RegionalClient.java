@@ -58,7 +58,7 @@ public class RegionalClient {
     public record PodState(boolean exists, boolean running, boolean ready, boolean dead, String reason) {}
 
     /** One row of {@code GET /api/v1/workers} — a worker Pod as the kubelet sees it. */
-    public record WorkerLiveness(String podName, String applicationId, String phase, boolean ready, boolean dead,
+    public record WorkerLiveness(String podName, String groupId, String phase, boolean ready, boolean dead,
                                  String reason, Integer exitCode, int restarts, String message) {}
 
     public List<WorkerLiveness> listWorkers(String regionalUrl) {
@@ -66,7 +66,7 @@ public class RegionalClient {
         List<WorkerLiveness> out = new ArrayList<>();
         for (JsonNode w : n) {
             JsonNode exit = w.get("exitCode");
-            out.add(new WorkerLiveness(text(w, "podName"), text(w, "applicationId"), text(w, "phase"),
+            out.add(new WorkerLiveness(text(w, "podName"), text(w, "groupId"), text(w, "phase"),
                     w.path("ready").asBoolean(false), w.path("dead").asBoolean(false), text(w, "reason"),
                     exit == null || exit.isNull() ? null : exit.asInt(), w.path("restarts").asInt(0), text(w, "message")));
         }
@@ -116,8 +116,7 @@ public class RegionalClient {
         try {
             body = mapper.writeValueAsString(Map.of(
                     "podName", spec.podName(),
-                    "applicationId", spec.applicationId(),
-                    "applicationName", spec.applicationName(),
+                    "groupId", spec.groupId(),
                     "region", spec.region()));
         } catch (IOException e) {
             throw new IllegalArgumentException("unserialisable PodSpec", e);
@@ -148,13 +147,13 @@ public class RegionalClient {
         send(regionalUrl, "POST", "/api/v1/pods/" + podName + "/restart", null);
     }
 
-    public List<ProvisionedPod> listPods(String regionalUrl, String applicationId, String region) {
-        String query = "?applicationId=" + URLEncoder.encode(applicationId, StandardCharsets.UTF_8)
+    public List<ProvisionedPod> listPods(String regionalUrl, String groupId, String region) {
+        String query = "?groupId=" + URLEncoder.encode(groupId, StandardCharsets.UTF_8)
                 + (region == null ? "" : "&region=" + URLEncoder.encode(region, StandardCharsets.UTF_8));
         JsonNode n = json(send(regionalUrl, "GET", "/api/v1/pods" + query, null));
         List<ProvisionedPod> out = new ArrayList<>();
         for (JsonNode p : n) {
-            out.add(new ProvisionedPod(text(p, "podName"), text(p, "applicationId"), text(p, "region"),
+            out.add(new ProvisionedPod(text(p, "podName"), text(p, "groupId"), text(p, "region"),
                     text(p, "status"), instant(p, "startedAt"), text(p, "imageDigest")));
         }
         return out;

@@ -535,13 +535,13 @@ public class RunController {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
     }
 
-    @ExceptionHandler(com.perf.globalorchestrator.service.RunService.ApplicationCapacityExceededException.class)
-    ResponseEntity<Map<String, Object>> handleAppCapacity(
-            com.perf.globalorchestrator.service.RunService.ApplicationCapacityExceededException e) {
+    @ExceptionHandler(com.perf.globalorchestrator.service.RunService.GroupCapacityExceededException.class)
+    ResponseEntity<Map<String, Object>> handleGroupCapacity(
+            com.perf.globalorchestrator.service.RunService.GroupCapacityExceededException e) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("code",        "APPLICATION_CAPACITY_EXCEEDED");
         body.put("message",     e.getMessage());
-        body.put("application", e.application());
+        body.put("group",       e.group());
         body.put("region",      e.region());
         body.put("max",         e.max());
         body.put("active",      e.active());

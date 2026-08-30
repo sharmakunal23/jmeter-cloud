@@ -30,7 +30,7 @@ import java.time.Duration;
  *   <li>{@link #CACHE_RUN_TIMESERIES} / {@link #CACHE_RUN_ROLLUP} / {@link #CACHE_RUN_SUMMARY} — 1 h.
  *       Terminal-run metrics are immutable, so this bounds turnover (a later
  *       purge removing the rows), not memory.</li>
- *   <li>{@link #CACHE_APPLICATION_CAPACITY} — 10 m, but <b>evicted on every
+ *   <li>{@link #CACHE_GROUP_CAPACITY} — 10 m, but <b>evicted on every
  *       write</b>; the TTL is only a backstop for a write path someone forgot
  *       to annotate. The application <i>registry</i> is deliberately not cached
  *       at all — {@code ApplicationHealthPoller} rewrites it every 30 s.</li>
@@ -55,7 +55,7 @@ public class CacheConfig {
     /** Run row + fleet members for a TERMINAL run (frozen; C-2). */
     public static final String CACHE_RUN_METADATA = "runMetadata";
     /** Per-(app, region) capacity grid (orchestrator-owned writes → evicted on update). */
-    public static final String CACHE_APPLICATION_CAPACITY = "applicationCapacity";
+    public static final String CACHE_GROUP_CAPACITY = "groupCapacity";
     /** Per-(run, worker, stream, tail) log tail for a TERMINAL member (frozen; C-5). */
     public static final String CACHE_MEMBER_LOGS = "memberLogs";
 
@@ -98,7 +98,7 @@ public class CacheConfig {
                 .withCacheConfiguration(CACHE_RUN_ROLLUP, base.entryTtl(TERMINAL_RUN_TTL))
                 .withCacheConfiguration(CACHE_RUN_SUMMARY, base.entryTtl(TERMINAL_RUN_TTL))
                 .withCacheConfiguration(CACHE_RUN_METADATA, base.entryTtl(TERMINAL_RUN_TTL))
-                .withCacheConfiguration(CACHE_APPLICATION_CAPACITY, base.entryTtl(CAPACITY_TTL))
+                .withCacheConfiguration(CACHE_GROUP_CAPACITY, base.entryTtl(CAPACITY_TTL))
                 .withCacheConfiguration(CACHE_MEMBER_LOGS, base.entryTtl(MEMBER_LOGS_TTL));
     }
 

@@ -2,10 +2,10 @@
 #
 # The static
 # `orchestrator-1` / `orchestrator-2` services are gone. Local-orchestrator
-# containers are now spun up dynamically per-application by the
+# containers are now spun up dynamically per application group by the
 # global-orchestrator's `PodProvisioner` — operators add workers from the
-# Capacity UI (`/capacity/{appName}`) and they appear in `docker ps` as
-# `{appName}-{region}-worker-{n}`. The image
+# Capacity UI (`/capacity/{groupId}`) and they appear in `docker ps` as
+# `{groupId}-{region}-worker-{n}`. The image
 # (`jmeter-local-orchestrator:dev`) still builds from this directory and
 # is consumed by the provisioner; this fragment exists to express the
 # build target for `docker compose build` / repo-wide bring-up.

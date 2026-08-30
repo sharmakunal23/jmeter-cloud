@@ -39,7 +39,7 @@ public class PodRegistrar {
     private final String podId;
     private final String region;
     private final String podBaseUrl;
-    private final String applicationId;
+    private final String groupId;
 
     public PodRegistrar(
             @Value("${GLOBAL_ORCHESTRATOR_URL:}")    String globalUrl,
@@ -51,11 +51,11 @@ public class PodRegistrar {
             // service name differs from the pod name.
             @Value("${POD_ID:#{null}}")              String podIdOverride,
             @Value("${POD_BASE_URL:#{null}}")        String podBaseUrlOverride,
-            // Phase 1 capacity rework: set by the global-orchestrator's
-            // PodProvisioner when spinning up a per-app worker. Optional
-            // during the Phase 1 → Phase 6 migration window so legacy
-            // static pods (no APPLICATION_ID in compose env) keep registering.
-            @Value("${APPLICATION_ID:#{null}}")      String applicationId) {
+            // The application group whose pool this worker joins — stamped by
+            // the regional's PodProvisioner (GROUP-CAPACITY, 2026-08-31; was
+            // APPLICATION_ID). Optional: operator-declared static workers get
+            // their group from the declare call and register without it.
+            @Value("${GROUP_ID:#{null}}")            String groupId) {
         this.http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
                 .version(HttpClient.Version.HTTP_1_1)
@@ -68,7 +68,7 @@ public class PodRegistrar {
         this.podBaseUrl = podBaseUrlOverride != null && !podBaseUrlOverride.isBlank()
                 ? podBaseUrlOverride
                 : "http://" + this.podId + ":" + httpPort;
-        this.applicationId = applicationId != null && !applicationId.isBlank() ? applicationId : null;
+        this.groupId = groupId != null && !groupId.isBlank() ? groupId : null;
     }
 
     @PostConstruct
@@ -106,8 +106,8 @@ public class PodRegistrar {
         body.append("{\"podId\":\"").append(podId).append("\",")
             .append("\"region\":\"").append(region).append("\",")
             .append("\"baseUrl\":\"").append(podBaseUrl).append("\"");
-        if (applicationId != null) {
-            body.append(",\"applicationId\":\"").append(applicationId).append("\"");
+        if (groupId != null) {
+            body.append(",\"groupId\":\"").append(groupId).append("\"");
         }
         body.append("}");
         try {
@@ -117,8 +117,8 @@ public class PodRegistrar {
                         globalUrl, resp.statusCode(), resp.body());
                 return;
             }
-            LOG.info("Registered with global-orchestrator at {} as podId={} baseUrl={} applicationId={}",
-                    globalUrl, podId, podBaseUrl, applicationId);
+            LOG.info("Registered with global-orchestrator at {} as podId={} baseUrl={} groupId={}",
+                    globalUrl, podId, podBaseUrl, groupId);
         } catch (Exception e) {
             LOG.warn("registerPod to {} failed: {}", globalUrl, e.toString());
         }

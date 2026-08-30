@@ -5,7 +5,8 @@ import com.perf.globalorchestrator.client.DocumentServiceClient.TemplateUnavaila
 import com.perf.globalorchestrator.client.TemplateBody;
 import com.perf.globalorchestrator.domain.Actor;
 import com.perf.globalorchestrator.domain.Application;
-import com.perf.globalorchestrator.domain.ApplicationCapacity;
+import com.perf.globalorchestrator.domain.ApplicationGroup;
+import com.perf.globalorchestrator.domain.GroupCapacity;
 import com.perf.globalorchestrator.domain.CronJob;
 import com.perf.globalorchestrator.domain.CronJobFire;
 import com.perf.globalorchestrator.domain.CronJobFireOutcome;
@@ -22,7 +23,8 @@ import com.perf.globalorchestrator.provision.PodSpinService;
 import com.perf.globalorchestrator.provision.ProvisioningMode;
 import com.perf.globalorchestrator.provision.ProvisioningProperties;
 import com.perf.globalorchestrator.provision.RecycleEvaluator.RecycleReason;
-import com.perf.globalorchestrator.repo.ApplicationCapacityRepository;
+import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
+import com.perf.globalorchestrator.repo.GroupCapacityRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.CronJobFireHistoryRepository;
 import com.perf.globalorchestrator.repo.CronJobRepository;
@@ -71,7 +73,8 @@ public class CronFireService {
     private final RunRepository runs;
     // Drain/provision dependencies.
     private final ApplicationRepository applications;
-    private final ApplicationCapacityRepository capacities;
+    private final GroupCapacityRepository capacities;
+    private final ApplicationGroupRepository groups;
     private final PodRepository pods;
     /**
      * Absent under {@code PROVISIONING_MODE=STATIC}
@@ -95,7 +98,8 @@ public class CronFireService {
                            RunService runService,
                            RunRepository runs,
                            ApplicationRepository applications,
-                           ApplicationCapacityRepository capacities,
+                           GroupCapacityRepository capacities,
+                           ApplicationGroupRepository groups,
                            PodRepository pods,
                            ObjectProvider<PodRecycler> recycler,
                            PodSpinService spinService,
@@ -112,6 +116,7 @@ public class CronFireService {
         this.runs = runs;
         this.applications = applications;
         this.capacities = capacities;
+        this.groups = groups;
         this.pods = pods;
         this.recycler = recycler;
         this.spinService = spinService;
@@ -272,7 +277,7 @@ public class CronFireService {
             outcome = CronJobFireOutcome.FAILED;
             error = e.getMessage();
         } catch (RunService.InsufficientCapacityException
-                 | RunService.ApplicationCapacityExceededException e) {
+                 | RunService.GroupCapacityExceededException e) {
             // No free workers right now — operator action, not a defect.
             outcome = CronJobFireOutcome.SKIPPED;
             error = e.getMessage();
@@ -289,8 +294,8 @@ public class CronFireService {
     }
 
     /**
-     * Drain every IDLE worker for (app, region) without
-     * replacement, via {@link PodRecycler#drainOne}. SKIPs when the app is
+     * Drain every IDLE worker of the app's group in the region without
+     * replacement, via {@link PodRecycler#drainOne}. SKIPs when the group is
      * {@code alwaysOn} (production-like protection). IN_USE workers are left
      * alone (the recycler's existing IDLE-only race guard). The fire is a
      * no-op success when nothing is idle — reported as LAUNCHED with a
@@ -311,19 +316,24 @@ public class CronFireService {
             return record(job, firedAt, null, CronJobFireOutcome.FAILED,
                     "application not registered: " + job.applicationName());
         }
-        if (app.alwaysOn()) {
+        ApplicationGroup group = groups.findById(app.metricsGroupId()).orElse(null);
+        if (group == null) {
+            return record(job, firedAt, null, CronJobFireOutcome.FAILED,
+                    "group not registered: " + app.metricsGroupId());
+        }
+        if (group.alwaysOn()) {
             return record(job, firedAt, null, CronJobFireOutcome.SKIPPED,
-                    "application '" + app.name() + "' is alwaysOn — drain suppressed");
+                    "group '" + group.groupId() + "' is alwaysOn — drain suppressed");
         }
         String region = job.region();
-        List<Pod> snapshot = pods.findByApplicationAndRegion(app.applicationId(), region);
+        List<Pod> snapshot = pods.findByGroupAndRegion(group.groupId(), region);
         int idle = 0;
         int drained = 0;
         for (Pod p : snapshot) {
             if (p.state() != PodState.IDLE) continue;
             idle++;
             try {
-                if (recycler.getObject().drainOne(p, app, RecycleReason.DRAIN_AFTER_RUN)) drained++;
+                if (recycler.getObject().drainOne(p, group, RecycleReason.DRAIN_AFTER_RUN)) drained++;
             } catch (RuntimeException e) {
                 // Per-pod failure shouldn't abort the batch.
                 LOG.warn("DRAIN_REGION {} ({}): drain of pod {} failed",
@@ -335,8 +345,8 @@ public class CronFireService {
     }
 
     /**
-     * Spin workers in (app, region) up to
-     * {@code applicationCapacity.maxAvailable}. SKIPs when the region has no
+     * Spin workers in the app's group's pool in the region up to
+     * {@code groupCapacity.maxAvailable}. SKIPs when the region has no
      * capacity row (the operator must configure a cap before scheduling
      * provision). A per-spin failure logs and breaks early so we don't hammer
      * a broken provisioner — the next window will retry the remaining gap.
@@ -353,19 +363,20 @@ public class CronFireService {
                     "application not registered: " + job.applicationName());
         }
         String region = job.region();
-        Optional<ApplicationCapacity> cap = capacities.find(app.applicationId(), region);
+        String groupId = app.metricsGroupId();
+        Optional<GroupCapacity> cap = capacities.find(groupId, region);
         if (cap.isEmpty()) {
             return record(job, firedAt, null, CronJobFireOutcome.SKIPPED,
-                    "no capacity configured for application '" + app.name()
+                    "no capacity configured for group '" + groupId
                             + "' in region '" + region + "'");
         }
         int max = cap.get().maxAvailable();
-        int current = pods.countByApplicationAndRegion(app.applicationId(), region);
+        int current = pods.countByGroupAndRegion(groupId, region);
         int gap = Math.max(0, max - current);
         int spun = 0;
         for (int i = 0; i < gap; i++) {
             try {
-                spinService.spin(app.applicationId(), app.name(), region);
+                spinService.spin(groupId, region);
                 spun++;
             } catch (RuntimeException e) {
                 LOG.warn("PROVISION_REGION {} ({}): spin {}/{} failed; aborting batch",

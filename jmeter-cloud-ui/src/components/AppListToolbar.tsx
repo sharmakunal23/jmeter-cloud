@@ -20,11 +20,14 @@ export interface AppListToolbarProps {
   /** Total count (pre search). Used to render "X of Y applications". */
   total: number;
   loading?: boolean;
+  /** What the list holds, singular — "application" (default) or "group"; drives the placeholder and the count. */
+  noun?: "application" | "group";
 }
 
 export function AppListToolbar({
-  search, onSearchChange, count, total, loading = false,
+  search, onSearchChange, count, total, loading = false, noun = "application",
 }: AppListToolbarProps) {
+  const placeholder = noun === "group" ? "Filter by group name or id…" : "Filter by application name…";
   const searchRef = useRef<HTMLInputElement | null>(null);
 
   // Page-level rule #11 — '/' focuses search, skipped while typing.
@@ -47,15 +50,15 @@ export function AppListToolbar({
       <input
         ref={searchRef}
         type="search"
-        placeholder="Filter by application name…"
+        placeholder={placeholder}
         value={search}
         onChange={(e) => onSearchChange(e.target.value)}
         className="appListToolbar__search"
-        aria-label="Filter applications by name"
+        aria-label={noun === "group" ? "Filter groups by name or id" : "Filter applications by name"}
         disabled={loading}
       />
       <small className="ink-soft appListToolbar__count">
-        {loading ? "—" : `${count} of ${total} application${total === 1 ? "" : "s"}`}
+        {loading ? "—" : `${count} of ${total} ${noun}${total === 1 ? "" : "s"}`}
       </small>
     </div>
   );

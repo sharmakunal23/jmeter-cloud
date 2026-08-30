@@ -35,9 +35,9 @@ public class PodRepository {
      * (post-restart) gets its identity refreshed
      * (state ← IDLE, baseUrl ← whatever it sends, lastHeartbeat ← now).
      *
-     * <p>{@code applicationId} (Phase 1 capacity rework) may be {@code null}
-     * during the migration window — legacy static pods register without it.
-     * On re-register, NVL preserves a previously-set applicationId
+     * <p>{@code groupId} is the pool the worker belongs to (GROUP-CAPACITY);
+     * the column is NOT NULL, so the caller has already refused a blank one.
+     * On re-register, NVL preserves a previously-set groupId
      * so a pod that goes through a transient identity wobble doesn't lose
      * its app binding.
      *
@@ -53,7 +53,7 @@ public class PodRepository {
      * declared worker that also self-registers stays declared — declaring
      * and self-registering converge on one row instead of fighting.
      */
-    public void register(String podId, String region, String baseUrl, String applicationId) {
+    public void register(String podId, String region, String baseUrl, String groupId) {
         // Preserve DRAINING_FOR_RECYCLE through
         // re-register. A pod that's mid-recycle is still alive enough to
         // re-register (heartbeats keep firing until the container is
@@ -61,18 +61,18 @@ public class PodRepository {
         // claim could grab a pod the recycler is about to kill.
         jdbc.update(
                 "MERGE INTO \"globalOrchestrator\".\"pod\" t "
-                + "USING (SELECT ? AS \"podId\", ? AS \"region\", ? AS \"baseUrl\", ? AS \"applicationId\" FROM dual) s "
+                + "USING (SELECT ? AS \"podId\", ? AS \"region\", ? AS \"baseUrl\", ? AS \"groupId\" FROM dual) s "
                 + "ON (t.\"podId\" = s.\"podId\") "
                 + "WHEN MATCHED THEN UPDATE SET "
                 + "  t.\"region\"=CASE WHEN t.\"source\"='STATIC' THEN t.\"region\" ELSE s.\"region\" END, "
                 + "  t.\"baseUrl\"=CASE WHEN t.\"source\"='STATIC' THEN t.\"baseUrl\" ELSE s.\"baseUrl\" END, "
                 + "  t.\"state\"=CASE WHEN t.\"state\"='DRAINING_FOR_RECYCLE' THEN 'DRAINING_FOR_RECYCLE' ELSE 'IDLE' END, "
                 + "  t.\"lastHeartbeat\"=SYSTIMESTAMP, "
-                + "  t.\"applicationId\"=NVL(s.\"applicationId\", t.\"applicationId\") "
+                + "  t.\"groupId\"=NVL(s.\"groupId\", t.\"groupId\") "
                 + "WHEN NOT MATCHED THEN INSERT "
-                + "(\"podId\",\"region\",\"baseUrl\",\"state\",\"lastHeartbeat\",\"applicationId\") "
-                + "VALUES (s.\"podId\", s.\"region\", s.\"baseUrl\", 'IDLE', SYSTIMESTAMP, s.\"applicationId\")",
-                podId, region, baseUrl, OracleBind.typed(Types.VARCHAR, applicationId));
+                + "(\"podId\",\"region\",\"baseUrl\",\"state\",\"lastHeartbeat\",\"groupId\") "
+                + "VALUES (s.\"podId\", s.\"region\", s.\"baseUrl\", 'IDLE', SYSTIMESTAMP, s.\"groupId\")",
+                podId, region, baseUrl, OracleBind.typed(Types.VARCHAR, groupId));
     }
 
     /**
@@ -92,18 +92,18 @@ public class PodRepository {
      * freshly declared worker is claimable immediately rather than being
      * swept LOST before the first probe tick.
      */
-    public void declareStatic(String podId, String region, String baseUrl, String applicationId) {
+    public void declareStatic(String podId, String region, String baseUrl, String groupId) {
         jdbc.update(
                 "MERGE INTO \"globalOrchestrator\".\"pod\" t "
-                + "USING (SELECT ? AS \"podId\", ? AS \"region\", ? AS \"baseUrl\", ? AS \"applicationId\" FROM dual) s "
+                + "USING (SELECT ? AS \"podId\", ? AS \"region\", ? AS \"baseUrl\", ? AS \"groupId\" FROM dual) s "
                 + "ON (t.\"podId\" = s.\"podId\") "
                 + "WHEN MATCHED THEN UPDATE SET "
                 + "  t.\"region\"=s.\"region\", t.\"baseUrl\"=s.\"baseUrl\", "
-                + "  t.\"applicationId\"=s.\"applicationId\", t.\"source\"='STATIC' "
+                + "  t.\"groupId\"=s.\"groupId\", t.\"source\"='STATIC' "
                 + "WHEN NOT MATCHED THEN INSERT "
-                + "(\"podId\",\"region\",\"baseUrl\",\"state\",\"lastHeartbeat\",\"applicationId\",\"source\") "
-                + "VALUES (s.\"podId\", s.\"region\", s.\"baseUrl\", 'IDLE', SYSTIMESTAMP, s.\"applicationId\", 'STATIC')",
-                podId, region, baseUrl, OracleBind.typed(Types.VARCHAR, applicationId));
+                + "(\"podId\",\"region\",\"baseUrl\",\"state\",\"lastHeartbeat\",\"groupId\",\"source\") "
+                + "VALUES (s.\"podId\", s.\"region\", s.\"baseUrl\", 'IDLE', SYSTIMESTAMP, s.\"groupId\", 'STATIC')",
+                podId, region, baseUrl, OracleBind.typed(Types.VARCHAR, groupId));
     }
 
     /**
@@ -115,7 +115,7 @@ public class PodRepository {
     public List<Pod> findBySource(PodSource source) {
         return jdbc.query(
                 "SELECT \"podId\", \"region\", \"baseUrl\", \"state\", "
-                + "\"lastHeartbeat\", \"registeredAt\", \"applicationId\", "
+                + "\"lastHeartbeat\", \"registeredAt\", \"groupId\", "
                 + "\"runsServed\", \"imageDigest\", \"provisionedAt\", \"source\" "
                 + "FROM \"globalOrchestrator\".\"pod\" WHERE \"source\" = ? "
                 + "ORDER BY \"podId\"",
@@ -134,15 +134,15 @@ public class PodRepository {
      * once the kubelet reports it ready, so a run can never be fanned out to a
      * worker whose HTTP is not up yet.
      */
-    public void registerStarting(String podId, String region, String baseUrl, String applicationId) {
+    public void registerStarting(String podId, String region, String baseUrl, String groupId) {
         // A plain INSERT on purpose: the primary key is what makes concurrent
         // spins (parallel provisioning, two operators) get distinct names —
         // a loser sees DuplicateKeyException and allocates again.
         jdbc.update(
                 "INSERT INTO \"globalOrchestrator\".\"pod\" "
-                + "(\"podId\",\"region\",\"baseUrl\",\"state\",\"lastHeartbeat\",\"applicationId\") "
+                + "(\"podId\",\"region\",\"baseUrl\",\"state\",\"lastHeartbeat\",\"groupId\") "
                 + "VALUES (?,?,?,'LOST', SYSTIMESTAMP, ?)",
-                podId, region, baseUrl, applicationId);
+                podId, region, baseUrl, groupId);
     }
 
     /** Marks one pod LOST; returns 1 only on the transition, so callers act on it exactly once. */
@@ -218,26 +218,26 @@ public class PodRepository {
 
     /**
      * Per-application + per-region claim: IDLE pods bound to
-     * {@code applicationId} in {@code region}, skipping any already held by a
+     * {@code groupId} in {@code region}, skipping any already held by a
      * non-terminal {@code runFleetMember}. Same lock semantics as
      * {@link #claimIdle(int)} — concurrent same-app launches split the
      * available pods rather than double-claiming.
      *
      * <p>The application-scoped capacity ceiling
-     * ({@code applicationCapacity.maxAvailable}) is enforced upstream in
+     * ({@code groupCapacity.maxAvailable}) is enforced upstream in
      * {@code RunService} BEFORE this runs. Returning fewer rows than
      * {@code limit} means the cap-check passed but the ready-pod count was
      * short — the operator needs to spin more pods (or, if a parallel run
      * grabbed them in the lock window, retry).
      */
-    public List<Pod> claimIdleByRegionAndApp(String region, String applicationId, int limit) {
-        return claim(region, applicationId, limit);
+    public List<Pod> claimIdleByGroup(String region, String groupId, int limit) {
+        return claim(region, groupId, limit);
     }
 
-    private List<Pod> claim(String region, String applicationId, int limit) {
+    private List<Pod> claim(String region, String groupId, int limit) {
         return OracleBind.refCursor(jdbc,
                 "BEGIN \"globalOrchestrator\".\"claims\".\"claimIdlePods\"(?, ?, ?, ?); END;",
-                cs -> { cs.setString(1, region); cs.setString(2, applicationId); cs.setInt(3, limit); },
+                cs -> { cs.setString(1, region); cs.setString(2, groupId); cs.setInt(3, limit); },
                 4, ROW_MAPPER);
     }
 
@@ -282,35 +282,35 @@ public class PodRepository {
 
     /**
      * Phase 2 of the capacity rework: returns the {@code podId}s of every
-     * pod row currently bound to {@code (applicationId, region)}. Used by
+     * pod row currently bound to {@code (groupId, region)}. Used by
      * {@link com.perf.globalorchestrator.provision.PodNameAllocator} to
      * pick the lowest-free integer suffix when allocating a new pod name.
      *
      * <p>Empty list when the app has no pods in this region yet.
      */
-    public List<String> findPodIdsByApplicationAndRegion(String applicationId, String region) {
+    public List<String> findPodIdsByGroupAndRegion(String groupId, String region) {
         return jdbc.queryForList(
                 "SELECT \"podId\" FROM \"globalOrchestrator\".\"pod\" "
-                + "WHERE \"applicationId\" = ? AND \"region\" = ? "
+                + "WHERE \"groupId\" = ? AND \"region\" = ? "
                 + "ORDER BY \"podId\"",
-                String.class, applicationId, region);
+                String.class, groupId, region);
     }
 
     /**
-     * Phase 2: returns every pod row bound to {@code (applicationId, region)}
+     * Phase 2: returns every pod row bound to {@code (groupId, region)}
      * — full record, not just the ID. Used by {@code PodReconciler} to
      * cross-check registry rows against actual containers seen by
      * {@link com.perf.globalorchestrator.provision.PodProvisioner}.
      */
-    public List<Pod> findByApplicationAndRegion(String applicationId, String region) {
+    public List<Pod> findByGroupAndRegion(String groupId, String region) {
         return jdbc.query(
                 "SELECT \"podId\", \"region\", \"baseUrl\", \"state\", "
-                + "       \"lastHeartbeat\", \"registeredAt\", \"applicationId\", "
+                + "       \"lastHeartbeat\", \"registeredAt\", \"groupId\", "
                 + "       \"runsServed\", \"imageDigest\", \"provisionedAt\", \"source\" "
                 + "FROM \"globalOrchestrator\".\"pod\" "
-                + "WHERE \"applicationId\" = ? AND \"region\" = ? "
+                + "WHERE \"groupId\" = ? AND \"region\" = ? "
                 + "ORDER BY \"podId\"",
-                ROW_MAPPER, applicationId, region);
+                ROW_MAPPER, groupId, region);
     }
 
     /**
@@ -326,7 +326,7 @@ public class PodRepository {
         }
         List<Pod> rows = jdbc.query(
                 "SELECT \"podId\", \"region\", \"baseUrl\", \"state\", "
-                + "\"lastHeartbeat\", \"registeredAt\", \"applicationId\", "
+                + "\"lastHeartbeat\", \"registeredAt\", \"groupId\", "
                 + "\"runsServed\", \"imageDigest\", \"provisionedAt\", \"source\" "
                 + "FROM \"globalOrchestrator\".\"pod\" WHERE \"podId\" = ?",
                 ROW_MAPPER, podId);
@@ -334,15 +334,15 @@ public class PodRepository {
     }
 
     /**
-     * Phase 2: counts every pod row bound to {@code (applicationId, region)}.
+     * Phase 2: counts every pod row bound to {@code (groupId, region)}.
      * Used by capacity-enforcement checks when spinning up a new pod —
-     * count(rows) + 1 must be ≤ {@code applicationCapacity.maxAvailable}.
+     * count(rows) + 1 must be ≤ {@code groupCapacity.maxAvailable}.
      */
-    public int countByApplicationAndRegion(String applicationId, String region) {
+    public int countByGroupAndRegion(String groupId, String region) {
         Integer n = jdbc.queryForObject(
                 "SELECT count(*) FROM \"globalOrchestrator\".\"pod\" "
-                + "WHERE \"applicationId\" = ? AND \"region\" = ?",
-                Integer.class, applicationId, region);
+                + "WHERE \"groupId\" = ? AND \"region\" = ?",
+                Integer.class, groupId, region);
         return n == null ? 0 : n;
     }
 
@@ -360,8 +360,8 @@ public class PodRepository {
 
     /**
      * HARD-DELETE / purge Phase 2 — deletes every pod row bound to
-     * {@code applicationId}. Called by the application purge BEFORE the
-     * application row is removed: {@code pod.applicationId} is
+     * {@code groupId}. Called by the application purge BEFORE the
+     * application row is removed: {@code pod.groupId} is
      * a plain foreign key, so the app row can't be dropped while
      * its pods linger. A hidden app has no active runs (the hide guard ensures
      * it), so its pods are idle registry rows; this clears them. Idempotent —
@@ -369,10 +369,10 @@ public class PodRepository {
      * separate concern (the provisioner / operator); this removes the registry
      * rows only.
      */
-    public int deleteByApplicationId(String applicationId) {
+    public int deleteByGroupId(String groupId) {
         return jdbc.update(
-                "DELETE FROM \"globalOrchestrator\".\"pod\" WHERE \"applicationId\" = ?",
-                applicationId);
+                "DELETE FROM \"globalOrchestrator\".\"pod\" WHERE \"groupId\" = ?",
+                groupId);
     }
 
     /**
@@ -450,7 +450,7 @@ public class PodRepository {
     public List<Pod> findAll() {
         return jdbc.query(
                 "SELECT \"podId\", \"region\", \"baseUrl\", \"state\", "
-                + "       \"lastHeartbeat\", \"registeredAt\", \"applicationId\", "
+                + "       \"lastHeartbeat\", \"registeredAt\", \"groupId\", "
                 + "       \"runsServed\", \"imageDigest\", \"provisionedAt\", \"source\" "
                 + "FROM \"globalOrchestrator\".\"pod\" "
                 + "ORDER BY \"lastHeartbeat\" DESC",
@@ -491,7 +491,7 @@ public class PodRepository {
     /**
      * Flips a pod from IDLE → DRAINING_FOR_RECYCLE.
      * Guarded on the current state being IDLE so a concurrent
-     * {@code claimIdleByRegionAndApp} can't race us: if the claim has
+     * {@code claimIdleByGroup} can't race us: if the claim has
      * already locked the row, it observes IDLE and grabs it; our UPDATE
      * then no-ops (zero rowcount). Returns the rowcount so the caller
      * skips the recycle when the pod slipped into an active claim.
@@ -531,7 +531,7 @@ public class PodRepository {
             PodState.valueOf(rs.getString("state")),
             instant(rs, "lastHeartbeat"),
             instant(rs, "registeredAt"),
-            rs.getString("applicationId"),
+            rs.getString("groupId"),
             rs.getLong("runsServed"),
             rs.getString("imageDigest"),
             instant(rs, "provisionedAt"),

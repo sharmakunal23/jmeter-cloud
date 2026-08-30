@@ -16,7 +16,7 @@ import java.util.List;
  */
 public record WorkerState(
         String podName,
-        String applicationId,
+        String groupId,
         String region,
         String phase,
         boolean ready,
@@ -28,8 +28,8 @@ public record WorkerState(
 
     public static WorkerState from(Pod pod) {
         String name = pod.getMetadata().getName();
-        String app = pod.getMetadata().getLabels() == null ? null
-                : pod.getMetadata().getLabels().get(ProvisionerProperties.LABEL_APPLICATION_ID);
+        String group = pod.getMetadata().getLabels() == null ? null
+                : pod.getMetadata().getLabels().get(ProvisionerProperties.LABEL_GROUP_ID);
         String region = pod.getMetadata().getLabels() == null ? null
                 : pod.getMetadata().getLabels().get(ProvisionerProperties.LABEL_REGION);
         String phase = pod.getStatus() == null ? null : pod.getStatus().getPhase();
@@ -77,6 +77,6 @@ public record WorkerState(
             }
         }
         if (dead && reason == null) reason = phase;
-        return new WorkerState(name, app, region, phase, ready, dead, reason, exitCode, restarts, message);
+        return new WorkerState(name, group, region, phase, ready, dead, reason, exitCode, restarts, message);
     }
 }

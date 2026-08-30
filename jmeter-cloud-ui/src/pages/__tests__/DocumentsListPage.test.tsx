@@ -41,7 +41,7 @@ function appA(): Application {
     applicationId: "01APPA",
     name: "alpha",
     sealId: null, description: null, healthEndpoints: [],
-    capacity: [{ region: "us-east", maxAvailable: 1 }],
+    metricsGroupId: "cps",
     createdAt: "2026-05-12T00:00:00Z",
   };
 }
@@ -50,7 +50,7 @@ function appB(): Application {
     applicationId: "01APPB",
     name: "beta",
     sealId: null, description: null, healthEndpoints: [],
-    capacity: [{ region: "us-east", maxAvailable: 1 }],
+    metricsGroupId: "cps",
     createdAt: "2026-05-12T00:00:00Z",
   };
 }

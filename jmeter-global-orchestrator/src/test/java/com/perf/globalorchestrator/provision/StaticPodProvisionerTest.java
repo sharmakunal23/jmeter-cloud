@@ -38,7 +38,7 @@ class StaticPodProvisionerTest {
     @Test
     @DisplayName("createAndStart is refused — and never touches the registry")
     void createAndStartRefused() {
-        PodSpec spec = new PodSpec(POD, "appId", "payments", "na-east");
+        PodSpec spec = new PodSpec(POD, "cps", "na-east");
         assertThatThrownBy(() -> provisioner.createAndStart(spec))
                 .isInstanceOf(ProvisioningDisabledException.class)
                 .hasMessageContaining(POD);
@@ -101,10 +101,10 @@ class StaticPodProvisionerTest {
     @Test
     @DisplayName("listFor with a region delegates to the region-scoped query")
     void listForRegionScoped() {
-        when(pods.findByApplicationAndRegion("appId", "na-east"))
+        when(pods.findByGroupAndRegion("cps", "na-east"))
                 .thenReturn(List.of(pod(PodState.IDLE)));
 
-        List<ProvisionedPod> found = provisioner.listFor("appId", "na-east");
+        List<ProvisionedPod> found = provisioner.listFor("cps", "na-east");
 
         assertThat(found).singleElement().satisfies(p -> {
             assertThat(p.podName()).isEqualTo(POD);
@@ -123,7 +123,7 @@ class StaticPodProvisionerTest {
                         PodState.IDLE, REGISTERED, REGISTERED, "otherApp", 0, null, null,
                         PodSource.STATIC)));
 
-        List<ProvisionedPod> found = provisioner.listFor("appId", null);
+        List<ProvisionedPod> found = provisioner.listFor("cps", null);
 
         assertThat(found).singleElement().satisfies(p -> {
             assertThat(p.podName()).isEqualTo(POD);
@@ -156,6 +156,6 @@ class StaticPodProvisionerTest {
 
     private static Pod pod(PodState state) {
         return new Pod(POD, "na-east", "http://payments-na-east-worker-1:8080",
-                state, REGISTERED, REGISTERED, "appId", 3, null, null, PodSource.STATIC);
+                state, REGISTERED, REGISTERED, "cps", 3, null, null, PodSource.STATIC);
     }
 }

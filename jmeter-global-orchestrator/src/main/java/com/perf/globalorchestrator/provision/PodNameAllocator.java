@@ -8,19 +8,19 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Allocates the next {@code {appName}-{region}-worker-{n}} name for an
- * (applicationId, region), restarting {@code n} at 1 per pair and <b>filling the
- * lowest gap</b> — deleting {@code worker-2} from [1,2,3] means the next
- * allocation is {@code worker-2}, not {@code worker-4}.
+ * Allocates the next {@code {groupId}-{region}-worker-{n}} name for a
+ * (groupId, region) — the pool is the group's — restarting {@code n} at 1 per
+ * pair and <b>filling the lowest gap</b>: deleting {@code worker-2} from [1,2,3]
+ * means the next allocation is {@code worker-2}, not {@code worker-4}. The
+ * group id's {@code _} becomes {@code -} in the name (DNS-1123).
  *
  * <p>Gap-filling rather than {@code MAX(n) + 1} because drains delete pod rows,
  * so MAX+1 would grow the suffix unboundedly across drain/spin cycles instead of
  * keeping names stable and operator-readable.
  *
  * <p>Names become network hostnames, so they must fit DNS-1123's 63 characters.
- * At the documented input limits the worst case is 64 — one over — so the
- * allocator caps {@code appName} plus {@code region} at 50 combined and rejects
- * anything that would overflow.
+ * The allocator caps the group stem plus {@code region} at 50 combined and
+ * rejects anything that would overflow.
  *
  * <p>{@link #nextSlotIndex(String, String, java.util.Collection)} is pure and
  * unit-testable without a database; the bean only wraps it in one repo call.
@@ -38,23 +38,29 @@ public class PodNameAllocator {
     }
 
     /**
-     * Allocates the next free pod name for this (applicationId, applicationName, region).
-     * The returned name is guaranteed not to collide with any existing
-     * {@code pod} row at the time of the call — but the caller is responsible
-     * for the actual INSERT (typically wrapped in a transaction with the
-     * provisioner's create-container call).
+     * Allocates the next free pod name for this (groupId, region). The
+     * returned name is guaranteed not to collide with any existing {@code pod}
+     * row at the time of the call — but the caller is responsible for the
+     * actual INSERT (typically wrapped in a transaction with the provisioner's
+     * create-container call).
      */
-    public String allocate(String applicationId, String applicationName, String region) {
-        validate(applicationName, region);
-        List<String> taken = pods.findPodIdsByApplicationAndRegion(applicationId, region);
-        int n = nextSlotIndex(applicationName, region, taken);
-        String name = format(applicationName, region, n);
+    public String allocate(String groupId, String region) {
+        String stem = nameStem(groupId);
+        validate(stem, region);
+        List<String> taken = pods.findPodIdsByGroupAndRegion(groupId, region);
+        int n = nextSlotIndex(stem, region, taken);
+        String name = format(stem, region, n);
         if (name.length() > MAX_POD_NAME_LENGTH) {
             throw new IllegalArgumentException(
                     "Allocated pod name '" + name + "' exceeds DNS-1123 limit of "
                     + MAX_POD_NAME_LENGTH + " chars (got " + name.length() + ")");
         }
         return name;
+    }
+
+    /** The DNS-1123 stem of a group id: {@code cps_pci} → {@code cps-pci}. */
+    public static String nameStem(String groupId) {
+        return groupId.replace('_', '-');
     }
 
     /**
@@ -93,7 +99,7 @@ public class PodNameAllocator {
 
     private static void validate(String appName, String region) {
         if (appName == null || appName.isBlank()) {
-            throw new IllegalArgumentException("applicationName is required");
+            throw new IllegalArgumentException("groupId is required");
         }
         if (region == null || region.isBlank()) {
             throw new IllegalArgumentException("region is required");
@@ -103,7 +109,7 @@ public class PodNameAllocator {
         // for a 4-digit slot index, which is well past Max=1000 from the capacity column.
         if (appName.length() + region.length() > 51) {
             throw new IllegalArgumentException(
-                    "applicationName + region too long (" + appName.length() + "+"
+                    "group stem + region too long (" + appName.length() + "+"
                     + region.length() + " > 51 chars); pod name would exceed DNS-1123 limit");
         }
     }

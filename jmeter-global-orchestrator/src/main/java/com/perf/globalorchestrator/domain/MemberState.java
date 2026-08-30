@@ -32,7 +32,7 @@ public enum MemberState {
      * per-(app, region) capacity gate (a draining worker still occupies
      * its pod) AND should NOT be re-claimed by another run. See
      * {@code PodRepository.claimIdleByRegionAndApp} active filter +
-     * {@code ApplicationCapacityRepository.countActivePodsForAppRegion}.
+     * {@code GroupCapacityRepository.countActivePodsForGroupRegion}.
      */
     public boolean isActiveForCapacity() {
         return this == PENDING || this == REQUESTED || this == ACCEPTED

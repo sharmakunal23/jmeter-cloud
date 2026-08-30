@@ -94,7 +94,7 @@ describe("RunDetailPage — async launch", () => {
 
 describe("RunDetailPage — Open in Grafana", () => {
   const app = { applicationId: "01J0APP", name: "jmeter-poc", healthEndpoints: [], createdAt: "2026-08-01T00:00:00Z",
-                recyclePolicy: "REUSE", alwaysOn: false, metricsGroupId: "cps", metricsApplication: "CPS-PCI" };
+                metricsGroupId: "cps", metricsApplication: "CPS-PCI" };
   const group = { groupId: "cps", name: "Servicing MQ", createdAt: "2026-08-01T00:00:00Z", hotDays: 7,
                   grafanaLiveUrl: "https://grafana.example.com/d/cpsProductMetrics/servicing-mq?orgId=1" };
 
@@ -121,7 +121,7 @@ describe("RunDetailPage — Open in Grafana", () => {
     expect(screen.queryByRole("link", { name: /open in grafana/i })).toBeNull();
   });
 
-  it("the dashboards are the group's only — a stale per-app URL is ignored; no group leaves the dashboards empty", async () => {
+  it("the dashboards are the group's only — a stale per-app URL is ignored; a group without a URL leaves them empty", async () => {
     api.get.mockResolvedValue(run("RUNNING", null, []));
     api.status.mockResolvedValue({ runId: "01J000RUN", state: "RUNNING", stateReason: null, members: [] });
     appsApi.list.mockResolvedValue([{ ...app, grafanaLiveUrl: "https://grafana.example.com/d/own?orgId=1" }]);
@@ -131,11 +131,12 @@ describe("RunDetailPage — Open in Grafana", () => {
     await waitFor(() => expect(JSON.parse(panel.getAttribute("data-dashboards")!).liveUrl).toBe(group.grafanaLiveUrl));
     unmount();
 
-    appsApi.list.mockResolvedValue([{ ...app, metricsGroupId: null, metricsApplication: null }]);
+    appsApi.list.mockResolvedValue([{ ...app, metricsApplication: null }]);
+    groupsApi.get.mockResolvedValue({ ...group, grafanaLiveUrl: null });
     renderPage();
     const again = await screen.findByTestId("metricsPanel");
     await waitFor(() => expect(appsApi.list).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(JSON.parse(again.getAttribute("data-dashboards")!)).toEqual({ metricsApplication: null }));
+    await waitFor(() => expect(JSON.parse(again.getAttribute("data-dashboards")!)).toEqual({ liveUrl: null, hotDays: 7, metricsApplication: null }));
   });
 });
 

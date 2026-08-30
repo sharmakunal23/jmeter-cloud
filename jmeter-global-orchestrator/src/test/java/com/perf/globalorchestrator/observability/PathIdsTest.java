@@ -23,14 +23,18 @@ class PathIdsTest {
     }
 
     @Test
-    void applicationCapacityPathYieldsAllThree() {
+    void groupCapacityPathYieldsAllThree() {
+        // The capacity routes are the group's (GROUP-CAPACITY).
         Map<String, String> ids = PathIds.extract(
-                "/api/v1/applications/payments/capacity/us-east-1/pods/payments-east-worker-1");
+                "/api/v1/applicationGroups/cps/capacity/us-east-1/pods/cps-us-east-1-worker-1");
 
         assertThat(ids)
-                .containsEntry(PathIds.KEY_APPLICATION_ID, "payments")
+                .containsEntry(PathIds.KEY_GROUP_ID, "cps")
                 .containsEntry(PathIds.KEY_REGION, "us-east-1")
-                .containsEntry(PathIds.KEY_POD_NAME, "payments-east-worker-1");
+                .containsEntry(PathIds.KEY_POD_NAME, "cps-us-east-1-worker-1")
+                .doesNotContainKey(PathIds.KEY_APPLICATION_ID);
+        assertThat(PathIds.extract("/api/v1/applications/payments"))
+                .containsEntry(PathIds.KEY_APPLICATION_ID, "payments");
     }
 
     @Test
@@ -51,7 +55,7 @@ class PathIdsTest {
     void templateLiteralsAreIgnored() {
         // Pasted template strings from docs/tests must not leak into MDC.
         assertThat(PathIds.extract("/api/v1/runs/{runId}")).isEmpty();
-        assertThat(PathIds.extract("/api/v1/applications/{applicationId}/capacity/{region}"))
+        assertThat(PathIds.extract("/api/v1/applicationGroups/{groupId}/capacity/{region}"))
                 .isEmpty();
     }
 

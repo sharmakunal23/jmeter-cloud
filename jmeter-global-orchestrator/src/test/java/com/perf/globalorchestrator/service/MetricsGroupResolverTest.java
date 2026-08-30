@@ -1,7 +1,6 @@
 package com.perf.globalorchestrator.service;
 
 import com.perf.globalorchestrator.domain.Application;
-import com.perf.globalorchestrator.domain.RecyclePolicy;
 import com.perf.globalorchestrator.domain.Run;
 import com.perf.globalorchestrator.domain.RunState;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
@@ -34,8 +33,7 @@ class MetricsGroupResolverTest {
     }
 
     private static Application app(String name, String groupId) {
-        return new Application("id", name, null, null, List.of(), null, Instant.now(), null, null, null,
-                RecyclePolicy.REUSE, null, null, false, groupId, groupId == null ? null : name.toUpperCase());
+        return new Application("id", name, null, null, List.of(), Instant.now(), null, null, null, groupId, groupId == null ? null : name.toUpperCase());
     }
 
     @BeforeEach

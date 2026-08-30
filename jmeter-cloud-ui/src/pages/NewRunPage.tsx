@@ -5,7 +5,8 @@ import { runsApi, GlobalOrchestratorError, type FleetAllocationEntry,
          type RegionShortfall, type StartRunRequest, type WorkerStatus } from "../api/runs";
 import { blobsApi, type BlobMetadata } from "../api/blobs";
 import { regionsApi, type RegionCapacity } from "../api/regions";
-import { applicationsApi, type Application } from "../api/applications";
+import { applicationsApi } from "../api/applications";
+import { applicationGroupsApi } from "../api/applicationGroups";
 // (D-RunLauncher rework — applicationsApi/ApplicationPicker are gone;
 //  the launcher's app comes from the URL via useParams.)
 import { FleetFlowDiagram, workerName } from "../components/FleetFlowDiagram";
@@ -101,10 +102,10 @@ export function NewRunPage() {
   const [progressError, setProgressError] = useState<string | null>(null);
   const [blobs, setBlobs] = useState<BlobsState>({ status: "ok", testPlans: [], dataFiles: [] });
   const [regions, setRegions] = useState<RegionsState>({ status: "loading" });
-  // Per-region maxAvailable for the URL-bound app. Drives the +/-
-  // ceiling so the operator can pick up to the policy cap (not just the
-  // currently-IDLE count). Stays null until the apps list loads.
-  const [appCapacityMap, setAppCapacityMap] = useState<Record<string, number> | null>(null);
+  // Per-region maxAvailable of the URL-bound app's GROUP (the pool it runs
+  // on). Drives the +/- ceiling so the operator can pick up to the policy cap
+  // (not just the currently-IDLE count). Stays null until the group loads.
+  const [groupCapacityMap, setGroupCapacityMap] = useState<Record<string, number> | null>(null);
 
   // Re-load blobs whenever the chosen application changes. Empty app =
   // gate is closed → no blobs fetched.
@@ -218,30 +219,32 @@ export function NewRunPage() {
   useEffect(() => { void refreshRegions(); }, []);
   useInterval(() => { void refreshRegions(); }, 5000);
 
-  // Fetch the URL-bound application's capacity grid once on mount
-  // (and whenever the URL app changes). The cap-aware +/- ceiling reads
-  // maxByRegion from this map; missing app or missing capacity row falls
-  // back to the legacy idlePods-based bound.
+  // Fetch the URL-bound application → its group → the group's capacity grid
+  // once on mount (and whenever the URL app changes). The cap-aware +/-
+  // ceiling reads maxByRegion from this map; a missing app, group or
+  // capacity row falls back to the legacy idlePods-based bound.
   useEffect(() => {
-    if (!application) { setAppCapacityMap(null); return; }
+    if (!application) { setGroupCapacityMap(null); return; }
     const ctl = new AbortController();
-    applicationsApi.list(ctl.signal)
-      .then((apps: Application[]) => {
+    (async () => {
+      try {
+        const apps = await applicationsApi.list(ctl.signal);
         const match = apps.find((a) => a.name === application);
-        if (!match || !match.capacity) { setAppCapacityMap({}); return; }
+        if (!match) { setGroupCapacityMap({}); return; }
+        const group = await applicationGroupsApi.get(match.metricsGroupId, ctl.signal);
         const m: Record<string, number> = {};
-        for (const c of match.capacity) m[c.region] = c.maxAvailable;
-        setAppCapacityMap(m);
-      })
-      .catch((err: unknown) => {
+        for (const c of group.capacity ?? []) m[c.region] = c.maxAvailable;
+        setGroupCapacityMap(m);
+      } catch (err: unknown) {
         if (ctl.signal.aborted) return;
         // Soft-fail: leave the ceiling at the legacy idlePods bound. The
         // launcher form is still usable; the operator just sees the
         // pre-UX1 cap behavior.
         // eslint-disable-next-line no-console
-        console.warn("application capacity fetch failed:", err);
-        setAppCapacityMap({});
-      });
+        console.warn("group capacity fetch failed:", err);
+        setGroupCapacityMap({});
+      }
+    })();
     return () => ctl.abort();
   }, [application]);
 
@@ -264,12 +267,12 @@ export function NewRunPage() {
    */
   function addWorkers(region: string, n: number) {
     if (n < 1) return;
-    // Clamp at the app's per-region maxAvailable (the policy cap),
+    // Clamp at the group's per-region maxAvailable (the policy cap),
     // not the live IDLE-pod count. Picking more than IDLE-now is fine —
     // the shortfall flow handles the gap via spinShortfall. Picking
     // more than maxAvailable is rejected by the backend; clamp here so
     // the UI matches the contract.
-    const ceiling = appCapacityMap?.[region]
+    const ceiling = groupCapacityMap?.[region]
         ?? regionsList.find((r) => r.region === region)?.idlePods
         ?? 0;
     setAllocation((prev) => {
@@ -626,9 +629,9 @@ export function NewRunPage() {
   // replicas. Production builds (`import.meta.env.DEV === false`) keep the
   // real /regions value untouched.
   // The global /regions rollup only returns regions where at
-  // least one pod is registered. For a fresh app with a 4-region
+  // least one pod is registered. For a fresh group with a 4-region
   // capacity grid but no pods yet, three of those regions would be
-  // missing from the launcher entirely. Merge the app's capacity-grid
+  // missing from the launcher entirely. Merge the group's capacity-grid
   // regions in with idlePods=0/totalPods=0 so the operator can still
   // pick workers for them (the shortfall flow handles the spin).
   const regionsList = useMemo(() => {
@@ -636,9 +639,9 @@ export function NewRunPage() {
     // Index existing rollup rows by region for O(1) merge.
     const byRegion = new Map<string, RegionCapacity>();
     for (const r of raw) byRegion.set(r.region, r);
-    // Augment with every region declared in the app's capacity grid.
-    if (appCapacityMap) {
-      for (const region of Object.keys(appCapacityMap)) {
+    // Augment with every region declared in the group's capacity grid.
+    if (groupCapacityMap) {
+      for (const region of Object.keys(groupCapacityMap)) {
         if (!byRegion.has(region)) {
           byRegion.set(region, {
             region,
@@ -656,7 +659,7 @@ export function NewRunPage() {
       idlePods: Math.max(r.idlePods, 20),
       totalPods: Math.max(r.totalPods, 20),
     }));
-  }, [regions, appCapacityMap]);
+  }, [regions, groupCapacityMap]);
 
   // UI-C2.b polish: the redundant chip strip (TOTAL PODS / REGIONS /
   // PLAN / STATUS) collapsed into a single Status badge in the header.
@@ -849,7 +852,7 @@ export function NewRunPage() {
           workerStatuses={workerStatuses}
           onAddWorkers={addWorkers}
           onRemoveWorkers={removeWorkers}
-          maxByRegion={appCapacityMap ?? undefined}
+          maxByRegion={groupCapacityMap ?? undefined}
           shortfall={submit.status === "error" ? submit.shortfall : undefined}
           loading={regions.status === "loading"}
           error={regions.status === "error" ? regions.message : null}
@@ -910,7 +913,7 @@ export function NewRunPage() {
           value={allocation}
           workerStatuses={workerStatuses}
           onWorkerClick={openDrawer}
-          maxByRegion={appCapacityMap ?? undefined}
+          maxByRegion={groupCapacityMap ?? undefined}
           shortfall={submit.status === "error" ? submit.shortfall : undefined}
           loading={regions.status === "loading"}
           error={regions.status === "error" ? regions.message : null}

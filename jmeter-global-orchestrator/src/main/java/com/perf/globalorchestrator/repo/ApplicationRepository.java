@@ -48,17 +48,12 @@ public class ApplicationRepository {
                 rs.getString("sealId"),
                 rs.getString("description"),
                 jsonbList(json, OracleBind.json(rs, "healthEndpoints"), URLS_TYPE, List.of()),
-                null,                                     // capacity hydrated separately
                 instant(rs, "createdAt"),
                 instant(rs, "lastHealthCheckedAt"),
                 statusOrNull(rs.getString("lastHealthStatus")),
                 OracleBind.json(rs, "lastHealthDetails") == null
                         ? null
                         : jsonbList(json, OracleBind.json(rs, "lastHealthDetails"), DETAILS_TYPE, List.of()),
-                RecyclePolicy.valueOf(rs.getString("recyclePolicy")),
-                nullableInt(rs, "maxRunsPerPod"),
-                nullableInt(rs, "podMaxAgeHours"),
-                rs.getBoolean("alwaysOn"),
                 rs.getString("metricsGroupId"),
                 rs.getString("metricsApplication"));
     }
@@ -77,13 +72,11 @@ public class ApplicationRepository {
                 "INSERT INTO \"globalOrchestrator\".\"application\" "
                 + "(\"applicationId\",\"name\",\"sealId\",\"description\","
                 + " \"healthEndpoints\",\"createdAt\","
-                + " \"recyclePolicy\",\"maxRunsPerPod\",\"podMaxAgeHours\","
-                + " \"alwaysOn\",\"metricsGroupId\",\"metricsApplication\") "
-                + "VALUES (?,?,?,?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                + " \"metricsGroupId\",\"metricsApplication\") "
+                + "VALUES (?,?,?,?, ?, ?, ?, ?)",
                 app.applicationId(), app.name(), app.sealId(), app.description(),
                 OracleBind.clob(endpointsJson), OracleBind.ts(app.createdAt()),
-                app.recyclePolicy().name(), app.maxRunsPerPod(), app.podMaxAgeHours(),
-                app.alwaysOn(), app.metricsGroupId(), app.metricsApplication());
+                app.metricsGroupId(), app.metricsApplication());
         return findById(app.applicationId()).orElseThrow();
     }
 
@@ -166,38 +159,16 @@ public class ApplicationRepository {
 
     public Application update(String applicationId, String name, String sealId,
                               String description, List<String> healthEndpoints,
-                              RecyclePolicy recyclePolicy, Integer maxRunsPerPod,
-                              Integer podMaxAgeHours, boolean alwaysOn,
                               String metricsGroupId, String metricsApplication) {
         String endpointsJson = serialise(healthEndpoints == null ? List.of() : healthEndpoints);
-        // RecyclePolicy may be null on the caller
-        // boundary (operator omitted the field on PUT); the controller
-        // applies REUSE in that case before reaching here. Repo treats
-        // null as "no change" defensively so a future internal caller
-        // can update non-recycle metadata without disturbing the policy.
-        int updated;
-        if (recyclePolicy == null) {
-            updated = jdbc.update(
-                    "UPDATE \"globalOrchestrator\".\"application\" "
-                    + "SET \"name\"=?, \"sealId\"=?, \"description\"=?, "
-                    + "    \"healthEndpoints\"=?, \"alwaysOn\"=?, "
-                    + "    \"metricsGroupId\"=?, \"metricsApplication\"=? "
-                    + "WHERE \"applicationId\"=?",
-                    name, sealId, description, OracleBind.clob(endpointsJson), alwaysOn,
-                    metricsGroupId, metricsApplication, applicationId);
-        } else {
-            updated = jdbc.update(
-                    "UPDATE \"globalOrchestrator\".\"application\" "
-                    + "SET \"name\"=?, \"sealId\"=?, \"description\"=?, "
-                    + "    \"healthEndpoints\"=?, "
-                    + "    \"recyclePolicy\"=?, \"maxRunsPerPod\"=?, \"podMaxAgeHours\"=?, "
-                    + "    \"alwaysOn\"=?, "
-                    + "    \"metricsGroupId\"=?, \"metricsApplication\"=? "
-                    + "WHERE \"applicationId\"=?",
-                    name, sealId, description, OracleBind.clob(endpointsJson),
-                    recyclePolicy.name(), maxRunsPerPod, podMaxAgeHours,
-                    alwaysOn, metricsGroupId, metricsApplication, applicationId);
-        }
+        int updated = jdbc.update(
+                "UPDATE \"globalOrchestrator\".\"application\" "
+                + "SET \"name\"=?, \"sealId\"=?, \"description\"=?, "
+                + "    \"healthEndpoints\"=?, "
+                + "    \"metricsGroupId\"=?, \"metricsApplication\"=? "
+                + "WHERE \"applicationId\"=?",
+                name, sealId, description, OracleBind.clob(endpointsJson),
+                metricsGroupId, metricsApplication, applicationId);
         if (updated == 0) {
             throw new EmptyResultDataAccessException("application not found: " + applicationId, 1);
         }

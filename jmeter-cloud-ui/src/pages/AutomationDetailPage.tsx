@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { applicationsApi, type Application } from "../api/applications";
+import { applicationGroupsApi, type ApplicationGroup } from "../api/applicationGroups";
 import { cronJobsApi, CronJobApiError, type CronJobKind, type CronJobSummary } from "../api/automation";
 import { CreateScheduleDialog } from "../components/CreateScheduleDialog";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -43,6 +44,8 @@ export function AutomationDetailPage() {
   const { appName: appNameParam = "" } = useParams<{ appName: string }>();
 
   const [appLookup, setAppLookup] = useState<AppLookup>({ status: "loading" });
+  // The app's group — its capacity grid is the region list for DRAIN / PROVISION schedules.
+  const [group, setGroup] = useState<ApplicationGroup | null>(null);
   const [jobs, setJobs] = useState<CronJobsState>({ status: "loading" });
   const [showCreate, setShowCreate] = useState(false);
   const [editJob, setEditJob] = useState<CronJobSummary | null>(null);
@@ -59,6 +62,11 @@ export function AutomationDetailPage() {
       .then((apps) => {
         const app = apps.find((a) => a.name === appNameParam);
         setAppLookup(app ? { status: "ok", app } : { status: "notFound" });
+        if (app) {
+          applicationGroupsApi.get(app.metricsGroupId, ctl.signal)
+            .then(setGroup)
+            .catch(() => { if (!ctl.signal.aborted) setGroup(null); });
+        }
       })
       .catch((err: unknown) => {
         if (ctl.signal.aborted) return;
@@ -277,7 +285,8 @@ export function AutomationDetailPage() {
       {showCreate && (
         <CreateScheduleDialog
           application={app.name}
-          regions={(app.capacity ?? []).map((c) => c.region)}
+          groupId={app.metricsGroupId}
+          regions={(group?.capacity ?? []).map((c) => c.region)}
           onClose={() => setShowCreate(false)}
           onCreated={(job) => {
             setShowCreate(false);
@@ -290,7 +299,8 @@ export function AutomationDetailPage() {
       {editJob && (
         <CreateScheduleDialog
           application={app.name}
-          regions={(app.capacity ?? []).map((c) => c.region)}
+          groupId={app.metricsGroupId}
+          regions={(group?.capacity ?? []).map((c) => c.region)}
           editing={editJob}
           onClose={() => setEditJob(null)}
           onCreated={(job) => {

@@ -15,7 +15,8 @@ import { BrandMark } from "./BrandMark";
  * <p>STATIC-FLEET Phase 7 — the Capacity tab is hidden when the deployment
  * does not provision its own workers. Capacity is entirely built around
  * spin / restart / drain, none of which apply to an operator-managed fleet;
- * there the equivalent surface is the per-application Data centers section.
+ * there the equivalent surface is the Data centers section on each application
+ * (the group's pool). Capacity itself lists application groups — the pool is the group's.
  * Exactly one of the two is live at a time.
  */
 export function Layout() {

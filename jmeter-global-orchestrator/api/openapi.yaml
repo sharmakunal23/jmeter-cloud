@@ -37,9 +37,11 @@ tags:
     description: Pod registry — self-registration + heartbeat protocol used by every local-orchestrator.
   - name: capacity
     description: |
-      Per-(application, region) pod-budget management.
-      `PUT /api/v1/applications/{id}/capacity/{region}` sets `maxAvailable`;
-      the `/pods` sub-endpoints spin / restart / drain individual containers.
+      Per-(group, region) pod-budget management — the worker pool is the
+      application group's (GROUP-CAPACITY, 2026-08-31): every application in
+      the group draws on it. `PUT /api/v1/applicationGroups/{groupId}/capacity/{region}`
+      sets `maxAvailable`; the `/pods` sub-endpoints spin / restart / drain /
+      declare individual workers.
   - name: platform
     description: |
       Deployment-wide facts: `GET /api/v1/platform/capabilities` (what this
@@ -336,7 +338,7 @@ paths:
         Default page size is 25, newest first.
 
         Rejected actions ARE recorded — e.g. a scale-up that hit the
-        per-(app, region) cap shows
+        per-(group, region) cap shows
         `result: "rejected:APPLICATION_CAPACITY_EXCEEDED"` — so the timeline
         reflects attempts, not just successes.
       parameters:
@@ -368,7 +370,7 @@ paths:
       summary: Add workers to a RUNNING run (mid-test scale-up)
       description: |
         Claims additional IDLE pods from the
-        run's per-(application, region) pod pool and fans out
+        run's group's per-region pool and fans out
         `POST /api/v1/test` to each. The original run's `testPlanBlobId` +
         `dataFilesBlobId` are sourced from the persisted run row, so the
         request body only carries the per-region allocation. Each new
@@ -387,7 +389,7 @@ paths:
         properties on the new workers.
 
         Strict mode (default): per-region shortfall rolls back with 503
-        `INSUFFICIENT_CAPACITY`. Per-(app, region) capacity exceeded
+        `INSUFFICIENT_CAPACITY`. Per-(group, region) capacity exceeded
         rolls back with 409 `APPLICATION_CAPACITY_EXCEEDED`.
 
         Best-effort mode (`?bestEffort=true`): adds whatever was claimed;
@@ -395,7 +397,7 @@ paths:
         zero pods could be claimed across all requested regions.
 
         Spin mode (`?spinShortfall=true`): on a per-region shortfall,
-        provision (spin) the missing pods up to the per-(app, region)
+        provision (spin) the missing pods up to the per-(group, region)
         `maxAvailable` ceiling, wait for them to report healthy, then
         retry the claim — mirrors `POST /api/v1/runs`'s `spinShortfall`.
         Lets the operator add workers up to MAX CAPACITY (not just the
@@ -428,7 +430,7 @@ paths:
           schema: { type: boolean, default: false }
           description: |
             When `true`, a per-region shortfall triggers an on-the-fly
-            spin of the missing pods (subject to the per-(app, region)
+            spin of the missing pods (subject to the per-(group, region)
             `maxAvailable` ceiling) followed by a claim retry — so the
             operator can scale up to max capacity, not just the
             currently-IDLE pods. Exceeding the ceiling → 409
@@ -464,7 +466,7 @@ paths:
             Pre-condition violation — codes:
             `RUN_NOT_SCALABLE` (run not in RUNNING state),
             `RUN_NOT_SCALABLE_NO_APPLICATION` (run has no app binding),
-            `APPLICATION_CAPACITY_EXCEEDED` (per-(app, region) cap hit).
+            `APPLICATION_CAPACITY_EXCEEDED` (per-(group, region) cap hit — the app's group's pool).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -1006,7 +1008,7 @@ paths:
             application/json:
               schema: { type: object, additionalProperties: true }
         "400":
-          description: Missing podId, baseUrl, or applicationId.
+          description: Missing podId, baseUrl, or groupId.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -1135,13 +1137,14 @@ paths:
       summary: Delete an application group
       description: |
         Hard delete, idempotent (an unknown group is 204). Refused while any
-        application — visible or archived — is still in the group: move them
-        to another group or purge them first.
+        application — visible or archived — is still in the group (move them
+        to another group or purge them first), or while the group still owns
+        workers or capacity rows (drain the workers and remove the regions first).
       responses:
         "204":
           description: Deleted (or never existed).
         "409":
-          description: APPLICATION_GROUP_HAS_APPLICATIONS
+          description: APPLICATION_GROUP_HAS_APPLICATIONS or APPLICATION_GROUP_HAS_WORKERS
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -1175,10 +1178,11 @@ paths:
       summary: Register a new application
       description: |
         Registration is a pure DB operation: the application row is
-        inserted and its per-(app, region) capacity rows are auto-seeded
-        at 0 for this deployment's regions — the ones named by
-        `REGIONS` (see `GET /api/v1/platform/capabilities`),
-        or the single starter region `us-east-1` when it declares none. Pod counts are never set
+        inserted in its group (`metricsGroupId` is required). Capacity is the
+        group's — its per-(group, region) rows were seeded at 0 when the group
+        was created, for this deployment's regions (the ones named by
+        `REGIONS`, see `GET /api/v1/platform/capabilities`, or the single
+        starter region `us-east-1` when it declares none). Pod counts are never set
         here — capacity changes go through the capacity endpoints.
         (DIRECT-METRICS, 2026-07-20: the KAFKA-PER-APP topic provisioning
         that used to happen on registration left with the broker — workers
@@ -1297,10 +1301,9 @@ paths:
         - every one of the app's runs is purged (result/testPlan/dataFiles
           blobs, per-second metric rows, run-state rows — same fan-out as
           `POST /runs/{id}/purge`);
-        - its `pod` registry rows (cleared before the app row — the
-          `pod.applicationId` FK is `ON DELETE RESTRICT`);
         - its health-transition log;
-        - the `application` row itself (`applicationCapacity` cascades).
+        - the `application` row itself. Workers and capacity are the
+          group's (`pod.groupId`, `groupCapacity`), so the pool is untouched.
 
         A single `purgeAudit` tombstone records the sweep.
 
@@ -1433,21 +1436,21 @@ paths:
       tags: [admin]
       summary: Spin one worker, bypassing the capacity checks
       description: |
-        Allocates the next free name for the (application, region) and asks
-        the region to create the worker — **without** the `maxAvailable`
-        check `POST …/capacity/{region}/pods` enforces. For a stuck fleet
-        only. `400` when either field is blank, `404` for an unknown
-        application, `409 PROVISIONING_DISABLED` in static mode.
+        Allocates the next free name for the (group, region) and asks the
+        region to create the worker — **without** the `maxAvailable` check
+        `POST …/capacity/{region}/pods` enforces. For a stuck fleet only.
+        `400` when either field is blank, `404` for an unknown group,
+        `409 PROVISIONING_DISABLED` in static mode.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [applicationId, region]
+              required: [groupId, region]
               properties:
-                applicationId: { type: string }
-                region:        { type: string }
+                groupId: { type: string }
+                region:  { type: string }
       responses:
         "201":
           description: The worker was requested; it registers itself once ready.
@@ -1455,19 +1458,19 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [podName, applicationId, region, baseUrl]
+                required: [podName, groupId, region, baseUrl]
                 properties:
-                  podName:       { type: string }
-                  applicationId: { type: string }
-                  region:        { type: string }
-                  baseUrl:       { type: string }
+                  podName: { type: string }
+                  groupId: { type: string }
+                  region:  { type: string }
+                  baseUrl: { type: string }
         "400":
-          description: "`INVALID_REQUEST` — applicationId and region are required."
+          description: "`INVALID_REQUEST` — groupId and region are required."
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
         "404":
-          description: "`APPLICATION_NOT_FOUND`."
+          description: "`APPLICATION_GROUP_NOT_FOUND`."
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -1512,16 +1515,16 @@ paths:
               schema: { $ref: "#/components/schemas/ProvisioningDisabledResponse" }
 
   # ────────────────────────────────────────────────────────────────────────
-  # Capacity (Phase 3 of the capacity rework)
-  # All endpoints scoped to one (applicationId, region).
+  # Capacity — the application group's worker pool (GROUP-CAPACITY).
+  # All endpoints scoped to one (groupId, region).
   # ────────────────────────────────────────────────────────────────────────
-  /api/v1/applications/{applicationId}/capacity/{region}:
+  /api/v1/applicationGroups/{groupId}/capacity/{region}:
     parameters:
-      - { name: applicationId, in: path, required: true, schema: { type: string } }
-      - { name: region,        in: path, required: true, schema: { type: string } }
+      - { name: groupId, in: path, required: true, schema: { type: string, pattern: "^[a-z][a-z0-9_]{0,29}$" } }
+      - { name: region,  in: path, required: true, schema: { type: string } }
     put:
       tags: [capacity]
-      summary: Set per-(application, region) maxAvailable directly
+      summary: Set per-(group, region) maxAvailable directly
       description: |
         Replaces the Phase 2 sponsor-gate stub. No approval flow — the
         operator owns capacity. Refuses 409 `CAPACITY_SHRINK_BELOW_PROVISIONED`
@@ -1541,7 +1544,7 @@ paths:
           description: Updated capacity row.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ApplicationCapacityRow" }
+              schema: { $ref: "#/components/schemas/GroupCapacityRow" }
         "400":
           description: Invalid maxAvailable.
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
@@ -1566,16 +1569,16 @@ paths:
           description: Region still has provisioned workers.
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
 
-  /api/v1/applications/{applicationId}/capacity/{region}/pods:
+  /api/v1/applicationGroups/{groupId}/capacity/{region}/pods:
     parameters:
-      - { name: applicationId, in: path, required: true, schema: { type: string } }
-      - { name: region,        in: path, required: true, schema: { type: string } }
+      - { name: groupId, in: path, required: true, schema: { type: string, pattern: "^[a-z][a-z0-9_]{0,29}$" } }
+      - { name: region,  in: path, required: true, schema: { type: string } }
     get:
       tags: [capacity]
-      summary: List pods for (application, region) with Ready / In-Use state
+      summary: List pods for (group, region) with Ready / In-Use state
       responses:
         "200":
-          description: Per-(app, region) capacity snapshot.
+          description: Per-(group, region) capacity snapshot.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CapacitySnapshot" }
@@ -1595,7 +1598,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SpinPodResponse" }
         "404":
-          description: applicationId or capacity row missing.
+          description: groupId or capacity row missing.
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "409":
           description: |
@@ -1610,10 +1613,10 @@ paths:
                   - $ref: "#/components/schemas/CapacityExceededResponse"
                   - $ref: "#/components/schemas/ProvisioningDisabledResponse"
 
-  /api/v1/applications/{applicationId}/capacity/{region}/pods/{podName}/restart:
+  /api/v1/applicationGroups/{groupId}/capacity/{region}/pods/{podName}/restart:
     parameters:
-      - { name: applicationId, in: path, required: true, schema: { type: string } }
-      - { name: region,        in: path, required: true, schema: { type: string } }
+      - { name: groupId, in: path, required: true, schema: { type: string, pattern: "^[a-z][a-z0-9_]{0,29}$" } }
+      - { name: region,  in: path, required: true, schema: { type: string } }
       - { name: podName,       in: path, required: true, schema: { type: string } }
     post:
       tags: [capacity]
@@ -1629,7 +1632,7 @@ paths:
                   podName:   { type: string }
                   restarted: { type: boolean }
         "404":
-          description: Pod not bound to (applicationId, region).
+          description: Pod not bound to (groupId, region).
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "409":
           description: |
@@ -1638,17 +1641,17 @@ paths:
             does not restart them.
           content: { application/json: { schema: { $ref: "#/components/schemas/ProvisioningDisabledResponse" } } }
 
-  /api/v1/applications/{applicationId}/capacity/{region}/pods/{podName}:
+  /api/v1/applicationGroups/{groupId}/capacity/{region}/pods/{podName}:
     parameters:
-      - { name: applicationId, in: path, required: true, schema: { type: string } }
-      - { name: region,        in: path, required: true, schema: { type: string } }
+      - { name: groupId, in: path, required: true, schema: { type: string, pattern: "^[a-z][a-z0-9_]{0,29}$" } }
+      - { name: region,  in: path, required: true, schema: { type: string } }
       - { name: podName,       in: path, required: true, schema: { type: string } }
     put:
       tags: [capacity]
       summary: Declare an operator-deployed worker (STATIC provisioning only)
       description: |
         Binds a worker the operator deployed themselves to this
-        (application, region). **Static mode only** — `409
+        (group, region) pool. **Static mode only** — `409
         PROVISIONING_REQUIRES_STATIC` when the deployment provisions its own
         workers, where names are allocator-owned and `POST .../pods` (spin)
         is the right call.
@@ -1667,7 +1670,7 @@ paths:
         run launch. `?force=true` skips that check for a worker that is
         deployed but not up yet.
 
-        `maxAvailable` for the (application, region) is **derived** — it is
+        `maxAvailable` for the (group, region) is **derived** — it is
         set to the declared worker count on every declare and release. There
         is no separate capacity to approve in this mode, and
         `PUT .../capacity/{region}` is refused accordingly.
@@ -1700,7 +1703,7 @@ paths:
             (address did not answer and `force` was not set).
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "404":
-          description: applicationId not registered.
+          description: groupId not registered.
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "409":
           description: |
@@ -1755,7 +1758,7 @@ paths:
                       Present + true only when the drain released a stale
                       binding to a non-terminal run whose container was gone.
         "404":
-          description: Pod not bound to (applicationId, region).
+          description: Pod not bound to (groupId, region).
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "409":
           description: Pod is held by an active run whose container is still running.
@@ -2206,9 +2209,9 @@ components:
           description: |
             AUTOMATION Phase C/E/D — dispatch:
               LAUNCH_RUN       fire a saved template via RunService.startRun;
-              DRAIN_REGION     drain every IDLE worker in (app, region) without
-                               replacement (skipped if application.alwaysOn);
-              PROVISION_REGION spin workers in (app, region) up to applicationCapacity.maxAvailable;
+              DRAIN_REGION     drain every IDLE worker of the app's group in the region without
+                               replacement (skipped if the group is alwaysOn);
+              PROVISION_REGION spin workers into the app's group's pool in the region up to groupCapacity.maxAvailable;
               INFRA_READINESS  platform-wide: email the daily infra-readiness report (goal #2);
               DAILY_REPORT     platform-wide: email the daily perf-test report (goal #1).
           enum: [LAUNCH_RUN, DRAIN_REGION, PROVISION_REGION, INFRA_READINESS, DAILY_REPORT]
@@ -2257,7 +2260,7 @@ components:
         region:
           type: string
           nullable: true
-          description: "Required for kind=DRAIN_REGION / PROVISION_REGION; must be a configured row in applicationCapacity (else 400 REGION_NOT_CONFIGURED)."
+          description: "Required for kind=DRAIN_REGION / PROVISION_REGION; must be a configured groupCapacity row of the application's group (else 400 REGION_NOT_CONFIGURED)."
         recipients:
           type: string
           nullable: true
@@ -2294,19 +2297,19 @@ components:
         runId: { type: string, nullable: true }
         error: { type: string, nullable: true }
 
-    ApplicationCapacityEntry:
+    GroupCapacityEntry:
       type: object
       required: [region, maxAvailable]
       properties:
-        region:        { type: string, description: "DNS-friendly region key (e.g. us-east, us-west)." }
-        maxAvailable:  { type: integer, minimum: 1, maximum: 1000, description: "Operator-set ceiling for this (app, region). Provisioned pods (some may be off for cost-saving)." }
+        region:        { type: string, description: "DNS-friendly region key (e.g. na-east, na-west)." }
+        maxAvailable:  { type: integer, minimum: 0, maximum: 1000, description: "Operator-set ceiling for this (group, region) — every application in the group draws on it." }
 
-    # Phase 3 — full row returned by PUT /capacity/{region} (carries timestamps).
-    ApplicationCapacityRow:
+    # Full row returned by PUT /capacity/{region} (carries timestamps).
+    GroupCapacityRow:
       type: object
-      required: [applicationId, region, maxAvailable]
+      required: [groupId, region, maxAvailable]
       properties:
-        applicationId: { type: string }
+        groupId:       { type: string }
         region:        { type: string }
         maxAvailable:  { type: integer, minimum: 0, maximum: 1000 }
         createdAt:     { type: string, format: date-time, nullable: true }
@@ -2322,8 +2325,20 @@ components:
         grafanaLiveUrl:   { type: string, nullable: true, maxLength: 2000, description: "The group's live Grafana dashboard (reads `<P>_METRICS`) — the UI's \"Open in Grafana\" default for every application in the group. Absolute http(s) URL; the UI appends `from/to/refresh/var-application`." }
         grafanaHistoryUrl: { type: string, nullable: true, maxLength: 2000, description: "The history dashboard (reads `<P>_METRICS_H`); optional — a run older than `hotDays` opens it, otherwise the live URL." }
         hotDays:          { type: integer, minimum: 1, maximum: 3650, default: 7, description: "Days the live dashboard covers (the group's hot retention)." }
+        recyclePolicy:
+          type: string
+          description: "The pool's recycle policy (the group's workers, whichever application ran on them). Default REUSE."
+          enum: [REUSE, MAX_RUNS, MAX_AGE, BOTH, EVERY_RUN, DRAIN_AFTER_RUN]
+        maxRunsPerPod:  { type: integer, nullable: true, minimum: 1, maximum: 10000, description: "Required for MAX_RUNS / BOTH; null otherwise." }
+        podMaxAgeHours: { type: integer, nullable: true, minimum: 1, maximum: 720, description: "Required for MAX_AGE / BOTH; null otherwise." }
+        alwaysOn:       { type: boolean, default: false, description: "When true, scheduled DRAIN_REGION jobs SKIP this group's workers (production-like, never auto-drained)." }
         createdAt:        { type: string, format: date-time }
         applicationCount: { type: integer, nullable: true, description: "Applications in the group, archived ones included. Present on every response from this controller." }
+        capacity:
+          type: array
+          nullable: true
+          description: "The group's worker budget per region (GROUP-CAPACITY) — seeded at 0 per deployment region on create, edited through the capacity endpoints. Present on every response from this controller."
+          items: { $ref: "#/components/schemas/GroupCapacityEntry" }
 
     CreateApplicationGroupRequest:
       type: object
@@ -2335,6 +2350,10 @@ components:
         grafanaLiveUrl:    { type: string, nullable: true, description: "Absolute http(s) URL ≤ 2000 chars; 400 otherwise. Blank = none." }
         grafanaHistoryUrl: { type: string, nullable: true, description: "Same rule; optional." }
         hotDays:           { type: integer, nullable: true, description: "1..3650; null = 7." }
+        recyclePolicy:     { type: string, nullable: true, enum: [REUSE, MAX_RUNS, MAX_AGE, BOTH, EVERY_RUN, DRAIN_AFTER_RUN], description: "Null defaults to REUSE. The thresholds must match the policy (400 otherwise)." }
+        maxRunsPerPod:     { type: integer, nullable: true, minimum: 1, maximum: 10000 }
+        podMaxAgeHours:    { type: integer, nullable: true, minimum: 1, maximum: 720 }
+        alwaysOn:          { type: boolean, nullable: true, description: "Defaults to false on create." }
 
     UpdateApplicationGroupRequest:
       type: object
@@ -2345,26 +2364,25 @@ components:
         grafanaLiveUrl:    { type: string, nullable: true, description: "Replaced wholesale; blank/null clears." }
         grafanaHistoryUrl: { type: string, nullable: true, description: "Replaced wholesale; blank/null clears." }
         hotDays:           { type: integer, nullable: true, description: "Replaced wholesale; null = 7." }
+        recyclePolicy:     { type: string, nullable: true, enum: [REUSE, MAX_RUNS, MAX_AGE, BOTH, EVERY_RUN, DRAIN_AFTER_RUN], description: "Replaced wholesale; null = REUSE with no thresholds." }
+        maxRunsPerPod:     { type: integer, nullable: true, minimum: 1, maximum: 10000 }
+        podMaxAgeHours:    { type: integer, nullable: true, minimum: 1, maximum: 720 }
+        alwaysOn:          { type: boolean, nullable: true, description: "Null on PUT preserves the current value (no surprise flips for callers that don't know about it)." }
 
     Application:
       type: object
-      required: [applicationId, name, healthEndpoints, createdAt]
+      required: [applicationId, name, healthEndpoints, createdAt, metricsGroupId]
       properties:
         applicationId:        { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
         name:                 { type: string, description: "DNS-friendly registered name. Drives URLs + cross-table joins on `run.application`." }
         sealId:               { type: string, nullable: true, description: "Operator-supplied identifier (e.g. internal catalog ID)." }
         description:          { type: string, nullable: true }
-        metricsGroupId:       { type: string, nullable: true, description: "The application group whose fact tables receive this app's metrics; its workers POST with `?groupId=` set to this. Null = ungrouped." }
+        metricsGroupId:       { type: string, description: "The application group the app belongs to — required. Its workers POST metrics with `?groupId=` set to this, and the group's worker pool (capacity, pods, recycle policy) is what the app's runs draw on." }
         metricsApplication:   { type: string, nullable: true, description: "The group classifier's value for this app's labels (`LABEL.APPLICATION`, e.g. `CPS-PCI`); defaults to the upper-cased name when grouped." }
         healthEndpoints:
           type: array
           description: "Health-check URLs polled every minute by ApplicationHealthPoller. Empty → polling disabled, status stays UNKNOWN."
           items: { type: string }
-        capacity:
-          type: array
-          nullable: true
-          description: "D-Capacity v2 — per-region max-pod budget for this application. NULL on requests without capacity hydration; populated on responses from this controller."
-          items: { $ref: "#/components/schemas/ApplicationCapacityEntry" }
         createdAt:            { type: string, format: date-time }
         lastHealthCheckedAt:  { type: string, format: date-time, nullable: true }
         lastHealthStatus:
@@ -2383,84 +2401,34 @@ components:
               latencyMs:  { type: integer }
               error:      { type: string, nullable: true }
               ok:         { type: boolean }
-        recyclePolicy:
-          type: string
-          description: "WORKER-HYGIENE Phase C — pod recycle policy. Default REUSE."
-          enum: [REUSE, MAX_RUNS, MAX_AGE, BOTH, EVERY_RUN, DRAIN_AFTER_RUN]
-        maxRunsPerPod:
-          type: integer
-          nullable: true
-          minimum: 1
-          maximum: 10000
-          description: "Required for MAX_RUNS / BOTH; null otherwise."
-        podMaxAgeHours:
-          type: integer
-          nullable: true
-          minimum: 1
-          maximum: 720
-          description: "Required for MAX_AGE / BOTH; null otherwise."
-        alwaysOn:
-          type: boolean
-          default: false
-          description: "AUTOMATION Phase C — when true, scheduled DRAIN_REGION jobs SKIP for this app (production-like, never auto-drained). PROVISION_REGION + LAUNCH_RUN unaffected."
 
     CreateApplicationRequest:
       type: object
-      required: [name]
+      required: [name, metricsGroupId]
+      description: "Capacity and the recycle policy are the group's — unknown fields such as `capacity` or `recyclePolicy` are ignored here."
       properties:
         name:            { type: string, description: "DNS-friendly: [a-z0-9]([-a-z0-9_]{0,62}[a-z0-9])?" }
         sealId:          { type: string, nullable: true, description: "≤ 128 chars" }
         description:     { type: string, nullable: true, description: "≤ 512 chars" }
-        metricsGroupId:  { type: string, nullable: true, description: "An existing application group's id; 400 when unknown. Null = ungrouped." }
-        metricsApplication: { type: string, nullable: true, description: "[A-Za-z0-9][A-Za-z0-9._-]{0,63}; null = upper-cased name when a group is set." }
+        metricsGroupId:  { type: string, description: "An existing application group's id — required; 400 `INVALID_REQUEST` when blank or unknown." }
+        metricsApplication: { type: string, nullable: true, description: "[A-Za-z0-9][A-Za-z0-9._-]{0,63}; null = upper-cased name." }
         healthEndpoints:
           type: array
           description: "Optional. Max 8 entries; each must be a valid http(s) URI ≤ 256 chars."
           items: { type: string }
-        capacity:
-          type: array
-          nullable: true
-          description: "D-Capacity v2 — per-region max-pod budget. Empty/null = configure later."
-          items: { $ref: "#/components/schemas/ApplicationCapacityEntry" }
-        recyclePolicy:
-          type: string
-          nullable: true
-          description: "WORKER-HYGIENE Phase C — null defaults to REUSE."
-          enum: [REUSE, MAX_RUNS, MAX_AGE, BOTH, EVERY_RUN, DRAIN_AFTER_RUN]
-        maxRunsPerPod:  { type: integer, nullable: true, minimum: 1, maximum: 10000 }
-        podMaxAgeHours: { type: integer, nullable: true, minimum: 1, maximum: 720 }
-        alwaysOn:
-          type: boolean
-          nullable: true
-          description: "AUTOMATION Phase C — defaults to false on create."
 
     UpdateApplicationRequest:
       type: object
-      required: [name]
+      required: [name, metricsGroupId]
       properties:
         name:            { type: string }
         sealId:          { type: string, nullable: true }
         description:     { type: string, nullable: true }
-        metricsGroupId:  { type: string, nullable: true, description: "Replaced wholesale — omit or null to clear the group." }
-        metricsApplication: { type: string, nullable: true, description: "Replaced wholesale — null = upper-cased name when grouped." }
+        metricsGroupId:  { type: string, description: "Replaced wholesale — required; an application always belongs to a group (400 when blank or unknown)." }
+        metricsApplication: { type: string, nullable: true, description: "Replaced wholesale — null = upper-cased name." }
         healthEndpoints:
           type: array
           items: { type: string }
-        capacity:
-          type: array
-          nullable: true
-          items: { $ref: "#/components/schemas/ApplicationCapacityEntry" }
-        recyclePolicy:
-          type: string
-          nullable: true
-          description: "WORKER-HYGIENE Phase C — null = no policy change. Setting requires the matching threshold fields per policy."
-          enum: [REUSE, MAX_RUNS, MAX_AGE, BOTH, EVERY_RUN, DRAIN_AFTER_RUN]
-        maxRunsPerPod:  { type: integer, nullable: true, minimum: 1, maximum: 10000 }
-        podMaxAgeHours: { type: integer, nullable: true, minimum: 1, maximum: 720 }
-        alwaysOn:
-          type: boolean
-          nullable: true
-          description: "AUTOMATION Phase C — null on PUT preserves the current value (no surprise flips for callers that don't know about it)."
 
     StartRunRequest:
       type: object
@@ -2528,7 +2496,7 @@ components:
             When true, a shortfall during the
             claim phase triggers an on-the-fly spin to fill the gap
             rather than a 503 INSUFFICIENT_CAPACITY. Subject to the
-            per-region `applicationCapacity.maxAvailable` ceiling: if
+            per-region `groupCapacity.maxAvailable` ceiling of the app's group: if
             filling the gap would exceed it, the response is 409
             `APPLICATION_CAPACITY_EXCEEDED` with the offending region.
             The UI's NewRunPage sets this only after the operator
@@ -3010,7 +2978,7 @@ components:
 
     RegisterPodRequest:
       type: object
-      required: [podId, baseUrl, applicationId]
+      required: [podId, baseUrl, groupId]
       properties:
         podId:
           type: string
@@ -3024,15 +2992,14 @@ components:
         baseUrl:
           type: string
           description: Where the global-orchestrator can reach this pod's REST API.
-        applicationId:
+        groupId:
           type: string
           description: |
-            The application this pod is bound to. Set by the local-
-            orchestrator from its `APPLICATION_ID` env var, which the
-            global-orchestrator's `PodProvisioner` populates when spinning
-            up a per-app worker. **Required as of Phase 6b** — `pod.applicationId`
-            is NOT NULL (migration V16) and the legacy null-app pool was
-            removed. A registration without it returns 400 `INVALID_REQUEST`.
+            The application group whose pool this pod belongs to. Set by the
+            local-orchestrator from its `GROUP_ID` env var, which the regional
+            provisioner stamps when creating the worker. Required —
+            `pod.groupId` is NOT NULL and an FK to `applicationGroup`; a
+            registration without it returns 400 `INVALID_REQUEST`.
 
     HeartbeatRequest:
       type: object
@@ -3050,12 +3017,9 @@ components:
         state:         { type: string, enum: [IDLE, LOST] }
         lastHeartbeat: { type: string, format: date-time }
         registeredAt:  { type: string, format: date-time }
-        applicationId:
+        groupId:
           type: string
-          description: |
-            Phase 1 capacity rework: the application this pod is bound to.
-            Nullable during the Phase 1 → Phase 6 migration window for
-            legacy static pods that registered without `APPLICATION_ID`.
+          description: The application group whose pool this pod belongs to (GROUP-CAPACITY); any application in the group may claim it.
         source:
           type: string
           enum: [DYNAMIC, STATIC]
@@ -3079,11 +3043,11 @@ components:
     # ── Phase 3 capacity-rework response schemas ──────────────────────────
     CapacitySnapshot:
       type: object
-      required: [applicationId, region, maxAvailable, provisioned, ready, inUse, spinnable, pods]
+      required: [groupId, region, maxAvailable, provisioned, ready, inUse, spinnable, pods]
       properties:
-        applicationId: { type: string }
+        groupId:       { type: string }
         region:        { type: string }
-        maxAvailable:  { type: integer, description: "Operator-set ceiling from applicationCapacity.maxAvailable." }
+        maxAvailable:  { type: integer, description: "Operator-set ceiling from groupCapacity.maxAvailable." }
         provisioned:   { type: integer, description: "ready + inUse — pods that exist as containers right now." }
         ready:         { type: integer, description: "Pods running + idle (not currently held by any run)." }
         inUse:         { type: integer, description: "Pods currently held by an active runFleetMember." }
@@ -3114,10 +3078,10 @@ components:
         initiatedBy: { type: string }
     SpinPodResponse:
       type: object
-      required: [podName, applicationId, region, baseUrl, provisioned, maxAvailable]
+      required: [podName, groupId, region, baseUrl, provisioned, maxAvailable]
       properties:
-        podName:       { type: string, example: "payments-us-east-worker-1" }
-        applicationId: { type: string }
+        podName:       { type: string, example: "cps-na-east-worker-1" }
+        groupId:       { type: string }
         region:        { type: string }
         baseUrl:       { type: string, example: "http://payments-us-east-worker-1:8080" }
         provisioned:   { type: integer, description: "Provisioned count after this spin." }
@@ -3215,10 +3179,10 @@ components:
           example: http://payments-na-east-worker-1.workers:8080
     DeclaredPodResponse:
       type: object
-      required: [podName, applicationId, region, baseUrl, source, reachable, declared, maxAvailable]
+      required: [podName, groupId, region, baseUrl, source, reachable, declared, maxAvailable]
       properties:
         podName:       { type: string }
-        applicationId: { type: string }
+        groupId:       { type: string }
         region:        { type: string }
         baseUrl:       { type: string }
         source:        { type: string, enum: [STATIC] }
@@ -3229,11 +3193,11 @@ components:
             False only when `?force=true` was used.
         declared:
           type: integer
-          description: Declared workers for this (application, region) after the call.
+          description: Declared workers for this (group, region) after the call.
         maxAvailable:
           type: integer
           description: |
-            The derived capacity written for this (application, region) —
+            The derived capacity written for this (group, region) —
             always equal to `declared` in static mode.
     ProvisioningDisabledResponse:
       type: object

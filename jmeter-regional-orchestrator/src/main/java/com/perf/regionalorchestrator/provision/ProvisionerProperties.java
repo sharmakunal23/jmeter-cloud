@@ -62,8 +62,8 @@ public record ProvisionerProperties(
 
     /** Label namespace for every Pod the provisioner manages. */
     public static final String LABEL_PREFIX           = "com.perf.jmeterCloud.";
-    public static final String LABEL_APPLICATION_ID   = LABEL_PREFIX + "applicationId";
-    public static final String LABEL_APPLICATION_NAME = LABEL_PREFIX + "applicationName";
+    /** The application group whose pool the worker belongs to (GROUP-CAPACITY, 2026-08-31; was {@code applicationId}). */
+    public static final String LABEL_GROUP_ID         = LABEL_PREFIX + "groupId";
     public static final String LABEL_REGION           = LABEL_PREFIX + "region";
     public static final String LABEL_ROLE             = LABEL_PREFIX + "role";
     public static final String LABEL_MANAGED_BY       = LABEL_PREFIX + "managedBy";

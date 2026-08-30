@@ -6,7 +6,7 @@ import { usePlatformCapabilities } from "../hooks/usePlatformCapabilities";
  * per-region shortfall table + the recovery actions:
  *
  *   - Provision (spinShortfall): spin the missing pods up to the
- *     per-(app, region) max capacity, then retry.
+ *     per-(group, region) max capacity, then retry.
  *   - Proceed with what's ready (bestEffort): take whatever IDLE pods
  *     were available.
  *   - Cancel / back.

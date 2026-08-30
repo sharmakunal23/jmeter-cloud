@@ -10,14 +10,14 @@ import java.time.Instant;
  * joins work; {@code baseUrl} is what the global uses to fan out
  * {@code POST /api/v1/test} during a run.
  *
- * <p>{@code applicationId} (Phase 1 capacity rework) is the application
- * this pod is bound to. Nullable during the Phase 1 → Phase 6 migration
- * window for legacy static pods registered without {@code APPLICATION_ID}.
+ * <p>{@code groupId} is the application group whose pool this pod belongs
+ * to (GROUP-CAPACITY): any application in the group may claim it. Never
+ * null — the column is NOT NULL and a register without a group is refused.
  *
  * <p>WORKER-HYGIENE Phase B adds three recycle-tracking fields:
  * <ul>
  *   <li>{@code runsServed} — incremented inside the run-claim transaction.
- *       Phase D's reconciler compares against {@code maxRunsPerPod}.</li>
+ *       Phase D's reconciler compares against the group's {@code maxRunsPerPod}.</li>
  *   <li>{@code imageDigest} — captured at container-create time; NULL for
  *       legacy pods. Phase D's reconciler diffs against the current image
  *       digest to detect stale workers after a rebuild.</li>
@@ -39,7 +39,7 @@ public record Pod(
         PodState state,
         Instant lastHeartbeat,
         Instant registeredAt,
-        String applicationId,
+        String groupId,
         long runsServed,
         String imageDigest,
         Instant provisionedAt,

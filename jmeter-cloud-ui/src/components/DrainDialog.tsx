@@ -75,7 +75,7 @@ export function DrainDialog({
           message:
             "No workers were drained — every target was rejected by its local orchestrator. " +
             "If your worker pods were spun up before a recent jmeter-local-orchestrator image " +
-            "rebuild, recycle them: open the Capacity tab → Drain All Ready → Provision N Worker(s) " +
+            "rebuild, recycle them: open the group's Capacity page → Drain All Ready → Provision N Worker(s) " +
             "for fresh pods on the new image.",
           skipped: resp.skipped,
         });

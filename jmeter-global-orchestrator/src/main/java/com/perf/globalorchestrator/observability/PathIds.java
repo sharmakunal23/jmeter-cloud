@@ -13,7 +13,7 @@ import java.util.Map;
  * appear under an existing parent:
  * <pre>
  *   /api/v1/runs/{runId}/members/{workerId}/...
- *   /api/v1/applications/{applicationId}/capacity/{region}/pods/{podName}/...
+ *   /api/v1/applicationGroups/{groupId}/capacity/{region}/pods/{podName}/...
  *   /api/v1/admin/pods/{podName}
  * </pre>
  *
@@ -24,6 +24,7 @@ public final class PathIds {
     /** MDC keys correspond 1:1 to the segment labels below. */
     public static final String KEY_RUN_ID         = "runId";
     public static final String KEY_APPLICATION_ID = "applicationId";
+    public static final String KEY_GROUP_ID       = "groupId";
     public static final String KEY_WORKER_ID      = "workerId";
     public static final String KEY_POD_NAME       = "podName";
     public static final String KEY_REGION         = "region";
@@ -33,6 +34,7 @@ public final class PathIds {
     static {
         LABEL_TO_KEY.put("runs",         KEY_RUN_ID);
         LABEL_TO_KEY.put("applications", KEY_APPLICATION_ID);
+        LABEL_TO_KEY.put("applicationGroups", KEY_GROUP_ID);
         LABEL_TO_KEY.put("members",      KEY_WORKER_ID);
         LABEL_TO_KEY.put("pods",         KEY_POD_NAME);
         LABEL_TO_KEY.put("capacity",     KEY_REGION);

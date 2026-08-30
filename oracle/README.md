@@ -7,8 +7,8 @@ metrics schema in the hosted environment's exact layout — the shared
 dimensions `LABEL`, `RUN`, `WORKER`, the routing table `GROUP_REGISTRY`, and per
 application group the fact tables `<GROUP_ID>_METRICS` (hot) and
 `<GROUP_ID>_METRICS_H` (history) with their nightly maintenance job — and
-**`"globalOrchestrator"`** is the control plane (runs, pods, applications and
-their groups, capacity, automation). The metrics-consumer connects as the
+**`"globalOrchestrator"`** is the control plane (runs, applications and their
+groups — each group owning its worker pool: pods, capacity, pod policy — automation). The metrics-consumer connects as the
 metrics owner; `"metricsReader"`, `"metricsPurger"` and
 `"globalOrchestratorWriter"` are the granted users.
 

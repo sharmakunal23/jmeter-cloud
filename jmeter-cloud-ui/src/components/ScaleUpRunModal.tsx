@@ -11,7 +11,8 @@ import {
   type ScaleUpRunResponse,
 } from "../api/runs";
 import { regionsApi, type RegionCapacity } from "../api/regions";
-import { applicationsApi, type Application } from "../api/applications";
+import { applicationsApi } from "../api/applications";
+import { applicationGroupsApi } from "../api/applicationGroups";
 import { FleetAllocationFormView } from "./FleetAllocationFormView";
 import { GlobalPropertiesEditor } from "./GlobalPropertiesEditor";
 import { RunStartProgress, type Stage } from "./RunStartProgress";
@@ -116,7 +117,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export function ScaleUpRunModal({ run, onClose, onSuccess }: ScaleUpRunModalProps) {
   const runId = run.runId;
   const [regions, setRegions] = useState<RegionsState>({ status: "loading", regions: [] });
-  // Per-region maxAvailable for this run's application (the policy ceiling).
+  // Per-region maxAvailable of this run's application group (the pool's ceiling).
   const [maxByRegion, setMaxByRegion] = useState<Record<string, number> | null>(null);
   const [allocation, setAllocation] = useState<FleetAllocationEntry[]>([]);
   const [globalProperties, setGlobalProperties] = useState<Record<string, string>>(
@@ -141,19 +142,23 @@ export function ScaleUpRunModal({ run, onClose, onSuccess }: ScaleUpRunModalProp
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose, progressStages]);
 
-  // Fetch the run's application capacity grid (per-region maxAvailable).
+  // Fetch the run's application → its group → the group's capacity grid (per-region maxAvailable).
   useEffect(() => {
     if (!run.application) { setMaxByRegion(null); return; }
     const ctl = new AbortController();
-    applicationsApi.list(ctl.signal)
-      .then((apps: Application[]) => {
+    (async () => {
+      try {
+        const apps = await applicationsApi.list(ctl.signal);
         const match = apps.find((a) => a.name === run.application);
-        if (!match || !match.capacity) { setMaxByRegion({}); return; }
+        if (!match) { setMaxByRegion({}); return; }
+        const group = await applicationGroupsApi.get(match.metricsGroupId, ctl.signal);
         const m: Record<string, number> = {};
-        for (const c of match.capacity) m[c.region] = c.maxAvailable;
+        for (const c of group.capacity ?? []) m[c.region] = c.maxAvailable;
         setMaxByRegion(m);
-      })
-      .catch(() => { if (!ctl.signal.aborted) setMaxByRegion({}); });
+      } catch {
+        if (!ctl.signal.aborted) setMaxByRegion({});
+      }
+    })();
     return () => ctl.abort();
   }, [run.application]);
 
@@ -207,7 +212,7 @@ export function ScaleUpRunModal({ run, onClose, onSuccess }: ScaleUpRunModalProp
     return m;
   }, [maxByRegion, activeByRegion]);
 
-  // Merge the app's capacity-grid regions into the live rollup so a region
+  // Merge the group's capacity-grid regions into the live rollup so a region
   // with configured capacity but zero pods right now still shows up.
   const mergedRegions = useMemo(() => {
     const byRegion = new Map<string, RegionCapacity>();

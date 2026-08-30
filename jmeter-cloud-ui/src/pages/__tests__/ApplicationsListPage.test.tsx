@@ -65,6 +65,7 @@ function fixtureApp(name: string, overrides: Partial<Application> = {}): Applica
     sealId: null,
     description: null,
     healthEndpoints: [],
+    metricsGroupId: "cps",
     createdAt: "2026-05-11T12:00:00Z",
     lastHealthCheckedAt: null,
     lastHealthStatus: "UNKNOWN",
@@ -178,16 +179,18 @@ describe("ApplicationsListPage — Create dialog", () => {
 
   it("submitting the dialog calls applicationsApi.create + closes on success", async () => {
     apps.list.mockResolvedValue([]);
+    groupsMock.list.mockResolvedValue([{ groupId: "cps", name: "Servicing MQ", createdAt: "2026-08-29T00:00:00Z", applicationCount: 0 }]);
     apps.create.mockResolvedValue(fixtureApp("brand-new"));
     renderPage();
     await waitFor(() => expect(screen.getByRole("button", { name: /Register your first application/i })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: /Register your first application/i }));
     fireEvent.change(screen.getByLabelText(/Name \*/i), { target: { value: "brand-new" } });
-    // D-Capacity v2 polish — capacity is sponsor-controlled; the form
-    // doesn't collect it, so a name alone is enough to submit.
+    // A name and a group are enough to submit — capacity is the group's, not collected here.
+    await waitFor(() => expect(screen.getByLabelText(/Application group/i)).not.toBeDisabled());
+    fireEvent.change(screen.getByLabelText(/Application group/i), { target: { value: "cps" } });
     fireEvent.click(screen.getByRole("button", { name: /^Register$/i }));
     await waitFor(() => expect(apps.create).toHaveBeenCalledWith(expect.objectContaining({
-      name: "brand-new",
+      name: "brand-new", metricsGroupId: "cps",
     })));
     // Dialog closes after success.
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -197,10 +200,11 @@ describe("ApplicationsListPage — Create dialog", () => {
 describe("ApplicationsListPage — application groups", () => {
   const cps = { groupId: "cps", name: "Servicing MQ", createdAt: "2026-08-29T00:00:00Z", applicationCount: 1 };
 
-  it("files applications under their group heading, ungrouped last (list view)", async () => {
-    groupsMock.list.mockResolvedValue([cps]);
+  it("files applications under their group heading, groups in name order (list view)", async () => {
+    const zed = { groupId: "zed", name: "Zed team", createdAt: "2026-08-29T00:00:00Z", applicationCount: 1 };
+    groupsMock.list.mockResolvedValue([cps, zed]);
     apps.list.mockResolvedValue([
-      fixtureApp("zeta-svc"),
+      fixtureApp("zeta-svc", { metricsGroupId: "zed" }),
       fixtureApp("cps-pci", { metricsGroupId: "cps", metricsApplication: "CPS-PCI" }),
     ]);
     renderPage();
@@ -209,21 +213,23 @@ describe("ApplicationsListPage — application groups", () => {
     expect(rows[0]).toContain("Servicing MQ");
     expect(rows[0]).toContain("cps");
     expect(rows[1]).toContain("cps-pci");
-    expect(rows[2]).toContain("Ungrouped");
+    expect(rows[2]).toContain("Zed team");
     expect(rows[3]).toContain("zeta-svc");
-  });
-
-  it("renders no headings while no group exists", async () => {
-    apps.list.mockResolvedValue([fixtureApp("checkout-svc")]);
-    renderPage();
-    await waitFor(() => expect(screen.getByText("checkout-svc")).toBeInTheDocument());
     expect(screen.queryByText("Ungrouped")).toBeNull();
   });
 
+  it("a heading shows the group id while the groups list has not caught up — there is no 'Ungrouped'", async () => {
+    apps.list.mockResolvedValue([fixtureApp("checkout-svc", { metricsGroupId: "demo" })]);
+    renderPage();
+    await waitFor(() => expect(screen.getByText("checkout-svc")).toBeInTheDocument());
+    expect(screen.queryByText("Ungrouped")).toBeNull();
+    expect(screen.getByRole("heading", { level: 2, name: /demo/ })).toBeInTheDocument();
+  });
+
   it("the search box also matches a group's name", async () => {
-    groupsMock.list.mockResolvedValue([cps]);
+    groupsMock.list.mockResolvedValue([cps, { groupId: "zed", name: "Zed team", createdAt: "2026-08-29T00:00:00Z", applicationCount: 1 }]);
     apps.list.mockResolvedValue([
-      fixtureApp("zeta-svc"),
+      fixtureApp("zeta-svc", { metricsGroupId: "zed" }),
       fixtureApp("cps-pci", { metricsGroupId: "cps" }),
     ]);
     renderPage();

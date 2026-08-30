@@ -24,6 +24,17 @@ vi.mock("../../api/automation", async () => {
     },
   };
 });
+vi.mock("../../api/applicationGroups", async () => {
+  const actual = await vi.importActual<typeof import("../../api/applicationGroups")>("../../api/applicationGroups");
+  return {
+    ...actual,
+    applicationGroupsApi: {
+      ...actual.applicationGroupsApi,
+      get: vi.fn().mockResolvedValue({ groupId: "cps", name: "Servicing MQ", createdAt: "2026-05-12T00:00:00Z",
+        capacity: [{ region: "us-east", maxAvailable: 1 }] }),
+    },
+  };
+});
 vi.mock("../../api/templates", async () => {
   const actual = await vi.importActual<typeof import("../../api/templates")>("../../api/templates");
   return { ...actual, templatesApi: { list: vi.fn(), save: vi.fn(), load: vi.fn(), delete: vi.fn() } };
@@ -48,7 +59,7 @@ function fixtureApp(): Application {
     applicationId: "01CHK",
     name: "checkout",
     sealId: null, description: null, healthEndpoints: [],
-    capacity: [{ region: "us-east", maxAvailable: 1 }],
+    metricsGroupId: "cps",
     createdAt: "2026-05-12T00:00:00Z",
   };
 }

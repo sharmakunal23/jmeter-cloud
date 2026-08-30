@@ -5,11 +5,12 @@ import { DataCentersSection } from "../DataCentersSection";
 import { __resetPlatformCapabilitiesCache } from "../../hooks/usePlatformCapabilities";
 import { CapacityApiError, capacityApi } from "../../api/capacity";
 
-const APP = "01KZDECFEET000000000000000";
+// The workers are the application GROUP's pool.
+const APP = "cps";
 
 function snapshot(pods: unknown[] = []) {
   return {
-    applicationId: APP, region: "na-east", maxAvailable: pods.length,
+    groupId: APP, region: "na-east", maxAvailable: pods.length,
     provisioned: pods.length, ready: pods.length, inUse: 0, spinnable: 0, pods,
   };
 }
@@ -41,25 +42,28 @@ describe("DataCentersSection", () => {
     vi.unstubAllGlobals();
   });
 
-  it("lists declared workers per data center", async () => {
-    vi.spyOn(capacityApi, "listPods").mockResolvedValue(snapshot([worker()]) as never);
+  it("lists declared workers per data center, fetched by group id", async () => {
+    const listPods = vi.spyOn(capacityApi, "listPods").mockResolvedValue(snapshot([worker()]) as never);
 
-    render(<DataCentersSection applicationId={APP} regions={["na-east"]} />);
+    render(<DataCentersSection groupId={APP} groupName="Servicing MQ" regions={["na-east"]} />);
 
     expect(await screen.findByText("payments-na-east-worker-1")).toBeInTheDocument();
     expect(screen.getByText("Ready")).toBeInTheDocument();
     expect(screen.getByText("1 declared")).toBeInTheDocument();
+    // The section names the pool it declares into — the group's, shared by its applications.
+    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(/Workers of group\s*Servicing MQ/);
+    expect(listPods).toHaveBeenCalledWith(APP, "na-east");
   });
 
   it("declares a worker with the name and address the operator supplies", async () => {
     vi.spyOn(capacityApi, "listPods").mockResolvedValue(snapshot() as never);
     const declare = vi.spyOn(capacityApi, "declareWorker").mockResolvedValue({
-      podName: "w-1", applicationId: APP, region: "na-east",
+      podName: "w-1", groupId: APP, region: "na-east",
       baseUrl: "http://w-1:8080", source: "STATIC",
       reachable: true, declared: 1, maxAvailable: 1,
     } as never);
 
-    render(<DataCentersSection applicationId={APP} regions={["na-east"]} />);
+    render(<DataCentersSection groupId={APP} groupName="Servicing MQ" regions={["na-east"]} />);
     fireEvent.click(await screen.findByRole("button", { name: /Declare a worker/ }));
     fireEvent.change(screen.getByPlaceholderText(/worker-1$/), { target: { value: "w-1" } });
     fireEvent.change(screen.getByPlaceholderText(/^http/), { target: { value: "http://w-1:8080" } });
@@ -76,11 +80,11 @@ describe("DataCentersSection", () => {
       .mockRejectedValueOnce(new CapacityApiError(
         400, "WORKER_UNREACHABLE", "worker w-1 did not answer at http://w-1:8080/actuator/health"))
       .mockResolvedValueOnce({
-        podName: "w-1", applicationId: APP, region: "na-east", baseUrl: "http://w-1:8080",
+        podName: "w-1", groupId: APP, region: "na-east", baseUrl: "http://w-1:8080",
         source: "STATIC", reachable: false, declared: 1, maxAvailable: 1,
       } as never);
 
-    render(<DataCentersSection applicationId={APP} regions={["na-east"]} />);
+    render(<DataCentersSection groupId={APP} groupName="Servicing MQ" regions={["na-east"]} />);
     fireEvent.click(await screen.findByRole("button", { name: /Declare a worker/ }));
     fireEvent.change(screen.getByPlaceholderText(/worker-1$/), { target: { value: "w-1" } });
     fireEvent.change(screen.getByPlaceholderText(/^http/), { target: { value: "http://w-1:8080" } });
@@ -101,7 +105,7 @@ describe("DataCentersSection", () => {
       })]) as never,
     );
 
-    render(<DataCentersSection applicationId={APP} regions={["na-east"]} />);
+    render(<DataCentersSection groupId={APP} groupName="Servicing MQ" regions={["na-east"]} />);
 
     expect(await screen.findByText("Running a test")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Release" })).toBeDisabled();
@@ -113,7 +117,7 @@ describe("DataCentersSection", () => {
       { podName: "payments-na-east-worker-1", drained: true, containerStopped: false } as never);
     vi.spyOn(window, "confirm").mockReturnValue(true);
 
-    render(<DataCentersSection applicationId={APP} regions={["na-east"]} />);
+    render(<DataCentersSection groupId={APP} groupName="Servicing MQ" regions={["na-east"]} />);
     fireEvent.click(await screen.findByRole("button", { name: "Release" }));
 
     await waitFor(() => expect(drain).toHaveBeenCalled());
@@ -124,13 +128,27 @@ describe("DataCentersSection", () => {
     vi.spyOn(capacityApi, "listPods").mockResolvedValue(
       snapshot([worker({ state: "LOST" })]) as never);
 
-    render(<DataCentersSection applicationId={APP} regions={["na-east"]} />);
+    render(<DataCentersSection groupId={APP} groupName="Servicing MQ" regions={["na-east"]} />);
 
     expect(await screen.findByText("Not answering")).toBeInTheDocument();
   });
 
   it("with no data centers configured it explains what to do instead of rendering an empty box", async () => {
-    render(<DataCentersSection applicationId={APP} regions={[]} />);
+    render(<DataCentersSection groupId={APP} groupName="Servicing MQ" regions={[]} />);
     expect(await screen.findByText(/No data centers configured/)).toBeInTheDocument();
+  });
+
+  it("a worker already declared to another group says which one — release it there first", async () => {
+    vi.spyOn(capacityApi, "listPods").mockResolvedValue(snapshot() as never);
+    vi.spyOn(capacityApi, "declareWorker").mockRejectedValue(new CapacityApiError(
+      409, "POD_BOUND_ELSEWHERE", "bound", undefined, { boundGroupId: "demo" }));
+
+    render(<DataCentersSection groupId={APP} groupName="Servicing MQ" regions={["na-east"]} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Declare a worker/ }));
+    fireEvent.change(screen.getByPlaceholderText(/worker-1$/), { target: { value: "w-1" } });
+    fireEvent.change(screen.getByPlaceholderText(/^http/), { target: { value: "http://w-1:8080" } });
+    fireEvent.click(screen.getByRole("button", { name: "Declare" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/already declared to group "demo"/);
   });
 });

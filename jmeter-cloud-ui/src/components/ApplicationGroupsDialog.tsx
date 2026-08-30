@@ -8,14 +8,20 @@ import {
 } from "../api/applicationGroups";
 import { ApplicationApiError } from "../api/applications";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { PodPolicyFields, pickerPolicyOf, policySummary, type PodPolicyValue } from "./RecyclePolicyEditor";
 import { useToast, ToastView } from "./Toast";
 
 /**
- * Manage application groups: list, add, rename, delete. A group's id is the
+ * Manage application groups: list, add, edit, delete. A group's id is the
  * routing key its workers send as `?groupId=`, so it is immutable and must
- * match the metrics schema's group registry; a group with applications cannot
- * be deleted.
+ * match the metrics schema's group registry. The group owns the worker pool,
+ * so its lifecycle policy and always-on flag are edited here (the pool's
+ * capacity is on the Capacity tab); a group with applications, workers or
+ * capacity rows cannot be deleted. Every save sends the full record — the
+ * server replaces it wholesale.
  */
+
+const DEFAULT_POLICY: PodPolicyValue = { recyclePolicy: "REUSE", alwaysOn: false };
 
 const MAX_NAME_LEN = 255;
 const MAX_DESCRIPTION_LEN = 512;
@@ -43,6 +49,7 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
   const [grafanaLiveUrl, setGrafanaLiveUrl] = useState("");
   const [grafanaHistoryUrl, setGrafanaHistoryUrl] = useState("");
   const [hotDays, setHotDays] = useState("7");
+  const [policy, setPolicy] = useState<PodPolicyValue>(DEFAULT_POLICY);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
@@ -53,6 +60,7 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
   const [editGrafanaLiveUrl, setEditGrafanaLiveUrl] = useState("");
   const [editGrafanaHistoryUrl, setEditGrafanaHistoryUrl] = useState("");
   const [editHotDays, setEditHotDays] = useState("7");
+  const [editPolicy, setEditPolicy] = useState<PodPolicyValue>(DEFAULT_POLICY);
   const [saving, setSaving] = useState(false);
 
   // Delete confirm
@@ -106,8 +114,13 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
         grafanaLiveUrl: grafanaLiveUrl.trim() || undefined,
         grafanaHistoryUrl: grafanaHistoryUrl.trim() || undefined,
         hotDays: Number(hotDays),
+        recyclePolicy: policy.recyclePolicy,
+        // The three offered policies take no thresholds.
+        maxRunsPerPod: null,
+        podMaxAgeHours: null,
+        alwaysOn: policy.alwaysOn,
       });
-      setGroupId(""); setName(""); setDescription("");
+      setGroupId(""); setName(""); setDescription(""); setPolicy(DEFAULT_POLICY);
       showToast({ variant: "ok", text: `Group "${name.trim()}" created.` });
       changed();
     } catch (err) {
@@ -124,6 +137,7 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
     setEditGrafanaLiveUrl(g.grafanaLiveUrl ?? "");
     setEditGrafanaHistoryUrl(g.grafanaHistoryUrl ?? "");
     setEditHotDays(String(g.hotDays ?? 7));
+    setEditPolicy({ recyclePolicy: pickerPolicyOf(g.recyclePolicy), alwaysOn: g.alwaysOn ?? false });
   }
 
   async function handleSave(g: ApplicationGroup) {
@@ -136,6 +150,10 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
         grafanaLiveUrl: editGrafanaLiveUrl.trim() || undefined,
         grafanaHistoryUrl: editGrafanaHistoryUrl.trim() || undefined,
         hotDays: Number(editHotDays),
+        recyclePolicy: editPolicy.recyclePolicy,
+        maxRunsPerPod: null,
+        podMaxAgeHours: null,
+        alwaysOn: editPolicy.alwaysOn,
       });
       setEditingId(null);
       showToast({ variant: "ok", text: `Group "${editName.trim()}" saved.` });
@@ -156,11 +174,16 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
       setDeleteTarget(null);
       changed();
     } catch (err) {
-      const inUse = err instanceof ApplicationApiError && err.code === "APPLICATION_GROUP_HAS_APPLICATIONS";
+      const hasApps = err instanceof ApplicationApiError && err.code === "APPLICATION_GROUP_HAS_APPLICATIONS";
+      const hasWorkers = err instanceof ApplicationApiError && err.code === "APPLICATION_GROUP_HAS_WORKERS";
       showToast({
         variant: "err",
-        text: inUse ? "This group still has applications." : "Could not delete the group.",
-        detail: inUse ? "Move them to another group or purge them first." : describe(err),
+        text: hasApps ? "This group still has applications."
+          : hasWorkers ? "This group still has workers or capacity."
+          : "Could not delete the group.",
+        detail: hasApps ? "Move them to another group or purge them first."
+          : hasWorkers ? "Drain its workers and remove its regions on the Capacity tab first."
+          : describe(err),
       });
       setDeleteTarget(null);
     } finally {
@@ -183,6 +206,8 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
               A group's id is what its workers send as <code>?groupId=</code> with every
               metrics batch; upper-cased it names the group's own tables
               (<code>CPS_METRICS</code>), so it must exist in the metrics database's group registry.
+              The group also owns the worker pool its applications run on — its capacity per
+              region is on the Capacity tab, its lifecycle policy is here.
             </small>
           </div>
           <button type="button" className="btn btn--ghost" onClick={onClose} aria-label="Close">×</button>
@@ -257,6 +282,7 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
                             style={{ marginTop: "0.3rem", width: "6rem" }}
                             title="Days the live dashboard covers; older runs open the history dashboard"
                           />
+                          <PodPolicyFields idPrefix={`edit-${g.groupId}`} value={editPolicy} onChange={setEditPolicy} disabled={saving} />
                         </td>
                         <td className="mono ink-soft">{g.groupId}</td>
                         <td className="mono">{g.applicationCount ?? 0}</td>
@@ -283,6 +309,10 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
                               Grafana: live{g.grafanaHistoryUrl ? " + history" : ""} · {g.hotDays ?? 7} hot days
                             </div>
                           )}
+                          <div className="ink-soft appListTable__desc">
+                            Workers: {policySummary(g.recyclePolicy, g.maxRunsPerPod, g.podMaxAgeHours)}
+                            {g.alwaysOn ? " Always on." : ""}
+                          </div>
                         </td>
                         <td className="mono ink-soft">{g.groupId}</td>
                         <td className="mono">{g.applicationCount ?? 0}</td>
@@ -293,7 +323,7 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
                           </button>{" "}
                           <button type="button" className="btn btn--sm btn--ghost text--error"
                                   onClick={() => setDeleteTarget(g)} aria-label={`delete group ${g.groupId}`}
-                                  title={(g.applicationCount ?? 0) > 0 ? "Move or purge its applications first" : "Delete this group"}>
+                                  title={(g.applicationCount ?? 0) > 0 ? "Move or purge its applications first" : "Delete this group (it must have no workers or capacity)"}>
                             Delete
                           </button>
                         </td>
@@ -385,6 +415,7 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
                 />
                 <small>Days the live dashboard covers (the group's hot retention); older runs open the history dashboard.</small>
               </div>
+              <PodPolicyFields idPrefix="new" value={policy} onChange={setPolicy} disabled={creating} />
               {createUrlError && grafanaLiveUrl + grafanaHistoryUrl !== "" && (
                 <p className="text--error" role="alert" style={{ fontSize: "0.78rem" }}>Dashboard URL {createUrlError}.</p>
               )}
@@ -402,8 +433,8 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
             body={
               <p>
                 Removes the group <span className="mono">{deleteTarget.groupId}</span> from the
-                registry. Its metrics tables are not touched; a group that still has applications
-                cannot be deleted.
+                registry. Its metrics tables are not touched; a group that still has applications,
+                workers or capacity rows cannot be deleted.
               </p>
             }
             confirmLabel="Delete group"

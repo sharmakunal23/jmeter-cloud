@@ -5,36 +5,24 @@ package com.perf.globalorchestrator.provision;
  *
  * <p>{@link #podName()} doubles as the Pod name and its network hostname, so
  * the global-orchestrator can reach it at
- * {@code http://{podName}.{headlessService}:8080} once it's running. The naming convention
- * is {@code {applicationName}-{region}-worker-{n}} (see
- * {@code PodNameAllocator} in Phase 2).
+ * {@code http://{podName}.{headlessService}:8080} once it's running. The naming
+ * convention is {@code {groupId}-{region}-worker-{n}} (see {@code PodNameAllocator}).
  *
- * <p>{@link #applicationId()} and {@link #applicationName()} are passed
- * to the container as env vars and labels:
- * <ul>
- *   <li>env {@code APPLICATION_ID} — the local-orch's {@code PodRegistrar}
- *       includes this in its {@code POST /api/v1/registerPod} body so
- *       {@code globalOrchestrator.pod.applicationId} is populated.</li>
- *   <li>label {@code com.perf.jmeterCloud.applicationId} — lets the
- *       provisioner list/reconcile containers by app without going
- *       through the registry.</li>
- * </ul>
+ * <p>{@link #groupId()} reaches the container as the {@code GROUP_ID} env var
+ * and the {@code com.perf.jmeterCloud.groupId} label, so the provisioner can
+ * list/reconcile a group's Pods without going through the registry.
  */
 public record PodSpec(
         String podName,
-        String applicationId,
-        String applicationName,
+        String groupId,
         String region) {
 
     public PodSpec {
         if (podName == null || podName.isBlank()) {
             throw new IllegalArgumentException("podName is required");
         }
-        if (applicationId == null || applicationId.isBlank()) {
-            throw new IllegalArgumentException("applicationId is required");
-        }
-        if (applicationName == null || applicationName.isBlank()) {
-            throw new IllegalArgumentException("applicationName is required");
+        if (groupId == null || groupId.isBlank()) {
+            throw new IllegalArgumentException("groupId is required");
         }
         if (region == null || region.isBlank()) {
             throw new IllegalArgumentException("region is required");

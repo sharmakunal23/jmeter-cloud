@@ -10,12 +10,12 @@ import { usePlatformCapabilities } from "../hooks/usePlatformCapabilities";
 
 /**
  * Placement picker — lets an operator choose which regions (or, on a
- * private cloud, which data centers) an application uses, via a clickable
- * US map + a synced checklist.
+ * private cloud, which data centers) an application group's worker pool
+ * uses, via a clickable US map + a synced checklist.
  *
  * <p>Toggling one on adds it; toggling off removes it. One that still has
  * provisioned workers is <em>locked</em> (can't be removed until drained).
- * At least one must stay selected. Any the app already has that aren't in
+ * At least one must stay selected. Any the group already has that aren't in
  * the deployment's list are surfaced separately so they can be cleaned up.
  *
  * <p>STATIC-FLEET Phase 7 — the option list comes from the deployment
@@ -30,8 +30,9 @@ import { usePlatformCapabilities } from "../hooks/usePlatformCapabilities";
  */
 
 export interface RegionPickerProps {
-  appName: string;
-  /** Region ids currently configured for the app. */
+  /** The group whose pool is being placed — shown in the title. */
+  groupName: string;
+  /** Region ids currently configured for the group. */
   current: string[];
   /** Regions that can't be removed because they still have workers. */
   lockedRegions?: Set<string>;
@@ -41,7 +42,7 @@ export interface RegionPickerProps {
 }
 
 export function RegionPicker({
-  appName, current, lockedRegions = new Set(), busy = false, onSubmit, onCancel,
+  groupName, current, lockedRegions = new Set(), busy = false, onSubmit, onCancel,
 }: RegionPickerProps) {
   const [selected, setSelected] = useState<Set<string>>(() => new Set(current));
   const [error, setError] = useState<string | null>(null);
@@ -54,7 +55,7 @@ export function RegionPicker({
   );
 
   /**
-   * Ids the app carries that this deployment doesn't offer. With a
+   * Ids the group carries that this deployment doesn't offer. With a
    * configured list that means "not in the list"; without one it falls back
    * to the AWS-canonical check, which is what it meant before Phase 7.
    */
@@ -118,7 +119,7 @@ export function RegionPicker({
         <header className="modal__header">
           <h3 id="regionPickerTitle">
             Manage {regionNoun({ plural: true })}{" "}
-            <span className="modal__titleApp mono">{appName}</span>
+            <span className="modal__titleApp mono">{groupName}</span>
           </h3>
           <button type="button" className="btn btn--ghost" onClick={onCancel} aria-label="Close">×</button>
         </header>

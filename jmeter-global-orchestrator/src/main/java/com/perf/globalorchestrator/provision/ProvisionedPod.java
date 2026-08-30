@@ -13,15 +13,15 @@ import java.time.Instant;
  */
 public record ProvisionedPod(
         String podName,
-        String applicationId,
+        String groupId,
         String region,
         String status,
         Instant startedAt,
         String imageDigest) {
 
     /** Back-compat factory for call sites that don't surface the image digest. */
-    public ProvisionedPod(String podName, String applicationId, String region,
+    public ProvisionedPod(String podName, String groupId, String region,
                           String status, Instant startedAt) {
-        this(podName, applicationId, region, status, startedAt, null);
+        this(podName, groupId, region, status, startedAt, null);
     }
 }

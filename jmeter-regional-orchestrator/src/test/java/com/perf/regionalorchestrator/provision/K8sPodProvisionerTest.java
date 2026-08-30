@@ -44,7 +44,7 @@ class K8sPodProvisionerTest {
     }
 
     private static PodSpec spec(String name) {
-        return new PodSpec(name, "01ARZ3NDEKTSV4RRFFQ69G5FAV", "payments", "us-east-1");
+        return new PodSpec(name, "cps", "us-east-1");
     }
 
     @Test
@@ -62,8 +62,9 @@ class K8sPodProvisionerTest {
         assertThat(pod).isNotNull();
         assertThat(pod.getMetadata().getLabels())
                 .containsEntry(ProvisionerProperties.LABEL_MANAGED_BY, "regional-orchestrator")
-                .containsEntry(ProvisionerProperties.LABEL_APPLICATION_ID, "01ARZ3NDEKTSV4RRFFQ69G5FAV")
-                .containsEntry(ProvisionerProperties.LABEL_APPLICATION_NAME, "payments")
+                .containsEntry(ProvisionerProperties.LABEL_GROUP_ID, "cps")
+                .doesNotContainKey("com.perf.jmeterCloud.applicationId")
+                .doesNotContainKey("com.perf.jmeterCloud.applicationName")
                 .containsEntry(ProvisionerProperties.LABEL_REGION, "us-east-1")
                 .containsEntry(ProvisionerProperties.LABEL_ROLE, "local-orchestrator");
 
@@ -92,7 +93,8 @@ class K8sPodProvisionerTest {
                 .containsEntry("POD_ID", "payments-us-east-1-worker-1")
                 .containsEntry("POD_BASE_URL", "http://payments-us-east-1-worker-1.workers:8080")
                 .containsEntry("REGION", "us-east-1")
-                .containsEntry("APPLICATION_ID", "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+                .containsEntry("GROUP_ID", "cps")
+                .doesNotContainKey("APPLICATION_ID")
                 // Workers never call the hub's control plane — no registrar, no heartbeat.
                 .doesNotContainKey("GLOBAL_ORCHESTRATOR_URL")
                 .containsEntry("JMETER_JVM_ARGS", "-Xms256m -Xmx512m")
@@ -148,29 +150,27 @@ class K8sPodProvisionerTest {
     }
 
     @Test
-    @DisplayName("listFor filters by app (+ optional region) server-side and maps phases to status strings")
+    @DisplayName("listFor filters by group (+ optional region) server-side and maps phases to status strings")
     void listForFiltersAndMaps() {
         provisioner.createAndStart(spec("payments-us-east-1-worker-1"));
-        provisioner.createAndStart(new PodSpec(
-                "payments-us-west-2-worker-1", "01ARZ3NDEKTSV4RRFFQ69G5FAV", "payments", "us-west-2"));
-        // A pod belonging to another app must never appear.
-        provisioner.createAndStart(new PodSpec(
-                "search-us-east-1-worker-1", "01BX5ZZKBKACTAV9WEVGEMMVS0", "search", "us-east-1"));
+        provisioner.createAndStart(new PodSpec("payments-us-west-2-worker-1", "cps", "us-west-2"));
+        // A pod belonging to another group must never appear.
+        provisioner.createAndStart(new PodSpec("search-us-east-1-worker-1", "demo", "us-east-1"));
         markPhase("payments-us-east-1-worker-1", "Running");
         markPhase("payments-us-west-2-worker-1", "Failed");
 
-        List<ProvisionedPod> all = provisioner.listFor("01ARZ3NDEKTSV4RRFFQ69G5FAV", null);
+        List<ProvisionedPod> all = provisioner.listFor("cps", null);
         assertThat(all).extracting(ProvisionedPod::podName)
                 .containsExactlyInAnyOrder("payments-us-east-1-worker-1", "payments-us-west-2-worker-1");
         assertThat(all).extracting(ProvisionedPod::status)
                 .containsExactlyInAnyOrder("running", "exited");
 
-        List<ProvisionedPod> east = provisioner.listFor("01ARZ3NDEKTSV4RRFFQ69G5FAV", "us-east-1");
+        List<ProvisionedPod> east = provisioner.listFor("cps", "us-east-1");
         assertThat(east).singleElement()
                 .satisfies(p -> {
                     assertThat(p.podName()).isEqualTo("payments-us-east-1-worker-1");
                     assertThat(p.region()).isEqualTo("us-east-1");
-                    assertThat(p.applicationId()).isEqualTo("01ARZ3NDEKTSV4RRFFQ69G5FAV");
+                    assertThat(p.groupId()).isEqualTo("cps");
                     assertThat(p.imageDigest()).isEqualTo("jmeter-local-orchestrator:dev");
                 });
     }

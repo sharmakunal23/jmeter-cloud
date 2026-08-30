@@ -6,7 +6,7 @@ import { formatRelative } from "../lib/time";
  * (refreshed every minute by `ApplicationHealthPoller` server-side).
  *
  * <p>Originally inline on `<ApplicationsListPage>`; extracted in
- * Phase 5b so the Capacity list can render the same badge on each app
+ * Phase 5b so other list pages can render the same badge on each app
  * row without duplicating the styling + tooltip logic.
  */
 export function HealthBadge({ app, compact = false }: { app: Application; compact?: boolean }) {

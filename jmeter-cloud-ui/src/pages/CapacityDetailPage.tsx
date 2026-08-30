@@ -2,13 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { formatRelative } from "../lib/time";
 
-import {
-  applicationsApi,
-  type Application,
-} from "../api/applications";
+import { applicationGroupsApi, type ApplicationGroup } from "../api/applicationGroups";
 import {
   capacityApi,
   CapacityApiError,
+  isCapacityExceeded,
   type CapacitySnapshot,
   type PodView,
 } from "../api/capacity";
@@ -17,13 +15,14 @@ import {
   type BulkAction,
 } from "../components/BulkActionConfirmDialog";
 import { RequestCapacityDialog } from "../components/RequestCapacityDialog";
-import { RecyclePolicyEditor } from "../components/RecyclePolicyEditor";
 import { RegionPicker } from "../components/RegionPicker";
 import { useVisiblePolling } from "../hooks/useVisiblePolling";
 
 /**
- * Phase 5b — per-application capacity drill-in. Reached via
- * /capacity/{appName} (clicking a row on `<CapacityListPage>`).
+ * Per-group capacity drill-in — the worker pool is the application group's
+ * (GROUP-CAPACITY, 2026-08-31). Reached via /capacity/{groupId} (clicking a
+ * row on `<CapacityListPage>`). The pool's lifecycle policy is edited with
+ * the group itself ("Manage groups" on Applications).
  *
  * <p>Per region: chips (Ready / In Use / Provisioned / Max), a count
  * input + "Provision Worker(s)" button, "Request Capacity" button
@@ -59,12 +58,12 @@ interface SelectionState {
 
 type State =
   | { status: "loading" }
-  | { status: "ok"; app: Application; snapshots: Record<string, CapacitySnapshot>; refreshedAt: Date }
+  | { status: "ok"; group: ApplicationGroup; snapshots: Record<string, CapacitySnapshot>; refreshedAt: Date }
   | { status: "notFound" }
   | { status: "error"; message: string };
 
 export function CapacityDetailPage() {
-  const { appName = "" } = useParams<{ appName: string }>();
+  const { groupId = "" } = useParams<{ groupId: string }>();
   const [state, setState] = useState<State>({ status: "loading" });
   const [toast, setToast] = useState<Toast | null>(null);
   const [selection, setSelection] = useState<SelectionState>({ byRegion: {} });
@@ -77,26 +76,26 @@ export function CapacityDetailPage() {
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
-      // Look up the app by name — the registry's listing is name-keyed
-      // in the URL but uniquely identified by applicationId server-side.
-      const apps = await applicationsApi.list(signal);
-      const app = apps.find((a) => a.name === appName);
-      if (!app) {
-        setState({ status: "notFound" });
-        return;
+      let group: ApplicationGroup;
+      try {
+        group = await applicationGroupsApi.get(groupId, signal);
+      } catch (err) {
+        if (signal?.aborted) return;
+        if (isNotFound(err)) { setState({ status: "notFound" }); return; }
+        throw err;
       }
-      const regions = (app.capacity ?? []).map((c) => c.region);
+      const regions = (group.capacity ?? []).map((c) => c.region);
       const snapPairs = await Promise.all(
         regions.map((region) =>
           capacityApi
-            .listPods(app.applicationId, region, signal)
+            .listPods(group.groupId, region, signal)
             .then((snap) => [region, snap] as const)
-            .catch(() => [region, syntheticSnap(app.applicationId, region, app)] as const),
+            .catch(() => [region, syntheticSnap(group, region)] as const),
         ),
       );
       const snapshots: Record<string, CapacitySnapshot> = {};
       for (const [region, snap] of snapPairs) snapshots[region] = snap;
-      setState({ status: "ok", app, snapshots, refreshedAt: new Date() });
+      setState({ status: "ok", group, snapshots, refreshedAt: new Date() });
 
       // Drop selections for pods that no longer exist (drained / replaced).
       setSelection((prev) => {
@@ -114,7 +113,7 @@ export function CapacityDetailPage() {
       if (signal?.aborted) return;
       setState({ status: "error", message: err instanceof Error ? err.message : String(err) });
     }
-  }, [appName]);
+  }, [groupId]);
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -129,9 +128,9 @@ export function CapacityDetailPage() {
     window.setTimeout(() => setToast((cur) => (cur === t ? null : cur)), 6000);
   }, []);
 
-  const refreshOne = useCallback(async (applicationId: string, region: string) => {
+  const refreshOne = useCallback(async (gid: string, region: string) => {
     try {
-      const snap = await capacityApi.listPods(applicationId, region);
+      const snap = await capacityApi.listPods(gid, region);
       setState((prev) => {
         if (prev.status !== "ok") return prev;
         return {
@@ -143,12 +142,12 @@ export function CapacityDetailPage() {
     } catch { /* next polling tick will reconcile */ }
   }, []);
 
-  if (state.status === "loading") return <p className="ink-soft">Loading capacity for {appName}…</p>;
+  if (state.status === "loading") return <p className="ink-soft">Loading capacity for {groupId}…</p>;
   if (state.status === "notFound") {
     return (
       <section className="capacityPage">
         <p className="text--error">
-          Application <span className="mono">{appName}</span> not found.
+          Application group <span className="mono">{groupId}</span> not found.
         </p>
         <p><Link to="/capacity" className="btn btn--ghost">← Back to Capacity</Link></p>
       </section>
@@ -156,29 +155,29 @@ export function CapacityDetailPage() {
   }
   if (state.status === "error") return <p className="text--error">{state.message}</p>;
 
-  const { app, snapshots } = state;
-  const regions = (app.capacity ?? []).map((c) => c.region);
+  const { group, snapshots } = state;
+  const regions = (group.capacity ?? []).map((c) => c.region);
 
   // ── Action handlers ─────────────────────────────────────────────
 
   async function provisionN(region: string, n: number) {
-    const max = (app.capacity ?? []).find((c) => c.region === region)?.maxAvailable ?? 0;
+    const max = (group.capacity ?? []).find((c) => c.region === region)?.maxAvailable ?? 0;
     setBusy(true);
     let ok = 0, failed = 0;
     let firstError: string | null = null;
     for (let i = 0; i < n; i++) {
       try {
-        await capacityApi.spinPod(app.applicationId, region);
+        await capacityApi.spinPod(group.groupId, region);
         ok += 1;
       } catch (err) {
         failed += 1;
         if (!firstError) firstError = err instanceof Error ? err.message : String(err);
         // If we hit the cap, stop the loop — subsequent calls will all 409.
-        if (err instanceof CapacityApiError && err.code === "APPLICATION_CAPACITY_EXCEEDED") break;
+        if (isCapacityExceeded(err)) break;
       }
     }
     setBusy(false);
-    void refreshOne(app.applicationId, region);
+    void refreshOne(group.groupId, region);
     if (failed === 0) {
       showToast({ variant: "ok", text: `Provisioned ${ok} worker${ok === 1 ? "" : "s"} in ${region}` });
     } else if (ok === 0) {
@@ -199,9 +198,9 @@ export function CapacityDetailPage() {
     for (const p of pods) {
       try {
         if (action === "drain") {
-          await capacityApi.drainPod(app.applicationId, region, p.podName);
+          await capacityApi.drainPod(group.groupId, region, p.podName);
         } else {
-          await capacityApi.restartPod(app.applicationId, region, p.podName);
+          await capacityApi.restartPod(group.groupId, region, p.podName);
         }
         ok += 1;
       } catch (err) {
@@ -212,7 +211,7 @@ export function CapacityDetailPage() {
     setBusy(false);
     setBulkDialog(null);
     setSelection((prev) => ({ byRegion: { ...prev.byRegion, [region]: new Set() } }));
-    void refreshOne(app.applicationId, region);
+    void refreshOne(group.groupId, region);
     const verb = action === "drain" ? "Drained" : "Restarted";
     if (failed === 0) {
       showToast({ variant: "ok", text: `${verb} ${ok} worker${ok === 1 ? "" : "s"} in ${region}` });
@@ -225,16 +224,15 @@ export function CapacityDetailPage() {
 
   async function applyRequestedCap(region: string, newMax: number) {
     try {
-      await capacityApi.setMax(app.applicationId, region, newMax);
-      // Phase 5c — toast carries an "Open Application" CTA so the
-      // operator can move forward into a run launch without a
-      // round-trip through the Applications tab.
+      await capacityApi.setMax(group.groupId, region, newMax);
+      // The toast's CTA leads to the group's applications — any of them can
+      // launch against the new ceiling.
       showToast({
         variant: "ok",
         text: `Max for ${region} set to ${newMax}`,
-        action: { label: "Open Application →", href: `/applications/${encodeURIComponent(app.name)}` },
+        action: { label: "Open Applications →", href: "/applications" },
       });
-      void refreshOne(app.applicationId, region);
+      void refreshOne(group.groupId, region);
     } catch (err) {
       // Bubble up so the dialog can render the error inline before closing.
       if (err instanceof CapacityApiError && err.code === "CAPACITY_SHRINK_BELOW_PROVISIONED") {
@@ -249,18 +247,18 @@ export function CapacityDetailPage() {
   }
 
   async function applyRegionChanges(selected: string[]) {
-    const currentRegions = (app.capacity ?? []).map((c) => c.region);
+    const currentRegions = (group.capacity ?? []).map((c) => c.region);
     const toAdd = selected.filter((r) => !currentRegions.includes(r));
     const toRemove = currentRegions.filter((r) => !selected.includes(r));
     setBusy(true);
     let ok = 0, failed = 0;
     let firstError: string | null = null;
     for (const r of toAdd) {
-      try { await capacityApi.addRegion(app.applicationId, r); ok += 1; }
+      try { await capacityApi.addRegion(group.groupId, r); ok += 1; }
       catch (e) { failed += 1; firstError ??= e instanceof Error ? e.message : String(e); }
     }
     for (const r of toRemove) {
-      try { await capacityApi.removeRegion(app.applicationId, r); ok += 1; }
+      try { await capacityApi.removeRegion(group.groupId, r); ok += 1; }
       catch (e) { failed += 1; firstError ??= e instanceof Error ? e.message : String(e); }
     }
     setBusy(false);
@@ -287,7 +285,7 @@ export function CapacityDetailPage() {
         <div className="pageHeader__titleGroup">
           <Link to="/capacity" className="ink-soft" style={{ fontSize: "0.85rem" }}>← Capacity</Link>
           <h1 className="capacityDetail__title">
-            <span className="mono">{app.name}</span>
+            {group.name} <span className="mono ink-soft appGroupHeading__id">{group.groupId}</span>
           </h1>
           <small className="ink-soft" aria-live="polite">
             {isPaused
@@ -295,9 +293,8 @@ export function CapacityDetailPage() {
               : `Refreshed ${formatRelative(state.refreshedAt.toISOString())}`}
           </small>
         </div>
-        {/* Phase 5c — navigation continuity: jump straight from capacity
-            management into the app or run-launch flow without a detour
-            through the Applications tab. */}
+        {/* A group has many applications, so the way forward is the
+            Applications list (filed under this group), not one launcher. */}
         <div className="capacityDetail__nav">
           <button
             type="button"
@@ -306,14 +303,8 @@ export function CapacityDetailPage() {
           >
             Manage regions
           </button>
-          <Link to={`/applications/${encodeURIComponent(app.name)}`} className="btn btn--ghost">
-            Open Application →
-          </Link>
-          <Link
-            to={`/applications/${encodeURIComponent(app.name)}/runs/new`}
-            className="btn btn--primary"
-          >
-            Launch a Run →
+          <Link to="/applications" className="btn btn--ghost" title={`The ${group.applicationCount ?? 0} application(s) in this group`}>
+            Applications ({group.applicationCount ?? 0}) →
           </Link>
         </div>
       </header>
@@ -340,23 +331,9 @@ export function CapacityDetailPage() {
         </div>
       )}
 
-      {/* Phase F3 — recycle policy editor sits above the per-region
-          worker tables. It's app-scoped (not per region) so the page
-          header is the natural home. */}
-      <RecyclePolicyEditor
-        app={app}
-        onSaved={(updated) => {
-          setState((prev) =>
-            prev.status === "ok" ? { ...prev, app: updated } : prev,
-          );
-          setToast({ variant: "ok", text: "Recycle policy updated." });
-        }}
-        onError={(message) => setToast({ variant: "err", text: "Could not save policy.", detail: message })}
-      />
-
       {regions.length === 0 ? (
         <div className="emptyState">
-          <p>This application has no capacity regions configured.</p>
+          <p>This group has no capacity regions configured.</p>
           <p className="ink-soft">
             Pick the USA regions it should run in (up to 4).
           </p>
@@ -396,7 +373,7 @@ export function CapacityDetailPage() {
 
       {requestCap && (
         <RequestCapacityDialog
-          applicationName={app.name}
+          groupName={group.name}
           region={requestCap.region}
           current={requestCap.current}
           onSubmit={async (newMax) => {
@@ -409,7 +386,7 @@ export function CapacityDetailPage() {
 
       {managingRegions && (
         <RegionPicker
-          appName={app.name}
+          groupName={group.name}
           current={regions}
           lockedRegions={lockedRegions}
           busy={busy}
@@ -692,10 +669,17 @@ function shortDigest(digest: string): string {
 
 // ── Helpers ──────────────────────────────────────────────────────
 
-function syntheticSnap(applicationId: string, region: string, app: Application): CapacitySnapshot {
-  const max = (app.capacity ?? []).find((c) => c.region === region)?.maxAvailable ?? 0;
+function syntheticSnap(group: ApplicationGroup, region: string): CapacitySnapshot {
+  const max = (group.capacity ?? []).find((c) => c.region === region)?.maxAvailable ?? 0;
   return {
-    applicationId, region, maxAvailable: max,
+    groupId: group.groupId, region, maxAvailable: max,
     provisioned: 0, ready: 0, inUse: 0, spinnable: max, pods: [],
   };
+}
+
+/** The registry's 404 for an unknown group (its client throws ApplicationApiError-shaped errors). */
+function isNotFound(err: unknown): boolean {
+  return typeof err === "object" && err !== null
+    && ((err as { httpStatus?: number }).httpStatus === 404
+      || (err as { code?: string }).code === "APPLICATION_GROUP_NOT_FOUND");
 }

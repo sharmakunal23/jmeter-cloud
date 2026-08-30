@@ -1,8 +1,8 @@
 # jmeter-global-orchestrator
 
 The control plane on **port 8082**: owns the application registry (applications
-and the application groups that route their metrics — `/api/v1/applicationGroups`),
-per-(app, region) capacity, run state and the pod registry in the Oracle
+and the application groups that route their metrics and own their worker pools —
+`/api/v1/applicationGroups`), per-(group, region) capacity, run state and the pod registry in the Oracle
 `"globalOrchestrator"` schema, claims IDLE pods one row at a time with
 `FOR UPDATE SKIP LOCKED` (the `claims` package), and fans a run out to many
 workers. It holds no cluster credential: under `PROVISIONING_MODE=DYNAMIC`

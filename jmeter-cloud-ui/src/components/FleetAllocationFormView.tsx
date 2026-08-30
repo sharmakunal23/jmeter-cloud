@@ -21,8 +21,8 @@ export interface FleetAllocationFormViewProps {
     loading?: boolean;
     error?: string | null;
     /**
-     * Per-region capacity ceiling from the application's
-     * `capacity[]` grid. When provided, the +/- buttons clamp at
+     * Per-region capacity ceiling from the application group's
+     * `capacity[]` grid (the pool the app runs on). When provided, the +/- buttons clamp at
      * `maxAvailable - claimed` (the ceiling) rather than the live
      * IDLE-pod count. Selecting more than IDLE-now is fine — the
      * shortfall flow (spinShortfall) handles the gap. Selecting
@@ -122,7 +122,7 @@ export function FleetAllocationFormView({
                     {sorted.map((r) => {
                         const claimed = countsByRegion.get(r.region) ?? 0;
                         // When maxByRegion is supplied (app launcher),
-                        // the ceiling is the app's per-region maxAvailable.
+                        // the ceiling is the group's per-region maxAvailable.
                         // Otherwise fall back to the IDLE-pod count (legacy
                         // capacity-tab view).
                         const ceiling = maxByRegion?.[r.region] ?? r.idlePods;

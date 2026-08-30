@@ -3,7 +3,6 @@ package com.perf.globalorchestrator.db;
 import com.perf.globalorchestrator.domain.Application;
 import com.perf.globalorchestrator.domain.ApplicationGroup;
 import com.perf.globalorchestrator.domain.MetricsTimeseries;
-import com.perf.globalorchestrator.domain.RecyclePolicy;
 import com.perf.globalorchestrator.domain.Run;
 import com.perf.globalorchestrator.domain.RunState;
 import com.perf.globalorchestrator.domain.RunSummary;
@@ -73,8 +72,8 @@ class MetricsReadDbTest extends OracleDbTestSupport {
         if (groups.findById("cps").isEmpty()) {
             groups.insert(new ApplicationGroup("cps", "Servicing MQ", null, Instant.now(), null));
         }
-        applications.insert(new Application("app-read", "cps-read", null, null, List.of(), null, Instant.now(), null, null, null,
-                RecyclePolicy.REUSE, null, null, false, "cps", "CPS-PCI"));
+        applications.insert(new Application("app-read", "cps-read", null, null, List.of(), Instant.now(), null, null, null,
+                "cps", "CPS-PCI"));
         Instant start = Instant.ofEpochSecond(T0);
         Run run = new Run("01J0READRUNAAAAAAAAAAAAAAA", "na-east", "b", null, "cps-read", "t", RunState.COMPLETED, null,
                 start, start, start.plusSeconds(120), false, null);

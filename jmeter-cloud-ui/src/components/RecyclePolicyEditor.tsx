@@ -1,10 +1,9 @@
-import { useState } from "react";
-
-import { applicationsApi, type Application } from "../api/applications";
+import type { RecyclePolicy } from "../api/applicationGroups";
 
 /**
- * Worker lifecycle policy editor — lives at the top of the per-app Capacity
- * detail page. Simplified (2026-05-26) to three operator-facing choices:
+ * The worker pool's lifecycle policy — a group setting (the pool is the
+ * group's), edited inside the application-groups dialog. Three operator-facing
+ * choices:
  *
  *  - **Reuse** (`REUSE`) — workers live indefinitely; reused across runs.
  *  - **After every run** (`EVERY_RUN`) — drain the worker after each run and
@@ -13,22 +12,16 @@ import { applicationsApi, type Application } from "../api/applications";
  *    each run with no replacement (cost-saving; re-provision on demand).
  *
  * The legacy threshold policies (`MAX_RUNS` / `MAX_AGE` / `BOTH`) are no
- * longer offered as choices, but stay valid at the data layer — an app still
+ * longer offered as choices, but stay valid at the data layer — a group still
  * on one renders an accurate read-only summary; editing migrates it to one of
- * the three above.
+ * the three above. `alwaysOn` sits beside the policy: it exempts the group's
+ * workers from scheduled drain-region jobs.
  */
-
-export type RecyclePolicy =
-  | "REUSE"
-  | "MAX_RUNS"
-  | "MAX_AGE"
-  | "BOTH"
-  | "EVERY_RUN"
-  | "DRAIN_AFTER_RUN";
+export type { RecyclePolicy };
 
 /** The three policies the picker offers, in display order. */
-const PICKER_POLICIES = ["REUSE", "EVERY_RUN", "DRAIN_AFTER_RUN"] as const;
-type PickerPolicy = (typeof PICKER_POLICIES)[number];
+export const PICKER_POLICIES = ["REUSE", "EVERY_RUN", "DRAIN_AFTER_RUN"] as const;
+export type PickerPolicy = (typeof PICKER_POLICIES)[number];
 
 const POLICY_LABELS: Record<PickerPolicy, { label: string; help: string }> = {
   REUSE: {
@@ -45,117 +38,79 @@ const POLICY_LABELS: Record<PickerPolicy, { label: string; help: string }> = {
   },
 };
 
-function isPickerPolicy(p: string): p is PickerPolicy {
-  return (PICKER_POLICIES as readonly string[]).includes(p);
+export function isPickerPolicy(p: string | null | undefined): p is PickerPolicy {
+  return p != null && (PICKER_POLICIES as readonly string[]).includes(p);
 }
 
-export interface RecyclePolicyEditorProps {
-  app: Application;
-  onSaved: (updated: Application) => void;
-  onError: (message: string) => void;
+/** The picker's value for a stored policy — a legacy threshold policy starts the radio at Reuse. */
+export function pickerPolicyOf(p: RecyclePolicy | null | undefined): PickerPolicy {
+  return isPickerPolicy(p) ? p : "REUSE";
 }
 
-export function RecyclePolicyEditor({ app, onSaved, onError }: RecyclePolicyEditorProps) {
-  const current = (app.recyclePolicy as RecyclePolicy) ?? "REUSE";
-  const [editing, setEditing] = useState(false);
-  // The picker only offers the three simplified policies; an app still on a
-  // legacy threshold policy starts the radio at REUSE (its true value still
-  // shows in the read-only summary until the operator picks a new one).
-  const [policy, setPolicy] = useState<PickerPolicy>(
-    isPickerPolicy(current) ? current : "REUSE",
-  );
-  const [saving, setSaving] = useState(false);
+export interface PodPolicyValue {
+  recyclePolicy: PickerPolicy;
+  alwaysOn: boolean;
+}
 
-  async function save() {
-    setSaving(true);
-    try {
-      const updated = await applicationsApi.update(app.applicationId, {
-        name: app.name,
-        sealId: app.sealId ?? null,
-        description: app.description ?? null,
-        healthEndpoints: app.healthEndpoints ?? [],
-        recyclePolicy: policy,
-        // The three simplified policies take no thresholds.
-        maxRunsPerPod: null,
-        podMaxAgeHours: null,
-      });
-      onSaved(updated);
-      setEditing(false);
-    } catch (e: unknown) {
-      onError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSaving(false);
-    }
-  }
+export interface PodPolicyFieldsProps {
+  /** Distinguishes the radio group + ids when several forms are on one page. */
+  idPrefix: string;
+  value: PodPolicyValue;
+  onChange: (next: PodPolicyValue) => void;
+  disabled?: boolean;
+}
 
-  function cancel() {
-    setPolicy(isPickerPolicy(current) ? current : "REUSE");
-    setEditing(false);
-  }
-
-  const summary = renderSummary(current, app.maxRunsPerPod ?? null, app.podMaxAgeHours ?? null);
-
+/** The policy radios + the always-on checkbox, fully controlled. */
+export function PodPolicyFields({ idPrefix, value, onChange, disabled = false }: PodPolicyFieldsProps) {
   return (
-    <section className="recyclePolicy" aria-label="Worker lifecycle policy">
-      <header className="recyclePolicy__head">
-        <div>
-          <h3 className="recyclePolicy__title">Worker lifecycle policy</h3>
-          {!editing && <small className="ink-soft">{summary}</small>}
-        </div>
-        {!editing && (
-          <button
-            type="button"
-            className="btn btn--ghost"
-            onClick={() => setEditing(true)}
-          >Edit policy</button>
-        )}
-      </header>
-
-      {editing && (
-        <div className="recyclePolicy__body">
-          <fieldset className="recyclePolicy__radios">
-            <legend className="visuallyHidden">Worker lifecycle policy</legend>
-            {PICKER_POLICIES.map((p) => (
-              <label key={p} className="recyclePolicy__radioRow">
-                <input
-                  type="radio"
-                  name="recyclePolicy"
-                  value={p}
-                  checked={policy === p}
-                  onChange={() => setPolicy(p)}
-                />
-                <span className="recyclePolicy__radioLabel">{POLICY_LABELS[p].label}</span>
-                <small className="ink-soft">{POLICY_LABELS[p].help}</small>
-              </label>
-            ))}
-          </fieldset>
-
-          <div className="recyclePolicy__actions">
-            <button
-              type="button"
-              className="btn btn--primary"
-              onClick={save}
-              disabled={saving}
-            >{saving ? "Saving…" : "Save policy"}</button>
-            <button
-              type="button"
-              className="btn"
-              onClick={cancel}
-              disabled={saving}
-            >Cancel</button>
-          </div>
-        </div>
-      )}
-    </section>
+    <div className="recyclePolicy__body">
+      <fieldset className="recyclePolicy__radios">
+        <legend>Worker lifecycle policy</legend>
+        {PICKER_POLICIES.map((p) => (
+          <label key={p} className="recyclePolicy__radioRow">
+            <input
+              type="radio"
+              name={`${idPrefix}RecyclePolicy`}
+              value={p}
+              checked={value.recyclePolicy === p}
+              onChange={() => onChange({ ...value, recyclePolicy: p })}
+              disabled={disabled}
+            />
+            <span className="recyclePolicy__radioLabel">{POLICY_LABELS[p].label}</span>
+            <small className="ink-soft">{POLICY_LABELS[p].help}</small>
+          </label>
+        ))}
+      </fieldset>
+      <div className="formField">
+        <label htmlFor={`${idPrefix}AlwaysOn`} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <input
+            id={`${idPrefix}AlwaysOn`}
+            type="checkbox"
+            checked={value.alwaysOn}
+            onChange={(e) => onChange({ ...value, alwaysOn: e.target.checked })}
+            disabled={disabled}
+            style={{ width: "auto" }}
+          />
+          Always on (production-like)
+        </label>
+        <small>
+          When checked, scheduled <strong>drain-region</strong> automation jobs skip this group's
+          workers — they are never auto-drained for overnight cost saving. Provision + launch jobs are unaffected.
+        </small>
+      </div>
+    </div>
   );
 }
 
-function renderSummary(policy: RecyclePolicy, maxRuns: number | null, maxAge: number | null): string {
-  switch (policy) {
+/** One line for a group's stored policy, thresholds included for the legacy ones. */
+export function policySummary(
+  policy: RecyclePolicy | null | undefined, maxRuns: number | null | undefined, maxAge: number | null | undefined,
+): string {
+  switch (policy ?? "REUSE") {
     case "REUSE":           return "Reuse — workers reused across runs, never auto-recycled.";
     case "EVERY_RUN":       return "After every run — drain + spin a fresh replacement.";
     case "DRAIN_AFTER_RUN": return "Drain after every run — drain with no replacement.";
-    // Legacy threshold policies (no longer offered; shown read-only for apps still on one).
+    // Legacy threshold policies (no longer offered; shown read-only for groups still on one).
     case "MAX_RUNS":        return `Recycle after ${maxRuns ?? "?"} runs (legacy policy).`;
     case "MAX_AGE":         return `Recycle after ${maxAge ?? "?"}h (legacy policy).`;
     case "BOTH":            return `Recycle after ${maxRuns ?? "?"} runs or ${maxAge ?? "?"}h (legacy policy).`;
