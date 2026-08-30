@@ -34,6 +34,19 @@ public interface MetricsDispatcher extends Closeable {
      */
     int offerAll(Collection<WorkerMetricBatch> envelopes);
 
+    /**
+     * {@link #offer} with the run's application group ({@code ?groupId=});
+     * {@code null} posts to the configured URL unchanged.
+     */
+    default boolean offer(WorkerMetricBatch envelope, String groupId) {
+        return offer(envelope);
+    }
+
+    /** {@link #offerAll} with the run's application group. */
+    default int offerAll(Collection<WorkerMetricBatch> envelopes, String groupId) {
+        return offerAll(envelopes);
+    }
+
     /** Returns the current depth of the in-memory queue, in envelopes. */
     int queueDepth();
 

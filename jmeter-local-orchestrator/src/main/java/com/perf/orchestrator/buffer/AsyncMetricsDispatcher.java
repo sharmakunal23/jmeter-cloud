@@ -16,64 +16,71 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Single background thread plus a bounded queue, so the aggregator's poll thread
- * never blocks on disk or network: {@link #offer(WorkerMetricBatch)} is a
- * sub-microsecond CAS and the dispatch thread does the gzip, the atomic rename
- * and the POST.
+ * Single-thread coordinator between the aggregator (producer) and the ingest
+ * client + disk buffer. {@link #offer} is a sub-microsecond CAS onto a bounded
+ * queue — the aggregator's poll thread never blocks on disk or HTTP. The
+ * dispatch thread persists each envelope to the buffer (with the run's
+ * application group, so a replay after a restart still routes correctly),
+ * POSTs it, and applies the response:
  *
- * <p><b>It always persists to the buffer before publishing</b>, which is what
- * makes envelopes survive a consumer outage or a process crash — a failed
- * publish simply leaves the file on disk for the retry sweeper.
- *
- * <p>Response handling maps directly onto the consumer's contract: {@code 202}
- * deletes from the buffer; {@code 400}/{@code 413} also delete but WARN and bump
- * {@link #failedCount()}, since keeping a malformed envelope would waste space
- * forever; anything else — 5xx, network, timeout — leaves it on disk to retry.
- *
- * <p>The loop retries the oldest stale envelope on every iteration, not only
- * when idle, so a backlog drains even under steady ingest.
+ * <ul>
+ *   <li>ACCEPTED → delete from the buffer.</li>
+ *   <li>TERMINAL_REJECT ({@code 400/413/415/405}) → delete, WARN, count in
+ *       {@link #failedCount()} — an unchanged replay would fail the same way.</li>
+ *   <li>AUTH_REJECT ({@code 401/403}) → keep on disk, ERROR, and stop posting
+ *       for {@code authRetry} (default 30 s) — the token is wrong or rotated;
+ *       hammering the consumer only fills its access log.</li>
+ *   <li>RETRY ({@code 429}, {@code 5xx}, I/O) → keep on disk; the sweeper
+ *       republishes the oldest envelope once it is {@code retryAfter} old.</li>
+ * </ul>
  */
 public final class AsyncMetricsDispatcher implements MetricsDispatcher {
 
     private static final Logger LOG = Logger.getLogger(AsyncMetricsDispatcher.class.getName());
 
-    /** In-memory queue capacity in envelopes. ~25 KB each → 256 ≈ 6.5 MB worst-case backlog. */
+    /** Default bounded queue capacity ({@code METRICS_INGEST_QUEUE_CAPACITY}). */
     public static final int DEFAULT_QUEUE_CAPACITY = 256;
 
-    /** Default poll timeout — controls retry cadence under idle (no-traffic) conditions. */
+    /** Default poll timeout — the retry cadence when nothing new arrives ({@code METRICS_INGEST_RETRY_INTERVAL_MS}). */
     public static final Duration DEFAULT_RETRY_INTERVAL = Duration.ofMillis(500);
 
-    /** A buffered envelope older than this is eligible for republish on the retry path. */
+    /** A buffered envelope older than this is eligible for republish ({@code METRICS_INGEST_RETRY_AFTER_MS}). */
     public static final Duration DEFAULT_RETRY_AFTER = Duration.ofSeconds(5);
+
+    /** How long posting pauses after a {@code 401/403} ({@code METRICS_INGEST_AUTH_RETRY_MS}). */
+    public static final Duration DEFAULT_AUTH_RETRY = Duration.ofSeconds(30);
+
+    /** An envelope waiting for the dispatch thread, with the group it routes to. */
+    private record Pending(WorkerMetricBatch envelope, String groupId) { }
 
     private final MetricsBuffer buffer;
     private final HttpIngestClient ingestClient;
     private final Clock clock;
-    private final ArrayBlockingQueue<WorkerMetricBatch> queue;
+    private final ArrayBlockingQueue<Pending> queue;
     private final Duration retryInterval;
     private final Duration retryAfter;
+    private final Duration authRetry;
     private final Thread workerThread;
     private volatile boolean shutdown = false;
+    /** Instant until which posting is paused after an auth rejection; {@code null} when open. */
+    private volatile Instant authBlockedUntil;
 
     /**
-     * SLIMDOWN D-4: a backpressure drop is silent data loss and the WARN is
-     * its only signal. Throttled (burst 5 / 60 s window + suppressed-count
-     * summary) because a wedged dispatch thread would otherwise emit one
-     * line per second for the whole outage. Single caller — the
-     * aggregator's poll thread — matching WarningThrottle's contract.
+     * A backpressure drop is silent data loss and the WARN is its only signal;
+     * throttled so a saturated queue cannot flood the log.
      */
     private final WarningThrottle backpressureWarnings = new WarningThrottle();
+    private final WarningThrottle authWarnings = new WarningThrottle();
 
-    /** Envelopes accepted (202) by the consumer — exposed via {@link #publishedCount()}. */
     private final LongAdder published = new LongAdder();
-
-    /** Envelopes terminally rejected (400/413) — exposed via {@link #failedCount()}. */
+    /** Envelopes terminally rejected (400/413/415/405) — exposed via {@link #failedCount()}. */
     private final LongAdder failed = new LongAdder();
+    private final LongAdder authRejected = new LongAdder();
 
     public AsyncMetricsDispatcher(MetricsBuffer buffer,
                                   HttpIngestClient ingestClient) {
         this(buffer, ingestClient, Clock.systemUTC(),
-                DEFAULT_QUEUE_CAPACITY, DEFAULT_RETRY_INTERVAL, DEFAULT_RETRY_AFTER);
+                DEFAULT_QUEUE_CAPACITY, DEFAULT_RETRY_INTERVAL, DEFAULT_RETRY_AFTER, DEFAULT_AUTH_RETRY);
     }
 
     public AsyncMetricsDispatcher(MetricsBuffer buffer,
@@ -82,31 +89,50 @@ public final class AsyncMetricsDispatcher implements MetricsDispatcher {
                                   int queueCapacity,
                                   Duration retryInterval,
                                   Duration retryAfter) {
+        this(buffer, ingestClient, clock, queueCapacity, retryInterval, retryAfter, DEFAULT_AUTH_RETRY);
+    }
+
+    public AsyncMetricsDispatcher(MetricsBuffer buffer,
+                                  HttpIngestClient ingestClient,
+                                  Clock clock,
+                                  int queueCapacity,
+                                  Duration retryInterval,
+                                  Duration retryAfter,
+                                  Duration authRetry) {
         this.buffer = Objects.requireNonNull(buffer, "buffer cannot be null");
         this.ingestClient = Objects.requireNonNull(ingestClient, "ingestClient cannot be null");
         this.clock = Objects.requireNonNull(clock, "clock cannot be null");
         if (queueCapacity < 1) {
             throw new IllegalArgumentException("queueCapacity must be >= 1, got: " + queueCapacity);
         }
-        if (retryInterval == null || retryInterval.isNegative() || retryInterval.isZero()) {
-            throw new IllegalArgumentException("retryInterval must be a positive duration");
-        }
-        if (retryAfter == null || retryAfter.isNegative() || retryAfter.isZero()) {
-            throw new IllegalArgumentException("retryAfter must be a positive duration");
-        }
+        requirePositive(retryInterval, "retryInterval");
+        requirePositive(retryAfter, "retryAfter");
+        requirePositive(authRetry, "authRetry");
         this.queue = new ArrayBlockingQueue<>(queueCapacity);
         this.retryInterval = retryInterval;
         this.retryAfter = retryAfter;
+        this.authRetry = authRetry;
 
         this.workerThread = new Thread(this::runLoop, "metrics-dispatcher");
         this.workerThread.setDaemon(true);
         this.workerThread.start();
     }
 
+    private static void requirePositive(Duration d, String name) {
+        if (d == null || d.isNegative() || d.isZero()) {
+            throw new IllegalArgumentException(name + " must be a positive duration");
+        }
+    }
+
     @Override
     public boolean offer(WorkerMetricBatch envelope) {
+        return offer(envelope, null);
+    }
+
+    @Override
+    public boolean offer(WorkerMetricBatch envelope, String groupId) {
         Objects.requireNonNull(envelope, "envelope cannot be null");
-        boolean accepted = queue.offer(envelope);
+        boolean accepted = queue.offer(new Pending(envelope, groupId));
         if (!accepted) {
             backpressureWarnings.record(
                     () -> LOG.warning(() -> String.format(
@@ -121,10 +147,15 @@ public final class AsyncMetricsDispatcher implements MetricsDispatcher {
 
     @Override
     public int offerAll(Collection<WorkerMetricBatch> envelopes) {
+        return offerAll(envelopes, null);
+    }
+
+    @Override
+    public int offerAll(Collection<WorkerMetricBatch> envelopes, String groupId) {
         Objects.requireNonNull(envelopes, "envelopes cannot be null");
         int accepted = 0;
         for (WorkerMetricBatch env : envelopes) {
-            if (!offer(env)) {
+            if (!offer(env, groupId)) {
                 break;
             }
             accepted++;
@@ -159,13 +190,23 @@ public final class AsyncMetricsDispatcher implements MetricsDispatcher {
         return failed.sum();
     }
 
+    /** Envelopes the consumer answered {@code 401/403} for — still on disk, waiting for a valid token. */
+    public long authRejectedCount() {
+        return authRejected.sum();
+    }
+
+    private boolean authBlocked() {
+        Instant until = authBlockedUntil;
+        return until != null && clock.instant().isBefore(until);
+    }
+
     private void runLoop() {
         LOG.info(() -> String.format(
-                "AsyncMetricsDispatcher started — queueCapacity=%d retryInterval=%s retryAfter=%s",
-                queue.remainingCapacity(), retryInterval, retryAfter));
+                "AsyncMetricsDispatcher started — queueCapacity=%d retryInterval=%s retryAfter=%s authRetry=%s",
+                queue.remainingCapacity(), retryInterval, retryAfter, authRetry));
         while (!shutdown) {
             try {
-                WorkerMetricBatch incoming = queue.poll(retryInterval.toMillis(), TimeUnit.MILLISECONDS);
+                Pending incoming = queue.poll(retryInterval.toMillis(), TimeUnit.MILLISECONDS);
                 if (incoming != null) {
                     handleNew(incoming);
                 }
@@ -181,15 +222,16 @@ public final class AsyncMetricsDispatcher implements MetricsDispatcher {
         LOG.info("AsyncMetricsDispatcher stopped");
     }
 
-    private void handleNew(WorkerMetricBatch envelope) {
-        Optional<BufferedEnvelope> handle = buffer.enqueue(envelope);
-        if (handle.isEmpty()) {
-            return;
+    private void handleNew(Pending pending) {
+        Optional<BufferedEnvelope> handle = buffer.enqueue(pending.envelope(), pending.groupId());
+        if (handle.isEmpty() || authBlocked()) {
+            return;   // buffered; the sweeper posts it once the auth pause ends
         }
         publishAsync(handle.get());
     }
 
     private void retryOldestStale() {
+        if (authBlocked()) return;
         Optional<BufferedEnvelope> opt = buffer.peekOldest();
         if (opt.isEmpty()) return;
         BufferedEnvelope env = opt.get();
@@ -200,7 +242,7 @@ public final class AsyncMetricsDispatcher implements MetricsDispatcher {
 
     private void publishAsync(BufferedEnvelope handle) {
         try {
-            ingestClient.send(handle.envelope())
+            ingestClient.send(handle.envelope(), handle.groupId())
                     .whenComplete((result, ex) -> {
                         if (ex != null || result == null) {
                             // Defensive — JdkHttpIngestClient never throws via the future,
@@ -223,6 +265,18 @@ public final class AsyncMetricsDispatcher implements MetricsDispatcher {
                                 LOG.warning(() -> String.format(
                                         "Ingest rejected envelope %s as malformed (status=%d, %s) — DELETED from buffer (data lost)",
                                         handle.id(), result.statusCode(), result.detail()));
+                            }
+                            case AUTH_REJECT -> {
+                                authRejected.increment();
+                                authBlockedUntil = clock.instant().plus(authRetry);
+                                authWarnings.record(
+                                        () -> LOG.severe(() -> String.format(
+                                                "Ingest refused envelope %s (status=%d, %s) — METRICS_INGEST_AUTH is missing or rotated; "
+                                                + "envelopes stay buffered, posting pauses for %s",
+                                                handle.id(), result.statusCode(), result.detail(), authRetry)),
+                                        suppressed -> LOG.severe(() -> String.format(
+                                                "Ingest auth still refused — %d further rejections suppressed in the last minute",
+                                                suppressed)));
                             }
                             case RETRY -> {
                                 if (LOG.isLoggable(Level.FINE)) {

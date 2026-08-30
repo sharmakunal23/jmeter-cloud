@@ -553,14 +553,15 @@ class TestRunManagerTest {
                 null, null, null,
                 null,                 // joinedAtSecond — null = original-fleet (Phase C)
                 null,                 // application — untagged in these legacy tests
-                null);                // gracePeriodSeconds — null = use the orchestrator default
+                null,                 // gracePeriodSeconds — null = use the orchestrator default
+                null, null);          // metricsGroupId, windowSeconds — orchestrator defaults
     }
 
     private static StartTestRequest reqWithGrace(String runId, Integer gracePeriodSeconds) {
         return new StartTestRequest(runId, "us-east-1", null,
                 null, null, List.of(), List.of(), java.util.Map.of(),
                 null, null, null, null, null,
-                gracePeriodSeconds);
+                gracePeriodSeconds, null, null);
     }
 
     private static OrchestratorConfig configIn(Path base) {

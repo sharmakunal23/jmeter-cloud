@@ -14,23 +14,38 @@ public record HttpIngestResult(Outcome outcome, int statusCode, String detail) {
         /** 202 — envelope accepted; dispatcher should delete from buffer. */
         ACCEPTED,
         /**
-         * 400 / 413 — consumer says the payload is malformed for this endpoint.
+         * 400 / 413 / 415 / 405 — the consumer says the request is malformed
+         * (unknown group, bad body, wrong media type).
          * Retry won't help. Dispatcher should delete from buffer (data is lost,
          * but keeping it on disk wastes space) and bump a counter so operators
          * see the rejection.
          */
         TERMINAL_REJECT,
         /**
+         * 401 / 403 — the consumer refused the {@code Authorization} header.
+         * The data is fine; the token is missing or rotated. Dispatcher keeps
+         * the envelope on disk and pauses posting for its auth-retry interval.
+         */
+        AUTH_REJECT,
+        /**
          * Any other HTTP status (5xx, 429, network failure, timeout).
-         * Dispatcher should leave the envelope on disk so the K-3 retry
-         * sweeper picks it up later.
+         * Dispatcher should leave the envelope on disk so the retry sweeper
+         * picks it up later.
          */
         RETRY
     }
 
     /** Convenience for tests / clear call sites. */
     public static HttpIngestResult accepted() {
-        return new HttpIngestResult(Outcome.ACCEPTED, 202, "ACCEPTED");
+        return accepted(202);
+    }
+
+    public static HttpIngestResult accepted(int statusCode) {
+        return new HttpIngestResult(Outcome.ACCEPTED, statusCode, "ACCEPTED");
+    }
+
+    public static HttpIngestResult authReject(int statusCode, String detail) {
+        return new HttpIngestResult(Outcome.AUTH_REJECT, statusCode, detail);
     }
 
     public static HttpIngestResult terminalReject(int statusCode, String detail) {

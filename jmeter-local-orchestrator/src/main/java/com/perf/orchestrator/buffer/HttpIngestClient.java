@@ -20,8 +20,10 @@ import java.util.concurrent.CompletableFuture;
  *       (the consumer says the payload is malformed; retrying won't help, and
  *       leaving it on disk wastes space). Counter {@code metricsIngest.terminalRejects}
  *       surfaces the loss for operator review.</li>
+ *   <li>{@link HttpIngestResult.Outcome#AUTH_REJECT} — leave on disk and
+ *       pause posting; the token needs fixing, not the data.</li>
  *   <li>{@link HttpIngestResult.Outcome#RETRY} — leave on disk so the
- *       dispatcher's K-3 retry sweeper picks it up later.</li>
+ *       dispatcher's retry sweeper picks it up later.</li>
  * </ul>
  *
  * <p>Implementations must be non-blocking and return the future immediately —
@@ -30,13 +32,20 @@ import java.util.concurrent.CompletableFuture;
  */
 public interface HttpIngestClient extends Closeable {
 
+    /** POST to the configured URL with no group parameter. */
+    default CompletableFuture<HttpIngestResult> send(WorkerMetricBatch envelope) {
+        return send(envelope, null);
+    }
+
     /**
-     * POST the envelope to the configured ingest endpoint.
+     * POST the envelope to the ingest endpoint for {@code groupId} — the run's
+     * application group, sent as {@code ?groupId=}; {@code null} posts to the
+     * configured URL unchanged.
      *
      * @return future that completes with the outcome; never completes
      *         exceptionally — network errors map to {@code RETRY}
      */
-    CompletableFuture<HttpIngestResult> send(WorkerMetricBatch envelope);
+    CompletableFuture<HttpIngestResult> send(WorkerMetricBatch envelope, String groupId);
 
     /** No-op default — JDK HttpClient does not require explicit close. */
     @Override

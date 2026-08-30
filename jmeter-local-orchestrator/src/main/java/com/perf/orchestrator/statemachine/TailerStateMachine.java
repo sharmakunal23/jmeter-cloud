@@ -218,7 +218,7 @@ public final class TailerStateMachine {
 
         List<WorkerMetricBatch> finalEnvelopes = aggregator.drainAll();
         if (!finalEnvelopes.isEmpty()) {
-            int accepted = dispatcher.offerAll(finalEnvelopes);
+            int accepted = dispatcher.offerAll(finalEnvelopes, config.getMetricsGroupId());
             if (accepted < finalEnvelopes.size()) {
                 LOG.warning(() -> String.format(
                         "Final flush: dispatcher refused %d/%d envelopes due to backpressure",
@@ -244,7 +244,7 @@ public final class TailerStateMachine {
     private void publishCloseable() {
         List<WorkerMetricBatch> closed = aggregator.drainCloseable();
         if (!closed.isEmpty()) {
-            int accepted = dispatcher.offerAll(closed);
+            int accepted = dispatcher.offerAll(closed, config.getMetricsGroupId());
             if (accepted < closed.size()) {
                 LOG.warning(() -> String.format(
                         "Dispatcher refused %d/%d envelopes due to backpressure — see metricsDispatch.dropsForBackpressure",

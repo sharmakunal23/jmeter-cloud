@@ -193,6 +193,7 @@ class StreamingPipelineTest {
         env.put("STATE_FLUSH_INTERVAL_MS",   "60000");
         env.put("DRAIN_EMPTY_POLLS_THRESHOLD", "3");
         env.put("GRACE_PERIOD_SECONDS",       "1");
+        env.put("FLUSH_WINDOW_SECONDS",       "1");   // per-second windows: this test counts one envelope per second
         return OrchestratorConfig.from(env);
     }
 

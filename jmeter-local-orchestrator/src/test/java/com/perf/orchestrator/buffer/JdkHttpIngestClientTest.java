@@ -163,6 +163,65 @@ class JdkHttpIngestClientTest {
         }
     }
 
+    @Nested
+    @DisplayName("group routing + bearer (PRIVATE-CLOUD-ALIGNMENT Track 5)")
+    class GroupAndAuth {
+
+        @Test
+        @DisplayName("endpointFor appends ?groupId=, replaces an existing one, and leaves the URL alone without a group")
+        void endpoint_for_group() {
+            java.net.URI base = java.net.URI.create("http://c:8083/api/v1/ingest");
+            assertThat(JdkHttpIngestClient.endpointFor(base, null)).isEqualTo(base);
+            assertThat(JdkHttpIngestClient.endpointFor(base, "cps").toString())
+                    .isEqualTo("http://c:8083/api/v1/ingest?groupId=cps");
+            assertThat(JdkHttpIngestClient.endpointFor(java.net.URI.create("http://c:8083/api/v1/ingest?groupId=demo"), "cps").toString())
+                    .isEqualTo("http://c:8083/api/v1/ingest?groupId=cps");
+            assertThat(JdkHttpIngestClient.endpointFor(java.net.URI.create("http://c:8083/api/v1/ingest?x=1&groupId=demo"), "cps").toString())
+                    .isEqualTo("http://c:8083/api/v1/ingest?x=1&groupId=cps");
+        }
+
+        @Test
+        @DisplayName("the POST carries ?groupId= and the Authorization header verbatim")
+        void posts_group_and_auth() throws Exception {
+            AtomicReference<String> query = new AtomicReference<>();
+            AtomicReference<String> auth = new AtomicReference<>();
+            startServer(exchange -> {
+                query.set(exchange.getRequestURI().getRawQuery());
+                auth.set(exchange.getRequestHeaders().getFirst("Authorization"));
+                exchange.getRequestBody().readAllBytes();
+                exchange.sendResponseHeaders(202, -1);
+                exchange.close();
+            });
+            client = new JdkHttpIngestClient("http://127.0.0.1:" + port + "/api/v1/ingest",
+                    "Bearer s3cret", Duration.ofSeconds(2), Duration.ofSeconds(2));
+            HttpIngestResult result = client.send(envelope(1L), "cps").get();
+            assertThat(result.outcome()).isEqualTo(HttpIngestResult.Outcome.ACCEPTED);
+            assertThat(query.get()).isEqualTo("groupId=cps");
+            assertThat(auth.get()).isEqualTo("Bearer s3cret");
+        }
+
+        @Test
+        @DisplayName("401 / 403 map to AUTH_REJECT — the data stays buffered")
+        void auth_statuses_map_to_auth_reject() throws Exception {
+            startServerReturning(401);
+            HttpIngestResult result = newClient().send(envelope(1L)).get();
+            assertThat(result.outcome()).isEqualTo(HttpIngestResult.Outcome.AUTH_REJECT);
+            assertThat(result.statusCode()).isEqualTo(401);
+        }
+
+        @Test
+        @DisplayName("415 maps to TERMINAL_REJECT; 429 maps to RETRY")
+        void media_type_and_throttle() throws Exception {
+            startServerReturning(415);
+            assertThat(newClient().send(envelope(1L)).get().outcome()).isEqualTo(HttpIngestResult.Outcome.TERMINAL_REJECT);
+            server.stop(0);
+            server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+            port = server.getAddress().getPort();
+            startServerReturning(429);
+            assertThat(newClient().send(envelope(1L)).get().outcome()).isEqualTo(HttpIngestResult.Outcome.RETRY);
+        }
+    }
+
     // ── helpers ────────────────────────────────────────────────────────
 
     private void startServerReturning(int status) {

@@ -53,6 +53,13 @@ public final class DiskBackedMetricsBuffer implements MetricsBuffer {
     private static final Logger LOG = Logger.getLogger(DiskBackedMetricsBuffer.class.getName());
 
     private static final String ENVELOPE_SUFFIX = ".envelope.gz";
+    /**
+     * Separates the id from the group in a filename ({@code <id>~<groupId>.envelope.gz});
+     * the group's charset ({@code [a-z][a-z0-9_]{0,29}}) never contains it, and
+     * ids sort unchanged because they are fixed-width and come first.
+     */
+    private static final char GROUP_SEPARATOR = '~';
+    private static final java.util.regex.Pattern GROUP_ID = java.util.regex.Pattern.compile("[a-z][a-z0-9_]{0,29}");
     private static final String TMP_SUFFIX      = ".envelope.gz.tmp";
     /** Sidecars from an older buffer format. No longer written; the boot scrub
      *  and delete paths still remove any leftovers. */
@@ -127,12 +134,15 @@ public final class DiskBackedMetricsBuffer implements MetricsBuffer {
                         LOG.log(Level.WARNING, "bootScrub: could not delete orphan " + entry, e);
                     }
                 } else if (name.endsWith(ENVELOPE_SUFFIX)) {
-                    String id = name.substring(0, name.length() - ENVELOPE_SUFFIX.length());
+                    String stem = name.substring(0, name.length() - ENVELOPE_SUFFIX.length());
+                    int sep = stem.indexOf(GROUP_SEPARATOR);
+                    String id = sep < 0 ? stem : stem.substring(0, sep);
+                    String groupId = sep < 0 ? null : stem.substring(sep + 1);
                     try {
                         long size = Files.size(entry);
                         Instant when = Files.getLastModifiedTime(entry).toInstant();
                         WorkerMetricBatch env = readEnvelope(entry);
-                        BufferedEnvelope handle = new BufferedEnvelope(id, entry, size, when, env);
+                        BufferedEnvelope handle = new BufferedEnvelope(id, entry, size, when, env, groupId);
                         index.put(id, handle);
                         totalBytes.addAndGet(size);
                         recovered++;
@@ -167,8 +177,17 @@ public final class DiskBackedMetricsBuffer implements MetricsBuffer {
     // -----------------------------------------------------------------------
 
     @Override
-    public synchronized Optional<BufferedEnvelope> enqueue(WorkerMetricBatch envelope) {
+    public synchronized Optional<BufferedEnvelope> enqueue(WorkerMetricBatch envelope, String groupId) {
         Objects.requireNonNull(envelope, "envelope must be non-null");
+        final String group;
+        if (groupId != null && !GROUP_ID.matcher(groupId).matches()) {
+            // Validated upstream (StartTestRequest / METRICS_GROUP_ID); never let
+            // an odd value reach a filename.
+            LOG.warning("Metrics buffer: ignoring invalid groupId '" + groupId + "' — posting without ?groupId=");
+            group = null;
+        } else {
+            group = groupId;
+        }
 
         // Step 1 — Free-disk reservation (JMeter wins)
         long freeDisk = freeDiskBytesSafe();
@@ -202,8 +221,9 @@ public final class DiskBackedMetricsBuffer implements MetricsBuffer {
         // Step 5 — Persist. The atomic rename is the durability boundary —
         // peekOldest and the boot scrubber only ever see the final filename.
         String id = nextId();
-        Path tmp        = bufferDir.resolve(id + TMP_SUFFIX);
-        Path target     = bufferDir.resolve(id + ENVELOPE_SUFFIX);
+        String stem     = group == null ? id : id + GROUP_SEPARATOR + group;
+        Path tmp        = bufferDir.resolve(stem + TMP_SUFFIX);
+        Path target     = bufferDir.resolve(stem + ENVELOPE_SUFFIX);
         try {
             Files.write(tmp, payload);
             Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE);
@@ -213,7 +233,7 @@ public final class DiskBackedMetricsBuffer implements MetricsBuffer {
         }
 
         BufferedEnvelope handle = new BufferedEnvelope(
-                id, target, payload.length, clock.instant(), envelope);
+                id, target, payload.length, clock.instant(), envelope, group);
         index.put(id, handle);
         totalBytes.addAndGet(payload.length);
         return Optional.of(handle);

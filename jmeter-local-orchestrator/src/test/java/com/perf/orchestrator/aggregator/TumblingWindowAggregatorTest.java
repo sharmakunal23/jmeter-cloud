@@ -614,4 +614,73 @@ class TumblingWindowAggregatorTest {
                     .isInstanceOf(UnsupportedOperationException.class);
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Multi-second windows (FLUSH_WINDOW_SECONDS, PRIVATE-CLOUD-ALIGNMENT Track 5)
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("15-second windows")
+    class FifteenSecondWindows {
+
+        private TumblingWindowAggregator fifteen(int grace) {
+            return new TumblingWindowAggregator(WORKER_ID, REGION, RUN_ID, grace, false, 0L, 15);
+        }
+
+        @Test
+        @DisplayName("rows land in the grid-aligned window floor(t / 15) * 15, whatever second they arrive in")
+        void rows_are_grid_aligned() {
+            TumblingWindowAggregator agg = fifteen(2);
+            agg.record(row(1_000L, "GET /a"));   // 990..1004
+            agg.record(row(1_004L, "GET /a"));
+            agg.record(row(1_005L, "GET /a"));   // 1005..1019
+            assertThat(agg.windowStartOf(1_000L)).isEqualTo(990L);
+            assertThat(agg.openWindowCount()).isEqualTo(2);
+            assertThat(agg.openBucketCount()).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("a window closes once the leading edge is grace seconds past its LAST second; the envelope carries the window start and an ISO-8601 timestamp")
+        void closes_after_grace_past_the_windows_last_second() {
+            TumblingWindowAggregator agg = fifteen(2);
+            agg.record(row(1_000L, "GET /a"));
+            agg.record(row(1_003L, "GET /a"));
+            agg.record(row(1_005L, "GET /a"));           // leading edge 1005: 990-window last second is 1004 → needs 1006
+            assertThat(agg.drainCloseable()).isEmpty();
+            agg.record(row(1_006L, "GET /a"));
+            List<WorkerMetricBatch> closed = agg.drainCloseable();
+            assertThat(closed).hasSize(1);
+            WorkerMetricBatch env = closed.get(0);
+            assertThat(env.windowSecond()).isEqualTo(990L);
+            assertThat(env.windowTimestamp()).isEqualTo("1970-01-01T00:16:30Z");
+            assertThat(env.entries()).hasSize(1);
+            assertThat(env.entries().get(0).throughput()).isEqualTo(2L);
+            assertThat(agg.openWindowCount()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("a late row for a closed window is dropped; one for an open earlier window is still folded in")
+        void late_rows_follow_the_same_bound() {
+            TumblingWindowAggregator agg = fifteen(2);
+            agg.record(row(1_000L, "GET /a"));           // 990-window
+            agg.record(row(1_005L, "GET /a"));           // 1005-window; nothing is closeable yet
+            agg.record(row(1_003L, "GET /a"));           // earlier window still open → folded in
+            assertThat(agg.drainCloseable()).isEmpty();
+            assertThat(agg.openBucketCount()).isEqualTo(2);
+            agg.record(row(1_030L, "GET /a"));           // leading edge jumps: 990 and 1005 both close
+            assertThat(agg.drainCloseable()).hasSize(2);
+            agg.record(row(1_002L, "GET /a"));           // evicted → dropped
+            agg.record(row(1_019L, "GET /a"));           // evicted → dropped
+            assertThat(agg.openBucketCount()).isEqualTo(1);
+            assertThat(agg.drainAll()).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("windowSeconds must be >= 1")
+        void rejects_zero_window() {
+            assertThatThrownBy(() -> new TumblingWindowAggregator(WORKER_ID, REGION, RUN_ID, 2, false, 0L, 0))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
 }

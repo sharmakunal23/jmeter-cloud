@@ -49,7 +49,16 @@ public interface MetricsBuffer extends Closeable {
      *         {@link #delete} on successful publish; {@link Optional#empty()}
      *         if refused
      */
-    Optional<BufferedEnvelope> enqueue(WorkerMetricBatch envelope);
+    default Optional<BufferedEnvelope> enqueue(WorkerMetricBatch envelope) {
+        return enqueue(envelope, null);
+    }
+
+    /**
+     * Persist an envelope together with the application group it routes to
+     * ({@code null} = none), so the handle — and a boot-time recovery of the
+     * file — carries the group to the ingest client.
+     */
+    Optional<BufferedEnvelope> enqueue(WorkerMetricBatch envelope, String groupId);
 
     /** Returns the oldest envelope currently in the buffer, or empty if none. */
     Optional<BufferedEnvelope> peekOldest();

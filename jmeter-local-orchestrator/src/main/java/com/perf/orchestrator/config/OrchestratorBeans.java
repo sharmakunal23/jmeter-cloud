@@ -203,6 +203,7 @@ public class OrchestratorBeans {
     public HttpIngestClient httpIngestClient(OrchestratorConfig config) {
         return new JdkHttpIngestClient(
                 config.getMetricsIngestUrl(),
+                config.getMetricsIngestAuth(),
                 java.time.Duration.ofMillis(config.getMetricsIngestConnectTimeoutMs()),
                 java.time.Duration.ofMillis(config.getMetricsIngestRequestTimeoutMs()));
     }
@@ -221,8 +222,13 @@ public class OrchestratorBeans {
      */
     @Bean(destroyMethod = "")
     public MetricsDispatcher metricsDispatcher(MetricsBuffer metricsBuffer,
-                                               HttpIngestClient httpIngestClient) {
-        return new AsyncMetricsDispatcher(metricsBuffer, httpIngestClient);
+                                               HttpIngestClient httpIngestClient,
+                                               OrchestratorConfig config) {
+        return new AsyncMetricsDispatcher(metricsBuffer, httpIngestClient, java.time.Clock.systemUTC(),
+                config.getMetricsIngestQueueCapacity(),
+                java.time.Duration.ofMillis(config.getMetricsIngestRetryIntervalMs()),
+                java.time.Duration.ofMillis(config.getMetricsIngestRetryAfterMs()),
+                java.time.Duration.ofMillis(config.getMetricsIngestAuthRetryMs()));
     }
 
     // -----------------------------------------------------------------------

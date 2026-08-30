@@ -702,6 +702,29 @@ components:
             to your worst tolerable response time. Falls back to the
             orchestrator's `GRACE_PERIOD_SECONDS` env (default 2) when omitted.
           example: 10
+        metricsGroupId:
+          type: string
+          pattern: "^[a-z][a-z0-9_]{0,29}$"
+          nullable: true
+          description: |
+            The run's application group — the metrics-consumer's `GROUP_REGISTRY`
+            id. Appended as `?groupId=` to `METRICS_INGEST_URL` on every envelope
+            of this run, which routes the rows to `<GROUP_ID>_METRICS`. Set by the
+            global-orchestrator from `application.metricsGroupId`; falls back to
+            the worker's `METRICS_GROUP_ID` env; with neither the URL is posted
+            unchanged. Anything else is 400.
+          example: cps
+        windowSeconds:
+          type: integer
+          format: int32
+          minimum: 1
+          nullable: true
+          description: |
+            Aggregation window width in seconds for this run (`FLUSH_WINDOW_SECONDS`,
+            default 15). Windows are grid-aligned (`floor(t / W) * W`) so every
+            worker stamps the same `windowSecond`; the global-orchestrator sends
+            one value to the whole fleet.
+          example: 15
         artifactSource:
           type: object
           description: |

@@ -124,6 +124,20 @@ public final class OrchestratorConfig {
     private final String metricsIngestUrl;
     private final int metricsIngestConnectTimeoutMs;
     private final int metricsIngestRequestTimeoutMs;
+    /** The whole {@code Authorization} value ({@code Bearer <token>}), the hosted {@code ingest.auth}; null = none. */
+    private final String metricsIngestAuth;
+    private final int metricsIngestQueueCapacity;
+    private final int metricsIngestRetryIntervalMs;
+    private final int metricsIngestRetryAfterMs;
+    private final int metricsIngestAuthRetryMs;
+    /** Window width for the aggregator (the hosted {@code flush.window.seconds}). */
+    private final int flushWindowSeconds;
+    /** The run's application group, sent as {@code ?groupId=}; null = none (per-run from POST /test, else env). */
+    private final String metricsGroupId;
+
+    /** The consumer's group id shape — a lowercase identifier, filename- and URL-safe. */
+    public static final java.util.regex.Pattern METRICS_GROUP_ID_PATTERN =
+            java.util.regex.Pattern.compile("[a-z][a-z0-9_]{0,29}");
 
     // Upload limits — guard against zip-bombs and accidental DoS
     private final int maxPlanSizeMb;
@@ -211,6 +225,7 @@ public final class OrchestratorConfig {
         this.sentinelPath      = env.get("SENTINEL_PATH");
 
         this.gracePeriodSeconds      = parsePositiveInt(env, "GRACE_PERIOD_SECONDS",      2);
+        this.flushWindowSeconds      = parsePositiveInt(env, "FLUSH_WINDOW_SECONDS",      15);
         this.pollIntervalMs          = parsePositiveInt(env, "POLL_INTERVAL_MS",          100);
         this.fileWaitPollIntervalMs  = parsePositiveInt(env, "FILE_WAIT_POLL_INTERVAL_MS", 500);
         this.stateFilePath           = env.getOrDefault("STATE_FILE_PATH", "/results/.jtlOffset");
@@ -261,7 +276,13 @@ public final class OrchestratorConfig {
         this.metricsIngestUrl                = env.getOrDefault("METRICS_INGEST_URL",
                 "http://metrics-consumer:8083/api/v1/ingest");
         this.metricsIngestConnectTimeoutMs   = parsePositiveInt(env, "METRICS_INGEST_CONNECT_TIMEOUT_MS", 2_000);
-        this.metricsIngestRequestTimeoutMs   = parsePositiveInt(env, "METRICS_INGEST_REQUEST_TIMEOUT_MS", 5_000);
+        this.metricsIngestRequestTimeoutMs   = parsePositiveInt(env, "METRICS_INGEST_READ_TIMEOUT_MS", 5_000);
+        this.metricsIngestAuth               = blankToNull(env.get("METRICS_INGEST_AUTH"));
+        this.metricsIngestQueueCapacity      = parsePositiveInt(env, "METRICS_INGEST_QUEUE_CAPACITY", 256);
+        this.metricsIngestRetryIntervalMs    = parsePositiveInt(env, "METRICS_INGEST_RETRY_INTERVAL_MS", 500);
+        this.metricsIngestRetryAfterMs       = parsePositiveInt(env, "METRICS_INGEST_RETRY_AFTER_MS", 5_000);
+        this.metricsIngestAuthRetryMs        = parsePositiveInt(env, "METRICS_INGEST_AUTH_RETRY_MS", 30_000);
+        this.metricsGroupId                  = parseGroupId(env.get("METRICS_GROUP_ID"));
 
         this.maxPlanSizeMb      = parsePositiveInt(env, "MAX_PLAN_SIZE_MB",      32);
         this.maxDataZipSizeMb   = parsePositiveInt(env, "MAX_DATA_ZIP_SIZE_MB",  512);
@@ -426,6 +447,20 @@ public final class OrchestratorConfig {
             throw new OrchestratorConfigException(
                     "Orchestrator cannot start. Missing or blank required environment variables: " + keys);
         }
+    }
+
+    private static String blankToNull(String raw) {
+        return raw == null || raw.isBlank() ? null : raw.trim();
+    }
+
+    /** {@code METRICS_GROUP_ID}: blank → none; otherwise it must be a consumer group id. */
+    static String parseGroupId(String raw) {
+        String value = blankToNull(raw);
+        if (value != null && !METRICS_GROUP_ID_PATTERN.matcher(value).matches()) {
+            throw new OrchestratorConfigException(
+                    "'METRICS_GROUP_ID' must match [a-z][a-z0-9_]{0,29}, got: '" + value + "'");
+        }
+        return value;
     }
 
     private static int parsePositiveInt(Map<String, String> env, String key, int defaultValue) {
@@ -630,6 +665,13 @@ public final class OrchestratorConfig {
     public String  getMetricsIngestUrl()              { return metricsIngestUrl; }
     public int     getMetricsIngestConnectTimeoutMs() { return metricsIngestConnectTimeoutMs; }
     public int     getMetricsIngestRequestTimeoutMs() { return metricsIngestRequestTimeoutMs; }
+    public String  getMetricsIngestAuth()             { return metricsIngestAuth; }
+    public int     getMetricsIngestQueueCapacity()    { return metricsIngestQueueCapacity; }
+    public int     getMetricsIngestRetryIntervalMs()  { return metricsIngestRetryIntervalMs; }
+    public int     getMetricsIngestRetryAfterMs()     { return metricsIngestRetryAfterMs; }
+    public int     getMetricsIngestAuthRetryMs()      { return metricsIngestAuthRetryMs; }
+    public int     getFlushWindowSeconds()            { return flushWindowSeconds; }
+    public String  getMetricsGroupId()                { return metricsGroupId; }
 
     public int getMaxPlanSizeMb()                    { return maxPlanSizeMb; }
     public int getMaxDataZipSizeMb()                 { return maxDataZipSizeMb; }

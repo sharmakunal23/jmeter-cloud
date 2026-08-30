@@ -672,6 +672,18 @@ public class TestRunManager implements TestRunGate {
                 request.gracePeriodSeconds() != null
                         ? Integer.toString(request.gracePeriodSeconds())
                         : Integer.toString(defaults.getGracePeriodSeconds()));
+        // Window width and metrics group: request > env > default. The group
+        // becomes ?groupId= on every envelope of this run (TailerStateMachine →
+        // dispatcher → buffer filename → ingest client).
+        env.put("FLUSH_WINDOW_SECONDS",
+                request.windowSeconds() != null
+                        ? Integer.toString(request.windowSeconds())
+                        : Integer.toString(defaults.getFlushWindowSeconds()));
+        String metricsGroupId = request.metricsGroupId() != null && !request.metricsGroupId().isBlank()
+                ? request.metricsGroupId() : defaults.getMetricsGroupId();
+        if (metricsGroupId != null) {
+            env.put("METRICS_GROUP_ID", metricsGroupId);
+        }
         // Carry the orchestrator-era settings through unchanged so the per-run
         // OrchestratorConfig validates against the same rules as the parent.
         env.put("BASE_DIR",        defaults.getBaseDir());

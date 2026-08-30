@@ -86,12 +86,36 @@ public record StartTestRequest(
          * {@code GRACE_PERIOD_SECONDS} env (default 2). Validated downstream by
          * {@code OrchestratorConfig.from} (must be a positive integer).
          */
-        Integer gracePeriodSeconds) {
+        Integer gracePeriodSeconds,
+        /**
+         * The run's application group (the consumer's {@code GROUP_REGISTRY}
+         * id, e.g. {@code cps}) — appended as {@code ?groupId=} to
+         * {@code METRICS_INGEST_URL} on every envelope of this run, which is
+         * how the rows reach the group's fact table. Set by the
+         * global-orchestrator from {@code application.metricsGroupId}; null
+         * falls back to the worker's {@code METRICS_GROUP_ID} env, and with
+         * neither the URL is posted unchanged.
+         */
+        String metricsGroupId,
+        /**
+         * Per-run override of the aggregator's window width in seconds
+         * ({@code FLUSH_WINDOW_SECONDS}, default 15). Every worker of a run
+         * must use the same value — the global-orchestrator sends it to all.
+         */
+        Integer windowSeconds) {
 
     private static final Pattern KEY_PATTERN  = Pattern.compile("[A-Za-z_][A-Za-z0-9_.]{0,63}");
+    private static final Pattern GROUP_ID_PATTERN = Pattern.compile("[a-z][a-z0-9_]{0,29}");
     private static final int MAX_VALUE_LENGTH = 256;
 
     public StartTestRequest {
+        if (metricsGroupId != null && !GROUP_ID_PATTERN.matcher(metricsGroupId).matches()) {
+            throw new IllegalArgumentException(
+                    "metricsGroupId must match [a-z][a-z0-9_]{0,29}, got: '" + metricsGroupId + "'");
+        }
+        if (windowSeconds != null && windowSeconds < 1) {
+            throw new IllegalArgumentException("windowSeconds must be >= 1, got: " + windowSeconds);
+        }
         jmeterArgs    = jmeterArgs    == null ? List.of() : List.copyOf(jmeterArgs);
         jmeterJvmArgs = jmeterJvmArgs == null ? List.of() : List.copyOf(jmeterJvmArgs);
         properties    = properties    == null ? Map.of()

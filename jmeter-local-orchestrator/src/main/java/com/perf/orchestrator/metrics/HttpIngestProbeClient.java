@@ -25,11 +25,17 @@ public final class HttpIngestProbeClient implements IngestProbeClient {
     private static final Logger LOG = LoggerFactory.getLogger(HttpIngestProbeClient.class);
 
     private final URI endpoint;
+    private final String authorization;
     private final HttpClient httpClient;
 
-    private HttpIngestProbeClient(URI endpoint, HttpClient httpClient) {
+    private HttpIngestProbeClient(URI endpoint, String authorization, HttpClient httpClient) {
         this.endpoint = endpoint;
+        this.authorization = authorization;
         this.httpClient = httpClient;
+    }
+
+    public static HttpIngestProbeClient tryCreate(String ingestUrl, Duration connectTimeout) {
+        return tryCreate(ingestUrl, connectTimeout, null);
     }
 
     /**
@@ -37,13 +43,14 @@ public final class HttpIngestProbeClient implements IngestProbeClient {
      * {@code ingest_probe_init_failed}) when the URL is malformed — same
      * fail-visible contract as the old AdminClient factory.
      */
-    public static HttpIngestProbeClient tryCreate(String ingestUrl, Duration connectTimeout) {
+    public static HttpIngestProbeClient tryCreate(String ingestUrl, Duration connectTimeout, String authorization) {
         try {
             URI uri = URI.create(ingestUrl);
             HttpClient client = HttpClient.newBuilder()
                     .connectTimeout(connectTimeout)
                     .build();
-            return new HttpIngestProbeClient(uri, client);
+            String auth = authorization == null || authorization.isBlank() ? null : authorization.trim();
+            return new HttpIngestProbeClient(uri, auth, client);
         } catch (Exception e) {
             LOG.warn("Could not construct ingest probe client for '{}': {}", ingestUrl, e.toString());
             return null;
@@ -53,12 +60,14 @@ public final class HttpIngestProbeClient implements IngestProbeClient {
     @Override
     public Result checkReachable(Duration timeout) {
         try {
-            HttpRequest request = HttpRequest.newBuilder()
+            HttpRequest.Builder request = HttpRequest.newBuilder()
                     .uri(endpoint)
                     .timeout(timeout)
-                    .method("OPTIONS", HttpRequest.BodyPublishers.noBody())
-                    .build();
-            httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+                    .method("OPTIONS", HttpRequest.BodyPublishers.noBody());
+            if (authorization != null) {
+                request.header("Authorization", authorization);
+            }
+            httpClient.send(request.build(), HttpResponse.BodyHandlers.discarding());
             // Any status code means the consumer's HTTP stack answered.
             return Result.up();
         } catch (java.net.http.HttpTimeoutException e) {

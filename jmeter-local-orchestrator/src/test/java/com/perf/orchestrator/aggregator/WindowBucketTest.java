@@ -13,8 +13,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.SoftAssertions.assertSoftly;
 
-@DisplayName("SecondBucket")
-class SecondBucketTest {
+@DisplayName("WindowBucket")
+class WindowBucketTest {
 
     private static final long   WINDOW_SECOND    = 1_744_554_727L;
     private static final String WINDOW_TIMESTAMP = "2025/04/13 14:32:07";
@@ -22,11 +22,11 @@ class SecondBucketTest {
     private static final String THREAD           = "jmeter-worker-0 1-1";
     private static final String URL              = "https://app/api/payment";
 
-    private SecondBucket bucket;
+    private WindowBucket bucket;
 
     @BeforeEach
     void setUp() {
-        bucket = new SecondBucket(WINDOW_SECOND, WINDOW_TIMESTAMP, LABEL);
+        bucket = new WindowBucket(WINDOW_SECOND, LABEL);
     }
 
     // -----------------------------------------------------------------------
@@ -84,19 +84,18 @@ class SecondBucketTest {
         }
 
         @Test
-        @DisplayName("activeThreads reflects the allThreads value from the last recorded row")
-        void active_threads_reflects_last_row() {
-            // First row: 40 threads; last row: 80 threads
+        @DisplayName("activeThreads is the highest allThreads seen in the window (the hosted flush semantics)")
+        void active_threads_reflects_window_max() {
             JtlRow first = new JtlRow(WINDOW_TIMESTAMP, WINDOW_SECOND, 100L, LABEL,
-                    "200", "OK", THREAD, "text", true, "", 1024L, 512L, 40, 40, URL, 98L, 0L, 2L);
+                    "200", "OK", THREAD, "text", true, "", 1024L, 512L, 80, 80, URL, 98L, 0L, 2L);
             JtlRow last = new JtlRow(WINDOW_TIMESTAMP, WINDOW_SECOND, 200L, LABEL,
-                    "200", "OK", THREAD, "text", true, "", 1024L, 512L, 80, 80, URL, 198L, 0L, 2L);
+                    "200", "OK", THREAD, "text", true, "", 1024L, 512L, 40, 40, URL, 198L, 0L, 2L);
 
             bucket.record(first);
             bucket.record(last);
 
             assertThat(bucket.toMetricEntry().activeThreads())
-                    .as("activeThreads must reflect the last row, not the first or an average")
+                    .as("activeThreads must be the window's maximum, not the last row")
                     .isEqualTo(80L);
         }
     }

@@ -38,8 +38,8 @@ class WireContractTest {
     void goldenDecodesFully() throws Exception {
         WorkerMetricBatch env = MAPPER.readValue(golden(), WorkerMetricBatch.class);
 
-        assertThat(env.windowSecond()).isEqualTo(1784600000L);
-        assertThat(env.windowTimestamp()).isEqualTo("2026-07-20T21:33:20Z");
+        assertThat(env.windowSecond()).isEqualTo(1784599995L);
+        assertThat(env.windowTimestamp()).isEqualTo("2026-07-20T21:33:15Z");
         assertThat(env.region()).isEqualTo("us-east-1");
         assertThat(env.workerId()).isEqualTo("acaps-us-east-1-worker-1");
         assertThat(env.runId()).isEqualTo("01KY1535CHHF9WG5HHZETVEQBZ");

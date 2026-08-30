@@ -88,7 +88,7 @@ public final class IngestReachabilityProbe implements Closeable {
         Duration probeTimeout = Duration.ofMillis(config.getIngestHealthCheckTimeoutMs());
         Duration pollInterval = Duration.ofMillis(config.getIngestHealthCheckIntervalMs());
         IngestProbeClient client = HttpIngestProbeClient.tryCreate(
-                config.getMetricsIngestUrl(), probeTimeout);
+                config.getMetricsIngestUrl(), probeTimeout, config.getMetricsIngestAuth());
         return new IngestReachabilityProbe(client, pollInterval, probeTimeout, "ingest-probe");
     }
 

@@ -59,7 +59,8 @@ public class StreamingPipeline {
                 config.getRunId(),
                 config.getGracePeriodSeconds(),
                 config.isUseThreadName(),
-                config.getJoinedAtSecond());
+                config.getJoinedAtSecond(),
+                config.getFlushWindowSeconds());
 
         this.machine = new TailerStateMachine(
                 config, stateStore, sentinel, aggregator, dispatcher);

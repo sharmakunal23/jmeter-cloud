@@ -35,11 +35,11 @@ public final class InMemoryMetricsBuffer implements MetricsBuffer {
     }
 
     @Override
-    public Optional<BufferedEnvelope> enqueue(WorkerMetricBatch envelope) {
+    public Optional<BufferedEnvelope> enqueue(WorkerMetricBatch envelope, String groupId) {
         long size = estimateSize(envelope);
         Instant now = clock.instant();
         String id = String.format("%013d-%06d", now.toEpochMilli(), idCounter.incrementAndGet());
-        BufferedEnvelope handle = new BufferedEnvelope(id, null, size, now, envelope);
+        BufferedEnvelope handle = new BufferedEnvelope(id, null, size, now, envelope, groupId);
         index.put(id, handle);
         totalBytes.addAndGet(size);
         return Optional.of(handle);

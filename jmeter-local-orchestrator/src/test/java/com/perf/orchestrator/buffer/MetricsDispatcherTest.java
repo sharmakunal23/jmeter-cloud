@@ -221,10 +221,43 @@ class MetricsDispatcherTest {
     // Test infrastructure
     // -----------------------------------------------------------------------
 
+    @Nested
+    @DisplayName("group routing + auth rejection (PRIVATE-CLOUD-ALIGNMENT Track 5)")
+    class GroupAndAuth {
+
+        @Test
+        @DisplayName("the run's group reaches the ingest client with the envelope")
+        void group_is_passed_through() {
+            wireDispatcher(RecordingIngestClient.alwaysAccepted());
+            dispatcher.offer(envelope(1L, "w-1", "GET /a"), "cps");
+            dispatcher.offer(envelope(2L, "w-1", "GET /a"));
+            Awaitility.await().atMost(Duration.ofSeconds(2))
+                    .untilAsserted(() -> assertThat(ingest.callCount.get()).isEqualTo(2));
+            assertThat(ingest.receivedGroups).containsExactly("cps", "(none)");
+        }
+
+        @Test
+        @DisplayName("401 keeps the envelope buffered, counts it, and pauses posting for the auth-retry interval")
+        void auth_reject_keeps_buffer_and_pauses() throws Exception {
+            ingest = RecordingIngestClient.alwaysReturning(HttpIngestResult.authReject(401, "no token"));
+            dispatcher = new AsyncMetricsDispatcher(buffer, ingest, java.time.Clock.systemUTC(),
+                    AsyncMetricsDispatcher.DEFAULT_QUEUE_CAPACITY,
+                    Duration.ofMillis(50), Duration.ofMillis(100), Duration.ofSeconds(30));
+            dispatcher.offer(envelope(1L, "w-1", "GET /a"), "cps");
+            Awaitility.await().atMost(Duration.ofSeconds(2))
+                    .untilAsserted(() -> assertThat(dispatcher.authRejectedCount()).isEqualTo(1L));
+            Thread.sleep(400);   // several retry sweeps — none may post while paused
+            assertThat(ingest.callCount.get()).isEqualTo(1);
+            assertThat(buffer.depthEnvelopes()).isEqualTo(1L);
+            assertThat(dispatcher.failedCount()).isZero();
+        }
+    }
+
     /** Test fake recording ingest invocations and returning configurable outcomes. */
     private static final class RecordingIngestClient implements HttpIngestClient {
         final AtomicInteger callCount = new AtomicInteger();
         final ConcurrentLinkedQueue<WorkerMetricBatch> received = new ConcurrentLinkedQueue<>();
+        final ConcurrentLinkedQueue<String> receivedGroups = new ConcurrentLinkedQueue<>();
         private final Supplier<HttpIngestResult> outcome; // null = never complete
 
         private RecordingIngestClient(Supplier<HttpIngestResult> outcome) { this.outcome = outcome; }
@@ -243,9 +276,10 @@ class MetricsDispatcherTest {
         }
 
         @Override
-        public CompletableFuture<HttpIngestResult> send(WorkerMetricBatch envelope) {
+        public CompletableFuture<HttpIngestResult> send(WorkerMetricBatch envelope, String groupId) {
             callCount.incrementAndGet();
             received.add(envelope);
+            receivedGroups.add(groupId == null ? "(none)" : groupId);
             if (outcome == null) {
                 return new CompletableFuture<>(); // never completes
             }

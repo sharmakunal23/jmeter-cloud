@@ -24,14 +24,23 @@ import java.time.Instant;
  *                     on-disk gzipped-JSON size
  * @param enqueuedAt   wall-clock instant the envelope was enqueued
  * @param envelope     the deserialised payload
+ * @param groupId      the application group the envelope routes to
+ *                     ({@code ?groupId=}); {@code null} = the configured URL
+ *                     as-is. On disk it is part of the filename, so a replay
+ *                     after a restart still reaches the right group table.
  */
 public record BufferedEnvelope(
         String id,
         Path file,
         long sizeBytes,
         Instant enqueuedAt,
-        WorkerMetricBatch envelope
+        WorkerMetricBatch envelope,
+        String groupId
 ) {
+    public BufferedEnvelope(String id, Path file, long sizeBytes, Instant enqueuedAt, WorkerMetricBatch envelope) {
+        this(id, file, sizeBytes, enqueuedAt, envelope, null);
+    }
+
     public BufferedEnvelope {
         if (id == null || id.isBlank()) {
             throw new IllegalArgumentException("id must be non-blank");

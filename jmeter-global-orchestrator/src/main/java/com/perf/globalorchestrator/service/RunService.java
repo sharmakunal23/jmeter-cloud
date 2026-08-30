@@ -27,7 +27,9 @@ import com.perf.globalorchestrator.repo.ApplicationCapacityRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.RunEventRepository;
 import com.perf.globalorchestrator.config.CacheConfig;
-import com.perf.globalorchestrator.repo.MetricsRollupRepository;
+import com.perf.globalorchestrator.repo.MetricsTarget;
+import com.perf.globalorchestrator.repo.RunMetricsRepository;
+import com.perf.globalorchestrator.repo.RunWindow;
 import com.perf.globalorchestrator.repo.RunRepository;
 import com.perf.globalorchestrator.repo.RunTrendRepository;
 import com.perf.globalorchestrator.domain.RunTrend;
@@ -95,6 +97,14 @@ public class RunService {
     private final PodRepository pods;
     /** D-Capacity — looked up by name to enforce per-(app, region) maxAvailable. */
     private final ApplicationRepository applications;
+
+    /**
+     * Window width every worker aggregates at ({@code metrics.windowSeconds},
+     * default 15 — the readers' finest bucket). Field-injected so the many
+     * hand-constructed test instances keep the default.
+     */
+    @org.springframework.beans.factory.annotation.Value("${metrics.windowSeconds:15}")
+    private int metricsWindowSeconds = 15;
     private final ApplicationCapacityRepository applicationCapacity;
     private final LocalOrchestratorClient localClient;
     private final WorkerStatusFetcher statusFetcher;
@@ -103,7 +113,8 @@ public class RunService {
             java.util.concurrent.Executors.newThreadPerTaskExecutor(
                     Thread.ofVirtual().name("globalOrch-launch-", 0).factory());
     // RunTrend snapshot on the run-terminal transition.
-    private final MetricsRollupRepository metricsRollup;
+    private final RunMetricsRepository runMetrics;
+    private final MetricsGroupResolver metricsGroups;
     private final RunTrendRepository runTrends;
     /** WORKER-HYGIENE Phase E — spin-to-fill on shortfall. Optional so tests can omit it. */
     private final com.perf.globalorchestrator.provision.PodSpinService spinService;
@@ -135,7 +146,8 @@ public class RunService {
             ApplicationCapacityRepository applicationCapacity,
             LocalOrchestratorClient localClient,
             WorkerStatusFetcher statusFetcher,
-            MetricsRollupRepository metricsRollup,
+            RunMetricsRepository runMetrics,
+            MetricsGroupResolver metricsGroups,
             RunTrendRepository runTrends,
             @org.springframework.beans.factory.annotation.Autowired(required = false)
             com.perf.globalorchestrator.provision.PodSpinService spinService,
@@ -152,7 +164,8 @@ public class RunService {
         this.applicationCapacity = applicationCapacity;
         this.localClient = localClient;
         this.statusFetcher = statusFetcher;
-        this.metricsRollup = metricsRollup;
+        this.runMetrics = runMetrics;
+        this.metricsGroups = metricsGroups;
         this.runTrends = runTrends;
         this.spinService = spinService;
         this.provisioning = provisioning;
@@ -242,7 +255,7 @@ public class RunService {
                 (request.application() == null || request.application().isBlank()) ? null : request.application(),
                 (request.initiatedBy() != null && !request.initiatedBy().isBlank()) ? request.initiatedBy() : actor.name(),
                 RunState.PREPARING, reason, now, null, null,
-                request.isSaveResults(), List.of());
+                request.isSaveResults(), List.of(), metricsGroupOf(request.application()));
         runs.insertRun(preparing);
         runs.updateRunState(runId, RunState.PREPARING, reason);
         LOG.info("run {} PREPARING — {}", runId, reason);
@@ -350,6 +363,9 @@ public class RunService {
                         boundApp.name(), regionName, max, provisioned, gap,
                         "spinShortfall would exceed maxAvailable — operator must raise the ceiling first");
             }
+            // Track 8: the region's namespace quota, as it last reported it —
+            // refuse before reserving names and creating Pods that would only Pend.
+            spinService.assertCapacity(regionName, gap);
         }
 
         // (2) Spin per region. Collect the new pods' baseUrls so we can
@@ -697,7 +713,8 @@ public class RunService {
                 stateReason,
                 now, null, null,
                 request.isSaveResults(),
-                List.of());
+                List.of(),
+                metricsGroupOf(request.application()));
         if (existingRunId == null) {
             runs.insertRun(run);
         }
@@ -1512,17 +1529,39 @@ public class RunService {
 
     private record FanoutOutcome(MemberState state, int statusCode, String reason) {}
 
+    /**
+     * The application's metrics group at launch, stamped on the run row: the
+     * run's rows land in that group's fact table for good, so the readers keep
+     * finding them even if the operator later moves the application.
+     */
+    private String metricsGroupOf(String applicationName) {
+        if (applicationName == null || applicationName.isBlank()) return null;
+        try {
+            return applications.findByName(applicationName).map(a -> a.metricsGroupId()).orElse(null);
+        } catch (RuntimeException e) {
+            LOG.warn("could not resolve the metrics group of application {}: {}", applicationName, e.toString());
+            return null;
+        }
+    }
+
     private Map<String, FanoutOutcome> fanOut(String runId, List<RunFleetMember> members,
                                               String testPlanBlobId, String dataFilesBlobId,
                                               String application, boolean saveResults) {
-        // DIRECT-METRICS: metrics routing needs nothing in the fan-out
-        // body — every worker POSTs straight to the metrics-consumer via
-        // its METRICS_INGEST_URL env.
+        // Metrics routing: every worker POSTs straight to the metrics-consumer
+        // (its METRICS_INGEST_URL env) and appends the run's application group
+        // as ?groupId= — the consumer routes the rows to <GROUP>_METRICS. Every
+        // member gets the same window width so their windowSeconds line up.
+        String metricsGroupId = (application == null || application.isBlank()) ? null
+                : applications.findByName(application).map(a -> a.metricsGroupId()).orElse(null);
         Map<String, Future<FanoutOutcome>> futures = new LinkedHashMap<>();
         for (RunFleetMember m : members) {
             runs.updateMemberState(runId, m.workerId(), MemberState.REQUESTED, null, null);
             Map<String, Object> body = new HashMap<>();
             body.put("runId", runId);
+            body.put("windowSeconds", metricsWindowSeconds);
+            if (metricsGroupId != null) {
+                body.put("metricsGroupId", metricsGroupId);
+            }
             // Each worker must stamp ITS OWN region onto every WorkerMetric it
             // publishes — the metrics "region" column drives the UI's split-by-
             // region view. Previously this sent the
@@ -1744,7 +1783,12 @@ public class RunService {
      */
     private void recordRunTrend(Run run) {
         try {
-            MetricsRollupRepository.RunAggregate agg = metricsRollup.runAggregate(run.runId());
+            java.util.Optional<MetricsTarget> target = metricsGroups.resolve(run);
+            if (target.isEmpty()) {
+                LOG.debug("run {} COMPLETED with no metrics group or no rows yet — skipping runTrend snapshot", run.runId());
+                return;
+            }
+            RunMetricsRepository.RunAggregate agg = runMetrics.runAggregate(target.get(), RunWindow.of(run));
             if (agg.rowCount() == 0) {
                 LOG.debug("run {} COMPLETED with no metric rows yet — skipping runTrend snapshot",
                         run.runId());

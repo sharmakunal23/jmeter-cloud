@@ -876,4 +876,46 @@ class OrchestratorConfigTest {
             });
         }
     }
+
+    @Nested
+    @DisplayName("metrics routing (PRIVATE-CLOUD-ALIGNMENT Track 5)")
+    class MetricsRouting {
+
+        @Test
+        @DisplayName("defaults: 15-second windows, no group, no auth, the dispatcher's three knobs")
+        void defaults() {
+            OrchestratorConfig cfg = OrchestratorConfig.from(fullValidEnv());
+            assertThat(cfg.getFlushWindowSeconds()).isEqualTo(15);
+            assertThat(cfg.getMetricsGroupId()).isNull();
+            assertThat(cfg.getMetricsIngestAuth()).isNull();
+            assertThat(cfg.getMetricsIngestQueueCapacity()).isEqualTo(256);
+            assertThat(cfg.getMetricsIngestRetryIntervalMs()).isEqualTo(500);
+            assertThat(cfg.getMetricsIngestRetryAfterMs()).isEqualTo(5_000);
+            assertThat(cfg.getMetricsIngestAuthRetryMs()).isEqualTo(30_000);
+        }
+
+        @Test
+        @DisplayName("METRICS_GROUP_ID must be a consumer group id; METRICS_INGEST_AUTH is the whole header value")
+        void group_and_auth() {
+            Map<String, String> env = new HashMap<>(fullValidEnv());
+            env.put("METRICS_GROUP_ID", "cps");
+            env.put("METRICS_INGEST_AUTH", " Bearer abc ");
+            env.put("FLUSH_WINDOW_SECONDS", "1");
+            OrchestratorConfig cfg = OrchestratorConfig.from(env);
+            assertThat(cfg.getMetricsGroupId()).isEqualTo("cps");
+            assertThat(cfg.getMetricsIngestAuth()).isEqualTo("Bearer abc");
+            assertThat(cfg.getFlushWindowSeconds()).isEqualTo(1);
+
+            env.put("METRICS_GROUP_ID", "CPS");
+            assertThatThrownBy(() -> OrchestratorConfig.from(env))
+                    .isInstanceOf(OrchestratorConfigException.class)
+                    .hasMessageContaining("METRICS_GROUP_ID");
+            env.put("METRICS_GROUP_ID", "cps");
+            env.put("FLUSH_WINDOW_SECONDS", "0");
+            assertThatThrownBy(() -> OrchestratorConfig.from(env))
+                    .isInstanceOf(OrchestratorConfigException.class)
+                    .hasMessageContaining("FLUSH_WINDOW_SECONDS");
+        }
+    }
+
 }

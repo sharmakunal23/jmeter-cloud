@@ -446,4 +446,39 @@ class DiskBackedMetricsBufferTest {
         @Override public Clock withZone(java.time.ZoneId zone) { return this; }
         @Override public Instant instant() { return now; }
     }
+
+    @Nested
+    @DisplayName("group routing (PRIVATE-CLOUD-ALIGNMENT Track 5)")
+    class GroupRouting {
+
+        @Test
+        @DisplayName("the group is part of the filename and survives a restart's boot scrub")
+        void group_survives_restart() {
+            DiskBackedMetricsBuffer buf = newBuffer();
+            BufferedEnvelope handle = buf.enqueue(envelope(1_700_000_000L, "worker-1", List.of("GET /a")), "cps").orElseThrow();
+            assertThat(handle.groupId()).isEqualTo("cps");
+            assertThat(handle.file().getFileName().toString()).endsWith("~cps.envelope.gz");
+            BufferedEnvelope plain = buf.enqueue(envelope(1_700_000_015L, "worker-1", List.of("GET /a"))).orElseThrow();
+            assertThat(plain.groupId()).isNull();
+            assertThat(plain.file().getFileName().toString()).doesNotContain("~");
+            buf.close();
+
+            DiskBackedMetricsBuffer reopened = newBuffer();
+            assertThat(reopened.depthEnvelopes()).isEqualTo(2L);
+            BufferedEnvelope oldest = reopened.peekOldest().orElseThrow();
+            assertThat(oldest.groupId()).isEqualTo("cps");
+            assertThat(oldest.id()).isEqualTo(handle.id());
+            reopened.delete(oldest);
+            assertThat(reopened.peekOldest().orElseThrow().groupId()).isNull();
+        }
+
+        @Test
+        @DisplayName("an invalid group never reaches a filename — the envelope is buffered without one")
+        void invalid_group_is_dropped_to_none() {
+            DiskBackedMetricsBuffer buf = newBuffer();
+            BufferedEnvelope handle = buf.enqueue(envelope(1L, "worker-1", List.of("GET /a")), "CPS;DROP").orElseThrow();
+            assertThat(handle.groupId()).isNull();
+        }
+    }
+
 }
