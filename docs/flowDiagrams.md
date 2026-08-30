@@ -326,9 +326,9 @@ flowchart LR
     B == "/api/v1/runs[/...]<br/>/api/v1/pods<br/>/api/v1/registerPod<br/>/api/v1/heartbeat<br/>/actuator/*" ==> NX
     NX -- "proxy_pass" --> GO[global-orchestrator:8082]
 
-    GO -. "fan-out POST /test<br/>+ status poll<br/>+ log proxy" .-> LO[local-orchestrator:8080]
+    GO -. "fan-out POST /test + status poll + log proxy<br/>through the region's relay<br/>(direct regions by baseUrl)" .-> LO[local-orchestrator:8080]
 
-    GR -. "SQL via provisioned<br/>datasource" .-> PG[(Database<br/>CARDZATE_DB_GRAF)]
+    GO -. "JDBC · three pools" .-> DB[(Database<br/>CARDZATE_DB_GRAF)]
 ```
 
 **Order matters in `nginx.conf`:** `^~ /api/v1/blob` must precede the general
@@ -337,8 +337,8 @@ compose and Kubernetes — `DNS_RESOLVER` and `SVC_SUFFIX` are derived at
 container start, because nginx's `resolver` ignores resolv.conf search domains
 and in-cluster upstreams must be FQDNs.
 
-Metrics render natively in the UI; there is no external dashboard, not
-an embed.
+Metrics render natively in the UI (uPlot); "Open in Grafana" links the group's
+hosted dashboards on the run's time range — nothing is embedded.
 
 ---
 
@@ -368,19 +368,17 @@ global-orchestrator (healthy) ──┐
                                 ├─► jmeter-cloud-ui
 document-service (healthy) ─────┘
 
-orchestrator-1 (alive)  ──► PodRegistrar fires async on @PostConstruct
-                            and POSTs /api/v1/registerPod to the
-                            global. The global doesn't depend on the
-                            orchestrator being up — its registry just
-                            stays empty until pods register.
-
-multiRegion profile adds:
-   └─► orchestrator-2 (parallel to orchestrator-1, different region tag)
+local-orchestrator workers           // not started by compose. STATIC (the
+                                     // default): the operator runs and declares
+                                     // them (driver.mjs worker). DYNAMIC: the hub
+                                     // spins them through a kind regional
+                                     // (infra/deploy/k8s/local/bootstrapRegions.sh).
 ```
 
-**Cold-cache time-to-healthy:** ~90 s end-to-end (oracle ~40 s cold,
-flyway-migrate 5 s, the Spring Boot apps + UI ~30-60 s in parallel,
-flyway 5 s). **Warm cache:** ~30 s.
+**Time-to-healthy after `up`, images already built:** ~90 s from an empty
+Oracle volume (oracle ~40 s, flyway-migrate 5 s, the Spring Boot apps + UI
+~30-60 s in parallel); ~30 s with a warm volume. A cold *build* is ~5 min
+(`bootOrder.svg`).
 
 ---
 
@@ -411,9 +409,9 @@ SIGTERM received
 │         terminal state                                            │
 │       Tomcat is still up so operators can poll                   │
 │       GET /api/v1/test and watch the state transition.           │
-│       The state machine calls metricPublisher.flush() at         │
-│       end-of-run, so by the time this returns the buffers        │
-│       have drained for the last run.                             │
+│       OrchestratorMain drains the dispatch queue at end-of-run,  │
+│       so by the time this returns every envelope of the last     │
+│       run has reached the disk buffer.                           │
 └──────────────────────────────────────────────────────────────────┘
    │
    ▼

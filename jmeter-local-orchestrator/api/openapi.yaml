@@ -673,7 +673,7 @@ components:
             (set by the global-orchestrator's
             `POST /api/v1/runs/{runId}/scaleUp` fan-out). Stamped onto
             every published `WorkerMetricBatch` JSON envelope so the
-            consumer + UI can compute per-second fleet rollups (sum over
+            consumer + UI can compute per-window fleet sums (sum over
             members live at second X).
         application:
           type: string

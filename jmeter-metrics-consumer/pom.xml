@@ -20,8 +20,8 @@
     <description>
         Ingests WorkerMetricBatch JSON envelopes POSTed by the
         local-orchestrator workers (POST /api/v1/ingest) and lands
-        per-second rows plus the rollup deltas in the Oracle metrics
-        schema the orchestrators read.
+        15-second rows, first write wins, in the group's fact table in
+        CARDZATE_DB_GRAF that the orchestrator reads.
     </description>
 
     <properties>

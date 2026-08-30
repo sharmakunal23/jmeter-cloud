@@ -130,14 +130,14 @@ class AiControllerTest {
     }
 
     @Test
-    @DisplayName("POST /runs/compare-insights → 400 INVALID_REQUEST when not exactly 2 ids")
+    @DisplayName("POST /runs/compareInsights → 400 INVALID_REQUEST when not exactly 2 ids")
     void compare_wrongIdCount_returns400() throws Exception {
-        mvc.perform(post("/api/v1/runs/compare-insights?ids=onlyOne"))
+        mvc.perform(post("/api/v1/runs/compareInsights?ids=onlyOne"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
-        mvc.perform(post("/api/v1/runs/compare-insights?ids=A,B,C"))
+        mvc.perform(post("/api/v1/runs/compareInsights?ids=A,B,C"))
                 .andExpect(status().isBadRequest());
-        mvc.perform(post("/api/v1/runs/compare-insights?ids=DUPE,DUPE"))
+        mvc.perform(post("/api/v1/runs/compareInsights?ids=DUPE,DUPE"))
                 .andExpect(status().isBadRequest());
     }
 }

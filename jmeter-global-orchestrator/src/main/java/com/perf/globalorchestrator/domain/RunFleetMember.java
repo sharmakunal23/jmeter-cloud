@@ -16,7 +16,7 @@ import java.util.Map;
  * <p><b>MID-TEST-SCALING Phase A</b> added {@code joinedAtSecond} —
  * NULL for original-fleet members, {@code >= 0} for mid-test scale-up
  * joiners (seconds since {@code run.startedAt}). Lets the UI render a
- * "joined +Xm" chip and lets per-second rollups distinguish members
+ * "joined +Xm" chip and lets the timeseries distinguish members
  * live at second X from members that hadn't joined yet.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)

@@ -7,7 +7,7 @@ on demand.
 
 In this mode you deploy workers with `kubectl` and **declare** them to the
 platform. Everything downstream is unchanged: runs claim declared workers,
-fan out to them, collect per-second metrics, and save results.
+fan out to them, collect 15-second metric windows, and save results.
 
 > **This IS the default.** Since 2026-07-27 `PROVISIONING_MODE` defaults to
 > `STATIC`, because operator-managed fleets are this platform's normal
@@ -81,7 +81,7 @@ substrate uses. What it needs:
 
 | Env var | Required? | Why |
 |---|---|---|
-| `METRICS_INGEST_URL` | **yes** | where per-second metrics are POSTed. Without it the run produces no data. |
+| `METRICS_INGEST_URL` | **yes** | where the 15-second metric windows are POSTed. Without it the run produces no data. |
 | `BASE_DIR` | yes (image default is fine) | working root; also how the worker recognises its own JMeter processes |
 | `POD_ID` | recommended | the worker's id. **Must equal the name you declare** — it is also the `workerId` stamped on every metric, so the metrics join breaks if they differ. Defaults to the hostname, which is normally what you want. |
 | `GLOBAL_ORCHESTRATOR_URL` + `GROUP_ID` | optional | enables self-registration (the group whose pool the worker joins). Harmless alongside declaring — the two converge on one row, and your declared address wins. |

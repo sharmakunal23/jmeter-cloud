@@ -106,7 +106,7 @@ public class AiController {
      * — we refuse to "compare" against nothing). Cached on the sorted pair for
      * terminal runs; {@code ?fresh=true} bypasses + re-bills.
      */
-    @PostMapping("/runs/compare-insights")
+    @PostMapping("/runs/compareInsights")
     public CompareInsights compareInsights(
             @RequestParam(name = "ids") String idsParam,
             @RequestParam(name = "fresh", defaultValue = "false") boolean fresh) {

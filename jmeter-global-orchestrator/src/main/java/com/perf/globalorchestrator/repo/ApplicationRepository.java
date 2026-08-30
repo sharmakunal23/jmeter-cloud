@@ -58,11 +58,6 @@ public class ApplicationRepository {
                 rs.getString("METRICS_APPLICATION"));
     }
 
-    private static Integer nullableInt(ResultSet rs, String col) throws SQLException {
-        int v = rs.getInt(col);
-        return rs.wasNull() ? null : v;
-    }
-
     public Application insert(Application app) {
         String endpointsJson = serialise(app.healthEndpoints());
         // The constructor defaults a null policy

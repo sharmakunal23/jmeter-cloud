@@ -176,7 +176,7 @@ public class RunController {
     /**
      * HARD-DELETE / purge — the irreversible second tier of the two-tier delete
      * model. PERMANENTLY removes a run: its result blobs (+ unshared
-     * testPlan/dataFiles blobs), its per-second metric rows, its AI-cache + trend
+     * testPlan/dataFiles blobs), its metric rows, its AI-cache + trend
      * rows, and the run row itself (cascading fleet members + audit events). A
      * {@code purgeAudit} tombstone records who/what/when + what was reclaimed.
      *

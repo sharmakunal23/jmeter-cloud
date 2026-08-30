@@ -21,7 +21,7 @@ cluster credential. Each data center runs one stateless
 liveness straight from the Pod list, and relays the global's calls to them. The
 **data plane** is N worker pods, each running JMeter and shipping metrics of its
 own accord. **Storage** is a single database holding both run state and metrics,
-with a dashboard alongside for drill-down.
+with the group's hosted Grafana dashboards linked for drill-down.
 
 Two things worth knowing: a worker's liveness is **the kubelet's word**, not a
 heartbeat — a dead worker's reason (`OOMKilled`, `Unschedulable`) reaches the

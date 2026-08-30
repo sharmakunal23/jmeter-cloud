@@ -47,6 +47,11 @@ spec:
                   key: metricsOwnerPassword
             - name: TZ
               value: UTC
+            # migrate normally; repair when a landed migration's checksum
+            # changed (V1's grants moved to V2 on 2026-08-30) — see
+            # oracle/docs/controlPlaneSchema.md, "Upgrading".
+            - name: FLYWAY_COMMAND
+              value: migrate
           command: ["/bin/sh", "-c"]
           args:
             - >-
@@ -56,7 +61,7 @@ spec:
               -password="$ORACLE_METRICS_OWNER_PASSWORD"
               -locations=filesystem:/flyway/sql
               -connectRetries=60
-              migrate
+              "$FLYWAY_COMMAND"
           resources:
             requests:
               memory: 256Mi

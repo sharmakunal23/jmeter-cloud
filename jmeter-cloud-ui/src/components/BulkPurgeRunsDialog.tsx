@@ -4,7 +4,7 @@ import { runsApi, GlobalOrchestratorError, type Run } from "../api/runs";
 
 /**
  * HARD-DELETE / purge — bulk permanent deletion of one or more ARCHIVED (hidden)
- * runs. Irreversible: each run's result files, per-second metrics, and run-state
+ * runs. Irreversible: each run's result files, metric rows, and run-state
  * rows are physically removed. A type-to-confirm guard (type "delete") sits in
  * front of the action since the selection is too large to retype id-by-id.
  *

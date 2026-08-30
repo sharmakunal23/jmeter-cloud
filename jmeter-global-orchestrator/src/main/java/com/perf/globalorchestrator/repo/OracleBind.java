@@ -100,7 +100,9 @@ final class OracleBind {
     /**
      * {@code TOTAL_THROUGHPUT} → {@code totalThroughput}: a column label as an API
      * key. Unquoted aliases fold to UPPER, so this is the only way a camelCase key
-     * leaves a query — never a quoted alias.
+     * leaves a query — never a quoted alias. A digit takes the capital
+     * ({@code HTTP_2XX} → {@code http2xx}), so name such columns with the
+     * letter first ({@code TWOXX_COUNT}) if the key must read differently.
      */
     static String camel(String upperSnake) {
         StringBuilder out = new StringBuilder(upperSnake.length());

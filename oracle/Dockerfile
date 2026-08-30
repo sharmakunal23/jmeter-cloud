@@ -6,7 +6,7 @@
 # classpath is a coin toss — and bakes the migrations in for Kubernetes,
 # which has no repo checkout to bind-mount. Compose bind-mounts the same
 # directory over the copy so an edit needs no rebuild.
-# Flyway 11 is the first line that knows Oracle 23ai; 10.x warns it is
+# Flyway 11 is the first line that knows Oracle 23ai/26ai; 10.x warns it is
 # untested past 21.3.
 #
 #   docker build --provenance=false -t jmeter-cloud-flyway:dev oracle/

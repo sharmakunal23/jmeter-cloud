@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * HM-5 — batched per-second timeseries for the side-by-side comparison
+ * HM-5 — batched timeseries for the side-by-side comparison
  * view. Returned by {@code GET /api/v1/runs/timeseries?ids=A,B}; the UI
  * compares exactly two runs (decision logged 2026-05-10), which is why
  * this is a partial-200 shape rather than a strict all-or-nothing

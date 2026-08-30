@@ -46,7 +46,7 @@ public class AiInsightsService {
     private static final Logger LOG = LoggerFactory.getLogger(AiInsightsService.class);
 
     // v2 (2026-05-31): inputs became a COMPACT DIGEST (aggregates + downsample +
-    // top-N labels) instead of the full per-second timeseries — ~56k → ~1-5k
+    // top-N labels) instead of the full 15-second timeseries — ~56k → ~1-5k
     // input tokens. v3 (2026-05-31): prompt forbids exposing "bucket" indices in
     // the output (it's just the input encoding) and tells the model to phrase
     // timing as elapsed wall time via bucketSec. Each bump invalidates the prior
@@ -218,7 +218,7 @@ public class AiInsightsService {
      * Compact, token-cheap digest of a run's headline metrics: a few aggregates
      * plus a duration-scaled downsample of each series (finer for long runs,
      * coarse for short ones) so Claude can read the shape without us shipping
-     * every per-second point. The raw timeseries is ~20-80× larger and adds no
+     * every 15-second point. The raw timeseries is ~20-80× larger and adds no
      * analytical value at summary altitude.
      */
     private Map<String, Object> seriesDigest(Run run, MetricsTimeseries ts) {

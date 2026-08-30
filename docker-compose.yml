@@ -14,13 +14,13 @@
 # repo-root .env, so plain `docker compose up` does the right thing without
 # requiring a flag.
 #
-# Workers POST per-second metrics straight to the metrics-consumer over HTTP
-# (`POST /api/v1/ingest`, JSON).
+# Workers POST 15-second metric windows straight to the metrics-consumer over
+# HTTP (`POST /api/v1/ingest`, JSON).
 #
-# Worker containers (formerly the static `orchestrator-1` / `orchestrator-2`
-# services) are no longer in compose — they're spun up dynamically per
-# application group by the global-orchestrator's PodProvisioner. See the
-# Capacity tab in the UI (`/capacity/{groupId}`) to add workers.
+# Worker containers are not started by compose. PROVISIONING_MODE=STATIC (the
+# default): the operator runs and declares them (`driver.mjs worker`, or the
+# Capacity page `/capacity/{groupId}`). DYNAMIC: the hub spins them through a
+# kind regional (`infra/deploy/k8s/local/bootstrapRegions.sh`).
 
 include:
   - path: ./oracle/docker-compose.yml

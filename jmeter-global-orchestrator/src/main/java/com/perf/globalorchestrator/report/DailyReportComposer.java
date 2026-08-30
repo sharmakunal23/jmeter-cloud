@@ -22,7 +22,7 @@ import java.util.Map;
  * compared against each app's preceding 6-day baseline, and the top regressions
  * to investigate.
  *
- * <p>Sources, both cheap (no scan of the per-second metrics table at send time):
+ * <p>Sources, both cheap (no scan of the fact metrics table at send time):
  * <ul>
  *   <li><b>Run counts</b> — {@link RunRepository#countByStateForApplicationSince}.</li>
  *   <li><b>Latency / error baselines</b> — the {@code runTrend} snapshots

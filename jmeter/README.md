@@ -14,5 +14,5 @@ change one and you must change the other, or every row fails to parse.
 
 Build: [`buildImage.sh`](buildImage.sh). `JMETER_INSTALL_MODE={Download,Local}`
 picks between a pinned mirror download and a local distribution.
-Detail: [`docs/baseImageDocker.md`](docs/baseImageDocker.md) and
-[`docs/baseImageAmi.md`](docs/baseImageAmi.md).
+The image and AMI notes (`docs/baseImageDocker.md`, `docs/baseImageAmi.md`) are
+kept locally and are not in the public tree.

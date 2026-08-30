@@ -781,7 +781,7 @@ export const runsApi = {
   },
 
   /**
-   * Batch fetch the per-second timeseries for two runs in one
+   * Batch fetch the timeseries for two runs in one
    * round-trip. Drives the two-run comparison view.
    * The backend enforces exactly two distinct ids; this client
    * reflects that in the signature so the constraint can't be

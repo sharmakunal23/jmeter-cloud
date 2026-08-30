@@ -25,7 +25,7 @@ exact keys documented in each service's
 | **External Secrets Operator** | The org already runs Vault / a cloud secrets manager. Secrets stay in the manager; rotation propagates without kubectl access. Recommended where available. |
 | **sealed-secrets** | The manifests are GitOps-managed and the team wants secrets in git. Adds a controller + key-backup obligation. |
 
-Whatever the choice: **the four Secret names and keys are the contract**
+Whatever the choice: **the three Secret names and keys are the contract**
 — the Deployments reference them by name, so any backend that
 materializes those Secrets works without manifest changes.
 
@@ -114,7 +114,7 @@ they mirror the pod nginx's blob-upload limits.
 
 | PVC | Contents | Posture |
 |-----|----------|---------|
-| `oracle` (kind StatefulSet template, 10Gi; the operator's instance on privateCloud) | ALL platform state: runs, registry, capacity, audit trail, metrics partitions, AI cache | Set an explicit `storageClassName` (SSD-class, `allowVolumeExpansion: true`) on kind; on privateCloud the instance is the DBA's. **Backups are mandatory**: RMAN or Data Pump on a schedule (or CSI VolumeSnapshots for the kind volume). Test a restore before go-live. Retention is the metrics-consumer's `RetentionJob` (boot + daily, `"maintenanceLock"` `FOR UPDATE SKIP LOCKED`): raw partitions dropped after `retention.rawDays` (30), rollups after `retention.rollupWeeks` (52) — no partition runway to maintain, no external cron. |
+| `oracle` (kind StatefulSet template, 10Gi; the operator's instance on privateCloud) | ALL platform state: runs, registry, capacity, audit trail, metrics partitions, AI cache | Set an explicit `storageClassName` (SSD-class, `allowVolumeExpansion: true`) on kind; on privateCloud the instance is the DBA's. **Backups are mandatory**: RMAN or Data Pump on a schedule (or CSI VolumeSnapshots for the kind volume). Test a restore before go-live. Retention is each group's nightly `<P>_NIGHTLY_MAINT` job inside the database (archive after `hotDays`, prune after `historyDays`, stats), rendered from `oracle/groups/<id>.json` — no consumer setting, no partition runway to maintain, no external cron. |
 | `document-service-data` (10Gi) | Test plans, data zips, saved JTL archives | Same storageClass treatment. Backup optional-but-recommended (artifacts are re-uploadable; saved results are not). Growth = operator-driven; alert on PVC usage >80%. |
 
 Both overlays carry commented `storageClassName` patch stubs

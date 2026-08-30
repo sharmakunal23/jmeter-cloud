@@ -35,6 +35,7 @@ import java.sql.PreparedStatement;
 import java.sql.Types;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -291,17 +292,18 @@ class GlobalRunDbTest extends OracleDbTestSupport {
 
     @Test
     void ai_response_cache_round_trips_the_clob_expires_on_read_and_purges_by_run() {
+        Instant dbBefore = owner.queryForObject("SELECT SYSTIMESTAMP FROM dual", OffsetDateTime.class).toInstant();
         aiResponses.upsert("insights", "run-ai-1", "v1", "{\"summary\":\"ok\"}", "claude-sonnet-4-6", 10, 20);
         var hit = aiResponses.find("insights", "run-ai-1", "v1", Duration.ofDays(30)).orElseThrow();
         assertThat(hit.responseJson()).isEqualTo("{\"summary\":\"ok\"}");   // the CLOB read by its bare column label
         assertThat(hit.model()).isEqualTo("claude-sonnet-4-6");
         assertThat(hit.tokensIn()).isEqualTo(10);
         assertThat(hit.tokensOut()).isEqualTo(20);
-        assertThat(hit.createdAt()).isAfter(Instant.now().minus(Duration.ofMinutes(1)));
+        assertThat(hit.createdAt()).isAfterOrEqualTo(dbBefore.minusSeconds(1));   // the database's clock, not the JVM's
 
         aiResponses.upsert("insights", "run-ai-1", "v1", "{\"summary\":\"again\"}", "claude-sonnet-4-6", 1, 2);   // MERGE replaces
         assertThat(aiResponses.find("insights", "run-ai-1", "v1", Duration.ofDays(30)).orElseThrow().responseJson()).isEqualTo("{\"summary\":\"again\"}");
-        assertThat(aiResponses.find("insights", "run-ai-1", "v1", Duration.ZERO)).isEmpty();   // past the TTL = a miss, not a stale hit
+        assertThat(aiResponses.find("insights", "run-ai-1", "v1", Duration.ofDays(-1))).isEmpty();   // cutoff a day ahead: expired = a miss, whatever the two clocks say
 
         aiResponses.upsert("compare", "run-ai-1|run-ai-2", "v1", "{}", "claude-sonnet-4-6", 0, 0);
         assertThat(aiResponses.deleteForRun("run-ai-1")).isEqualTo(2);   // the single-run row and the comparison it sits in

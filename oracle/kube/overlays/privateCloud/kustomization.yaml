@@ -3,8 +3,19 @@
 # in-cluster.
 #
 # ONCE, BY A DBA: run oracle/initdb/01_createSchemasAndUsers.sql against
-# the platform's PDB with real passwords (it creates the schema owner and
-# the three application users; nothing else needs instance privileges).
+# the platform's PDB with real passwords, the PDB's service name and the
+# tablespace of your choice, and without its LOCAL DEV ONLY block (it
+# creates the schema owner and the three application users; nothing else
+# needs instance privileges). It is re-runnable.
+#
+# REPAIR (only when the Job fails validation because a landed migration's
+# checksum changed): delete the Job, apply once with FLYWAY_COMMAND=repair,
+# delete it again, apply with migrate. Patch stub:
+#   - target: { kind: Job, name: flyway-migrate }
+#     patch: |-
+#       - op: replace
+#         path: /spec/template/spec/containers/0/env/3/value
+#         value: repair
 #
 # CREDENTIALS (required before first apply — never committed):
 #   kubectl -n jmeter-cloud create secret generic oracle-credentials \

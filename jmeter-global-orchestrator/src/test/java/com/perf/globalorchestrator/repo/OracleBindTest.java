@@ -37,6 +37,7 @@ class OracleBindTest {
         assertEquals("avgP50Ms", OracleBind.camel("AVG_P50_MS"));
         assertEquals("httpErrorRate", OracleBind.camel("HTTP_ERROR_RATE"));
         assertEquals("n", OracleBind.camel("N"));
+        assertEquals("http2xx", OracleBind.camel("HTTP_2XX"));   // a digit takes the capital
         assertEquals("", OracleBind.camel(""));
     }
 

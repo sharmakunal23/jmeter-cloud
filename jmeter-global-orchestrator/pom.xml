@@ -20,7 +20,7 @@
     <description>
         Fan-out layer that drives many jmeter-local-orchestrators across
         regions/clusters. Owns run-state, coordinates fleet-wide test
-        starts, and reads aggregated metrics from the Oracle rollups.
+        starts, and aggregates the group fact tables in CARDZATE_DB_GRAF at query time.
     </description>
 
     <properties>

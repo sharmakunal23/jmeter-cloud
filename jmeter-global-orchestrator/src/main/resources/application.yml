@@ -108,7 +108,7 @@ metricsConsumer:
 
 # Per-run timeseries (GET /runs/{id}/timeseries) trailing-edge trim. On a LIVE
 # run the newest `settleSeconds` of data are still in flight — each worker holds
-# a per-second window open for its close-grace (~2 s, up to GRACE_PERIOD_SECONDS)
+# its newest 15-second window open for its close-grace (~2 s, up to GRACE_PERIOD_SECONDS)
 # and the metrics-consumer adds ingest + batch-INSERT lag before the
 # rows land in the database. Until then those seconds are partially aggregated, so a
 # run polled every 5 s shows a wobbling trailing edge that the auto-scaled chart

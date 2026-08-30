@@ -87,7 +87,7 @@ COPY jmeter/user.properties ${JMETER_HOME}/bin/user.properties
 FROM ${BASE_IMAGE}
 
 LABEL org.opencontainers.image.title="jmeter-local-orchestrator" \
-      org.opencontainers.image.description="HTTP-driven orchestrator: launches JMeter as a child process, tails the JTL, and POSTs per-second JSON metrics to the metrics-consumer" \
+      org.opencontainers.image.description="HTTP-driven orchestrator: launches JMeter as a child process, tails the JTL, and POSTs 15-second JSON metric windows to the metrics-consumer" \
       org.opencontainers.image.source="https://github.com/your-org/jmeter-local-orchestrator"
 
 ARG JMETER_VERSION=5.6.3

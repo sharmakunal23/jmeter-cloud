@@ -1,14 +1,11 @@
 # jmeter-local-orchestrator subsystem — Compose fragment.
 #
-# The static
-# `orchestrator-1` / `orchestrator-2` services are gone. Local-orchestrator
-# containers are now spun up dynamically per application group by the
-# global-orchestrator's `PodProvisioner` — operators add workers from the
-# Capacity UI (`/capacity/{groupId}`) and they appear in `docker ps` as
-# `{groupId}-{region}-worker-{n}`. The image
-# (`jmeter-local-orchestrator:dev`) still builds from this directory and
-# is consumed by the provisioner; this fragment exists to express the
-# build target for `docker compose build` / repo-wide bring-up.
+# Compose starts no worker: under PROVISIONING_MODE=STATIC (the default) the
+# operator runs and declares them (`driver.mjs worker`, the Capacity page);
+# under DYNAMIC the hub spins them through a kind regional. The image
+# (`jmeter-local-orchestrator:dev`) still builds from this directory and is
+# what both paths run; this fragment exists to express the build target for
+# `docker compose build` / repo-wide bring-up.
 #
 # Container bakes Apache JMeter 5.6.3 + the orchestrator's fat JAR into
 # a single image. The orchestrator launches `/opt/jmeter/bin/jmeter` as

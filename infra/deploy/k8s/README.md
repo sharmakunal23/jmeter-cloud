@@ -169,7 +169,7 @@ correctness. The per-service verdict:
 | Service | Safe replicas | Why |
 |---------|---------------|-----|
 | `jmeter-cloud-ui` | **any** | nginx + static assets, no state |
-| `metrics-consumer` | **any** | ingest is idempotent (staged prune on `(runId, workerId, label, windowSecond)`); `RetentionJob` takes `"maintenanceLock"` `FOR UPDATE SKIP LOCKED`, so replicas never race |
+| `metrics-consumer` | **any** | ingest is idempotent (first write wins on `(RUN_ID, WORKER_ID, LABEL_ID, WINDOW_SECOND)`); retention is each group's nightly database job, so replicas never race |
 | `global-orchestrator` | **any** (after the MULTI-INSTANCE fixes) | see the guarantees below |
 | `jmeter-regional-orchestrator` | **any** | stateless — every call is a cluster API call or a relayed worker call; nothing is cached or scheduled |
 | `document-service` | **1** — hard constraint on `LocalFsBlobStore` | RWO PVC + `Recreate` strategy; two replicas can't mount the same volume, and a second writer would fork the blob tree. Scale out **only** after switching to `S3BlobStore` (`-Pcloud`) |

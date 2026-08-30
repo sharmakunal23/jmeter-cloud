@@ -5,7 +5,7 @@
   </defs>
   <rect width="1240" height="420" fill="#fafaf9"/>
   <text x="30" y="34" font-size="19" font-weight="700" fill="#0f172a">jmeter-local-orchestrator — one worker pod</text>
-  <text x="30" y="56" font-size="12.5" fill="#64748b">HTTP-driven: stage artifacts → launch JMeter → tail JTL → aggregate per second → POST JSON metrics.</text>
+  <text x="30" y="56" font-size="12.5" fill="#64748b">HTTP-driven: stage artifacts → launch JMeter → tail JTL → aggregate 15-s windows → POST JSON metrics.</text>
 
   <!-- pod boundary -->
   <rect x="20" y="76" width="990" height="180" rx="12" fill="none" stroke="#5eead4" stroke-dasharray="6 4"/>
@@ -30,7 +30,7 @@
     <rect x="654" y="120" width="160" height="76" rx="8" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
     <text x="734" y="146" text-anchor="middle" font-weight="600" fill="#115e59">JTL tailer +</text>
     <text x="734" y="164" text-anchor="middle" font-weight="600" fill="#115e59">aggregator</text>
-    <text x="734" y="184" text-anchor="middle" font-size="10" fill="#0f766e">1 s windows / label</text>
+    <text x="734" y="184" text-anchor="middle" font-size="10" fill="#0f766e">15-s windows / label</text>
 
     <rect x="870" y="120" width="120" height="76" rx="8" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
     <text x="930" y="150" text-anchor="middle" font-weight="600" fill="#115e59">Ingest</text>

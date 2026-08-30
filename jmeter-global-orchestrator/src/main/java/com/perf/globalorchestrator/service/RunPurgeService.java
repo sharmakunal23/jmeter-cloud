@@ -24,7 +24,7 @@ import java.util.Map;
 /**
  * The irreversible second tier of the delete model: where
  * {@link RunService#deleteRun} only hides a run, this physically removes a
- * hidden run's result blobs, its per-second metrics rows and its run-state, and
+ * hidden run's result blobs, its metric rows and its run-state, and
  * leaves a {@code purgeAudit} tombstone. Test-plan and data-file blobs go only
  * if no surviving run still references them.
  *

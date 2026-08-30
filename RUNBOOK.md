@@ -69,7 +69,9 @@ same host port. Ports are configurable in `.env`.
 | Port | Service | URL | Health check |
 |------|---------|-----|--------------|
 | `1521` | Oracle Database Free (`FREEPDB1`) | `localhost:1521/FREEPDB1` (`system` / `localdev`; the one schema owner `CARDZATE_DB_GRAF` — the consumer connects as it; the hub as `GLOBAL_ORCHESTRATOR_WRITER` / `METRICS_READER` / `METRICS_PURGER`) | `healthcheck.sh` (in the image) |
-| `8025` | MailHog (dev SMTP) | http://localhost:8025 | — |
+| `1025` | MailHog SMTP (dev sink the hub mails to) | `localhost:1025` | — |
+| `6379` | Redis (the hub's cache) | `localhost:6379` | `redis-cli ping` |
+| `8025` | MailHog UI (dev SMTP) | http://localhost:8025 | — |
 | `8080` | Worker HTTP API (`jmeter-local-orchestrator`) | http://localhost:8080 | `GET /actuator/health` |
 | `8082` | global-orchestrator | http://localhost:8082 | `GET /actuator/health` |
 | `8083` | metrics-consumer | http://localhost:8083 | `GET /actuator/health` |

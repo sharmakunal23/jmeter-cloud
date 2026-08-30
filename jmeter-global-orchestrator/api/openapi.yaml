@@ -256,7 +256,7 @@ paths:
         - result blobs in document-service (`results-{runId}-*`), plus the run's
           testPlan / dataFiles blobs **only if** no other run still references
           them (shared uploaded plans survive);
-        - the run's per-second rows in `metrics."workerMetric"`;
+        - the run's fact rows in its group's `<GROUP_ID>_METRICS` (and `_METRICS_H`);
         - its AI-cache + trend rows, and the `run` row itself — cascading its
           fleet members and audit events.
 
@@ -721,7 +721,7 @@ paths:
   /api/v1/runs/timeseries:
     get:
       tags: [runs]
-      summary: Batched per-second timeseries for the comparison view (HM-5)
+      summary: Batched timeseries for the comparison view (HM-5)
       description: |
         Returns timeseries for exactly two runs in a single round-trip.
         Drives the side-by-side comparison page where an operator picks
@@ -889,7 +889,7 @@ paths:
       tags: [ai]
       summary: Generate AI insights for a single run (AI-1)
       description: |
-        Hands the run's metadata, per-second timeseries, and per-label rollup to
+        Hands the run's metadata, timeseries, and per-label rollup to
         Claude and returns a short summary plus 3–5 severity-tagged findings.
         Advisory only. Terminal runs are cached in the durable `aiResponse`
         table (no re-bill on reload); active runs are never cached (their inputs
@@ -927,7 +927,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
-  /api/v1/runs/compare-insights:
+  /api/v1/runs/compareInsights:
     post:
       tags: [ai]
       summary: Explain the delta between two runs (AI-2)
@@ -1299,7 +1299,7 @@ paths:
         CANNOT be undone:
 
         - every one of the app's runs is purged (result/testPlan/dataFiles
-          blobs, per-second metric rows, run-state rows — same fan-out as
+          blobs, metric rows, run-state rows — same fan-out as
           `POST /runs/{id}/purge`);
         - its health-transition log;
         - the `application` row itself. Workers and capacity are the
@@ -1663,7 +1663,7 @@ paths:
         DELETE releases either.
 
         `podName` MUST equal the `workerId` the worker stamps on its metrics
-        or the `metrics."workerMetric"` join breaks.
+        or the `WORKER (RUN_ID, WORKER_KEY)` join breaks.
 
         The address is probed (`GET {baseUrl}/actuator/health`) before the
         declaration is accepted, so a typo fails here rather than at the next
@@ -2680,7 +2680,7 @@ components:
         metricRowsDeleted:
           type: integer
           format: int64
-          description: 'Total rows removed from metrics."workerMetric" across all the app''s runs.'
+          description: 'Total fact rows removed from the group''s `<GROUP_ID>_METRICS` across all the app''s runs.'
         blobsDeleted:
           type: integer
           description: Total document-service blobs removed across all the app's runs.
@@ -2702,7 +2702,7 @@ components:
         metricRowsDeleted:
           type: integer
           format: int64
-          description: 'Rows removed from metrics."workerMetric".'
+          description: 'Fact rows removed from the group''s `<GROUP_ID>_METRICS`.'
         blobsDeleted:
           type: integer
           description: |

@@ -85,7 +85,7 @@ export const aiApi = {
     const fresh = opts?.fresh ? "&fresh=true" : "";
     return request<CompareInsights>(
       "POST",
-      `/api/v1/runs/compare-insights?ids=${ids}${fresh}`,
+      `/api/v1/runs/compareInsights?ids=${ids}${fresh}`,
       undefined,
       signal,
     );

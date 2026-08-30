@@ -5,7 +5,7 @@ import java.util.List;
 
 /**
  * AI-2 — Claude's reading of the delta between two runs,
- * served by {@code POST /api/v1/runs/compare-insights?ids=A,B}.
+ * served by {@code POST /api/v1/runs/compareInsights?ids=A,B}.
  *
  * <p>{@code runIds} preserves the operator's submitted order (A then B);
  * {@code summary} reads B relative to A; {@code findings} are per-metric

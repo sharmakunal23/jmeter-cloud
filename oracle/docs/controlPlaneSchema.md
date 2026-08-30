@@ -65,7 +65,7 @@ Both are called from a `BEGIN … END;` block with a `REF CURSOR` out parameter
 | `ORCH_AI_RESPONSE`: upsert → find → upsert again → find past the TTL → purge by run id | the CLOB round-trips by its bare label; the MERGE replaces; an expired row is a miss; `deleteForRun` removes the single-run row and the comparison it sits in |
 | 5 schedules: two due, one not due, one disabled, one platform-level future | claim returns the two due, earliest first |
 | Duplicate platform job name, `MAX_RUNS` without a threshold, pod for an unknown group, non-JSON `PROPERTIES` | ORA-00001, ORA-02290, ORA-02291, ORA-02290 |
-| V1 + V2 applied from an empty schema | every object `VALID`, 13 `ORCH_*` tables, no non-UPPER object or column name but Flyway's own history |
+| V1 + V2 applied from an empty schema | every object `VALID`, 13 `ORCH_*` tables, no non-UPPER object or column name but Flyway's three (`flyway_schema_history`, its `_pk` and `_s_idx` — tool-imposed, like `docker-compose.yml`; don't "fix" them with `-table=`) |
 
 ## Roles
 
@@ -80,8 +80,19 @@ pool sets `CURRENT_SCHEMA = CARDZATE_DB_GRAF` and names tables bare.
 
 ## Upgrading a database that has the two-schema layout
 
-`DROP USER "globalOrchestrator" CASCADE` (and the three quoted users), create
-the users from `initdb/`, `flyway repair` (V1's checksum changed when its
-grants moved to V2), then `flyway migrate` — V2 and the re-rendered bundles
-apply on top of the existing V1. Oracle cannot rename a user, so the old
-control-plane rows are not carried over.
+Oracle cannot rename a user, so the old control-plane rows are not carried
+over: as SYS, `DROP USER "globalOrchestrator" CASCADE` and the three quoted
+users, re-run `initdb/01_createSchemasAndUsers.sql` (re-runnable — the
+existing owner is kept), then repair V1's checksum (its grants block moved to
+V2) and migrate; V2 and the re-rendered bundles apply on top of the existing V1.
+
+```bash
+docker compose run --rm --entrypoint flyway flyway-migrate \
+  -url=jdbc:oracle:thin:@//oracle:1521/FREEPDB1 -user=CARDZATE_DB_GRAF \
+  -password="${ORACLE_METRICS_OWNER_PASSWORD:-localdev}" -locations=filesystem:/flyway/sql repair
+docker compose up flyway-migrate
+```
+
+On Kubernetes the Job is immutable, so it is delete → apply with the
+`FLYWAY_COMMAND=repair` patch (stub in `kube/overlays/privateCloud`) → delete →
+apply with `migrate`.

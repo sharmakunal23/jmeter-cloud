@@ -9,7 +9,7 @@
   </defs>
   <rect width="900" height="420" fill="#fafaf9"/>
   <text x="30" y="30" font-size="15" font-weight="700" fill="#0f172a">jmeter-global-orchestrator — runs, capacity, and every region's workers</text>
-  <text x="30" y="48" font-size="10" fill="#64748b">Claims IDLE workers with SELECT … FOR UPDATE SKIP LOCKED, launches asynchronously when it must provision, and reaches workers only through their region.</text>
+  <text x="30" y="48" font-size="10" fill="#64748b">Claims IDLE workers one row at a time (ORCH_CLAIMS, SKIP LOCKED), launches asynchronously when it must provision, and reaches workers only through their region.</text>
 
   <!-- CONTROL PLANE band -->
   <rect x="30" y="66" width="840" height="150" rx="8" fill="none" stroke="#bfdbfe"/>
@@ -52,12 +52,12 @@
   <text x="42" y="344" font-size="10" font-weight="600" letter-spacing="1" fill="#065f46">DATA STORAGE</text>
 
   <rect x="210" y="356" width="220" height="40" rx="6" fill="#d1fae5" stroke="#047857" stroke-width="1.3"/>
-  <text x="320" y="373" text-anchor="middle" font-size="12" font-weight="600" fill="#065f46">globalOrchestrator schema</text>
-  <text x="320" y="388" text-anchor="middle" font-size="10" fill="#475569">run · runFleetMember · pod · capacity</text>
+  <text x="320" y="373" text-anchor="middle" font-size="12" font-weight="600" fill="#065f46">ORCH_* control plane</text>
+  <text x="320" y="388" text-anchor="middle" font-size="10" fill="#475569">ORCH_RUN · ORCH_POD · capacity</text>
 
   <rect x="42" y="356" width="150" height="40" rx="6" fill="#ffffff" stroke="#6ee7b7" stroke-width="1.3"/>
-  <text x="117" y="373" text-anchor="middle" font-size="12" font-weight="600" fill="#065f46">metrics schema</text>
-  <text x="117" y="388" text-anchor="middle" font-size="10" fill="#475569">group facts, read-only</text>
+  <text x="117" y="373" text-anchor="middle" font-size="12" font-weight="600" fill="#065f46">group fact tables</text>
+  <text x="117" y="388" text-anchor="middle" font-size="10" fill="#475569">&lt;P&gt;_METRICS · read-only</text>
 
   <!-- arrows -->
   <g stroke="#64748b" stroke-width="1.3" fill="none" marker-end="url(#a)">
