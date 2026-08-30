@@ -6,6 +6,7 @@ import com.perf.globalorchestrator.domain.MetricsTimeseries;
 import com.perf.globalorchestrator.domain.RecyclePolicy;
 import com.perf.globalorchestrator.domain.Run;
 import com.perf.globalorchestrator.domain.RunState;
+import com.perf.globalorchestrator.domain.RunSummary;
 import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.MetricsPurgeRepository;
@@ -126,7 +127,33 @@ class MetricsReadDbTest extends OracleDbTestSupport {
         assertThat(split.applications().keySet()).containsExactly("CPS", "CPS-PCI");
         assertThat(split.applications().get("CPS-PCI").tps().get(0).v()).isEqualTo(80.0 / 15);
 
-        // Per-label rollup with the keys the UI table and the AI digest read.
+        // The per-label split: every label, then an exact prefix (bound as an escaped LIKE pattern).
+        MetricsTimeseries labels = timeseries.timeseries(run.runId(), target.get(), window, new Query(false, false, true, null, 15, null), 0);
+        assertThat(labels.labels().keySet()).containsExactly("TG1 login read", "TG5 pay read");
+        assertThat(labels.labelsTotal()).isEqualTo(2);
+        assertThat(labels.labels().get("TG5 pay read").tps().get(0).v()).isEqualTo(80.0 / 15);
+        MetricsTimeseries prefixed = timeseries.timeseries(run.runId(), target.get(), window, new Query(false, false, true, "TG5", 15, null), 0);
+        assertThat(prefixed.labels().keySet()).containsExactly("TG5 pay read");
+        assertThat(prefixed.labelsTotal()).isEqualTo(1);
+        assertThat(timeseries.timeseries(run.runId(), target.get(), window, new Query(false, false, true, "TG_", 15, null), 0).labels()).isEmpty();
+
+        // The summary: the total and one row per application from one ROLLUP statement; tps over the rows' span.
+        RunSummary summary = runMetrics.summary(run.runId(), target.get(), window);
+        assertThat(summary.total().samples()).isEqualTo(1320);
+        assertThat(summary.total().errors()).isEqualTo(16);   // HTTP 5xx: (3 + 1) × 4 windows
+        assertThat(summary.total().errorPct()).isCloseTo(100.0 * 16 / 1320, org.assertj.core.data.Offset.offset(1e-9));
+        assertThat(summary.total().tps()).isEqualTo(1320.0 / 60);
+        assertThat(summary.total().avgMs()).isCloseTo(174_400.0 / 1320, org.assertj.core.data.Offset.offset(1e-6));
+        assertThat(summary.total().p90Ms()).isCloseTo(1.5 * 174_400.0 / 1320, org.assertj.core.data.Offset.offset(1e-6));
+        assertThat(summary.total().maxMs()).isEqualTo(900.0);
+        assertThat(summary.total().maxActiveThreads()).isEqualTo(10);
+        assertThat(summary.fromSecond()).isEqualTo(T0);
+        assertThat(summary.toSecond()).isEqualTo(T0 + 45);
+        assertThat(summary.byApplication()).extracting(RunSummary.Stats::application).containsExactly("CPS", "CPS-PCI");
+        assertThat(summary.byApplication().get(0).samples()).isEqualTo(1000);
+        assertThat(summary.byApplication().get(1).tps()).isEqualTo(320.0 / 60);
+
+        // Per-label rollup with the keys the UI's aggregate report and the AI digest read; busiest first.
         List<Map<String, Object>> rollup = runMetrics.rollupByLabel(target.get(), window);
         assertThat(rollup).hasSize(2);
         Map<String, Object> first = rollup.get(0);
@@ -134,8 +161,16 @@ class MetricsReadDbTest extends OracleDbTestSupport {
         assertThat(first.get("application")).isEqualTo("CPS");
         assertThat(((Number) first.get("totalThroughput")).longValue()).isEqualTo(1000);
         assertThat(((Number) first.get("totalErrors")).longValue()).isEqualTo(12);
+        assertThat(((Number) first.get("httpErrors")).longValue()).isEqualTo(12);
+        assertThat(((Number) first.get("httpErrorRate")).doubleValue()).isCloseTo(12.0 / 1000, org.assertj.core.data.Offset.offset(1e-9));
         assertThat(((Number) first.get("avgP95Ms")).doubleValue()).isCloseTo((600 * 300.0 + 400 * 320) / 1000, org.assertj.core.data.Offset.offset(1e-6));
+        assertThat(((Number) first.get("avgP90Ms")).doubleValue()).isCloseTo(1.5 * (600 * 100.0 + 400 * 120) / 1000, org.assertj.core.data.Offset.offset(1e-6));
+        assertThat(((Number) first.get("throughputRps")).doubleValue()).isEqualTo(1000.0 / 60);
         assertThat(((Number) first.get("rowCount")).longValue()).isEqualTo(8);
+        assertThat(runMetrics.rollupByLabel(target.get(), window, MetricsTimeseriesRepository.likePrefix("TG5")))
+                .extracting(m -> m.get("label")).containsExactly("TG5 pay read");
+        assertThat(runMetrics.rollupByLabel(target.get(), window, null, 1))
+                .extracting(m -> m.get("label")).containsExactly("TG1 login read");   // the busiest, FETCH FIRST 1
         RunMetricsRepository.RunAggregate agg = runMetrics.runAggregate(target.get(), window);
         assertThat(agg.rowCount()).isEqualTo(16);
         assertThat(agg.errorRate()).isCloseTo(16.0 / 1320, org.assertj.core.data.Offset.offset(1e-9));

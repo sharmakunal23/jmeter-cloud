@@ -9,7 +9,7 @@ import java.util.Map;
  * Bucketed timeseries for one run, served by
  * {@code GET /api/v1/runs/{runId}/timeseries} and read straight from the
  * run's group fact table ({@code <GROUP_ID>_METRICS}, plus the archived-day
- * table for older data): TPS, response time (mean, p95, p99), error
+ * table for older data): TPS, response time (mean, p90, p95, p99), error
  * percentage and the HTTP class buckets, every point a throughput-weighted
  * fold of the 15-second worker rows inside a {@link #bucketSize}-second bucket
  * (15, 30 or 60 — the Grafana granularity picker's values).
@@ -17,8 +17,10 @@ import java.util.Map;
  * <p>{@link #regions} (on {@code byRegion=true}) splits the same series per
  * {@code WORKER.REGION} — hot rows only, since the archived-day table has no
  * worker dimension; {@link #applications} (on {@code byApplication=true})
- * splits them per {@code LABEL.APPLICATION}, the group classifier's value.
- * Both are omitted from the JSON when empty, so the default payload shape is
+ * splits them per {@code LABEL.APPLICATION}, the group classifier's value;
+ * {@link #labels} (on {@code byLabel=true}) per {@code LABEL.LABEL_KEY}, the
+ * busiest {@link #labelsShown} of {@link #labelsTotal} matching labels. All
+ * three are omitted from the JSON when empty, so the default payload shape is
  * unchanged. {@code fromSecond} / {@code toSecond} are the first and last bucket
  * starts (epoch seconds).
  */
@@ -31,22 +33,37 @@ public record MetricsTimeseries(
         @JsonInclude(JsonInclude.Include.NON_EMPTY)
         Map<String, Series> regions,
         @JsonInclude(JsonInclude.Include.NON_EMPTY)
-        Map<String, Series> applications
+        Map<String, Series> applications,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+        Map<String, Series> labels,
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        Integer labelsTotal
 ) {
 
     /** Missing maps come back from the cache as null — keep them empty. */
     public MetricsTimeseries {
         if (regions == null) regions = Map.of();
         if (applications == null) applications = Map.of();
+        if (labels == null) labels = Map.of();
     }
 
     public MetricsTimeseries(String runId, int bucketSize, Long fromSecond, Long toSecond, Series series) {
-        this(runId, bucketSize, fromSecond, toSecond, series, Map.of(), Map.of());
+        this(runId, bucketSize, fromSecond, toSecond, series, Map.of(), Map.of(), Map.of(), null);
     }
 
     public MetricsTimeseries(String runId, int bucketSize, Long fromSecond, Long toSecond, Series series,
                              Map<String, Series> regions) {
-        this(runId, bucketSize, fromSecond, toSecond, series, regions, Map.of());
+        this(runId, bucketSize, fromSecond, toSecond, series, regions, Map.of(), Map.of(), null);
+    }
+
+    public MetricsTimeseries(String runId, int bucketSize, Long fromSecond, Long toSecond, Series series,
+                             Map<String, Series> regions, Map<String, Series> applications) {
+        this(runId, bucketSize, fromSecond, toSecond, series, regions, applications, Map.of(), null);
+    }
+
+    /** How many labels {@link #labels} carries — the busiest ones by samples. */
+    public int labelsShown() {
+        return labels.size();
     }
 
     /**
@@ -59,10 +76,12 @@ public record MetricsTimeseries(
             List<TimeseriesPoint>              avgRtMs,
             List<TimeseriesPoint>              errorPct,
             Map<String, List<TimeseriesPoint>> statusCodes,
+            List<TimeseriesPoint>              p90Ms,
             List<TimeseriesPoint>              p95Ms,
             List<TimeseriesPoint>              p99Ms
     ) {
         public Series {
+            if (p90Ms == null) p90Ms = List.of();
             if (p95Ms == null) p95Ms = List.of();
             if (p99Ms == null) p99Ms = List.of();
             if (statusCodes == null) statusCodes = Map.of();
@@ -70,11 +89,17 @@ public record MetricsTimeseries(
 
         public Series(List<TimeseriesPoint> tps, List<TimeseriesPoint> avgRtMs,
                       List<TimeseriesPoint> errorPct, Map<String, List<TimeseriesPoint>> statusCodes) {
-            this(tps, avgRtMs, errorPct, statusCodes, List.of(), List.of());
+            this(tps, avgRtMs, errorPct, statusCodes, List.of(), List.of(), List.of());
+        }
+
+        public Series(List<TimeseriesPoint> tps, List<TimeseriesPoint> avgRtMs,
+                      List<TimeseriesPoint> errorPct, Map<String, List<TimeseriesPoint>> statusCodes,
+                      List<TimeseriesPoint> p95Ms, List<TimeseriesPoint> p99Ms) {
+            this(tps, avgRtMs, errorPct, statusCodes, List.of(), p95Ms, p99Ms);
         }
 
         public static Series empty() {
-            return new Series(List.of(), List.of(), List.of(), Map.of(), List.of(), List.of());
+            return new Series(List.of(), List.of(), List.of(), Map.of(), List.of(), List.of(), List.of());
         }
     }
 

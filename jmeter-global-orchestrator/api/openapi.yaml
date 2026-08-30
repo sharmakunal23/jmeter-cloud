@@ -646,19 +646,70 @@ paths:
       - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
     get:
       tags: [runs]
-      summary: Per-label aggregate from the run's group fact table
+      summary: The aggregate report — one row per label from the run's group fact table
       description: |
         Folds the run's rows in its application group's `<GROUP_ID>_METRICS`
-        (and the archived-day table) per JMeter label: totals, throughput-
-        weighted p50/p95/p99, max, and the label's `application` (the group
-        classifier's value). A run whose application has no group, or whose
-        rows have not landed, answers an empty `byLabel`.
+        (and the archived-day table) per JMeter label, busiest first: samples,
+        throughput over the rows' span, throughput-weighted avg/p50/p90/p95/p99,
+        max, and the label's `application` (the group classifier's value).
+        `window` narrows it to the run's trailing slice the way the charts do;
+        `labelPrefix` keeps only labels starting with that text (an exact
+        prefix — an index range, never a fuzzy match); `labelLimit` keeps the
+        busiest N (10 by default, `all` for every one). A run whose application
+        has no group, or whose rows have not landed, answers an empty `byLabel`.
+      parameters:
+        - name: window
+          in: query
+          required: false
+          schema: { type: string, enum: [5m, 10m, 15m, 30m, 1h, 2h, 4h, all], default: all }
+          description: Trailing window anchored at the run's latest data window; `all` = the whole run.
+        - name: labelPrefix
+          in: query
+          required: false
+          schema: { type: string, maxLength: 100 }
+          description: Only labels whose key starts with this text (case-sensitive, at most 100 chars).
+        - name: labelLimit
+          in: query
+          required: false
+          schema: { type: string, default: "10" }
+          description: The busiest labels to return — a number 1–50, or `all` for every label. Anything else is 400.
       responses:
         "200":
           description: Per-label rollup.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/RunMetricsRollup" }
+        "404":
+          description: Unknown runId.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/runs/{runId}/summary:
+    parameters:
+      - { name: runId, in: path, required: true, schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" } }
+    get:
+      tags: [runs]
+      summary: The Metrics tab's headline numbers — the hosted dashboard's "Key Metrics" and "Summary by Application"
+      description: |
+        One `GROUP BY ROLLUP(LABEL.APPLICATION)` statement over the run's rows
+        (or its trailing `window`): the total and one row per application, each
+        with samples, errors, `tps` (samples over the span the rows cover —
+        `MAX(WINDOW_SECOND) - MIN + 15`, the dashboard's formula), error %,
+        throughput-weighted avg/p90/p95/p99, max and peak active threads.
+        Zeros (200, not 404) while the run has no rows; cached for terminal runs.
+      parameters:
+        - name: window
+          in: query
+          required: false
+          schema: { type: string, enum: [5m, 10m, 15m, 30m, 1h, 2h, 4h, all], default: all }
+          description: Trailing window anchored at the run's latest data window; `all` = the whole run.
+      responses:
+        "200":
+          description: The run's headline stats over the range.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunSummary" }
         "404":
           description: Unknown runId.
           content:
@@ -720,18 +771,22 @@ paths:
         (`<GROUP_ID>_METRICS`, plus the archived-day table for older data)
         the way the hosted Grafana panels read it: rows bucketed by
         `FLOOR(WINDOW_SECOND / g) * g`, `tps` = samples / g, `avgRtMs`,
-        `p95Ms`, `p99Ms` throughput-weighted, `errorPct` = 100 × errors /
-        samples, `statusCodes` keyed by HTTP class (`2xx` … `5xx`, `other`)
-        as counts per second. `bucketSize` is `g` — 15 (the workers' window),
-        30 or 60 — the smallest that keeps the response under 1500 points,
-        or the requested `granularity`.
+        `p90Ms`, `p95Ms`, `p99Ms` throughput-weighted, `errorPct` = 100 ×
+        (4xx + 5xx) / samples (the dashboard's definition, not JMeter's
+        success flag), `statusCodes` keyed by HTTP class (`2xx` … `5xx`,
+        `other`) as counts per second. `bucketSize` is `g` — 15 (the workers'
+        window), 30 or 60 — the smallest that keeps the response under 1500
+        points, or the requested `granularity`.
 
         `byRegion=true` adds `regions` (per `WORKER.REGION`; hot rows only),
-        `byApplication=true` adds `applications` (per `LABEL.APPLICATION`);
-        `series` stays the exact fold of either split. A live run drops its
-        newest ~20 s (still being published). Empty series (200, not 404)
-        while the run has no group or no rows yet — the friendly polling
-        shape.
+        `byApplication=true` adds `applications` (per `LABEL.APPLICATION`),
+        `byLabel=true` adds `labels` (per `LABEL.LABEL_KEY`, the `labelLimit`
+        busiest — 10 by default, `all` for every one — of the `labelsTotal`
+        matching `labelPrefix`);
+        `series` stays the exact
+        fold of any split. A live run drops its newest ~20 s (still being
+        published). Empty series (200, not 404) while the run has no group
+        or no rows yet — the friendly polling shape.
       parameters:
         - name: byRegion
           in: query
@@ -743,6 +798,21 @@ paths:
           required: false
           schema: { type: boolean, default: false }
           description: When true, include the per-application split in `applications`.
+        - name: byLabel
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: When true, include the per-label split in `labels` — the busiest labels by samples.
+        - name: labelPrefix
+          in: query
+          required: false
+          schema: { type: string, maxLength: 100 }
+          description: With `byLabel`, only labels whose key starts with this text (an exact prefix; at most 100 chars).
+        - name: labelLimit
+          in: query
+          required: false
+          schema: { type: string, default: "10" }
+          description: With `byLabel`, how many of the busiest labels to return — a number 1–50, or `all` for every label. Anything else is 400.
         - name: granularity
           in: query
           required: false
@@ -2795,8 +2865,13 @@ components:
               application:      { type: string, nullable: true, description: "The group classifier's value for the label (`LABEL.APPLICATION`)." }
               totalThroughput:  { type: integer, format: int64 }
               totalErrors:      { type: integer, format: int64 }
-              errorRate:        { type: number, format: double }
+              errorRate:        { type: number, format: double, description: "totalErrors / samples (JMeter's success flag; a fraction, not a percentage)." }
+              httpErrors:       { type: integer, format: int64, description: "HTTP 4xx + 5xx samples — the dashboard's \"Error %\" numerator." }
+              httpErrorRate:    { type: number, format: double, description: "httpErrors / samples (a fraction)." }
+              throughputRps:    { type: number, format: double, description: "Samples over the span the label's rows cover." }
+              avgMs:            { type: number, format: double, description: "Throughput-weighted mean response time." }
               avgP50Ms:         { type: number, format: double }
+              avgP90Ms:         { type: number, format: double }
               avgP95Ms:         { type: number, format: double }
               avgP99Ms:         { type: number, format: double }
               maxMs:            { type: number, format: double }
@@ -2828,6 +2903,11 @@ components:
           items: { $ref: "#/components/schemas/TimeseriesPoint" }
         errorPct:
           type: array
+          description: "100 × (HTTP 4xx + 5xx) / samples per bucket."
+          items: { $ref: "#/components/schemas/TimeseriesPoint" }
+        p90Ms:
+          type: array
+          description: "Throughput-weighted mean of the per-worker p90s."
           items: { $ref: "#/components/schemas/TimeseriesPoint" }
         p95Ms:
           type: array
@@ -2863,6 +2943,43 @@ components:
           type: object
           description: "Per-application split (`LABEL.APPLICATION`), present only with `byApplication=true`."
           additionalProperties: { $ref: "#/components/schemas/MetricsSeries" }
+        labels:
+          type: object
+          description: "Per-label split (`LABEL.LABEL_KEY`), present only with `byLabel=true` — the `labelLimit` busiest labels by samples (10 by default), busiest first."
+          additionalProperties: { $ref: "#/components/schemas/MetricsSeries" }
+        labelsTotal:
+          type: integer
+          description: "With `byLabel=true`: how many labels matched `labelPrefix` before the cap."
+
+    RunSummary:
+      type: object
+      required: [runId, total, byApplication]
+      description: The run's headline numbers over one range — `GET /runs/{runId}/summary`.
+      properties:
+        runId:      { type: string }
+        fromSecond: { type: integer, format: int64, nullable: true, description: "First window in the range (epoch second); null when empty." }
+        toSecond:   { type: integer, format: int64, nullable: true, description: "Last window in the range; null when empty." }
+        total:      { $ref: "#/components/schemas/RunSummaryStats" }
+        byApplication:
+          type: array
+          description: One row per `LABEL.APPLICATION`, busiest first; `application` is set on these rows only.
+          items: { $ref: "#/components/schemas/RunSummaryStats" }
+
+    RunSummaryStats:
+      type: object
+      required: [samples, errors, tps, errorPct, avgMs, p90Ms, p95Ms, p99Ms, maxMs, maxActiveThreads]
+      properties:
+        application:      { type: string, description: "Only on the per-application rows." }
+        samples:          { type: integer, format: int64 }
+        errors:           { type: integer, format: int64, description: "HTTP 4xx + 5xx samples." }
+        tps:              { type: number, format: double, description: "Samples over the span the rows cover (`MAX(WINDOW_SECOND) - MIN + 15`)." }
+        errorPct:         { type: number, format: double, description: "100 × errors / samples (4xx + 5xx)." }
+        avgMs:            { type: number, format: double, description: "Throughput-weighted mean response time." }
+        p90Ms:            { type: number, format: double }
+        p95Ms:            { type: number, format: double }
+        p99Ms:            { type: number, format: double }
+        maxMs:            { type: number, format: double }
+        maxActiveThreads: { type: integer, format: int64, description: "Peak of any worker's active threads in a window." }
 
     MetricsTimeseriesBatch:
       type: object

@@ -142,16 +142,26 @@ export type MetricsWindow = "all" | "5m" | "10m" | "15m" | "30m" | "1h" | "2h" |
 /** Bucket width in seconds — the Grafana granularity picker's values; omit for the server's automatic choice. */
 export type MetricsGranularity = 15 | 30 | 60;
 
-/** The series the charts consume — shared by the total and each region / application split. */
+/** The series the charts consume — shared by the total and each region / application / label split. */
 export interface MetricsTimeseriesSeries {
   tps:      TimeseriesPoint[];
   avgRtMs:  TimeseriesPoint[];
+  /** 100 × (HTTP 4xx + 5xx) / samples per bucket. */
   errorPct: TimeseriesPoint[];
   /** Counts per second by HTTP class: keys `2xx`, `3xx`, `4xx`, `5xx`, `other` (the schema keeps no per-code detail). */
   statusCodes: Record<string, TimeseriesPoint[]>;
-  /** Throughput-weighted p95 / p99 per bucket. */
+  /** Throughput-weighted p90 / p95 / p99 per bucket. */
+  p90Ms?: TimeseriesPoint[];
   p95Ms?: TimeseriesPoint[];
   p99Ms?: TimeseriesPoint[];
+}
+
+/** How the charts split the run: one line, or one per application (`LABEL.APPLICATION`) or region (`WORKER.REGION`). */
+export type MetricsSplit = "none" | "application" | "region";
+
+/** True for the three states after which a run's rows stop changing. */
+export function isTerminalRunState(state: RunState): boolean {
+  return state === "COMPLETED" || state === "FAILED" || state === "ABORTED";
 }
 
 export interface MetricsTimeseries {
@@ -170,6 +180,73 @@ export interface MetricsTimeseries {
   regions?: Record<string, MetricsTimeseriesSeries>;
   /** Per-application split (`LABEL.APPLICATION`), present only with `byApplication=true`. */
   applications?: Record<string, MetricsTimeseriesSeries>;
+  /** Per-label split (`LABEL.LABEL_KEY`), present only with `byLabel=true` — the `labelLimit` busiest labels (10 by default), busiest first. */
+  labels?: Record<string, MetricsTimeseriesSeries>;
+  /** With `byLabel=true`: how many labels matched before the cap. */
+  labelsTotal?: number | null;
+}
+
+/**
+ * One aggregate over a range — the hosted dashboard's "Key Metrics" formulas:
+ * `tps` is samples over the span the rows cover, percentiles are
+ * throughput-weighted. `application` is set on the per-application rows only.
+ */
+export interface RunSummaryStats {
+  application?: string | null;
+  samples: number;
+  /** HTTP 4xx + 5xx samples. */
+  errors: number;
+  tps: number;
+  /** 100 × errors / samples. */
+  errorPct: number;
+  avgMs: number;
+  p90Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+  maxMs: number;
+  maxActiveThreads: number;
+}
+
+/** `GET /api/v1/runs/{runId}/summary` — the headline numbers and the per-application table. */
+export interface RunSummary {
+  runId: string;
+  fromSecond: number | null;
+  toSecond: number | null;
+  total: RunSummaryStats;
+  /** Busiest application first; empty until rows land. */
+  byApplication: RunSummaryStats[];
+}
+
+/** One row of the aggregate report — `GET /api/v1/runs/{runId}/metrics`, busiest label first. */
+export interface RunLabelRollup {
+  label: string;
+  application?: string | null;
+  totalThroughput: number;
+  /** JMeter's failed samples (the success flag). */
+  totalErrors: number;
+  /** totalErrors / samples — a fraction, not a percentage. */
+  errorRate: number;
+  /** HTTP 4xx + 5xx samples — what the dashboard calls errors. */
+  httpErrors: number;
+  /** httpErrors / samples — a fraction. */
+  httpErrorRate: number;
+  throughputRps: number;
+  avgMs: number;
+  avgP50Ms: number;
+  avgP90Ms: number;
+  avgP95Ms: number;
+  avgP99Ms: number;
+  maxMs: number;
+  maxActiveThreads: number;
+  firstSecond: number;
+  lastSecond: number;
+  rowCount: number;
+}
+
+export interface RunMetricsRollup {
+  runId: string;
+  state: RunState;
+  byLabel: RunLabelRollup[];
 }
 
 /**
@@ -652,17 +729,52 @@ export const runsApi = {
   timeseries: (
     runId: string,
     signal?: AbortSignal,
-    opts: { byRegion?: boolean; byApplication?: boolean; granularity?: MetricsGranularity; window?: MetricsWindow } = {},
+    opts: {
+      byRegion?: boolean; byApplication?: boolean; byLabel?: boolean; labelPrefix?: string; labelLimit?: number | "all";
+      granularity?: MetricsGranularity; window?: MetricsWindow;
+    } = {},
   ): Promise<MetricsTimeseries> => {
     const params = new URLSearchParams();
     if (opts.byRegion) params.set("byRegion", "true");
     if (opts.byApplication) params.set("byApplication", "true");
+    if (opts.byLabel) params.set("byLabel", "true");
+    if (opts.byLabel && opts.labelPrefix?.trim()) params.set("labelPrefix", opts.labelPrefix.trim());
+    if (opts.byLabel && opts.labelLimit) params.set("labelLimit", String(opts.labelLimit));
     if (opts.granularity) params.set("granularity", String(opts.granularity));
     if (opts.window && opts.window !== "all") params.set("window", opts.window);
     const qs = params.toString();
     return request<MetricsTimeseries>(
       "GET",
       `/api/v1/runs/${encodeURIComponent(runId)}/timeseries${qs ? `?${qs}` : ""}`,
+      undefined,
+      signal,
+    );
+  },
+
+  /** The Metrics tab's headline numbers over the same window as the charts — one statement server-side. */
+  summary: (
+    runId: string,
+    signal?: AbortSignal,
+    opts: { window?: MetricsWindow } = {},
+  ): Promise<RunSummary> => {
+    const qs = opts.window && opts.window !== "all" ? `?window=${opts.window}` : "";
+    return request<RunSummary>("GET", `/api/v1/runs/${encodeURIComponent(runId)}/summary${qs}`, undefined, signal);
+  },
+
+  /** The aggregate report: the busiest labels over the window, narrowed to an exact label prefix (`labelLimit` 1–50 or "all"; server default 10). */
+  metrics: (
+    runId: string,
+    signal?: AbortSignal,
+    opts: { window?: MetricsWindow; labelPrefix?: string; labelLimit?: number | "all" } = {},
+  ): Promise<RunMetricsRollup> => {
+    const params = new URLSearchParams();
+    if (opts.window && opts.window !== "all") params.set("window", opts.window);
+    if (opts.labelPrefix?.trim()) params.set("labelPrefix", opts.labelPrefix.trim());
+    if (opts.labelLimit) params.set("labelLimit", String(opts.labelLimit));
+    const qs = params.toString();
+    return request<RunMetricsRollup>(
+      "GET",
+      `/api/v1/runs/${encodeURIComponent(runId)}/metrics${qs ? `?${qs}` : ""}`,
       undefined,
       signal,
     );

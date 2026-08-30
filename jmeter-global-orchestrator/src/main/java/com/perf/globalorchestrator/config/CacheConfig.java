@@ -27,7 +27,7 @@ import java.time.Duration;
  *
  * <p>TTLs differ by what the entry is:
  * <ul>
- *   <li>{@link #CACHE_RUN_TIMESERIES} / {@link #CACHE_RUN_ROLLUP} — 1 h.
+ *   <li>{@link #CACHE_RUN_TIMESERIES} / {@link #CACHE_RUN_ROLLUP} / {@link #CACHE_RUN_SUMMARY} — 1 h.
  *       Terminal-run metrics are immutable, so this bounds turnover (a later
  *       purge removing the rows), not memory.</li>
  *   <li>{@link #CACHE_APPLICATION_CAPACITY} — 10 m, but <b>evicted on every
@@ -50,6 +50,8 @@ public class CacheConfig {
     public static final String CACHE_RUN_TIMESERIES = "runTimeseries";
     /** Per-label rollup for a TERMINAL run (immutable). */
     public static final String CACHE_RUN_ROLLUP = "runRollup";
+    /** The headline stats for a terminal run (`GET /runs/{id}/summary`). */
+    public static final String CACHE_RUN_SUMMARY = "runSummary";
     /** Run row + fleet members for a TERMINAL run (frozen; C-2). */
     public static final String CACHE_RUN_METADATA = "runMetadata";
     /** Per-(app, region) capacity grid (orchestrator-owned writes → evicted on update). */
@@ -94,6 +96,7 @@ public class CacheConfig {
                 .cacheDefaults(base.entryTtl(TERMINAL_RUN_TTL))
                 .withCacheConfiguration(CACHE_RUN_TIMESERIES, base.entryTtl(TERMINAL_RUN_TTL))
                 .withCacheConfiguration(CACHE_RUN_ROLLUP, base.entryTtl(TERMINAL_RUN_TTL))
+                .withCacheConfiguration(CACHE_RUN_SUMMARY, base.entryTtl(TERMINAL_RUN_TTL))
                 .withCacheConfiguration(CACHE_RUN_METADATA, base.entryTtl(TERMINAL_RUN_TTL))
                 .withCacheConfiguration(CACHE_APPLICATION_CAPACITY, base.entryTtl(CAPACITY_TTL))
                 .withCacheConfiguration(CACHE_MEMBER_LOGS, base.entryTtl(MEMBER_LOGS_TTL));

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -6,9 +6,17 @@ vi.mock("../../api/runs", async () => {
   const actual = await vi.importActual<typeof import("../../api/runs")>("../../api/runs");
   return { ...actual, runsApi: { ...actual.runsApi, get: vi.fn(), status: vi.fn() } };
 });
-// The insights panel pulls charts + metrics hooks; a stub keeps this test about the page.
-vi.mock("../../components/RunStreamsPanel", () => ({
-  RunStreamsPanel: () => <div data-testid="streamsPanel">streams</div>,
+// The Metrics tab pulls charts + metrics hooks; a stub keeps this test about the
+// page. It records the dashboards the page hands the tab for its Grafana link.
+vi.mock("../../components/MetricsTabPanel", () => ({
+  MetricsTabPanel: (props: { dashboards?: unknown; run?: unknown }) => (
+    <div data-testid="metricsPanel" data-dashboards={JSON.stringify(props.dashboards ?? null)} data-run={JSON.stringify(props.run ?? null)}>metrics</div>
+  ),
+}));
+vi.mock("../../components/LogTailPanel", () => ({
+  LogTailPanel: (props: { workerId: string; streamSource: string }) => (
+    <div data-testid="logTailMock" data-streamsource={props.streamSource} data-workerid={props.workerId}>tail</div>
+  ),
 }));
 vi.mock("../../components/RunEventsTimeline", () => ({
   RunEventsTimeline: () => <div>events</div>,
@@ -67,10 +75,10 @@ describe("RunDetailPage — async launch", () => {
 
     await waitFor(() => expect(screen.getByTestId("provisioningPanel")).toBeInTheDocument());
     expect(screen.getByText(reason)).toBeInTheDocument();
-    expect(screen.queryByTestId("streamsPanel")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("metricsPanel")).not.toBeInTheDocument();
   });
 
-  it("once RUNNING the insights panel renders as before", async () => {
+  it("once RUNNING the Metrics tab renders as before", async () => {
     const member = { runId: "01J000RUN", workerId: "jmeter-poc-na-east-worker-1", region: "na-east",
       state: "RUNNING", stateReason: null, fanoutStatusCode: 202, podBaseUrl: "http://w:8080",
       createdAt: "2026-08-28T18:00:00Z", startedAt: null, completedAt: null, properties: {}, runsServed: 1 };
@@ -79,7 +87,7 @@ describe("RunDetailPage — async launch", () => {
 
     renderPage();
 
-    await waitFor(() => expect(screen.getByTestId("streamsPanel")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("metricsPanel")).toBeInTheDocument());
     expect(screen.queryByTestId("provisioningPanel")).not.toBeInTheDocument();
   });
 });
@@ -97,37 +105,113 @@ describe("RunDetailPage — Open in Grafana", () => {
     groupsApi.get.mockReset();
   });
 
-  it("a terminal run links the group's dashboard with the run's exact range and var-application", async () => {
+  it("hands the Metrics tab the group's dashboards, the app's metrics name and the run's timestamps", async () => {
     api.get.mockResolvedValue({ ...run("COMPLETED", null, []), startedAt: "2026-08-30T11:00:00Z", completedAt: "2026-08-30T11:30:00Z" });
     api.status.mockResolvedValue({ runId: "01J000RUN", state: "COMPLETED", stateReason: null, members: [] });
     appsApi.list.mockResolvedValue([app]);
     groupsApi.get.mockResolvedValue(group);
     renderPage();
-    const link = await screen.findByRole("link", { name: /open in grafana/i });
-    const href = new URL(link.getAttribute("href")!);
-    expect(href.pathname).toBe("/d/cpsProductMetrics/servicing-mq");
-    expect(href.searchParams.get("from")).toBe(String(Date.parse("2026-08-30T11:00:00Z")));
-    expect(href.searchParams.get("to")).toBe(String(Date.parse("2026-08-30T11:30:00Z")));
-    expect(href.searchParams.get("var-application")).toBe("CPS-PCI");
-    expect(href.searchParams.get("refresh")).toBeNull();
-    expect(link).toHaveAttribute("target", "_blank");
+    const panel = await screen.findByTestId("metricsPanel");
+    await waitFor(() => expect(JSON.parse(panel.getAttribute("data-dashboards")!)).toEqual({
+      liveUrl: group.grafanaLiveUrl, hotDays: 7, metricsApplication: "CPS-PCI",
+    }));
+    expect(JSON.parse(panel.getAttribute("data-run")!)).toEqual({ startedAt: "2026-08-30T11:00:00Z", completedAt: "2026-08-30T11:30:00Z" });
     expect(groupsApi.get).toHaveBeenCalledWith("cps", expect.anything());
+    // The page itself no longer renders the link — it lives on the Metrics tab's toolbar.
+    expect(screen.queryByRole("link", { name: /open in grafana/i })).toBeNull();
   });
 
-  it("the app's own URL wins over the group's; no URL anywhere hides the button", async () => {
+  it("the app's own URL wins over the group's; no group and no URL leaves the dashboards empty", async () => {
     api.get.mockResolvedValue(run("RUNNING", null, []));
     api.status.mockResolvedValue({ runId: "01J000RUN", state: "RUNNING", stateReason: null, members: [] });
     appsApi.list.mockResolvedValue([{ ...app, grafanaLiveUrl: "https://grafana.example.com/d/own?orgId=1" }]);
     groupsApi.get.mockResolvedValue(group);
     const { unmount } = renderPage();
-    const link = await screen.findByRole("link", { name: /open in grafana/i });
-    expect(link.getAttribute("href")).toMatch(/^https:\/\/grafana\.example\.com\/d\/own\?orgId=1&from=.*&to=now&refresh=15s/);
+    const panel = await screen.findByTestId("metricsPanel");
+    await waitFor(() => expect(JSON.parse(panel.getAttribute("data-dashboards")!).liveUrl).toBe("https://grafana.example.com/d/own?orgId=1"));
     unmount();
 
     appsApi.list.mockResolvedValue([{ ...app, metricsGroupId: null, metricsApplication: null }]);
     renderPage();
-    await screen.findByTestId("streamsPanel");
+    const again = await screen.findByTestId("metricsPanel");
     await waitFor(() => expect(appsApi.list).toHaveBeenCalledTimes(2));
-    expect(screen.queryByRole("link", { name: /open in grafana/i })).toBeNull();
+    await waitFor(() => expect(JSON.parse(again.getAttribute("data-dashboards")!)).toEqual({ metricsApplication: null }));
+  });
+});
+
+describe("RunDetailPage — one tab row: Metrics first, Console + Logs last and live-only", () => {
+  const member = { runId: "01J000RUN", workerId: "jmeter-poc-na-east-worker-1", region: "na-east",
+    state: "RUNNING", stateReason: null, fanoutStatusCode: 202, podBaseUrl: "http://w:8080",
+    createdAt: "2026-08-28T18:00:00Z", startedAt: null, completedAt: null, properties: {}, runsServed: 1 };
+
+  beforeEach(() => {
+    api.get.mockReset();
+    api.status.mockReset();
+    appsApi.list.mockReset().mockResolvedValue([]);
+    groupsApi.get.mockReset();
+    window.localStorage.clear();
+  });
+
+  function live() {
+    api.get.mockResolvedValue(run("RUNNING", null, [member]));
+    api.status.mockResolvedValue({ runId: "01J000RUN", state: "RUNNING", stateReason: null, members: [member] });
+  }
+
+  it("a live run shows Metrics · Worker Fleet · Metadata · Events · Console · Logs, Metrics selected, with the ARIA tab contract", async () => {
+    live();
+    renderPage();
+    await screen.findByTestId("metricsPanel");
+    const tabs = screen.getAllByRole("tab").map((t) => t.textContent?.replace(/\d+.*$/, "").trim());
+    expect(tabs).toEqual(["Metrics", "Worker Fleet", "Metadata", "Events", "Console", "Logs"]);
+    const metrics = screen.getByRole("tab", { name: /^Metrics$/ });
+    expect(metrics).toHaveAttribute("aria-selected", "true");
+    expect(metrics).toHaveAttribute("tabindex", "0");
+    expect(metrics.id).toBe("runDetailTab-metrics");
+    expect(metrics.getAttribute("aria-controls")).toBe("runDetailPanel-metrics");
+    expect(screen.getByRole("tab", { name: "Console" })).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe("runDetailTab-metrics");
+  });
+
+  it("Console and Logs mount one worker's stream each and unmount the Metrics tab; the choice is remembered", async () => {
+    live();
+    const first = renderPage();
+    await screen.findByTestId("metricsPanel");
+    fireEvent.click(screen.getByRole("tab", { name: "Console" }));
+    expect(screen.queryByTestId("metricsPanel")).toBeNull();
+    expect(screen.getByTestId("logTailMock")).toHaveAttribute("data-streamsource", "console");
+    fireEvent.click(screen.getByRole("tab", { name: "Logs" }));
+    expect(screen.getByTestId("logTailMock")).toHaveAttribute("data-streamsource", "jmeter");
+    expect(window.localStorage.getItem("jmeterCloud.runDetailTab")).toBe("logs");
+    first.unmount();
+
+    renderPage();
+    await screen.findByTestId("logTailMock");
+    expect(screen.getByRole("tab", { name: "Logs" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("keyboard: ArrowRight/ArrowLeft cycle, Home/End jump", async () => {
+    live();
+    renderPage();
+    await screen.findByTestId("metricsPanel");
+    const metrics = screen.getByRole("tab", { name: /^Metrics$/ });
+    fireEvent.keyDown(metrics, { key: "End" });
+    expect(screen.getByRole("tab", { name: "Logs" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Logs" }), { key: "ArrowRight" });
+    expect(metrics).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(metrics, { key: "ArrowLeft" });
+    expect(screen.getByRole("tab", { name: "Logs" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Logs" }), { key: "Home" });
+    expect(metrics).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("a finished run has no Console or Logs tab, and a stored Console choice lands on Metrics", async () => {
+    window.localStorage.setItem("jmeterCloud.runDetailTab", "console");
+    api.get.mockResolvedValue({ ...run("COMPLETED", null, [{ ...member, state: "COMPLETED" }]), completedAt: "2026-08-28T18:10:00Z" });
+    api.status.mockResolvedValue({ runId: "01J000RUN", state: "COMPLETED", stateReason: null, members: [{ ...member, state: "COMPLETED" }] });
+    renderPage();
+    await screen.findByTestId("metricsPanel");
+    expect(screen.queryByRole("tab", { name: "Console" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Logs" })).toBeNull();
+    expect(screen.getByRole("tab", { name: /^Metrics$/ })).toHaveAttribute("aria-selected", "true");
   });
 });

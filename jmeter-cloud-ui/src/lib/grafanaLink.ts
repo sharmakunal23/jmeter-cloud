@@ -1,4 +1,4 @@
-import type { MetricsGranularity, MetricsWindow, RunState } from "../api/runs";
+import { isTerminalRunState, type MetricsGranularity, type MetricsWindow, type RunState } from "../api/runs";
 
 /**
  * Builds the "Open in Grafana" deep link for a run: the application's (or its
@@ -11,20 +11,18 @@ import type { MetricsGranularity, MetricsWindow, RunState } from "../api/runs";
  * with no auto-refresh. A terminal run older than the group's hot days opens
  * the history dashboard when one is configured.
  */
-/** What the Metrics tab is showing — reported up so the Grafana link matches the charts. */
-export interface MetricsView {
-  window: MetricsWindow;
-  granularity: MetricsGranularity | "auto";
-}
-
-export interface GrafanaLinkInput {
+/** The dashboards a run can open — the group's URLs and hot days, the app's metrics name. */
+export interface GrafanaDashboards {
   liveUrl?: string | null;
   historyUrl?: string | null;
   /** Days the live dashboard covers; older runs open `historyUrl`. Default 7. */
   hotDays?: number | null;
-  run: { state: RunState; startedAt?: string | null; completedAt?: string | null };
   /** `LABEL.APPLICATION` for the run's app — set as `var-application` unless the URL already pins one. */
   metricsApplication?: string | null;
+}
+
+export interface GrafanaLinkInput extends GrafanaDashboards {
+  run: { state: RunState; startedAt?: string | null; completedAt?: string | null };
   /** The Metrics tab's selection. */
   window: MetricsWindow;
   granularity?: MetricsGranularity | "auto";
@@ -32,7 +30,6 @@ export interface GrafanaLinkInput {
   now?: number;
 }
 
-const TERMINAL: ReadonlySet<RunState> = new Set(["COMPLETED", "FAILED", "ABORTED", "DRAINED"] as RunState[]);
 const LIVE_REFRESH = "15s";
 const DAY_MS = 86_400_000;
 
@@ -56,7 +53,7 @@ function splitUrl(url: string): { head: string; params: URLSearchParams; hash: s
 /** The dashboard to open, or `null` when the application has none. */
 export function grafanaLinkFor(input: GrafanaLinkInput): string | null {
   const now = input.now ?? Date.now();
-  const terminal = TERMINAL.has(input.run.state);
+  const terminal = isTerminalRunState(input.run.state);
   const started = epochMs(input.run.startedAt);
   const completed = epochMs(input.run.completedAt);
   const hotDays = input.hotDays && input.hotDays > 0 ? input.hotDays : 7;

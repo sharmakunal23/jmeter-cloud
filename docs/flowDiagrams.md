@@ -229,7 +229,7 @@ Latency budget across the data plane (target SLO):
 | Dispatcher → disk buffer | < 5 ms (gzip + atomic rename) | < 10 ms |
 | POST /ingest → consumer | < 20 ms | < 50 ms |
 | Consumer → Oracle (stage + ingest call) | p50 3 ms (measured 2026-08-28, 8 workers) | p99 7 ms, max 17 ms |
-| Oracle → UI Metrics tab poll (`/timeseries`) | p50 8 ms (measured) | p99 17 ms |
+| Oracle → a Metrics tab panel (`/summary`, `/timeseries`, `/metrics`; open sections only, every 15 s while live) | p50 8 ms (measured, `/timeseries`) | p99 17 ms |
 | **End-to-end** | **< 1 s** | **< 3 s** |
 
 ---

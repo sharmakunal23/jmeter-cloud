@@ -5,6 +5,7 @@ import com.perf.globalorchestrator.domain.MetricsTimeseries;
 import com.perf.globalorchestrator.domain.MetricsTimeseries.Series;
 import com.perf.globalorchestrator.domain.Run;
 import com.perf.globalorchestrator.domain.RunState;
+import com.perf.globalorchestrator.domain.RunSummary;
 import com.perf.globalorchestrator.repo.MetricsTarget;
 import com.perf.globalorchestrator.repo.MetricsTimeseriesRepository;
 import com.perf.globalorchestrator.repo.MetricsTimeseriesRepository.Query;
@@ -28,7 +29,8 @@ import java.util.Optional;
  * series — the friendly shape the polling UI expects before the first row.
  *
  * <p>Caching only applies through the Spring proxy: callers inject this bean,
- * not the repositories.
+ * not the repositories — and there are no convenience overloads here on
+ * purpose, since one method calling another inside the bean would bypass it.
  */
 @Service
 public class CachingMetricsService {
@@ -68,30 +70,80 @@ public class CachingMetricsService {
         return read(runId, state, new Query(byRegion, false, null, windowSeconds));
     }
 
-    /** The full read: region and application splits, a forced granularity, a window. */
+    /** Every split the Metrics tab can ask for; the per-label split takes an optional exact prefix and a cap. */
     @Cacheable(cacheNames = CacheConfig.CACHE_RUN_TIMESERIES,
-               key = "#runId + ':' + #byRegion + ':' + #byApplication + ':' + (#granularity == null ? 'auto' : #granularity) "
+               key = "#runId + ':' + #byRegion + ':' + #byApplication + ':' + #byLabel + ':' + (#labelPrefix == null ? '' : #labelPrefix) "
+                     + "+ ':' + (#labelLimit == null ? '' : #labelLimit) + ':' + (#granularity == null ? 'auto' : #granularity) "
                      + "+ ':' + (#windowSeconds == null ? 'all' : #windowSeconds)",
                condition = "#state != null && #state.terminal",
                // An empty series is not a fact about the run: its rows may not have
                // landed yet or its group may be unresolved — never pin that in Redis.
                unless = "#result == null || #result.series().tps().isEmpty()")
     public MetricsTimeseries timeseries(String runId, RunState state, boolean byRegion, boolean byApplication,
+                                        boolean byLabel, String labelPrefix, Integer labelLimit,
                                         Integer granularity, Long windowSeconds) {
-        return read(runId, state, new Query(byRegion, byApplication, granularity, windowSeconds));
+        return read(runId, state, new Query(byRegion, byApplication, byLabel, labelPrefix, labelLimit, granularity, windowSeconds));
     }
 
-    /** Per-label table for {@code GET /runs/{runId}/metrics}; same terminal-only gating. */
-    @Cacheable(cacheNames = CacheConfig.CACHE_RUN_ROLLUP, key = "#runId",
+    /**
+     * The aggregate report for {@code GET /runs/{runId}/metrics} over a trailing
+     * window (null = the whole run), narrowed to a label prefix (null = every
+     * label) and to the {@code labelLimit} busiest labels
+     * ({@link MetricsTimeseriesRepository#LABELS_ALL} = every label); same
+     * terminal-only gating.
+     */
+    @Cacheable(cacheNames = CacheConfig.CACHE_RUN_ROLLUP,
+               key = "#runId + ':' + (#windowSeconds == null ? 'all' : #windowSeconds) + ':' + (#labelPrefix == null ? '' : #labelPrefix) + ':' + #labelLimit",
                condition = "#state != null && #state.terminal",
                unless = "#result == null || #result.isEmpty()")
-    public List<Map<String, Object>> rollupByLabel(String runId, RunState state) {
+    public List<Map<String, Object>> rollupByLabel(String runId, RunState state, Long windowSeconds, String labelPrefix, int labelLimit) {
         Optional<Run> run = runs.findByRunId(runId);
         if (run.isEmpty()) {
             return List.of();
         }
         Optional<MetricsTarget> target = resolver.resolve(run.get());
-        return target.map(t -> runMetricsRepo.rollupByLabel(t, RunWindow.of(run.get()))).orElse(List.of());
+        if (target.isEmpty()) {
+            return List.of();
+        }
+        RunWindow w = range(run.get(), state, target.get(), windowSeconds);
+        if (w == null) {
+            return List.of();
+        }
+        return runMetricsRepo.rollupByLabel(target.get(), w, MetricsTimeseriesRepository.likePrefix(labelPrefix), labelLimit);
+    }
+
+    /** The headline stats for {@code GET /runs/{runId}/summary}; same terminal-only gating. */
+    @Cacheable(cacheNames = CacheConfig.CACHE_RUN_SUMMARY,
+               key = "#runId + ':' + (#windowSeconds == null ? 'all' : #windowSeconds)",
+               condition = "#state != null && #state.terminal",
+               unless = "#result == null || #result.total().samples() == 0")
+    public RunSummary summary(String runId, RunState state, Long windowSeconds) {
+        Optional<Run> run = runs.findByRunId(runId);
+        if (run.isEmpty()) {
+            return RunSummary.empty(runId);
+        }
+        Optional<MetricsTarget> target = resolver.resolve(run.get());
+        if (target.isEmpty()) {
+            return RunSummary.empty(runId);
+        }
+        RunWindow w = range(run.get(), state, target.get(), windowSeconds);
+        if (w == null) {
+            return RunSummary.empty(runId);
+        }
+        return runMetricsRepo.summary(runId, target.get(), w);
+    }
+
+    /**
+     * The slice every panel reads: the whole run when nothing narrows it,
+     * otherwise the same trailing window (and live settle) the charts use.
+     */
+    private RunWindow range(Run run, RunState state, MetricsTarget t, Long windowSeconds) {
+        boolean live = state == null || !state.isTerminal();
+        RunWindow whole = RunWindow.of(run);
+        if (windowSeconds == null && !live) {
+            return whole;
+        }
+        return timeseriesRepo.resolveRange(t, whole, windowSeconds, live ? settleSeconds : 0);
     }
 
     private MetricsTimeseries read(String runId, RunState state, Query q) {

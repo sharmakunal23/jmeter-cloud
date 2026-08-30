@@ -1,26 +1,28 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { useInterval } from "../hooks/useInterval";
 import { runsApi, type Run, type RunFleetMember, type RunState, type MemberState } from "../api/runs";
 import { RegionBadgeList } from "../components/RegionBadge";
-import { RunStreamsPanel } from "../components/RunStreamsPanel";
+import { MetricsTabPanel } from "../components/MetricsTabPanel";
+import { StreamTabPanel } from "../components/StreamTabPanel";
 import { RunEventsTimeline } from "../components/RunEventsTimeline";
 import { ScaleUpRunModal } from "../components/ScaleUpRunModal";
 import { DrainDialog, type DrainMode } from "../components/DrainDialog";
 import { AbortRunDialog } from "../components/AbortRunDialog";
 import { applicationsApi, type Application } from "../api/applications";
 import { applicationGroupsApi, type ApplicationGroup } from "../api/applicationGroups";
-import { grafanaLinkFor, type MetricsView } from "../lib/grafanaLink";
+import type { GrafanaDashboards } from "../lib/grafanaLink";
 
 /**
- * Run detail — page-level snapshot poller around a {@link RunStreamsPanel}
+ * Run detail — page-level snapshot poller around the Metrics tab and the run tabs
  * that owns the Metrics / Console / Logs sub-tabs.
  *
  * <p>2026-05-15 (smoke fix 2): operator-driven UX rework.
  * <ul>
- *   <li>Tab order: Insights → Worker Fleet → Metadata. Insights is the
- *       default landing tab — operators spend most time watching metrics.</li>
+ *   <li>Tab order: Metrics → Worker Fleet → Metadata → Events → Console → Logs.
+ *       Metrics is the default landing tab — operators spend most time
+ *       watching charts; Console and Logs exist only while the run is live.</li>
  *   <li>Status badge pinned immediately next to the runId in the H1 so its
  *       position never reflows. Action buttons left the header entirely
  *       to keep the badge stable.</li>
@@ -40,14 +42,32 @@ type DetailState =
 
 const POLL_INTERVAL_MS = 5_000;
 
-type PageTab = "insights" | "fleet" | "metadata" | "events";
+type PageTab = "metrics" | "fleet" | "metadata" | "events" | "console" | "logs";
 
-const TABS: Array<{ id: PageTab; label: string }> = [
-  { id: "insights", label: "Insights" },
+/**
+ * One tab row: the Metrics dashboard first (where operators spend their
+ * time), then the fleet, metadata and events; Console and Logs last, and
+ * only while the run is live — once terminal the pod's ring buffer and
+ * jmeter.log are being recycled for the next test, so those tabs go away.
+ */
+const ALL_TABS: ReadonlyArray<{ id: PageTab; label: string; liveOnly?: boolean }> = [
+  { id: "metrics",  label: "Metrics" },
   { id: "fleet",    label: "Worker Fleet" },
   { id: "metadata", label: "Metadata" },
   { id: "events",   label: "Events" },
+  { id: "console",  label: "Console", liveOnly: true },
+  { id: "logs",     label: "Logs",    liveOnly: true },
 ];
+
+const ACTIVE_TAB_STORAGE_KEY = "jmeterCloud.runDetailTab";
+
+function readActiveTab(): PageTab {
+  try {
+    const v = window.localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
+    if (ALL_TABS.some((t) => t.id === v)) return v as PageTab;
+  } catch { /* private mode or storage disabled */ }
+  return "metrics";
+}
 
 /** Fold the per-row Drain, bulk Drain, and Stop test paths into one dialog target. */
 type DrainTarget = { workerIds: string[]; mode: DrainMode } | null;
@@ -58,12 +78,14 @@ export function RunDetailPage() {
   const [scaleUpOpen, setScaleUpOpen] = useState(false);
   const [drainTarget, setDrainTarget] = useState<DrainTarget>(null);
   const [abortOpen, setAbortOpen] = useState(false);
-  const [pageTab, setPageTab] = useState<PageTab>("insights");
-  // "Open in Grafana": the run's application (its dashboard overrides) + group
-  // (the dashboards, hot days). Loaded once — neither changes during a run.
+  const [pageTab, setPageTab] = useState<PageTab>(readActiveTab);
+  useEffect(() => {
+    try { window.localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, pageTab); } catch { /* private mode */ }
+  }, [pageTab]);
+  const tabRefs = useRef<Map<PageTab, HTMLButtonElement | null>>(new Map());
+  // "Open in Grafana" (on the Metrics tab): the run's application (its dashboard
+  // overrides) + group (the dashboards, hot days). Loaded once — neither changes during a run.
   const [dashboards, setDashboards] = useState<{ app: Application | null; group: ApplicationGroup | null } | null>(null);
-  const [metricsView, setMetricsView] = useState<MetricsView>({ window: "all", granularity: "auto" });
-  const onMetricsViewChange = useCallback((v: MetricsView) => setMetricsView(v), []);
 
   const fetchOnce = useCallback(() => {
     if (!runId) return new AbortController();
@@ -118,6 +140,32 @@ export function RunDetailPage() {
     state.status === "ok" && isTerminalState(state.run.state);
   useInterval(fetchOnce, isTerminal ? null : POLL_INTERVAL_MS);
 
+  // Console + Logs exist only while the run is live; if the active tab just
+  // vanished (the run finished mid-session), land on Metrics.
+  const tabs = useMemo(() => ALL_TABS.filter((t) => !t.liveOnly || !isTerminal), [isTerminal]);
+  useEffect(() => {
+    if (!tabs.some((t) => t.id === pageTab)) setPageTab("metrics");
+  }, [tabs, pageTab]);
+
+  // Left/Right cycle, Home/End jump — keyboard access to the tab strip.
+  function onTabKey(e: KeyboardEvent<HTMLButtonElement>) {
+    const idx = tabs.findIndex((t) => t.id === pageTab);
+    if (idx === -1) return;
+    let next = idx;
+    switch (e.key) {
+      case "ArrowRight": next = (idx + 1) % tabs.length;               break;
+      case "ArrowLeft":  next = (idx - 1 + tabs.length) % tabs.length; break;
+      case "Home":       next = 0;                                     break;
+      case "End":        next = tabs.length - 1;                       break;
+      default: return;
+    }
+    e.preventDefault();
+    const target = tabs[next];
+    if (!target) return;
+    setPageTab(target.id);
+    tabRefs.current.get(target.id)?.focus();
+  }
+
   if (state.status === "loading") return <p>loading…</p>;
   if (state.status === "error") {
     return (
@@ -131,16 +179,13 @@ export function RunDetailPage() {
 
   const run = state.run;
   // The app's own dashboard URLs win over the group's; no URL anywhere = no button.
-  const grafanaHref = dashboards
-    ? grafanaLinkFor({
+  const grafanaDashboards: GrafanaDashboards | null = dashboards
+    ? {
         liveUrl: dashboards.app?.grafanaLiveUrl || dashboards.group?.grafanaLiveUrl,
         historyUrl: dashboards.app?.grafanaHistoryUrl || dashboards.group?.grafanaHistoryUrl,
         hotDays: dashboards.group?.hotDays,
-        run,
         metricsApplication: dashboards.app?.metricsApplication,
-        window: metricsView.window,
-        granularity: metricsView.granularity,
-      })
+      }
     : null;
 
   const counts = countByCategory(run.fleetMembers);
@@ -195,11 +240,12 @@ export function RunDetailPage() {
 
       <div className="runDetail__tabBar">
         <div className="runStreams__tabStrip" role="tablist" aria-label="Run detail section selector">
-          {TABS.map((t) => {
+          {tabs.map((t) => {
             const selected = t.id === pageTab;
             return (
               <button
                 key={t.id}
+                ref={(el) => { tabRefs.current.set(t.id, el); }}
                 type="button"
                 role="tab"
                 id={`runDetailTab-${t.id}`}
@@ -208,6 +254,7 @@ export function RunDetailPage() {
                 tabIndex={selected ? 0 : -1}
                 className={selected ? "runStreams__tab runStreams__tab--active" : "runStreams__tab"}
                 onClick={() => setPageTab(t.id)}
+                onKeyDown={onTabKey}
               >
                 {t.label}
                 {/* Worker Fleet tab carries a compact count breakdown so the
@@ -241,19 +288,6 @@ export function RunDetailPage() {
               ↓ Download results
             </a>
           )}
-          {grafanaHref && (
-            <a
-              className="btn btn--ghost"
-              href={grafanaHref}
-              target="_blank"
-              rel="noreferrer"
-              title={isTerminal
-                ? "Open the application's Grafana dashboard for this run's exact time range"
-                : "Open the application's Grafana dashboard on the Metrics tab's window, auto-refreshing"}
-            >
-              ↗ Open in Grafana
-            </a>
-          )}
         </div>
       </div>
 
@@ -271,12 +305,35 @@ export function RunDetailPage() {
             <p className="ink-soft">Metrics appear once the test is running.</p>
           </div>
         )}
-        {run.state !== "PREPARING" && pageTab === "insights" && (
-          <RunStreamsPanel
-            onMetricsViewChange={onMetricsViewChange}
+        {/* Inactive tabs fully unmount, so their polling stops — at 100 pods the
+            page polls one stream (the active worker × the active tab), never
+            a request per pod. */}
+        {run.state !== "PREPARING" && pageTab === "metrics" && (
+          <MetricsTabPanel
             runId={run.runId}
-            fleetMembers={run.fleetMembers}
             runState={run.state}
+            run={{ startedAt: run.startedAt, completedAt: run.completedAt }}
+            dashboards={grafanaDashboards}
+          />
+        )}
+        {run.state !== "PREPARING" && pageTab === "console" && (
+          <StreamTabPanel
+            runId={run.runId}
+            panelKey="console"
+            streamSource="console"
+            fleetMembers={run.fleetMembers}
+            runTerminal={isTerminal}
+            emptyHint="No fleet members yet — the run hasn't been fanned out to any workers."
+          />
+        )}
+        {run.state !== "PREPARING" && pageTab === "logs" && (
+          <StreamTabPanel
+            runId={run.runId}
+            panelKey="logs"
+            streamSource="jmeter"
+            fleetMembers={run.fleetMembers}
+            runTerminal={isTerminal}
+            emptyHint="No fleet members yet — the run hasn't been fanned out to any workers."
           />
         )}
         {run.state !== "PREPARING" && pageTab === "fleet" && (

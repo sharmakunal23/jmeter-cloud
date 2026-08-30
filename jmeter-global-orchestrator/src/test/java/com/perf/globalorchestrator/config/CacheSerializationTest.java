@@ -4,6 +4,7 @@ import com.perf.globalorchestrator.client.LocalOrchestratorClient.LogsResult;
 import com.perf.globalorchestrator.domain.ApplicationCapacity;
 import com.perf.globalorchestrator.domain.MemberState;
 import com.perf.globalorchestrator.domain.MetricsTimeseries;
+import com.perf.globalorchestrator.domain.RunSummary;
 import com.perf.globalorchestrator.domain.Run;
 import com.perf.globalorchestrator.domain.RunFleetMember;
 import com.perf.globalorchestrator.domain.RunState;
@@ -138,5 +139,15 @@ class CacheSerializationTest {
         byte[] bytes = serializer.serialize(original);
         Object back = serializer.deserialize(bytes);
         assertThat(back).isInstanceOf(LogsResult.class).isEqualTo(original);
+    }
+
+    @Test
+    @DisplayName("RunSummary (nested Stats, a null application on the total) round-trips")
+    void summaryRoundTrips() {
+        RunSummary original = new RunSummary("01J0000000000000000000CACHE", 1000L, 1300L,
+                new RunSummary.Stats(null, 1320, 16, 22.0, 1.2121, 132.1, 198.2, 320.5, 640.0, 900.0, 10),
+                List.of(new RunSummary.Stats("CPS", 1000, 12, 16.6, 1.2, 108.0, 162.0, 308.0, 616.0, 900.0, 10)));
+        Object back = serializer.deserialize(serializer.serialize(original));
+        assertThat(back).isInstanceOf(RunSummary.class).isEqualTo(original);
     }
 }

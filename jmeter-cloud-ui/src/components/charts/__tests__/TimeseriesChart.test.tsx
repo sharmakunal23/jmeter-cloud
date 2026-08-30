@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
+import type uPlot from "uplot";
 
 // ── Mock uPlot ──────────────────────────────────────────────────────
 // The real lib is canvas-based and jsdom doesn't paint canvas
@@ -64,6 +65,7 @@ function lastConstructedChart(): { scales: { x: { min?: number; max?: number } }
 
 import {
   TimeseriesChart,
+  legendClickPlugin,
   type TimeseriesSeries,
   formatCompactNumber,
   formatCompactDuration,
@@ -327,6 +329,118 @@ describe("sync zoom across charts (uPlot built-in cursor.sync)", () => {
     const [opts] = uplotConstructor.mock.calls[0]!;
     const sync = (opts as { cursor: { sync?: { setSeries?: boolean } } }).cursor.sync;
     expect(sync!.setSeries).toBe(false);
+  });
+});
+
+describe("legend and tooltip — the Grafana shape", () => {
+  it("the legend is static (names + markers, no live values) and a tooltip plugin is registered", () => {
+    render(<TimeseriesChart title="t" series={[tps]} />);
+    const [opts] = uplotConstructor.mock.calls[0]!;
+    const o = opts as { legend: { show: boolean; live: boolean; markers: { fill: (u: unknown, i: number) => string } }; plugins: Array<{ hooks: Record<string, unknown> }> };
+    expect(o.legend).toMatchObject({ show: true, live: false });
+    expect(o.legend).not.toHaveProperty("isolate");   // clicks are legendClickPlugin's, not uPlot's
+    expect(o.legend.markers.fill({ series: [{}, { stroke: "#2563eb" }] }, 1)).toBe("#2563eb");
+    // Once built, uPlot hands the stroke back as a function — the marker must still be the colour.
+    expect(o.legend.markers.fill({ series: [{}, { stroke: () => "#db2777" }] }, 1)).toBe("#db2777");
+    expect(o.plugins).toHaveLength(2);
+    expect(Object.keys(o.plugins[0]!.hooks)).toEqual(expect.arrayContaining(["init", "setCursor", "destroy"]));
+    expect(Object.keys(o.plugins[1]!.hooks)).toEqual(["init"]);
+  });
+
+  it("the tooltip shows the hovered bucket's time to the second and every visible series' value, only while the mouse is over the plot", () => {
+    render(<TimeseriesChart title="t" series={[tps, { label: "P95", color: "#7c3aed", data: [{ sec: 1_700_000_000, v: 300 }, { sec: 1_700_000_015, v: 310 }] }]}
+      formatValue={(v) => v.toFixed(1)} />);
+    const [opts] = uplotConstructor.mock.calls[0]!;
+    const plugin = (opts as { plugins: Array<{ hooks: { init: (u: unknown) => void; setCursor: (u: unknown) => void } }> }).plugins[0]!;
+    const over = document.createElement("div");
+    Object.defineProperty(over, "clientWidth", { value: 600 });
+    Object.defineProperty(over, "clientHeight", { value: 200 });
+    const u = {
+      over,
+      cursor: { idx: 1, left: 100, top: 50 },
+      data: [[1_700_000_000, 1_700_000_015], [5, 6], [300, 310]],
+      series: [{}, { label: "TPS", stroke: "#2563eb", show: true }, { label: "P95", stroke: "#7c3aed", show: false }],
+    };
+    plugin.hooks.init(u);
+    const box = over.querySelector(".uTooltip") as HTMLDivElement;
+    expect(box).not.toBeNull();
+    // Not hovering: a synced sibling's cursor moves draw no tooltip here.
+    plugin.hooks.setCursor(u);
+    expect(box.style.display).toBe("none");
+
+    over.dispatchEvent(new Event("mouseenter"));
+    plugin.hooks.setCursor(u);
+    expect(box.style.display).toBe("block");
+    const expectedTime = new Date(1_700_000_015 * 1000);
+    const hh = String(expectedTime.getHours()).padStart(2, "0");
+    const mm = String(expectedTime.getMinutes()).padStart(2, "0");
+    const ss = String(expectedTime.getSeconds()).padStart(2, "0");
+    expect(box.querySelector(".uTooltip__time")!.textContent).toBe(`${hh}:${mm}:${ss}`);
+    const rows = Array.from(box.querySelectorAll(".uTooltip__row")).map((r) => r.textContent);
+    expect(rows).toEqual(["TPS6.0"]);   // P95 is hidden (legend toggled off) so it is not listed
+
+    over.dispatchEvent(new Event("mouseleave"));
+    expect(box.style.display).toBe("none");
+  });
+});
+
+describe("legend clicks — isolate, then add, double-click restores", () => {
+  function fakeChart(n: number) {
+    const root = document.createElement("div");
+    const legend = document.createElement("table");
+    legend.className = "u-legend";
+    for (let i = 0; i < n; i++) {
+      const row = document.createElement("tr");
+      row.className = "u-series";
+      const th = document.createElement("th");
+      th.textContent = `s${i + 1}`;
+      row.appendChild(th);
+      legend.appendChild(row);
+    }
+    root.appendChild(legend);
+    const series = [{}, ...Array.from({ length: n }, () => ({ show: true }))];
+    const u = {
+      root, series,
+      setSeries: vi.fn((i: number, opts: { show: boolean }) => { (series[i] as { show: boolean }).show = opts.show; }),
+    };
+    const init = legendClickPlugin().hooks.init as (self: uPlot, opts: uPlot.Options, data: uPlot.AlignedData) => void;
+    init(u as unknown as uPlot, {} as uPlot.Options, [[]] as unknown as uPlot.AlignedData);
+    const click = (i: number) => legend.querySelectorAll("th")[i - 1]!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const dblclick = (i: number) => legend.querySelectorAll("th")[i - 1]!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    const shown = () => series.slice(1).map((s) => (s as { show: boolean }).show);
+    return { click, dblclick, shown, legend };
+  }
+
+  it("first click isolates, the next clicks add and remove, hiding the last one shows all", () => {
+    const c = fakeChart(4);
+    c.click(2);
+    expect(c.shown()).toEqual([false, true, false, false]);
+    c.click(4);
+    expect(c.shown()).toEqual([false, true, false, true]);
+    c.click(2);
+    expect(c.shown()).toEqual([false, false, false, true]);
+    c.click(4);                                    // the last visible one → everything back
+    expect(c.shown()).toEqual([true, true, true, true]);
+  });
+
+  it("a double-click shows every series again, and uPlot's own toggle never runs", () => {
+    const c = fakeChart(3);
+    const uplotHandler = vi.fn();
+    c.legend.querySelector("th")!.addEventListener("click", uplotHandler);   // stands in for uPlot's listener on the row
+    c.click(1);
+    expect(c.shown()).toEqual([true, false, false]);
+    expect(uplotHandler).not.toHaveBeenCalled();
+    c.dblclick(1);
+    expect(c.shown()).toEqual([true, true, true]);
+  });
+});
+
+describe("showTitle", () => {
+  it("omits uPlot's title when showTitle is false (the modal header carries it) and keeps it by default", () => {
+    render(<TimeseriesChart title="Error codes" series={[tps]} showTitle={false} />);
+    expect((uplotConstructor.mock.calls[0]![0] as { title?: string }).title).toBeUndefined();
+    render(<TimeseriesChart title="Error codes" series={[tps]} />);
+    expect((uplotConstructor.mock.calls[1]![0] as { title?: string }).title).toBe("Error codes");
   });
 });
 

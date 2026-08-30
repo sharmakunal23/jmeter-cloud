@@ -1,53 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
-import type { MetricsTimeseries } from "../../api/runs";
+import { emptySummary, emptyTimeseries, rollup, summary, timeseries } from "./metricsFixtures";
 
-// a11y assertions live in MetricsTabPanel.a11y.test.tsx so this
-// file stays focused on behavior. Kept in mind here when picking
-// data-* attribute names + roles, but not asserted.
-
-// ── Mock the chart so we can assert on the props the panel passes
-//    without exercising uPlot itself (it's tested in TimeseriesChart). ──
+// ── The chart is mocked so the panel's wiring (titles, series, sync, reset)
+//    is asserted without uPlot; the API is mocked at the client boundary so
+//    the test drives the real hooks, sections and view state. ──
 const chartCalls = vi.hoisted(() => ({
-  instances: [] as Array<{
-    title: string;
-    seriesLabels: string[];
-    height?: number;
-    syncKey?: string;
-    resetVersion?: number;
-  }>,
+  instances: [] as Array<{ title: string; seriesLabels: string[]; height?: number; syncKey?: string; resetVersion?: number }>,
 }));
 vi.mock("../charts/TimeseriesChart", async (importOriginal) => {
-  // Keep the real formatter exports (formatCompactNumber, etc.) — the
-  // panel imports them as siblings of TimeseriesChart and they're pure
-  // functions worth exercising in panel tests.
   const actual = await importOriginal<typeof import("../charts/TimeseriesChart")>();
   return {
     ...actual,
-    TimeseriesChart: (props: {
-      title: string;
-      series: Array<{ label: string }>;
-      height?: number;
-      syncKey?: string;
-      resetVersion?: number;
-    }) => {
+    TimeseriesChart: (props: { title: string; series: Array<{ label: string }>; height?: number; syncKey?: string; resetVersion?: number }) => {
       chartCalls.instances.push({
-        title: props.title,
-        seriesLabels: props.series.map((s) => s.label),
-        height: props.height,
-        syncKey: props.syncKey,
-        resetVersion: props.resetVersion,
+        title: props.title, seriesLabels: props.series.map((s) => s.label),
+        height: props.height, syncKey: props.syncKey, resetVersion: props.resetVersion,
       });
       return (
-        <div
-          data-testid="chartMock"
-          data-title={props.title}
-          data-labels={props.series.map((s) => s.label).join(",")}
-          data-height={String(props.height)}
-          data-synckey={props.syncKey ?? ""}
-          data-resetversion={String(props.resetVersion ?? 0)}
-        >
+        <div data-testid="chartMock" data-title={props.title} data-labels={props.series.map((s) => s.label).join(",")}
+          data-synckey={props.syncKey ?? ""} data-resetversion={String(props.resetVersion ?? 0)}>
           chart: {props.title}
         </div>
       );
@@ -55,402 +29,392 @@ vi.mock("../charts/TimeseriesChart", async (importOriginal) => {
   };
 });
 
-// ── Mock the data-fetching hook so the panel renders deterministically. ──
-const hookState = vi.hoisted(() => ({
-  current: null as ReturnType<typeof makeHookReturn> | null,
+const api = vi.hoisted(() => ({ summary: vi.fn(), timeseries: vi.fn(), metrics: vi.fn() }));
+vi.mock("../../api/runs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../api/runs")>();
+  return { ...actual, runsApi: { ...actual.runsApi, ...api } };
+});
+vi.mock("../../hooks/useAiStatus", () => ({ useAiStatus: () => ({ enabled: false, model: "", loading: false }) }));
+vi.mock("../../hooks/useRunInsights", () => ({
+  useRunInsights: () => ({ status: { kind: "idle" }, data: null, generate: vi.fn(), regenerate: vi.fn() }),
 }));
 
-vi.mock("../../hooks/useMetricsTimeseries", async (importOriginal) => {
-  // Keep the real sibling exports (isTerminalRunState) — the panel uses
-  // them to pick the initial time window.
-  const actual = await importOriginal<typeof import("../../hooks/useMetricsTimeseries")>();
-  return { ...actual, useMetricsTimeseries: () => hookState.current };
-});
+import { MetricsTabPanel, METRICS_REFRESH_MS, errorCodeSeries } from "../MetricsTabPanel";
+import type { RunState } from "../../api/runs";
 
-import { MetricsTabPanel } from "../MetricsTabPanel";
-
-function makeHookReturn(overrides: Partial<{
-  status: { kind: "loading" } | { kind: "ok" } | { kind: "error"; message: string };
-  data: MetricsTimeseries | null;
-  lastUpdated: Date | null;
-  isPaused: boolean;
-  pauseReason: "manual" | "delayNull" | "documentHidden" | "offscreen" | null;
-}> = {}) {
-  return {
-    status:      overrides.status ?? { kind: "ok" as const },
-    data:        overrides.data === undefined ? sampleData() : overrides.data,
-    lastUpdated: overrides.lastUpdated ?? new Date("2026-05-10T20:00:00Z"),
-    isPaused:    overrides.isPaused ?? false,
-    pauseReason: overrides.pauseReason ?? null,
-  };
+let location: { search: string } = { search: "" };
+function Location() {
+  const loc = useLocation();
+  location = loc;
+  return null;
 }
 
-function sampleData(): MetricsTimeseries {
-  return {
-    runId: "01J000RUN",
-    bucketSize: 15,
-    fromSecond: 1_700_000_000,
-    toSecond:   1_700_000_005,
-    series: {
-      tps:      [{ sec: 1_700_000_000, v: 5 }, { sec: 1_700_000_001, v: 6 }],
-      avgRtMs:  [{ sec: 1_700_000_000, v: 12 }, { sec: 1_700_000_001, v: 14 }],
-      errorPct: [{ sec: 1_700_000_000, v: 0 }, { sec: 1_700_000_001, v: 1.5 }],
-      statusCodes: {
-        "2xx": [{ sec: 1_700_000_000, v: 5 }, { sec: 1_700_000_001, v: 5 }],
-        "5xx": [{ sec: 1_700_000_001, v: 1 }],
-      },
-    },
-  };
+function renderPanel(runState: RunState = "RUNNING", search = "", extra: Partial<Parameters<typeof MetricsTabPanel>[0]> = {}) {
+  return render(
+    <MemoryRouter initialEntries={[`/runs/01J000RUN${search}`]}>
+      <Routes>
+        <Route path="/runs/:runId" element={<><Location /><MetricsTabPanel runId="01J000RUN" runState={runState} {...extra} /></>} />
+      </Routes>
+    </MemoryRouter>,
+  );
 }
+
+const chartTitles = () => screen.queryAllByTestId("chartMock").map((el) => el.getAttribute("data-title"));
+const section = (name: RegExp) => screen.getByRole("button", { name });
 
 beforeEach(() => {
   chartCalls.instances = [];
-  hookState.current = makeHookReturn();
-  // Layout + split-by-region persist to localStorage; clear it so each
-  // test starts from the documented defaults (grid layout, region off).
+  api.summary.mockReset().mockResolvedValue(summary());
+  api.timeseries.mockReset().mockResolvedValue(timeseries());
+  api.metrics.mockReset().mockResolvedValue(rollup());
   try { window.localStorage.clear(); } catch { /* jsdom always has it */ }
 });
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.useRealTimers();
 });
 
-describe("MetricsTabPanel — happy path", () => {
-  it("renders four charts (TPS, RT, Error %, Status codes) when data is present", () => {
-    render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    expect(chartCalls.instances).toHaveLength(4);
-    expect(chartCalls.instances.map((c) => c.title)).toEqual([
-      "Total TPS",
-      "Response Time",
-      "Error %",
-      "Status codes",
-    ]);
+describe("MetricsTabPanel — sections and what they fetch", () => {
+  it("opens Key metrics and both chart sections by default; Per label and the Aggregate report stay collapsed and fetch nothing", async () => {
+    renderPanel();
+    await screen.findAllByTestId("chartMock");
+    expect(section(/key metrics/i)).toHaveAttribute("aria-expanded", "true");
+    expect(section(/throughput and response time/i)).toHaveAttribute("aria-expanded", "true");
+    expect(section(/^errors$/i)).toHaveAttribute("aria-expanded", "true");
+    expect(section(/per label/i)).toHaveAttribute("aria-expanded", "false");
+    expect(section(/aggregate report/i)).toHaveAttribute("aria-expanded", "false");
+    expect(api.summary).toHaveBeenCalledTimes(1);
+    expect(api.timeseries).toHaveBeenCalledTimes(1);
+    expect(api.timeseries.mock.calls[0]![2]).toMatchObject({ byApplication: false, byRegion: false });
+    expect(api.timeseries.mock.calls[0]![2].byLabel).toBeFalsy();
+    expect(api.metrics).not.toHaveBeenCalled();
   });
 
-  it("status-codes chart orders the HTTP classes ascending and color-codes them", () => {
-    render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    const statusChart = chartCalls.instances.find((c) => c.title === "Status codes")!;
-    expect(statusChart.seriesLabels).toEqual(["2xx", "5xx"]);
+  it("expanding Per label fetches the label split; expanding the Aggregate report fetches the rollup", async () => {
+    api.timeseries.mockImplementation((_id: string, _s: AbortSignal, opts: { byLabel?: boolean }) =>
+      Promise.resolve(opts.byLabel
+        ? timeseries({ labels: { "TG1 login": timeseries().series, "TG5 pay": timeseries().series }, labelsTotal: 7 })
+        : timeseries()));
+    renderPanel();
+    await screen.findAllByTestId("chartMock");
+    fireEvent.click(section(/per label/i));
+    await waitFor(() => expect(api.timeseries).toHaveBeenCalledTimes(2));
+    expect(api.timeseries.mock.calls[1]![2]).toMatchObject({ byLabel: true, labelLimit: 10, window: "30m" });
+    await waitFor(() => expect(chartTitles()).toContain("Throughput per label"));
+    expect(chartTitles()).toContain("Response time per label (avg)");
+    expect(screen.getByText(/busiest 2 of 7 labels/i)).toBeInTheDocument();
+
+    fireEvent.click(section(/aggregate report/i));
+    await waitFor(() => expect(api.metrics).toHaveBeenCalledTimes(1));
+    const table = await screen.findByRole("table", { name: /aggregate report/i });
+    expect(within(table).getAllByRole("row")).toHaveLength(3);
+    expect(within(table).getByText("TG1 login")).toBeInTheDocument();
+    expect(within(table).getAllByRole("columnheader").map((h) => h.textContent?.replace(/ [↑↓]$/, "")))
+      .toEqual(["Label", "Samples", "Throughput", "Avg", "P90", "P95", "P99", "Error %"]);
   });
 
-  it("renders the data-summary text with point count + last fetch time", () => {
-    render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    expect(screen.getByText(/2 points · 15-s buckets/)).toBeInTheDocument();
-    expect(screen.getByText(/last fetch/i)).toBeInTheDocument();
+  it("collapsing a section unmounts its content; a collapsed section is not refreshed", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderPanel();
+    await screen.findAllByTestId("chartMock");
+    fireEvent.click(section(/key metrics/i));
+    expect(screen.queryByText("TPS", { selector: "dt" })).toBeNull();
+    const summaryCalls = api.summary.mock.calls.length;
+    await act(async () => { vi.advanceTimersByTime(METRICS_REFRESH_MS + 50); });
+    await waitFor(() => expect(api.timeseries.mock.calls.length).toBeGreaterThanOrEqual(2));
+    expect(api.summary).toHaveBeenCalledTimes(summaryCalls);
   });
 
-  it("a coarser bucket surfaces in the status text", () => {
-    const data = sampleData();
-    data.bucketSize = 60;
-    hookState.current = makeHookReturn({ data });
-    render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    expect(screen.getByText(/2 points · 60-s buckets/)).toBeInTheDocument();
-  });
-
-  it("the Response Time chart adds P95 / P99 when the series carry them", () => {
-    const data = sampleData();
-    data.series.p95Ms = [{ sec: 1_700_000_000, v: 300 }, { sec: 1_700_000_001, v: 310 }];
-    data.series.p99Ms = [{ sec: 1_700_000_000, v: 800 }, { sec: 1_700_000_001, v: 820 }];
-    hookState.current = makeHookReturn({ data });
-    render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    const rt = chartCalls.instances.find((c) => c.title === "Response Time")!;
-    expect(rt.seriesLabels).toEqual(["Avg", "P95", "P99"]);
+  it("the two chart sections share one timeseries read: collapsing both stops it, either one keeps it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderPanel();
+    await screen.findAllByTestId("chartMock");
+    fireEvent.click(section(/throughput and response time/i));
+    expect(chartTitles()).toEqual(["Error %", "Error codes"]);
+    await act(async () => { vi.advanceTimersByTime(METRICS_REFRESH_MS + 50); });
+    await waitFor(() => expect(api.timeseries).toHaveBeenCalledTimes(2));
+    fireEvent.click(section(/^errors$/i));
+    expect(chartTitles()).toEqual([]);
+    await act(async () => { vi.advanceTimersByTime(METRICS_REFRESH_MS + 50); });
+    expect(api.timeseries).toHaveBeenCalledTimes(2);
   });
 });
 
-describe("MetricsTabPanel — empty state", () => {
-  it("renders a friendly hint instead of empty charts when the run has no metrics yet", () => {
-    hookState.current = makeHookReturn({
-      data: { ...sampleData(), series: { tps: [], avgRtMs: [], errorPct: [], statusCodes: {} },
-              fromSecond: null, toSecond: null },
+describe("MetricsTabPanel — key metrics", () => {
+  it("renders TPS · Avg · P90 · P95 · P99 · Error % from /summary and the per-application table only when the run spans several applications", async () => {
+    api.summary.mockResolvedValue(summary(["CPS", "CPS-PCI"]));
+    renderPanel();
+    const value = async (term: string) => (await screen.findByText(term, { selector: "dt" })).nextElementSibling;
+    expect(await value("TPS")).toHaveTextContent("22.0");
+    expect(await value("P99")).toHaveTextContent("900ms");
+    expect(await value("Error %")).toHaveTextContent("1.00%");
+    expect(screen.getAllByRole("term").map((t) => t.textContent)).toEqual(["TPS", "Avg", "P90", "P95", "P99", "Error %"]);
+    const table = screen.getByRole("table", { name: /summary by application/i });
+    expect(within(table).getAllByRole("row")).toHaveLength(3);
+  });
+
+  it("a single-application run shows no per-application table; an empty range says so", async () => {
+    renderPanel();
+    await screen.findByText("TPS", { selector: "dt" });
+    expect(screen.queryByRole("table", { name: /summary by application/i })).toBeNull();
+    api.summary.mockResolvedValue(emptySummary());
+    renderPanel("RUNNING", "?range=5m");
+    await screen.findByTestId("keyMetricsEmpty");
+  });
+});
+
+describe("MetricsTabPanel — charts", () => {
+  it("renders the four dashboard charts with the Grafana series (Avg/P90/P95/P99, 4xx/5xx) on one sync group", async () => {
+    renderPanel();
+    await waitFor(() => expect(chartTitles()).toEqual(["Throughput", "Response time", "Error %", "Error codes"]));
+    const byTitle = Object.fromEntries(chartCalls.instances.map((c) => [c.title, c]));
+    expect(byTitle["Response time"]!.seriesLabels).toEqual(["Avg", "P90", "P95", "P99"]);
+    expect(byTitle["Error codes"]!.seriesLabels).toEqual(["4xx", "5xx"]);
+    expect(new Set(chartCalls.instances.map((c) => c.syncKey))).toEqual(new Set(["metrics:01J000RUN"]));
+  });
+
+  it("error codes are 4xx and 5xx only, as a percentage of the bucket's samples", () => {
+    const s = errorCodeSeries({
+      tps: [{ sec: 1, v: 10 }], avgRtMs: [], errorPct: [],
+      statusCodes: { "4xx": [{ sec: 1, v: 0.5 }], "5xx": [{ sec: 1, v: 1 }], other: [{ sec: 1, v: 0.1 }] },
     });
-    render(<MetricsTabPanel runId="01J000RUN" runState="PREPARING" />);
-    expect(screen.queryByTestId("chartMock")).toBeNull();
-    // Match on the explanatory copy (unique to the empty-state hint)
-    // because the status row also surfaces "no metrics yet".
-    expect(screen.getByText(/the consumer writes within ~1 s/i)).toBeInTheDocument();
+    expect(s.map((x) => x.label)).toEqual(["4xx", "5xx"]);
+    expect(s[0]!.data[0]!.v).toBe(5);
+    expect(s[1]!.data[0]!.v).toBe(10);
   });
 
-  it("renders nothing chart-like during the initial load (status=loading, data=null)", () => {
-    hookState.current = makeHookReturn({ status: { kind: "loading" }, data: null });
-    render(<MetricsTabPanel runId="01J000RUN" runState="PREPARING" />);
-    expect(screen.queryByTestId("chartMock")).toBeNull();
-    expect(screen.queryByText(/No metrics yet/i)).toBeNull();
-    expect(screen.getByText(/loading…/i)).toBeInTheDocument();
-  });
-});
-
-describe("MetricsTabPanel — error state", () => {
-  it("surfaces fetch errors in the header without losing the prior data", () => {
-    hookState.current = makeHookReturn({ status: { kind: "error", message: "kaboom" } });
-    render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    expect(screen.getByText(/error: kaboom/)).toBeInTheDocument();
-    // Prior snapshot still renders the 4 charts.
-    expect(chartCalls.instances).toHaveLength(4);
-  });
-});
-
-// The retired "Open in Grafana" action never lived in the Metrics panel; keep the panel
-// tab bar (RunDetailPage) — it's a run-level action, not a metrics one.
-describe("MetricsTabPanel — no external dashboard link", () => {
-  it("does not render an external dashboard link", () => {
-    render(<MetricsTabPanel runId="01J000RUN" runState="COMPLETED" />);
-    expect(screen.queryByRole("link", { name: /Open in/ })).toBeNull();
-  });
-});
-
-describe("MetricsTabPanel — paused state", () => {
-  it("shows the paused chip with a reason-specific label when polling is gated", () => {
-    hookState.current = makeHookReturn({ isPaused: true, pauseReason: "delayNull" });
-    render(<MetricsTabPanel runId="01J000RUN" runState="COMPLETED" />);
-    expect(screen.getByText(/paused — terminal/i)).toBeInTheDocument();
+  it("split by region fetches the split and renders one line per region; the picker offers no other split", async () => {
+    api.timeseries.mockImplementation((_id: string, _s: AbortSignal, opts: { byRegion?: boolean }) =>
+      Promise.resolve(opts.byRegion
+        ? timeseries({ regions: { "na-east": timeseries().series, "na-west": timeseries().series } })
+        : timeseries()));
+    renderPanel("RUNNING", "?split=region");
+    await waitFor(() => expect(chartTitles()[0]).toBe("Throughput by region"));
+    expect(api.timeseries.mock.calls[0]![2]).toMatchObject({ byRegion: true, byApplication: false });
+    const throughput = chartCalls.instances.find((c) => c.title === "Throughput by region")!;
+    expect(throughput.seriesLabels).toEqual(["na-east", "na-west"]);
+    expect(chartTitles()).toContain("Error codes");   // the total, as on the hosted dashboard
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).not.toContain("By application");
   });
 
-  it("no paused chip when polling is active", () => {
-    render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    expect(screen.queryByText(/paused/i)).toBeNull();
+  it("Reset zoom bumps resetVersion on every chart and is disabled without data", async () => {
+    renderPanel();
+    await screen.findAllByTestId("chartMock");
+    fireEvent.click(screen.getByRole("button", { name: /reset zoom/i }));
+    await waitFor(() => screen.getAllByTestId("chartMock").forEach((el) => expect(el.getAttribute("data-resetversion")).toBe("1")));
+    api.timeseries.mockResolvedValue(emptyTimeseries());
+    api.summary.mockResolvedValue(emptySummary());
+    renderPanel("RUNNING", "?range=5m");
+    await waitFor(() => expect(screen.getAllByRole("button", { name: /reset zoom/i }).some((b) => (b as HTMLButtonElement).disabled)).toBe(true));
+  });
+
+  it("shows the empty hint instead of charts when the range has no rows, and the error in the header without losing prior charts", async () => {
+    api.timeseries.mockResolvedValue(emptyTimeseries());
+    renderPanel();
+    expect(await screen.findAllByText(/no metrics in this range yet/i)).toHaveLength(2);   // one per chart section
+    expect(screen.queryAllByTestId("chartMock")).toHaveLength(0);
   });
 });
 
-describe("MetricsTabPanel — layout toggle (Grid / Stacked)", () => {
-  // Each test starts with a fresh localStorage so the toggle defaults
-  // deterministically to "grid" — stale state from a previous test
-  // could otherwise flip the initial selection.
-  beforeEach(() => { window.localStorage.clear(); });
+describe("MetricsTabPanel — the view lives in the URL", () => {
+  it("a live run opens on the last 30 minutes, a finished run on the whole test", async () => {
+    renderPanel("RUNNING");
+    await waitFor(() => expect(api.timeseries).toHaveBeenCalled());
+    expect(api.timeseries.mock.calls[0]![2]).toMatchObject({ window: "30m", granularity: 15 });   // 15 s is the default, no "auto"
+    expect(api.summary.mock.calls[0]![2]).toMatchObject({ window: "30m" });
+    expect((screen.getByTitle(/most recent slice/i) as HTMLSelectElement).value).toBe("30m");
+    expect(location.search).toBe("");
 
-  it("defaults to Grid (2-column) and applies the matching CSS modifier", () => {
-    const { container } = render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    expect(screen.getByRole("tab", { name: /Grid/ })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: /Stacked/ })).toHaveAttribute("aria-selected", "false");
-    expect(container.querySelector(".metricsPanel__chartGrid--grid")).not.toBeNull();
-    expect(container.querySelector(".metricsPanel__chartGrid--stacked")).toBeNull();
+    api.timeseries.mockClear();
+    renderPanel("COMPLETED");
+    await waitFor(() => expect(api.timeseries).toHaveBeenCalled());
+    expect(api.timeseries.mock.calls[0]![2]).toMatchObject({ window: "all" });
   });
 
-  it("clicking Stacked flips aria-selected + the CSS modifier + the chart height", () => {
-    chartCalls.instances = [];
-    const { container } = render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    const initialHeights = chartCalls.instances.map((c) => c.height);
-    expect(initialHeights.every((h) => h === 220)).toBe(true);
-
-    chartCalls.instances = [];
-    fireEvent.click(screen.getByRole("tab", { name: /Stacked/ }));
-    expect(screen.getByRole("tab", { name: /Stacked/ })).toHaveAttribute("aria-selected", "true");
-    expect(container.querySelector(".metricsPanel__chartGrid--stacked")).not.toBeNull();
-    expect(container.querySelector(".metricsPanel__chartGrid--grid")).toBeNull();
-    // Stacked uses taller charts (260 vs grid's 220), matching the two-run
-    // comparison view's height (shared STACKED_CHART_HEIGHT constant).
-    expect(chartCalls.instances.every((c) => c.height === 260)).toBe(true);
+  it("reads range, granularity and split from the URL and writes a change back (replace)", async () => {
+    renderPanel("RUNNING", "?range=1h&granularity=60&split=region");
+    await waitFor(() => expect(api.timeseries).toHaveBeenCalled());
+    expect(api.timeseries.mock.calls[0]![2]).toMatchObject({ window: "1h", granularity: 60, byRegion: true });
+    expect(screen.queryByText(/^Application$/)).toBeNull();   // no Application column anywhere on the tab
+    fireEvent.change(screen.getByTitle(/most recent slice/i), { target: { value: "4h" } });
+    await waitFor(() => expect(location.search).toContain("range=4h"));
+    expect(location.search).toContain("granularity=60");
+    expect(location.search).toContain("split=region");
+    await waitFor(() => expect(api.timeseries.mock.calls.at(-1)![2]).toMatchObject({ window: "4h" }));
+    // Back to the default clears the key.
+    fireEvent.change(screen.getByTitle(/most recent slice/i), { target: { value: "30m" } });
+    await waitFor(() => expect(location.search).not.toContain("range="));
   });
 
-  it("persists the selection to localStorage and restores it on remount", () => {
-    const { unmount } = render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    fireEvent.click(screen.getByRole("tab", { name: /Stacked/ }));
-    expect(window.localStorage.getItem("jmeterCloud.metricsLayout")).toBe("stacked");
+  it("Per label and the Aggregate report each own a label filter and Top-N (or All) that reach the URL after a pause", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderPanel("COMPLETED", "?label=TG1&top=20&reportLabel=TG5&reportTop=all");
+    await screen.findAllByTestId("chartMock");
+    // Collapsed sections show no controls and fetch nothing.
+    expect(screen.queryByTestId("perLabelLabelPrefix")).toBeNull();
+    fireEvent.click(section(/per label/i));
+    await waitFor(() => expect(api.timeseries.mock.calls.at(-1)![2]).toMatchObject({ byLabel: true, labelPrefix: "TG1", labelLimit: 20 }));
+    expect((screen.getByTestId("perLabelLabelPrefix") as HTMLInputElement).value).toBe("TG1");
+    expect((screen.getByTestId("perLabelLabelLimit") as HTMLSelectElement).value).toBe("20");
+    expect(screen.getByRole("option", { name: "All labels" })).toBeInTheDocument();
 
-    unmount();
-    render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    expect(screen.getByRole("tab", { name: /Stacked/ })).toHaveAttribute("aria-selected", "true");
-  });
-});
+    fireEvent.click(section(/aggregate report/i));
+    await waitFor(() => expect(api.metrics).toHaveBeenCalledTimes(1));
+    expect(api.metrics.mock.calls[0]![2]).toMatchObject({ labelPrefix: "TG5", labelLimit: "all", window: "all" });
+    expect((screen.getByTestId("reportLabelPrefix") as HTMLInputElement).value).toBe("TG5");
+    expect((screen.getByTestId("reportLabelLimit") as HTMLSelectElement).value).toBe("all");
 
-describe("MetricsTabPanel — sync zoom + Reset zoom button", () => {
-  it("all four charts share the same syncKey (keyed by runId) so zoom propagates across them", () => {
-    chartCalls.instances = [];
-    render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    const keys = chartCalls.instances.map((c) => c.syncKey);
-    expect(keys).toHaveLength(4);
-    expect(new Set(keys).size).toBe(1); // identical across all four
-    expect(keys[0]).toBe("metrics:01J000RUN");
-  });
+    // The report's filter changes only the report's query and URL keys.
+    fireEvent.change(screen.getByTestId("reportLabelPrefix"), { target: { value: "TG9" } });
+    expect(location.search).toContain("reportLabel=TG5");
+    await act(async () => { vi.advanceTimersByTime(400); });
+    await waitFor(() => expect(location.search).toContain("reportLabel=TG9"));
+    await waitFor(() => expect(api.metrics.mock.calls.at(-1)![2]).toMatchObject({ labelPrefix: "TG9" }));
+    expect(location.search).toContain("label=TG1");
+    expect(api.timeseries.mock.calls.at(-1)![2]).toMatchObject({ labelPrefix: "TG1" });
 
-  it("different runIds get different sync keys (no cross-run group leakage)", () => {
-    chartCalls.instances = [];
-    const { rerender } = render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    const firstKey = chartCalls.instances[0]!.syncKey;
-
-    chartCalls.instances = [];
-    rerender(<MetricsTabPanel runId="01J999OTHER" runState="RUNNING" />);
-    const secondKey = chartCalls.instances[0]!.syncKey;
-
-    expect(firstKey).toBe("metrics:01J000RUN");
-    expect(secondKey).toBe("metrics:01J999OTHER");
-    expect(firstKey).not.toBe(secondKey);
+    fireEvent.change(screen.getByTestId("perLabelLabelLimit"), { target: { value: "all" } });
+    await waitFor(() => expect(location.search).toContain("top=all"));
+    await waitFor(() => expect(api.timeseries.mock.calls.at(-1)![2]).toMatchObject({ byLabel: true, labelLimit: "all" }));
   });
 
-  it("Reset zoom button increments resetVersion on ALL four charts", () => {
-    chartCalls.instances = [];
-    render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    // Initial render: resetVersion=0 across the board
-    expect(chartCalls.instances.map((c) => c.resetVersion)).toEqual([0, 0, 0, 0]);
-
-    chartCalls.instances = [];
-    fireEvent.click(screen.getByRole("button", { name: /Reset zoom/ }));
-    // After click: every chart sees resetVersion=1, all in lockstep
-    expect(chartCalls.instances.map((c) => c.resetVersion)).toEqual([1, 1, 1, 1]);
-
-    chartCalls.instances = [];
-    fireEvent.click(screen.getByRole("button", { name: /Reset zoom/ }));
-    expect(chartCalls.instances.map((c) => c.resetVersion)).toEqual([2, 2, 2, 2]);
+  it("an empty report or label set says so in the body only — no '0 labels' beside the title", async () => {
+    api.metrics.mockResolvedValue(rollup([]));
+    api.timeseries.mockImplementation((_id: string, _s: AbortSignal, opts: { byLabel?: boolean }) =>
+      Promise.resolve(opts.byLabel ? timeseries({ labels: {}, labelsTotal: 0 }) : timeseries()));
+    renderPanel("COMPLETED", "?reportLabel=GET%20s&label=GET%20s");
+    await screen.findAllByTestId("chartMock");
+    fireEvent.click(section(/aggregate report/i));
+    fireEvent.click(section(/per label/i));
+    await screen.findByTestId("aggregateReportEmpty");
+    await screen.findByTestId("perLabelEmpty");
+    expect(screen.getAllByText(/No labels start with "GET s" in this range/)).toHaveLength(2);
+    expect(screen.queryByText(/0 labels/)).toBeNull();
   });
 
-  it("Reset zoom is disabled when there's no data (avoids the dead click)", () => {
-    hookState.current = makeHookReturn({
-      data: { ...sampleData(), series: { tps: [], avgRtMs: [], errorPct: [], statusCodes: {} } },
-    });
-    render(<MetricsTabPanel runId="01J000RUN" runState="PREPARING" />);
-    expect(screen.getByRole("button", { name: /Reset zoom/ })).toBeDisabled();
+  it("the toolbar reads AI insights · Reset zoom · granularity · split · range · Open in Grafana, no points meta on the chart sections", async () => {
+    renderPanel("RUNNING", "", { dashboards: { liveUrl: "https://grafana.example.com/d/cps?orgId=1" } });
+    await screen.findAllByTestId("chartMock");
+    const actions = screen.getByRole("link", { name: /open in grafana/i }).parentElement!;
+    const order = Array.from(actions.children).map((el) =>
+      el.tagName === "LABEL" ? (el.querySelector("select") as HTMLSelectElement).title.split(" ")[0] : el.textContent!.trim());
+    expect(order).toEqual(["⟲ Reset zoom", "Seconds", "One", "The", "↗ Open in Grafana"]);   // AI insights is hidden while AI is disabled
+    expect(screen.queryByText(/points · 15-s buckets/)).toBeNull();
+    expect(screen.queryByRole("option", { name: "Auto" })).toBeNull();
   });
 });
 
-describe("MetricsTabPanel — header no longer has a Refresh button (5s polling is enough)", () => {
-  it("there is no Refresh button anywhere in the panel", () => {
-    render(<MetricsTabPanel runId="01J000RUN" runState="COMPLETED" />);
-    expect(screen.queryByRole("button", { name: /Refresh/ })).toBeNull();
+describe("MetricsTabPanel — refresh and status", () => {
+  it("a live run refreshes every open section every 15 s while the page is open and wears a live badge; a finished run is paused as terminal", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const live = renderPanel("RUNNING");
+    await screen.findAllByTestId("chartMock");
+    expect(screen.getByText(/live · 15 s/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /refresh/i })).toBeNull();
+    await act(async () => { vi.advanceTimersByTime(METRICS_REFRESH_MS + 50); });
+    await waitFor(() => expect(api.timeseries).toHaveBeenCalledTimes(2));
+    expect(api.summary).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+    live.unmount();
+
+    api.timeseries.mockClear();
+    renderPanel("COMPLETED");
+    await screen.findByText(/paused — terminal/);
+    expect(screen.queryByText(/live · 15 s/)).toBeNull();
+    // The toolbar carries the badge only.
+    expect(screen.queryByText(/refreshed/)).toBeNull();
   });
 
-  it("there is no description paragraph in the header (header is tight: status + actions only)", () => {
-    render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    expect(screen.queryByText(/Per-second timeseries from/)).toBeNull();
+  it("a failed fetch is reported beside the badge while the last good charts stay painted", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderPanel("RUNNING");
+    await screen.findAllByTestId("chartMock");
+    api.timeseries.mockRejectedValue(new Error("boom"));
+    await act(async () => { vi.advanceTimersByTime(METRICS_REFRESH_MS + 50); });
+    await screen.findByText(/error: boom/);
+    expect(screen.getAllByTestId("chartMock").length).toBeGreaterThan(0);
   });
 });
 
-describe("MetricsTabPanel — structural a11y hooks (axe sweep lives in .a11y.test.tsx)", () => {
-  it("layout toggle is a tablist with descriptive aria-label", () => {
-    render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    expect(screen.getByRole("tablist", { name: /Chart layout/i })).toBeInTheDocument();
-  });
-});
-
-describe("MetricsTabPanel — Split by region", () => {
-  function sampleDataWithRegions(): MetricsTimeseries {
-    const base = sampleData();
-    return {
-      ...base,
-      regions: {
-        "us-west-2": {
-          tps:      [{ sec: 1_700_000_000, v: 2 }],
-          avgRtMs:  [{ sec: 1_700_000_000, v: 20 }],
-          errorPct: [{ sec: 1_700_000_000, v: 1 }],
-          statusCodes: { "200": [{ sec: 1_700_000_000, v: 2 }] },
-        },
-        "us-east-1": {
-          tps:      [{ sec: 1_700_000_000, v: 3 }],
-          avgRtMs:  [{ sec: 1_700_000_000, v: 10 }],
-          errorPct: [{ sec: 1_700_000_000, v: 0 }],
-          statusCodes: { "200": [{ sec: 1_700_000_000, v: 3 }], "500": [{ sec: 1_700_000_000, v: 1 }] },
-        },
-      },
+describe("MetricsTabPanel — export the aggregate report", () => {
+  it("Export CSV is the first control of the report's header, disabled with no rows, and downloads the rows shown", async () => {
+    const created: string[] = [];
+    const revoked: string[] = [];
+    let saved: { name: string; text: string } | null = null;
+    (URL as unknown as { createObjectURL: (b: Blob) => string }).createObjectURL = (b: Blob) => {
+      created.push("blob:1");
+      void b.text().then((t) => { saved = { name: saved?.name ?? "", text: t }; });
+      return "blob:1";
     };
-  }
+    (URL as unknown as { revokeObjectURL: (u: string) => void }).revokeObjectURL = (u: string) => { revoked.push(u); };
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      saved = { name: this.download, text: saved?.text ?? "" };
+    });
 
-  it("defaults to OFF — aggregate charts, no region series", () => {
-    hookState.current = makeHookReturn({ data: sampleDataWithRegions() });
-    render(<MetricsTabPanel runId="01J000RUN" runState="COMPLETED" />);
-    // 4 aggregate charts; the toggle is present but not pressed.
-    expect(chartCalls.instances).toHaveLength(4);
-    expect(screen.getByRole("button", { name: /Split by region/ }))
-      .toHaveAttribute("aria-pressed", "false");
+    renderPanel("COMPLETED", "?range=1h");
+    await screen.findAllByTestId("chartMock");
+    fireEvent.click(section(/aggregate report/i));
+    const button = await screen.findByRole("button", { name: /export csv/i });
+    const controls = button.parentElement!;
+    expect(controls.firstElementChild).toBe(button);
+    await screen.findByRole("table", { name: /aggregate report/i });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    await waitFor(() => expect(saved?.name).toBe("aggregateReport-01J000RUN-1h.csv"));
+    await waitFor(() => expect(saved?.text).toContain("label,samples,throughputRps,avgMs,p90Ms,p95Ms,p99Ms,errorPct"));
+    expect(saved!.text).toContain("TG1 login,1000,16.67,120.0,200.0,300.0,900.0,0.20");
+    expect(revoked).toEqual(created);
+    clickSpy.mockRestore();
   });
 
-  it("toggling ON renders one line per region + small-multiple status charts", () => {
-    hookState.current = makeHookReturn({ data: sampleDataWithRegions() });
-    render(<MetricsTabPanel runId="01J000RUN" runState="COMPLETED" />);
-
-    chartCalls.instances = [];
-    fireEvent.click(screen.getByRole("button", { name: /Split by region/ }));
-
-    const titles = chartCalls.instances.map((c) => c.title);
-    // 3 numeric "by region" charts + one Status-codes chart per region (2).
-    expect(titles).toEqual([
-      "TPS by region",
-      "Response Time by region",
-      "Error % by region",
-      "Status codes — us-east-1",
-      "Status codes — us-west-2",
-    ]);
-
-    // Numeric charts carry one series per region, region names as labels,
-    // sorted (us-east-1 before us-west-2).
-    const tpsChart = chartCalls.instances.find((c) => c.title === "TPS by region")!;
-    expect(tpsChart.seriesLabels).toEqual(["us-east-1", "us-west-2"]);
-
-    // Per-region status chart shows that region's codes only.
-    const eastStatus = chartCalls.instances.find((c) => c.title === "Status codes — us-east-1")!;
-    expect(eastStatus.seriesLabels).toEqual(["200", "500"]);
-    const westStatus = chartCalls.instances.find((c) => c.title === "Status codes — us-west-2")!;
-    expect(westStatus.seriesLabels).toEqual(["200"]);
-
-    expect(screen.getByRole("button", { name: /Split by region/ }))
-      .toHaveAttribute("aria-pressed", "true");
-  });
-
-  it("falls back to aggregate when the toggle is on but no region data is present", () => {
-    // e.g. first poll right after flipping the toggle, before the
-    // byRegion payload arrives — render aggregate rather than blank.
-    hookState.current = makeHookReturn({ data: sampleData() }); // no `regions`
-    render(<MetricsTabPanel runId="01J000RUN" runState="COMPLETED" />);
-    fireEvent.click(screen.getByRole("button", { name: /Split by region/ }));
-    expect(chartCalls.instances.map((c) => c.title)).toContain("Total TPS");
-    expect(chartCalls.instances.map((c) => c.title)).not.toContain("TPS by region");
+  it("Key metrics carries no samples meta beside its title", async () => {
+    renderPanel("COMPLETED");
+    await screen.findByText("TPS", { selector: "dt" });
+    expect(screen.queryByText(/1,320 samples/)).toBeNull();
   });
 });
 
-describe("MetricsTabPanel — time-window selector", () => {
-  const windowSelect = () =>
-    screen.getByRole("combobox", { name: /Time window/i }) as HTMLSelectElement;
+describe("MetricsTabPanel — enlarge a chart", () => {
+  it("every chart card has an enlarge control that opens the same chart in a modal; Escape and × close it", async () => {
+    renderPanel("COMPLETED");
+    await screen.findAllByTestId("chartMock");
+    expect(screen.getAllByRole("button", { name: /^enlarge /i }).map((b) => b.getAttribute("aria-label")))
+      .toEqual(["Enlarge Throughput", "Enlarge Response time", "Enlarge Error %", "Enlarge Error codes"]);
+    expect(screen.queryByRole("dialog")).toBeNull();
 
-  it("LIVE run defaults to 'Last 30 min' (whole-test is bounded while data is still arriving) and offers the fixed window set", () => {
-    render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    expect(windowSelect().value).toBe("30m");
-    const labels = Array.from(windowSelect().options).map((o) => o.textContent);
-    expect(labels).toEqual([
-      "Whole test", "Last 5 min", "Last 10 min", "Last 15 min", "Last 30 min",
-      "Last 1 hour", "Last 2 hours", "Last 4 hours",
-    ]);
-  });
+    fireEvent.click(screen.getByRole("button", { name: "Enlarge Response time" }));
+    const dialog = screen.getByRole("dialog", { name: /response time — enlarged/i });
+    const modalChart = within(dialog).getByTestId("chartMock");
+    expect(modalChart).toHaveAttribute("data-title", "Response time");
+    expect(modalChart).toHaveAttribute("data-labels", "Avg,P90,P95,P99");
+    expect(modalChart.getAttribute("data-synckey")).toBe("");   // not in the page's sync group
+    expect(chartCalls.instances.at(-1)!.height).toBeGreaterThanOrEqual(320);   // ~60 % of the viewport, never below 320
 
-  it("terminal run defaults to 'Whole test' (served from the terminal-run cache)", () => {
-    render(<MetricsTabPanel runId="01J000RUN" runState="COMPLETED" />);
-    expect(windowSelect().value).toBe("all");
-  });
-
-  it("a stored 'Whole test' preference is honored on terminal runs but bounded to 30 min on live runs", () => {
-    window.localStorage.setItem("jmeterCloud.metricsWindow", "all");
-    const { unmount } = render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    expect(windowSelect().value).toBe("30m");
-    unmount();
-
-    render(<MetricsTabPanel runId="01J000RUN" runState="COMPLETED" />);
-    expect(windowSelect().value).toBe("all");
-  });
-
-  it("a stored bounded window is honored on live and terminal runs alike", () => {
-    window.localStorage.setItem("jmeterCloud.metricsWindow", "1h");
-    const { unmount } = render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    expect(windowSelect().value).toBe("1h");
-    unmount();
-
-    render(<MetricsTabPanel runId="01J000RUN" runState="COMPLETED" />);
-    expect(windowSelect().value).toBe("1h");
-  });
-
-  it("persists an explicit selection to localStorage and restores it on remount", () => {
-    const { unmount } = render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    fireEvent.change(windowSelect(), { target: { value: "1h" } });
-    expect(window.localStorage.getItem("jmeterCloud.metricsWindow")).toBe("1h");
-    unmount();
-
-    render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    expect(windowSelect().value).toBe("1h");
-  });
-
-  it("picking 'Whole test' mid-run is honored for the session and stored", () => {
-    render(<MetricsTabPanel runId="01J000RUN" runState="RUNNING" />);
-    fireEvent.change(windowSelect(), { target: { value: "all" } });
-    expect(windowSelect().value).toBe("all");
-    expect(window.localStorage.getItem("jmeterCloud.metricsWindow")).toBe("all");
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Enlarge Error codes" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
 
-// (within is imported above so we can scope cell lookups when tests grow)
-void within;
+describe("MetricsTabPanel — Open in Grafana", () => {
+  it("links the group's dashboard on the tab's range when dashboards are given, and shows nothing otherwise", async () => {
+    renderPanel("RUNNING", "?range=15m&granularity=30", {
+      dashboards: { liveUrl: "https://grafana.example.com/d/cps?orgId=1", metricsApplication: "CPS-PCI" },
+      run: { startedAt: "2026-08-30T11:50:00Z" },
+    });
+    const link = await screen.findByRole("link", { name: /open in grafana/i });
+    const href = new URL(link.getAttribute("href")!);
+    expect(href.searchParams.get("from")).toBe("now-15m");
+    expect(href.searchParams.get("refresh")).toBe("15s");
+    expect(href.searchParams.get("var-application")).toBe("CPS-PCI");
+    expect(href.searchParams.get("var-granularity")).toBe("30");
+    expect(new URL(link.getAttribute("href")!).searchParams.get("var-granularity")).toBe("30");
+
+    renderPanel("RUNNING", "", { dashboards: { liveUrl: null } });
+    await waitFor(() => expect(screen.getAllByRole("button", { name: /reset zoom/i }).length).toBe(2));
+    expect(screen.getAllByRole("link", { name: /open in grafana/i })).toHaveLength(1);
+  });
+});

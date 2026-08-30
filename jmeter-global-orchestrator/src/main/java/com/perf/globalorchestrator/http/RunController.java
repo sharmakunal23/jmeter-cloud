@@ -8,7 +8,9 @@ import com.perf.globalorchestrator.domain.MetricsTimeseriesBatch;
 import com.perf.globalorchestrator.domain.Run;
 import com.perf.globalorchestrator.domain.RunEvent;
 import com.perf.globalorchestrator.domain.RunFleetMember;
+import com.perf.globalorchestrator.domain.RunSummary;
 import com.perf.globalorchestrator.domain.Ulid;
+import com.perf.globalorchestrator.repo.MetricsTimeseriesRepository;
 import com.perf.globalorchestrator.service.CachingLogTailService;
 import com.perf.globalorchestrator.service.CachingMetricsService;
 import com.perf.globalorchestrator.service.RunPurgeService;
@@ -313,48 +315,101 @@ public class RunController {
                 .body(result.body() == null ? "" : result.body());
     }
 
+    /**
+     * The aggregate report: one row per label over the run (or its trailing
+     * {@code window}), optionally narrowed to labels starting with
+     * {@code labelPrefix}. Cached when the run is terminal, straight to SQL otherwise.
+     */
     @GetMapping("/runs/{runId:" + Ulid.PATTERN + "}/metrics")
-    public ResponseEntity<Map<String, Object>> getRunMetrics(@PathVariable String runId) {
-        // Surface the same Run object the client already has access to,
-        // alongside the per-label rollup. Avoids a second round-trip when
-        // a UI wants to display metadata + metrics side-by-side.
+    public ResponseEntity<Map<String, Object>> getRunMetrics(
+            @PathVariable String runId,
+            @RequestParam(name = "window", defaultValue = "all") String window,
+            @RequestParam(name = "labelPrefix", required = false) String labelPrefix,
+            @RequestParam(name = "labelLimit", required = false) String labelLimit) {
         Run run = runs.getRun(runId);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("runId", run.runId());
         body.put("state", run.state().name());
-        // Cached when run is terminal, straight to SQL otherwise.
-        body.put("byLabel", metrics.rollupByLabel(runId, run.state()));
+        body.put("byLabel", metrics.rollupByLabel(runId, run.state(), parseWindowSeconds(window),
+                parseLabelPrefix(labelPrefix), parseLabelLimit(labelLimit)));
         return ResponseEntity.ok(body);
     }
 
     /**
-     * HM-1 — per-second timeseries for the run-detail Metrics tab. Drives
-     * the four native uPlot charts (TPS, avg RT, error %, status codes)
-     * that replaced the former Grafana iframe. Empty arrays during
-     * PREPARING (rather than 404) so the polling UI doesn't flash a red
-     * error before the consumer has written its first row.
+     * The Metrics tab's headline numbers — the hosted dashboard's "Key Metrics"
+     * stat row and "Summary by Application" table — over the run or its
+     * trailing {@code window}. Zeros (200, not 404) while the run has no rows.
+     */
+    @GetMapping("/runs/{runId:" + Ulid.PATTERN + "}/summary")
+    public ResponseEntity<RunSummary> getRunSummary(
+            @PathVariable String runId,
+            @RequestParam(name = "window", defaultValue = "all") String window) {
+        Run run = runs.getRun(runId);
+        return ResponseEntity.ok(metrics.summary(runId, run.state(), parseWindowSeconds(window)));
+    }
+
+    /**
+     * Bucketed timeseries for the run-detail Metrics tab's charts, with the
+     * splits the tab can ask for. Empty arrays during PREPARING (rather than
+     * 404) so the polling UI doesn't flash a red error before the consumer has
+     * written its first row.
      */
     @GetMapping("/runs/{runId:" + Ulid.PATTERN + "}/timeseries")
     public ResponseEntity<MetricsTimeseries> getRunTimeseries(
             @PathVariable String runId,
             @RequestParam(name = "byRegion", defaultValue = "false") boolean byRegion,
             @RequestParam(name = "byApplication", defaultValue = "false") boolean byApplication,
+            @RequestParam(name = "byLabel", defaultValue = "false") boolean byLabel,
+            @RequestParam(name = "labelPrefix", required = false) String labelPrefix,
+            @RequestParam(name = "labelLimit", required = false) String labelLimit,
             @RequestParam(name = "granularity", required = false) Integer granularity,
             @RequestParam(name = "window", defaultValue = "all") String window) {
-        // Validate the runId exists. getRun throws RunNotFoundException
-        // on miss, mapped to 404 by the existing handler — same shape
-        // as /metrics so the UI's error path is consistent.
+        // getRun throws RunNotFoundException on miss → 404, the same shape as
+        // /metrics and /summary so the UI's error path is consistent.
         Run run = runs.getRun(runId);
-        // Cached when run is terminal, straight to SQL otherwise.
-        // byRegion=true adds the per-region breakdown (the UI's "Split by
-        // region" toggle); default false keeps the aggregate-only payload.
-        // window restricts to the last 5m/10m/30m/1h/2h/4h of the run (or
-        // "all" = whole test); it trims the per-poll scan on long live runs.
         Long windowSeconds = parseWindowSeconds(window);
         if (granularity != null && granularity != 15 && granularity != 30 && granularity != 60) {
             throw new IllegalArgumentException("granularity must be 15, 30 or 60 seconds; got " + granularity);
         }
-        return ResponseEntity.ok(metrics.timeseries(runId, run.state(), byRegion, byApplication, granularity, windowSeconds));
+        return ResponseEntity.ok(metrics.timeseries(runId, run.state(), byRegion, byApplication, byLabel,
+                parseLabelPrefix(labelPrefix), parseLabelLimit(labelLimit), granularity, windowSeconds));
+    }
+
+    /**
+     * {@code labelLimit}: absent = the 10 busiest labels, {@code all} = every
+     * label, else 1..50 (400 otherwise).
+     */
+    private static int parseLabelLimit(String labelLimit) {
+        if (labelLimit == null || labelLimit.isBlank()) {
+            return MetricsTimeseriesRepository.LABELS_SHOWN;
+        }
+        if (labelLimit.trim().equalsIgnoreCase("all")) {
+            return MetricsTimeseriesRepository.LABELS_ALL;
+        }
+        int n;
+        try {
+            n = Integer.parseInt(labelLimit.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("labelLimit must be 'all' or a number between 1 and " + MetricsTimeseriesRepository.LABELS_MAX);
+        }
+        if (n < 1 || n > MetricsTimeseriesRepository.LABELS_MAX) {
+            throw new IllegalArgumentException("labelLimit must be 'all' or a number between 1 and " + MetricsTimeseriesRepository.LABELS_MAX);
+        }
+        return n;
+    }
+
+    /** A label prefix is plain text of at most {@value #LABEL_PREFIX_MAX} chars; blank = none. */
+    private static final int LABEL_PREFIX_MAX = 100;
+
+    private static String parseLabelPrefix(String labelPrefix) {
+        if (labelPrefix == null || labelPrefix.isBlank()) {
+            return null;
+        }
+        String trimmed = labelPrefix.trim();
+        if (trimmed.length() > LABEL_PREFIX_MAX) {
+            throw new IllegalArgumentException("labelPrefix must be at most " + LABEL_PREFIX_MAX + " characters");
+        }
+        return trimmed;
     }
 
     /**

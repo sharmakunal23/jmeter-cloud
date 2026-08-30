@@ -4118,10 +4118,10 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
 }
 
 @media (min-width: 980px) {
-  .metricsPanel__chartGrid--grid {
+  /* Two columns, like the hosted dashboard's 12-unit panels; one column on narrow screens. */
+  .metricsPanel__chartGrid {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
-  /* Stacked is single column at every width — no override needed. */
 }
 
 /* Layout toggle — segmented control matching the existing
@@ -4986,3 +4986,146 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
 .healthTree__row--service .checklistRow__label { font-weight: var(--weight-semibold, 600); }
 .checklist__head { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; }
 .checklist__toggle { margin-left: auto; }
+
+/* ── Metrics tab as a dashboard (2026-08-30) ─────────────────────────
+   Collapsible sections, a stat row, tables, and the on-plot tooltip that
+   replaced uPlot's live legend. Chart cards keep .timeseriesChart. */
+.metricsToolbar .metricsPanel__headerActions { row-gap: 0.4rem; }
+.metricsToolbar__state { display: inline-flex; align-items: center; gap: 0.6rem; flex: 0 1 auto; }
+.metricsToolbar__error { font-size: 0.85rem; }
+.metricsToolbar__labelInput {
+  width: 11rem;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  font: inherit;
+  font-size: 0.88rem;
+}
+.metricsToolbar__labelInput:focus { outline: 2px solid var(--brand-soft); border-color: var(--brand); }
+
+.metricsSection { margin-bottom: 0.75rem; }
+.metricsSection__header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.15rem 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.6rem;
+}
+.metricsSection__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.2rem;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: var(--weight-semibold, 600);
+  color: var(--ink);
+  cursor: pointer;
+}
+.metricsSection__toggle:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 4px; }
+.metricsSection__chevron { width: 0.9rem; color: var(--ink-soft); font-size: 0.85rem; }
+.metricsSection__meta { font-size: 0.82rem; color: var(--ink-soft); }
+.metricsSection__controls { margin-left: auto; display: inline-flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.metricsSection--closed .metricsSection__header { margin-bottom: 0.25rem; }
+
+.statRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: 0.6rem;
+  margin: 0 0 0.75rem;
+}
+.statCard {
+  margin: 0;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.statCard__label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-soft);
+}
+.statCard__value {
+  margin: 0.15rem 0 0;
+  font-size: 1.35rem;
+  font-weight: var(--weight-semibold, 600);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.statCard--warn .statCard__value { color: #b45309; }
+.statCard--err  .statCard__value { color: var(--err); }
+
+.metricsTable { font-size: 0.86rem; }
+.metricsTable__num { text-align: right !important; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.metricsTable__scroll { overflow-x: auto; }
+.metricsTable__sort {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+.metricsTable__sort:hover { color: var(--brand); }
+
+/* A chart card with its enlarge control in the corner; the modal draws the same chart wide. */
+.chartCard { position: relative; min-width: 0; }
+.chartCard__enlarge {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.5rem;
+  z-index: 2;
+  width: 1.9rem;
+  height: 1.9rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.chartCard__enlarge:hover { color: var(--brand); border-color: var(--brand); }
+.chartCard__enlarge:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.modal--chart { max-width: min(1400px, 92vw); }
+.modal__body--chart { padding: 0.5rem 0.75rem 0.75rem; }
+.modal__body--chart .timeseriesChart { margin-bottom: 0; box-shadow: none; border: 0; }
+
+/* Static legend: names + markers, laid out as one line under the plot. */
+.timeseriesChart .u-legend .u-series { display: inline-block; margin-right: 0.9rem; }
+.timeseriesChart .u-legend .u-series > * { display: inline-block; }
+.timeseriesChart .u-legend .u-label { cursor: pointer; }
+
+/* The on-plot tooltip (see TimeseriesChart's tooltipPlugin). */
+.uTooltip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 5;
+  pointer-events: none;
+  min-width: 8rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12);
+  font-size: 0.78rem;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.uTooltip__time { font-weight: var(--weight-semibold, 600); margin-bottom: 0.2rem; font-variant-numeric: tabular-nums; }
+.uTooltip__row { display: flex; align-items: center; gap: 0.4rem; line-height: 1.5; }
+.uTooltip__mark { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 2px; flex-shrink: 0; }
+.uTooltip__label { color: var(--ink-soft); flex: 1 1 auto; }
+.uTooltip__value { font-variant-numeric: tabular-nums; margin-left: 0.6rem; }

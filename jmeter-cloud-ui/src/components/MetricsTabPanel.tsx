@@ -1,446 +1,210 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { MetricsGranularity, MetricsTimeseries, MetricsTimeseriesSeries, MetricsWindow, RunState, TimeseriesPoint } from "../api/runs";
-import type { MetricsView } from "../lib/grafanaLink";
-import { isTerminalRunState, useMetricsTimeseries } from "../hooks/useMetricsTimeseries";
+import {
+  isTerminalRunState, runsApi,
+  type MetricsSplit, type MetricsTimeseries, type MetricsTimeseriesSeries, type RunState, type TimeseriesPoint,
+} from "../api/runs";
+import { CATEGORICAL_PALETTE, SERIES_COLOR, colorForKey } from "../lib/chartColors";
+import { grafanaLinkFor, type GrafanaDashboards } from "../lib/grafanaLink";
+import {
+  GRANULARITY_OPTIONS, LABEL_LIMIT_OPTIONS, RANGE_OPTIONS, SPLIT_OPTIONS,
+  type GranularityChoice, type LabelLimit, type LabelSelection, type MetricsViewState,
+} from "../lib/metricsView";
 import { useAiStatus } from "../hooks/useAiStatus";
+import { useMetricsView } from "../hooks/useMetricsView";
+import { usePanelQuery } from "../hooks/usePanelQuery";
+import { useRefreshTick } from "../hooks/useRefreshTick";
 import { useRunInsights } from "../hooks/useRunInsights";
 import { RunInsightsPanel } from "./RunInsightsPanel";
+import { AggregateReport, aggregateReportCsv } from "./metrics/AggregateReport";
+import { downloadCsv } from "../lib/download";
+import { ChartModal, type ChartSpec } from "./charts/ChartModal";
+import { KeyMetrics } from "./metrics/KeyMetrics";
+import { MetricsSection, useSectionOpen } from "./metrics/MetricsSection";
 import {
-  TimeseriesChart,
-  type TimeseriesSeries,
-  STACKED_CHART_HEIGHT,
-  formatCompactNumber,
-  formatCompactDuration,
-  formatPercent,
+  TimeseriesChart, type TimeseriesSeries, formatCompactDuration, formatCompactNumber, formatPercent,
 } from "./charts/TimeseriesChart";
 
 /**
- * Historical metrics for the run-detail Metrics tab: four native uPlot charts
- * driven by `GET /api/v1/runs/{runId}/timeseries`.
+ * The run's metrics as a dashboard — the hosted Grafana layout, scoped to one
+ * run: a toolbar (the live/paused badge, AI insights, reset zoom, granularity,
+ * split by region, range, the group's Grafana link), then five collapsible sections over
+ * four queries — the Per label section and the Aggregate report each carry
+ * their own label filter and Top-N:
  *
- * The query is keyed by runId, so a run of any age renders, and keeping the
- * data as plain arrays in this app is what lets the compare page and the AI
- * panels reuse it.
+ * <ul>
+ *   <li><b>Key metrics</b> — TPS · Avg · P90 · P95 · P99 · Error % + summary by application (`/summary`, one statement).</li>
+ *   <li><b>Throughput and response time</b> and <b>Errors</b> (error %, 4xx / 5xx) — one `/timeseries` read, shared while either is open.</li>
+ *   <li><b>Per label</b> — throughput and response time per label (`/timeseries?byLabel`).</li>
+ *   <li><b>Aggregate report</b> — one row per label (`/metrics`).</li>
+ * </ul>
+ *
+ * A collapsed section fetches nothing. Open sections refresh together every
+ * {@link METRICS_REFRESH_MS} while the run is live and the page is open (one
+ * flush window — the rows change no faster), never once it is terminal. The
+ * view lives in the URL. Error % everywhere is HTTP 4xx + 5xx over samples.
  */
 export interface MetricsTabPanelProps {
   runId: string;
   runState: RunState;
-  /** Fired on mount and whenever the window / granularity pickers change — feeds the "Open in Grafana" link. */
-  onViewChange?: (view: MetricsView) => void;
+  /** The run's timestamps, for the Grafana link's absolute range on a finished run. */
+  run?: { startedAt?: string | null; completedAt?: string | null };
+  /** The group's dashboards (and the app's metrics name); absent = no "Open in Grafana". */
+  dashboards?: GrafanaDashboards | null;
 }
 
-const HEIGHT_GRID    = 220;                  // 2-column compact view
-const HEIGHT_STACKED = STACKED_CHART_HEIGHT;  // 1-column detailed view — matches the two-run comparison height
+/** One flush window: the workers publish 15-second windows, so the rows change every 15 s. */
+export const METRICS_REFRESH_MS = 15_000;
+const CHART_HEIGHT = 280;
+const LABEL_DEBOUNCE_MS = 300;
 
-const TPS_COLOR      = "#2563eb"; // brand blue
-const AVG_RT_COLOR   = "#0ea5e9"; // info blue
-const P95_COLOR      = "#7c3aed"; // violet
-const P99_COLOR      = "#db2777"; // pink
-const ERROR_COLOR    = "#dc2626"; // err red
+export function MetricsTabPanel({ runId, runState, run, dashboards }: MetricsTabPanelProps) {
+  const isTerminal = isTerminalRunState(runState);
+  const [view, updateView] = useMetricsView(isTerminal);
+  const granularity = view.granularity;
 
-const LAYOUT_STORAGE_KEY = "jmeterCloud.metricsLayout";
-const REGION_STORAGE_KEY = "jmeterCloud.metricsSplitByRegion";
-const WINDOW_STORAGE_KEY = "jmeterCloud.metricsWindow";
-const GRANULARITY_STORAGE_KEY = "jmeterCloud.metricsGranularity";
-type Layout = "grid" | "stacked";
-/** "auto" lets the server pick the smallest bucket that keeps the payload bounded. */
-type GranularityChoice = "auto" | MetricsGranularity;
-const GRANULARITY_OPTIONS: ReadonlyArray<{ value: GranularityChoice; label: string }> = [
-  { value: "auto", label: "Auto" },
-  { value: 15,     label: "15 s" },
-  { value: 30,     label: "30 s" },
-  { value: 60,     label: "60 s" },
-];
+  // One clock for every open section.
+  const { tick, isPaused, pauseReason } = useRefreshTick(isTerminal ? null : METRICS_REFRESH_MS, `metrics:${runId}`);
 
-function readStoredGranularity(): GranularityChoice {
-  try {
-    const v = window.localStorage.getItem(GRANULARITY_STORAGE_KEY);
-    if (v === "15" || v === "30" || v === "60") return Number(v) as MetricsGranularity;
-  } catch { /* private mode */ }
-  return "auto";
-}
+  const [keyOpen, toggleKey] = useSectionOpen("keyMetrics");
+  const [throughputOpen, toggleThroughput] = useSectionOpen("throughput");
+  const [errorsOpen, toggleErrors] = useSectionOpen("errors");
+  const [labelsOpen, toggleLabels] = useSectionOpen("perLabel");
+  const [reportOpen, toggleReport] = useSectionOpen("aggregateReport");
+  // Both chart sections read the same statement — one query, enabled while either is open.
+  const chartsOpen = throughputOpen || errorsOpen;
 
-/**
- * Time-window options for the metrics charts. The default depends on the
- * run's state — see {@link initialTimeWindow}: terminal runs open on
- * "Whole test" (served from the orchestrator's Redis cache), live runs
- * open on {@link LIVE_DEFAULT_WINDOW}.
- */
-const WINDOW_OPTIONS: ReadonlyArray<{ value: MetricsWindow; label: string }> = [
-  { value: "all", label: "Whole test" },
-  { value: "5m",  label: "Last 5 min" },
-  { value: "10m", label: "Last 10 min" },
-  { value: "15m", label: "Last 15 min" },
-  { value: "30m", label: "Last 30 min" },
-  { value: "1h",  label: "Last 1 hour" },
-  { value: "2h",  label: "Last 2 hours" },
-  { value: "4h",  label: "Last 4 hours" },
-];
-
-/** Stored window preference, or null when nothing valid was ever picked. */
-function readStoredWindow(): MetricsWindow | null {
-  try {
-    const v = window.localStorage.getItem(WINDOW_STORAGE_KEY);
-    return WINDOW_OPTIONS.some((o) => o.value === v) ? (v as MetricsWindow) : null;
-  } catch { return null; }
-}
-
-/**
- * Default window for a run that is still producing data. "Whole test" on a
- * long LIVE run re-aggregates every raw row of the run on each 5 s poll —
- * measured (2026-07-24, 34M-row bench): that shape can't keep up with ~10
- * concurrent watchers, while bounded windows have >10× headroom. Terminal
- * runs are exempt: their whole-test snapshot is computed once and served
- * from the Redis cache.
- */
-const LIVE_DEFAULT_WINDOW: MetricsWindow = "30m";
-
-/**
- * Initial window for the picker: the operator's stored preference, else
- * "Whole test" — except that a LIVE run never *starts* on "Whole test"
- * (bounded to {@link LIVE_DEFAULT_WINDOW}, see above). Explicitly picking
- * "Whole test" mid-run still works and persists; only the initial state
- * is bounded, so the expensive shape is a deliberate act, not a default.
- */
-function initialTimeWindow(isTerminal: boolean): MetricsWindow {
-  const preferred = readStoredWindow() ?? "all";
-  return !isTerminal && preferred === "all" ? LIVE_DEFAULT_WINDOW : preferred;
-}
-
-function readStoredLayout(): Layout {
-  try {
-    const v = window.localStorage.getItem(LAYOUT_STORAGE_KEY);
-    return v === "stacked" ? "stacked" : "grid";
-  } catch { return "grid"; }
-}
-
-function readStoredSplitByRegion(): boolean {
-  try {
-    return window.localStorage.getItem(REGION_STORAGE_KEY) === "true";
-  } catch { return false; }
-}
-
-export function MetricsTabPanel({ runId, runState, onViewChange }: MetricsTabPanelProps) {
-  // "Split by region" — off by default (the aggregate view is the
-  // default the operator asked to keep). When on, the hook fetches the
-  // per-region breakdown (one extra GROUP BY server-side) and the charts
-  // render one line per region.
-  const [splitByRegion, setSplitByRegion] = useState<boolean>(readStoredSplitByRegion);
-  useEffect(() => {
-    try { window.localStorage.setItem(REGION_STORAGE_KEY, String(splitByRegion)); }
-    catch { /* private mode */ }
-  }, [splitByRegion]);
-
-  // Time window — stored preference, bounded to "Last 30 min" while the
-  // run is live (see initialTimeWindow). Persisted only on an explicit
-  // pick, so the live-run bound never overwrites the stored preference
-  // and terminal runs keep defaulting to "Whole test".
-  const [timeWindow, setTimeWindow] = useState<MetricsWindow>(
-    () => initialTimeWindow(isTerminalRunState(runState)),
+  // ── The four queries — each only while its section is open ──────────
+  const summary = usePanelQuery(
+    (signal) => runsApi.summary(runId, signal, { window: view.range }),
+    [runId, view.range], tick, keyOpen,
   );
-  const pickTimeWindow = (w: MetricsWindow) => {
-    setTimeWindow(w);
-    try { window.localStorage.setItem(WINDOW_STORAGE_KEY, w); }
-    catch { /* private mode */ }
-  };
-
-  // Bucket width — the Grafana granularity picker; "auto" = the server's choice.
-  const [granularity, setGranularity] = useState<GranularityChoice>(readStoredGranularity);
-  const pickGranularity = (g: GranularityChoice) => {
-    setGranularity(g);
-    try { window.localStorage.setItem(GRANULARITY_STORAGE_KEY, String(g)); }
-    catch { /* private mode */ }
-  };
-
-  useEffect(() => {
-    onViewChange?.({ window: timeWindow, granularity });
-  }, [onViewChange, timeWindow, granularity]);
-
-  const { status, data, lastUpdated, isPaused, pauseReason } =
-    useMetricsTimeseries(runId, runState, splitByRegion, timeWindow, granularity === "auto" ? undefined : granularity);
-
-  const [layout, setLayout] = useState<Layout>(readStoredLayout);
-  useEffect(() => {
-    try { window.localStorage.setItem(LAYOUT_STORAGE_KEY, layout); }
-    catch { /* private mode */ }
-  }, [layout]);
-  const chartHeight = layout === "stacked" ? HEIGHT_STACKED : HEIGHT_GRID;
-
-  // Region mode is active only when the toggle is on AND the payload
-  // actually carries a region breakdown (it won't during the first poll
-  // after flipping the toggle, or for a run with no metrics yet) — so we
-  // fall back to the aggregate charts rather than flashing empty.
-  const regionKeys = useMemo(
-    () => (data?.regions ? Object.keys(data.regions).sort() : []),
-    [data],
+  const charts = usePanelQuery(
+    (signal) => runsApi.timeseries(runId, signal, {
+      byApplication: view.split === "application", byRegion: view.split === "region",
+      granularity, window: view.range,
+    }),
+    [runId, view.range, granularity, view.split], tick, chartsOpen,
   );
-  const regionMode = splitByRegion && regionKeys.length > 0;
+  const labels = usePanelQuery(
+    (signal) => runsApi.timeseries(runId, signal, {
+      byLabel: true, labelPrefix: view.labels.prefix, labelLimit: view.labels.limit, granularity, window: view.range,
+    }),
+    [runId, view.range, granularity, view.labels.prefix, view.labels.limit], tick, labelsOpen,
+  );
+  const report = usePanelQuery(
+    (signal) => runsApi.metrics(runId, signal, { window: view.range, labelPrefix: view.report.prefix, labelLimit: view.report.limit }),
+    [runId, view.range, view.report.prefix, view.report.limit], tick, reportOpen,
+  );
 
-  // Bumping `resetVersion` tells every chart to call setScale("x",
-  // {min:null, max:null}) — auto-fit back to the full data range.
-  // Each TimeseriesChart instance subscribes to it via its
-  // `resetVersion` prop. Independent of layout / data updates.
-  const [resetVersion, setResetVersion] = useState(0);
-  // Sync key — all four charts share this so uPlot's built-in cursor
-  // sync propagates hover crosshairs AND drag-zoom across them.
-  // Keyed by runId so navigating to a different run starts a fresh
-  // sync group (no leftover sub from the previous chart instances).
+  // Zoom is shared across every chart on the tab (cursor sync), and "Reset zoom" clears it everywhere.
   const syncKey = `metrics:${runId}`;
+  const [resetVersion, setResetVersion] = useState(0);
+  // Any chart card can be opened enlarged in a modal (there is no stacked layout).
+  const [enlarged, setEnlarged] = useState<ChartSpec | null>(null);
 
-  // Project the response shape into the chart's input shape. Memoise on
-  // `data` + `regionMode` identity so child charts get stable references
-  // between polls when nothing changed.
-  //
-  // Aggregate mode: one series per chart (the all-regions total).
-  // Region mode: one color-coded series per region, the region name as
-  // the legend label so the operator reads "us-east-1 vs us-west-2".
-  const tpsSeries = useMemo<TimeseriesSeries[]>(
-    () => {
-      if (!data) return [];
-      if (regionMode) return regionSeries(data.regions!, regionKeys, "tps");
-      return [{ label: "TPS", color: TPS_COLOR, data: data.series.tps }];
-    },
-    [data, regionMode, regionKeys],
-  );
-  // Aggregate mode charts the mean with the throughput-weighted p95 / p99 beside it
-  // (the hosted Grafana "Response Time" panel); region mode keeps one mean per region.
-  const avgRtSeries = useMemo<TimeseriesSeries[]>(
-    () => {
-      if (!data) return [];
-      if (regionMode) return regionSeries(data.regions!, regionKeys, "avgRtMs");
-      const series: TimeseriesSeries[] = [{ label: "Avg", color: AVG_RT_COLOR, data: data.series.avgRtMs }];
-      if (data.series.p95Ms?.length) series.push({ label: "P95", color: P95_COLOR, data: data.series.p95Ms });
-      if (data.series.p99Ms?.length) series.push({ label: "P99", color: P99_COLOR, data: data.series.p99Ms });
-      return series;
-    },
-    [data, regionMode, regionKeys],
-  );
-  const errorPctSeries = useMemo<TimeseriesSeries[]>(
-    () => {
-      if (!data) return [];
-      if (regionMode) return regionSeries(data.regions!, regionKeys, "errorPct");
-      return [{ label: "Error %", color: ERROR_COLOR, data: data.series.errorPct }];
-    },
-    [data, regionMode, regionKeys],
-  );
-  // Aggregate mode → one Status-codes chart (one series per code).
-  // Region mode → small multiples: one Status-codes chart per region.
-  const statusCodeSeries = useMemo<TimeseriesSeries[]>(
-    () => data && !regionMode ? buildStatusCodeSeries(data.series.statusCodes) : [],
-    [data, regionMode],
-  );
-  const statusByRegion = useMemo<Array<{ region: string; series: TimeseriesSeries[] }>>(
-    () => data && regionMode
-      ? regionKeys.map((r) => ({ region: r, series: buildStatusCodeSeries(data.regions![r]!.statusCodes) }))
-      : [],
-    [data, regionMode, regionKeys],
-  );
+  const data = charts.data;
+  const hasChartData = data !== null && data.series.tps.length > 0;
 
-  const hasAnyData = data !== null && data.series.tps.length > 0;
-  const isInitialLoading = status.kind === "loading" && data === null;
-  const errorMessage = status.kind === "error" ? status.message : null;
-
-  // AI insights — a right-hand column toggled from the header (next to "Split
-  // by region"), so the summary sits beside the charts with no scroll. Gated
-  // on ≥ 30 s of data (earlier, the summary is just "the run started");
-  // bucketSize accounts for downsampled long runs.
+  // ── AI insights — a side column, gated on ≥ 30 s of chart data ──────
   const { enabled: aiEnabled } = useAiStatus();
   const [showInsights, setShowInsights] = useState(false);
   const insights = useRunInsights(runId);
   const secondsOfData = data ? data.series.tps.length * Math.max(1, data.bucketSize) : 0;
   const insightsReady = secondsOfData >= 30;
   const insightsOpen = aiEnabled && showInsights;
-
-  // Auto-generate when the column opens (one click → insights). Fires once:
-  // generate() flips status to "loading", so the guard closes. If the run
-  // wasn't ready at open time, it fires as soon as the data crosses 30 s.
-  // Reopening a run that already has data shows the cached result — no re-bill.
   const insightsGenerate = insights.generate;
   const insightsKind = insights.status.kind;
   const hasInsights = insights.data !== null;
   useEffect(() => {
-    if (insightsOpen && insightsReady && insightsKind === "idle" && !hasInsights) {
-      insightsGenerate();
-    }
+    if (insightsOpen && insightsReady && insightsKind === "idle" && !hasInsights) insightsGenerate();
   }, [insightsOpen, insightsReady, insightsKind, hasInsights, insightsGenerate]);
+
+  const grafanaHref = dashboards
+    ? grafanaLinkFor({
+        ...dashboards,
+        run: { state: runState, startedAt: run?.startedAt, completedAt: run?.completedAt },
+        window: view.range, granularity: view.granularity,
+      })
+    : null;
+
+  const firstError = [summary, charts, labels, report].map((q) => q.status).find((s) => s.kind === "error");
 
   return (
     <div className="metricsPanel">
-      <header className="metricsPanel__header">
-        <div className="metricsPanel__headerInfo">
-          <p className="metricsPanel__status">
-            {isInitialLoading
-              ? "loading…"
-              : errorMessage
-                ? <span className="text--error">error: {errorMessage}</span>
-                : <>
-                    {hasAnyData
-                      ? `${data!.series.tps.length} point${data!.series.tps.length === 1 ? "" : "s"} · ${data!.bucketSize}-s buckets`
-                      : "no metrics yet"}
-                    {lastUpdated && <> · last fetch {lastUpdated.toLocaleTimeString()}</>}
-                    {isPaused && <> · <span className="badge badge--warn" title={pauseTooltip(pauseReason)}>{pauseLabel(pauseReason)}</span></>}
-                  </>}
-          </p>
-        </div>
-        <div className="metricsPanel__headerActions">
-          {aiEnabled && (
-            <button
-              type="button"
-              className={`btn btn--ghost ${insightsOpen ? "btn--active" : ""}`}
-              aria-pressed={insightsOpen}
-              onClick={() => setShowInsights((v) => !v)}
-              title="Show Claude's read of this run in a panel beside the charts"
-            >
-              ✨ AI insights
-            </button>
-          )}
-          <button
-            type="button"
-            className={`btn btn--ghost metricsPanel__regionToggle ${splitByRegion ? "metricsPanel__regionToggle--active" : ""}`}
-            aria-pressed={splitByRegion}
-            onClick={() => setSplitByRegion((v) => !v)}
-            title="Split each metric into one line per region (compare us-east vs us-west). Default off."
-          >
-            ⊞ Split by region
-          </button>
-          <button
-            type="button"
-            className="btn btn--ghost"
-            onClick={() => setResetVersion((v) => v + 1)}
-            title="Reset zoom on all charts back to the full run window"
-            disabled={!hasAnyData}
-          >
-            ⟲ Reset zoom
-          </button>
-          <label className="metricsPanel__windowPicker">
-            <span className="visuallyHidden">Granularity</span>
-            <select
-              className="formSelect"
-              value={String(granularity)}
-              onChange={(e) => pickGranularity(e.target.value === "auto" ? "auto" : Number(e.target.value) as MetricsGranularity)}
-              title="Bucket width per point — 15 s is the workers' window; Auto keeps long runs bounded"
-            >
-              {GRANULARITY_OPTIONS.map((o) => (
-                <option key={String(o.value)} value={String(o.value)}>{o.label}</option>
-              ))}
-            </select>
-          </label>
-          <label className="metricsPanel__windowPicker">
-            <span className="visuallyHidden">Time window</span>
-            <select
-              className="formSelect"
-              value={timeWindow}
-              onChange={(e) => pickTimeWindow(e.target.value as MetricsWindow)}
-              title="Show only the most recent slice of the run — faster to pull on long (e.g. 10-hour) tests"
-            >
-              {WINDOW_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
-          </label>
-          <div
-            className="metricsPanel__layoutToggle"
-            role="tablist"
-            aria-label="Chart layout"
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={layout === "grid"}
-              className={`btn btn--ghost ${layout === "grid" ? "btn--active" : ""}`}
-              onClick={() => setLayout("grid")}
-              title="2-column compact grid"
-            >
-              ▦ Grid
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={layout === "stacked"}
-              className={`btn btn--ghost ${layout === "stacked" ? "btn--active" : ""}`}
-              onClick={() => setLayout("stacked")}
-              title="Single-column stacked — larger charts, more detail"
-            >
-              ▤ Stacked
-            </button>
-          </div>
-        </div>
-      </header>
+      <MetricsToolbar
+        view={view}
+        onChange={updateView}
+        isPaused={isPaused}
+        pauseLabel={isPaused ? pauseLabel(pauseReason) : null}
+        pauseTitle={isPaused ? pauseTooltip(pauseReason) : null}
+        onResetZoom={() => setResetVersion((v) => v + 1)}
+        canResetZoom={hasChartData}
+        error={firstError && firstError.kind === "error" ? firstError.message : null}
+        aiEnabled={aiEnabled}
+        insightsOpen={insightsOpen}
+        onToggleInsights={() => setShowInsights((v) => !v)}
+        grafanaHref={grafanaHref}
+        grafanaTitle={isTerminal
+          ? "Open the group's Grafana dashboard for this run's exact time range"
+          : "Open the group's Grafana dashboard on this range, auto-refreshing"}
+      />
 
       <div className="metricsPanel__body">
         <div className="metricsPanel__charts">
-      {hasAnyData ? (
-        <div className={`metricsPanel__chartGrid metricsPanel__chartGrid--${layout}`}>
-          <TimeseriesChart
-            title={regionMode ? "TPS by region" : "Total TPS"}
-            series={tpsSeries}
-            yLabel="requests / s"
-            height={chartHeight}
-            formatValue={(v) => v.toFixed(1)}
-            formatAxisValue={formatCompactNumber}
-            syncKey={syncKey}
-            resetVersion={resetVersion}
-          />
-          <TimeseriesChart
-            title={regionMode ? "Response Time by region" : "Response Time"}
-            series={avgRtSeries}
-            yLabel="ms"
-            height={chartHeight}
-            formatValue={(v) => v.toFixed(1)}
-            formatAxisValue={formatCompactDuration}
-            syncKey={syncKey}
-            resetVersion={resetVersion}
-          />
-          <TimeseriesChart
-            title={regionMode ? "Error % by region" : "Error %"}
-            series={errorPctSeries}
-            yLabel="%"
-            height={chartHeight}
-            formatValue={(v) => v.toFixed(2)}
-            formatAxisValue={formatPercent}
-            syncKey={syncKey}
-            resetVersion={resetVersion}
-          />
-          {regionMode ? (
-            // Status codes is a 2-D metric (code × region); to avoid an
-            // overcrowded single chart we render small multiples — one
-            // Status-codes chart per region, each with that region's codes.
-            statusByRegion.map(({ region, series }) => (
-              <TimeseriesChart
-                key={region}
-                title={`Status codes — ${region}`}
-                series={series}
-                yLabel="count / s"
-                height={chartHeight}
-                formatValue={(v) => v.toFixed(0)}
-                formatAxisValue={formatCompactNumber}
-                syncKey={syncKey}
-                resetVersion={resetVersion}
-              />
-            ))
-          ) : (
-            <TimeseriesChart
-              title="Status codes"
-              series={statusCodeSeries}
-              yLabel="count / s"
-              height={chartHeight}
-              formatValue={(v) => v.toFixed(0)}
-              formatAxisValue={formatCompactNumber}
-              syncKey={syncKey}
-              resetVersion={resetVersion}
-            />
-          )}
-        </div>
-      ) : !isInitialLoading && !errorMessage ? (
-        <p className="runDetail__embedHint metricsPanel__emptyHint">
-          No metrics yet — the consumer writes within ~1 s of the first
-          JMeter sample. If the run is in <code className="mono">PREPARING</code>{" "}
-          this is expected; if it's <code className="mono">RUNNING</code>{" "}
-          and this hint persists past the first few seconds, check the
-          metrics-consumer logs.
-        </p>
-      ) : null}
+          <MetricsSection id="keyMetrics" title="Key metrics" open={keyOpen} onToggle={toggleKey}>
+            <KeyMetrics summary={summary.data} loading={summary.status.kind === "loading"} />
+          </MetricsSection>
+
+          <MetricsSection id="throughput" title="Throughput and response time" open={throughputOpen} onToggle={toggleThroughput}
+            meta={throughputOpen ? splitMeta(view.split) : undefined}>
+            {hasChartData ? (
+              <ChartGrid data={data} split={view.split} panels="throughput" syncKey={syncKey} resetVersion={resetVersion} onEnlarge={setEnlarged} />
+            ) : (
+              <EmptyCharts loading={charts.status.kind === "loading" && data === null} runState={runState} />
+            )}
+          </MetricsSection>
+
+          <MetricsSection id="errors" title="Errors" open={errorsOpen} onToggle={toggleErrors}
+            meta={errorsOpen ? splitMeta(view.split) : undefined}>
+            {hasChartData ? (
+              <ChartGrid data={data} split={view.split} panels="errors" syncKey={syncKey} resetVersion={resetVersion} onEnlarge={setEnlarged} />
+            ) : (
+              <EmptyCharts loading={charts.status.kind === "loading" && data === null} runState={runState} />
+            )}
+          </MetricsSection>
+
+          <MetricsSection id="perLabel" title="Per label" open={labelsOpen} onToggle={toggleLabels}
+            meta={labelsOpen ? labelsMeta(labels.data) : undefined}
+            controls={<LabelControls id="perLabel" selection={view.labels} onChange={(labels) => updateView({ labels })} />}>
+            {labels.data && labels.data.labels && Object.keys(labels.data.labels).length > 0 ? (
+              <LabelCharts data={labels.data} syncKey={syncKey} resetVersion={resetVersion} onEnlarge={setEnlarged} />
+            ) : (
+              <p className="metricsPanel__status" data-testid="perLabelEmpty">
+                {labels.status.kind === "loading" && labels.data === null ? "loading…"
+                  : view.labels.prefix ? `No labels start with "${view.labels.prefix}" in this range.`
+                  : "No samples in this range yet."}
+              </p>
+            )}
+          </MetricsSection>
+
+          <MetricsSection id="aggregateReport" title="Aggregate report" open={reportOpen} onToggle={toggleReport}
+            meta={reportOpen && report.data && report.data.byLabel.length > 0
+              ? `${report.data.byLabel.length} label${report.data.byLabel.length === 1 ? "" : "s"}` : undefined}
+            controls={<>
+              <button
+                type="button"
+                className="btn btn--ghost"
+                disabled={!report.data || report.data.byLabel.length === 0}
+                onClick={() => downloadCsv(aggregateReportCsv(report.data?.byLabel ?? []), `aggregateReport-${runId}-${view.range}.csv`)}
+                title="Download the rows below as CSV"
+              >
+                ⭳ Export CSV
+              </button>
+              <LabelControls id="report" selection={view.report} onChange={(report) => updateView({ report })} />
+            </>}>
+            <AggregateReport rows={report.data?.byLabel ?? null} loading={report.status.kind === "loading"} labelPrefix={view.report.prefix} />
+          </MetricsSection>
         </div>
         {insightsOpen && (
           <RunInsightsPanel
@@ -452,85 +216,296 @@ export function MetricsTabPanel({ runId, runState, onViewChange }: MetricsTabPan
           />
         )}
       </div>
+      <ChartModal chart={enlarged} onClose={() => setEnlarged(null)} />
     </div>
+  );
+}
+
+// ── Toolbar ────────────────────────────────────────────────────────────
+
+interface MetricsToolbarProps {
+  view: MetricsViewState;
+  onChange: (patch: Partial<MetricsViewState>) => void;
+  isPaused: boolean;
+  pauseLabel: string | null;
+  pauseTitle: string | null;
+  onResetZoom: () => void;
+  canResetZoom: boolean;
+  error: string | null;
+  aiEnabled: boolean;
+  insightsOpen: boolean;
+  onToggleInsights: () => void;
+  grafanaHref: string | null;
+  grafanaTitle: string;
+}
+
+function MetricsToolbar(p: MetricsToolbarProps) {
+  return (
+    <header className="metricsPanel__header metricsToolbar">
+      <div className="metricsPanel__headerInfo metricsToolbar__state">
+        {p.isPaused
+          ? <span className="badge badge--warn" title={p.pauseTitle ?? undefined}>{p.pauseLabel}</span>
+          : <span className="badge badge--info" title={`Every open section refreshes every ${METRICS_REFRESH_MS / 1000} s while this page is open — one flush window`}>live · {METRICS_REFRESH_MS / 1000} s</span>}
+        {p.error && <span className="text--error metricsToolbar__error">error: {p.error}</span>}
+      </div>
+      <div className="metricsPanel__headerActions">
+        {p.aiEnabled && (
+          <button
+            type="button"
+            className={`btn btn--ghost ${p.insightsOpen ? "btn--active" : ""}`}
+            aria-pressed={p.insightsOpen}
+            onClick={p.onToggleInsights}
+            title="Show Claude's read of this run in a panel beside the charts"
+          >
+            ✨ AI insights
+          </button>
+        )}
+        <button
+          type="button"
+          className="btn btn--ghost"
+          onClick={p.onResetZoom}
+          title="Reset zoom on all charts back to the full range"
+          disabled={!p.canResetZoom}
+        >
+          ⟲ Reset zoom
+        </button>
+        <label className="metricsPanel__windowPicker">
+          <span className="visuallyHidden">Granularity</span>
+          <select
+            className="formSelect"
+            value={String(p.view.granularity)}
+            onChange={(e) => p.onChange({ granularity: Number(e.target.value) as GranularityChoice })}
+            title="Seconds per point — 15 s is the workers' window, the finest there is"
+          >
+            {GRANULARITY_OPTIONS.map((o) => <option key={String(o.value)} value={String(o.value)}>{o.label}</option>)}
+          </select>
+        </label>
+        <label className="metricsPanel__windowPicker">
+          <span className="visuallyHidden">Split</span>
+          <select
+            className="formSelect"
+            value={p.view.split}
+            onChange={(e) => p.onChange({ split: e.target.value as MetricsSplit })}
+            title="One line per region"
+          >
+            {SPLIT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </label>
+        <label className="metricsPanel__windowPicker">
+          <span className="visuallyHidden">Time range</span>
+          <select
+            className="formSelect"
+            value={p.view.range}
+            onChange={(e) => p.onChange({ range: e.target.value as MetricsViewState["range"] })}
+            title="The most recent slice of the run, or the whole test"
+          >
+            {RANGE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </label>
+        {p.grafanaHref && (
+          <a className="btn btn--ghost" href={p.grafanaHref} target="_blank" rel="noreferrer" title={p.grafanaTitle}>
+            ↗ Open in Grafana
+          </a>
+        )}
+      </div>
+    </header>
+  );
+}
+
+/** A section's own label controls: an exact label prefix (debounced into the URL) and the Top-N / all. */
+function LabelControls({ id, selection, onChange }: {
+  id: string; selection: LabelSelection; onChange: (next: LabelSelection) => void;
+}) {
+  const [labelDraft, setLabelDraft] = useState(selection.prefix);
+  useEffect(() => { setLabelDraft(selection.prefix); }, [selection.prefix]);
+  useEffect(() => {
+    if (labelDraft === selection.prefix) return;
+    const timer = window.setTimeout(() => onChange({ ...selection, prefix: labelDraft }), LABEL_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [labelDraft]);
+
+  return (
+    <>
+      <label className="metricsPanel__windowPicker metricsToolbar__label">
+        <span className="visuallyHidden">Label filter</span>
+        <input
+          type="search"
+          className="formInput metricsToolbar__labelInput"
+          data-testid={`${id}LabelPrefix`}
+          value={labelDraft}
+          maxLength={100}
+          placeholder="Label starts with…"
+          onChange={(e) => setLabelDraft(e.target.value)}
+          title="Only labels starting with this text"
+        />
+      </label>
+      <label className="metricsPanel__windowPicker">
+        <span className="visuallyHidden">Labels shown</span>
+        <select
+          className="formSelect"
+          data-testid={`${id}LabelLimit`}
+          value={String(selection.limit)}
+          onChange={(e) => onChange({ ...selection, limit: e.target.value === "all" ? "all" : Number(e.target.value) as LabelLimit })}
+          title="How many of the busiest labels to show"
+        >
+          {LABEL_LIMIT_OPTIONS.map((o) => <option key={String(o.value)} value={String(o.value)}>{o.label}</option>)}
+        </select>
+      </label>
+    </>
+  );
+}
+
+// ── Charts ─────────────────────────────────────────────────────────────
+
+interface ChartGridProps {
+  data: MetricsTimeseries; split: MetricsSplit; panels: "throughput" | "errors";
+  syncKey: string; resetVersion: number; onEnlarge: (chart: ChartSpec) => void;
+}
+
+function ChartGrid({ data, split, panels, syncKey, resetVersion, onEnlarge }: ChartGridProps) {
+  const groups = split === "application" ? data.applications : split === "region" ? data.regions : undefined;
+  const keys = useMemo(() => (groups ? Object.keys(groups).sort() : []), [groups]);
+  // The split is applied only when the payload carries it — never flash empty on the first refresh after switching.
+  const splitMode = split !== "none" && keys.length > 0 && groups !== undefined;
+  const by = split === "application" ? "application" : "region";
+
+  const throughput = useMemo<TimeseriesSeries[]>(() => splitMode
+    ? splitSeries(groups!, keys, "tps")
+    : [{ label: "TPS", color: SERIES_COLOR.tps, data: data.series.tps }], [data, groups, keys, splitMode]);
+  const responseTime = useMemo<TimeseriesSeries[]>(() => {
+    if (splitMode) return splitSeries(groups!, keys, "avgRtMs");
+    const s: TimeseriesSeries[] = [{ label: "Avg", color: SERIES_COLOR.avg, data: data.series.avgRtMs }];
+    if (data.series.p90Ms?.length) s.push({ label: "P90", color: SERIES_COLOR.p90, data: data.series.p90Ms });
+    if (data.series.p95Ms?.length) s.push({ label: "P95", color: SERIES_COLOR.p95, data: data.series.p95Ms });
+    if (data.series.p99Ms?.length) s.push({ label: "P99", color: SERIES_COLOR.p99, data: data.series.p99Ms });
+    return s;
+  }, [data, groups, keys, splitMode]);
+  const errorPct = useMemo<TimeseriesSeries[]>(() => splitMode
+    ? splitSeries(groups!, keys, "errorPct")
+    : [{ label: "Error %", color: SERIES_COLOR.error, data: data.series.errorPct }], [data, groups, keys, splitMode]);
+  const errorCodes = useMemo<TimeseriesSeries[]>(() => errorCodeSeries(data.series), [data]);
+
+  const one = (v: number) => v.toFixed(1);
+  const two = (v: number) => v.toFixed(2);
+  const cards: ChartSpec[] = panels === "throughput"
+    ? [
+        { title: splitMode ? `Throughput by ${by}` : "Throughput", series: throughput, yLabel: "requests / s",
+          formatValue: one, formatAxisValue: formatCompactNumber },
+        { title: splitMode ? `Response time (avg) by ${by}` : "Response time", series: responseTime, yLabel: "ms",
+          formatValue: one, formatAxisValue: formatCompactDuration },
+      ]
+    : [
+        { title: splitMode ? `Error % by ${by}` : "Error %", series: errorPct, yLabel: "% of samples",
+          formatValue: two, formatAxisValue: formatPercent },
+        { title: "Error codes", series: errorCodes, yLabel: "% of samples",
+          formatValue: two, formatAxisValue: formatPercent },
+      ];
+  return (
+    <div className="metricsPanel__chartGrid">
+      {cards.map((c) => (
+        <ChartCard key={c.title} chart={c} syncKey={syncKey} resetVersion={resetVersion} onEnlarge={onEnlarge} />
+      ))}
+    </div>
+  );
+}
+
+/** A chart in its card, with the enlarge control in the corner. */
+function ChartCard({ chart, syncKey, resetVersion, onEnlarge }: {
+  chart: ChartSpec; syncKey: string; resetVersion: number; onEnlarge: (chart: ChartSpec) => void;
+}) {
+  return (
+    <div className="chartCard">
+      <button
+        type="button"
+        className="chartCard__enlarge"
+        onClick={() => onEnlarge(chart)}
+        title="Enlarge"
+        aria-label={`Enlarge ${chart.title}`}
+      >
+        ⤢
+      </button>
+      <TimeseriesChart {...chart} height={CHART_HEIGHT} syncKey={syncKey} resetVersion={resetVersion} />
+    </div>
+  );
+}
+
+function LabelCharts({ data, syncKey, resetVersion, onEnlarge }: {
+  data: MetricsTimeseries; syncKey: string; resetVersion: number; onEnlarge: (chart: ChartSpec) => void;
+}) {
+  const labels = data.labels!;
+  const keys = useMemo(() => Object.keys(labels), [labels]);   // busiest first, as the server orders them
+  const throughput = useMemo(() => keys.map((k, i) => ({
+    label: k, color: CATEGORICAL_PALETTE[i % CATEGORICAL_PALETTE.length]!, data: labels[k]!.tps,
+  })), [labels, keys]);
+  const responseTime = useMemo(() => keys.map((k, i) => ({
+    label: k, color: CATEGORICAL_PALETTE[i % CATEGORICAL_PALETTE.length]!, data: labels[k]!.avgRtMs,
+  })), [labels, keys]);
+  const one = (v: number) => v.toFixed(1);
+  const cards: ChartSpec[] = [
+    { title: "Throughput per label", series: throughput, yLabel: "requests / s", formatValue: one, formatAxisValue: formatCompactNumber },
+    { title: "Response time per label (avg)", series: responseTime, yLabel: "ms", formatValue: one, formatAxisValue: formatCompactDuration },
+  ];
+  return (
+    <div className="metricsPanel__chartGrid">
+      {cards.map((c) => (
+        <ChartCard key={c.title} chart={c} syncKey={syncKey} resetVersion={resetVersion} onEnlarge={onEnlarge} />
+      ))}
+    </div>
+  );
+}
+
+function EmptyCharts({ loading, runState }: { loading: boolean; runState: RunState }) {
+  if (loading) return <p className="metricsPanel__status">loading…</p>;
+  return (
+    <p className="runDetail__embedHint metricsPanel__emptyHint">
+      No metrics in this range yet — the consumer writes each 15-second window as the workers close it.
+      {runState === "RUNNING" && " If this persists past the first minute of a running test, check the metrics-consumer logs."}
+    </p>
   );
 }
 
 // ── helpers ────────────────────────────────────────────────────────────
 
-/**
- * Build the status-class series with stable colors. The server folds JMeter
- * response codes into `2xx` … `5xx` and `other` (non-HTTP markers, 1xx, malformed
- * codes) — the schema keeps no per-code detail.
- */
-function buildStatusCodeSeries(
-  codes: MetricsTimeseries["series"]["statusCodes"],
+function splitSeries(
+  groups: Record<string, MetricsTimeseriesSeries>, keys: string[], metric: "tps" | "avgRtMs" | "errorPct",
 ): TimeseriesSeries[] {
-  const entries = Object.entries(codes);
-  // Stable sort: numeric codes ascending, non-numeric last.
-  entries.sort(([a], [b]) => compareCodes(a, b));
-  return entries.map(([code, points]) => ({
-    label: code,
-    color: colorForCode(code),
-    data: points as TimeseriesPoint[],
-  }));
+  return keys.map((k, i) => ({ label: k, color: colorForKey(k, i), data: groups[k]![metric] }));
 }
 
 /**
- * Stable region → stroke color. The four USA regions get fixed hues so
- * a region keeps the same color across charts and across runs (us-east-1
- * is always blue, us-west-2 always amber); anything else falls back to a
- * palette cycled by the region's sorted position so two unknown regions
- * never collide.
+ * The hosted "Error Codes" panel: 4xx and 5xx as a percentage of the bucket's
+ * samples — the server's counts per second over its TPS, both over the same
+ * bucket so the ratio is exact. Non-HTTP markers are not charted.
  */
-const REGION_COLORS: Record<string, string> = {
-  "us-east-1": "#2563eb", // blue
-  "us-east-2": "#7c3aed", // violet
-  "us-west-1": "#0d9488", // teal
-  "us-west-2": "#f59e0b", // amber
-};
-const REGION_FALLBACK_PALETTE = ["#2563eb", "#f59e0b", "#0d9488", "#7c3aed", "#db2777", "#65a30d"];
-
-function colorForRegion(region: string, index: number): string {
-  return REGION_COLORS[region] ?? REGION_FALLBACK_PALETTE[index % REGION_FALLBACK_PALETTE.length]!;
+export function errorCodeSeries(series: MetricsTimeseriesSeries): TimeseriesSeries[] {
+  const tpsBySec = new Map<number, number>();
+  for (const p of series.tps) tpsBySec.set(p.sec, p.v);
+  const pct = (points: TimeseriesPoint[] | undefined): TimeseriesPoint[] =>
+    (points ?? []).map((p) => {
+      const tps = tpsBySec.get(p.sec) ?? 0;
+      return { sec: p.sec, v: tps > 0 ? 100 * p.v / tps : 0 };
+    });
+  return [
+    { label: "4xx", color: SERIES_COLOR.http4xx, data: pct(series.statusCodes["4xx"]) },
+    { label: "5xx", color: SERIES_COLOR.http5xx, data: pct(series.statusCodes["5xx"]) },
+  ];
 }
 
-/**
- * Build one chart series per region for a single numeric metric — the
- * region name is the legend label, the color is stable per region.
- */
-function regionSeries(
-  regions: Record<string, MetricsTimeseriesSeries>,
-  regionKeys: string[],
-  metric: "tps" | "avgRtMs" | "errorPct",
-): TimeseriesSeries[] {
-  return regionKeys.map((r, i) => ({
-    label: r,
-    color: colorForRegion(r, i),
-    data: regions[r]![metric],
-  }));
+/** "by region" beside a chart section's title when a split is on; nothing otherwise. */
+function splitMeta(split: MetricsSplit): string | undefined {
+  return split === "none" ? undefined : SPLIT_OPTIONS.find((o) => o.value === split)?.label.toLowerCase() ?? split;
 }
 
-function compareCodes(a: string, b: string): number {
-  const an = parseInt(a, 10), bn = parseInt(b, 10);
-  const aIsNum = !isNaN(an), bIsNum = !isNaN(bn);
-  if (aIsNum && bIsNum) return an - bn;
-  if (aIsNum) return -1;
-  if (bIsNum) return 1;
-  return a.localeCompare(b);
+function labelsMeta(data: MetricsTimeseries | null): string | undefined {
+  if (!data || !data.labels) return undefined;
+  const shown = Object.keys(data.labels).length;
+  if (shown === 0) return undefined;   // the body already says there is nothing to show
+  const total = data.labelsTotal ?? shown;
+  return total > shown ? `busiest ${shown} of ${total} labels` : `${shown} label${shown === 1 ? "" : "s"}`;
 }
 
-function colorForCode(code: string): string {
-  // Keys are HTTP classes ("2xx" … "5xx", "other"); a raw code still maps by its class.
-  const n = parseInt(code, 10);
-  if (isNaN(n))                       return "#94a3b8"; // slate-400 — "other" / non-HTTP marker
-  const klass = n >= 100 ? Math.floor(n / 100) : n;
-  if (klass === 2) return "#10b981"; // ok green
-  if (klass === 3) return "#0ea5e9"; // info blue
-  if (klass === 4) return "#f59e0b"; // warn amber
-  if (klass === 5) return "#dc2626"; // err red
-  return "#94a3b8";
-}
+type PauseReasonOrNull = ReturnType<typeof useRefreshTick>["pauseReason"];
 
 function pauseLabel(reason: PauseReasonOrNull): string {
   switch (reason) {
@@ -544,14 +519,10 @@ function pauseLabel(reason: PauseReasonOrNull): string {
 
 function pauseTooltip(reason: PauseReasonOrNull): string {
   switch (reason) {
-    case "manual":         return "Manual pause — click Refresh to fetch on demand.";
+    case "manual":         return "Refresh is paused.";
     case "delayNull":      return "Run is terminal (COMPLETED / FAILED / ABORTED) — nothing new to fetch.";
-    case "documentHidden": return "Browser tab is in the background. Polling resumes when the tab returns to the foreground.";
-    case "offscreen":      return "Panel is scrolled off-screen. Polling resumes on scroll back.";
-    case null:             return "Polling is paused.";
+    case "documentHidden": return "Browser tab is in the background. Refresh resumes when the tab returns to the foreground.";
+    case "offscreen":      return "Panel is scrolled off-screen. Refresh resumes on scroll back.";
+    case null:             return "Refresh is paused.";
   }
 }
-
-// Local alias to keep the imports tight — we only use the type for the
-// label/tooltip switch above, not as a runtime value.
-type PauseReasonOrNull = ReturnType<typeof useMetricsTimeseries>["pauseReason"];

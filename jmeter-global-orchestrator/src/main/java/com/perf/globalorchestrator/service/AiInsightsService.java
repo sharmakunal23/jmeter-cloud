@@ -6,6 +6,7 @@ import com.perf.globalorchestrator.domain.CompareInsights;
 import com.perf.globalorchestrator.domain.MetricsTimeseries;
 import com.perf.globalorchestrator.domain.Run;
 import com.perf.globalorchestrator.domain.RunInsights;
+import com.perf.globalorchestrator.repo.MetricsTimeseriesRepository;
 import com.perf.globalorchestrator.repo.AiResponseRepository;
 import com.perf.globalorchestrator.repo.AiResponseRepository.CachedAiResponse;
 import com.perf.globalorchestrator.service.AiClient.AiResult;
@@ -119,7 +120,7 @@ public class AiInsightsService {
         requireEnabled();
         String userPrompt = buildRunUserPrompt(run,
                 metrics.timeseries(runId, run.state(), false, null),
-                metrics.rollupByLabel(runId, run.state()));
+                metrics.rollupByLabel(runId, run.state(), null, null, MetricsTimeseriesRepository.LABELS_ALL));
         quota.acquire();
         AiResult result = ai.complete(runSystemPrompt, userPrompt);
 
