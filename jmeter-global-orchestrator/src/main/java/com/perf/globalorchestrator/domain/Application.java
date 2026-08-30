@@ -66,31 +66,8 @@ public record Application(
          * how a group's rows are faceted back to this app. Defaults to the
          * upper-cased name when a group is set.
          */
-        String metricsApplication,
-        /** Per-app override of the group's live Grafana dashboard URL; null = the group's applies. */
-        String grafanaLiveUrl,
-        /** Per-app override of the group's history dashboard URL; null = the group's applies. */
-        String grafanaHistoryUrl) {
+        String metricsApplication) {
 
-    /** Without dashboard overrides (the group's URLs apply). */
-    public Application(String applicationId,
-                       String name,
-                       String sealId,
-                       String description,
-                       List<String> healthEndpoints,
-                       List<ApplicationCapacity> capacity,
-                       Instant createdAt,
-                       Instant lastHealthCheckedAt,
-                       HealthStatus lastHealthStatus,
-                       List<Map<String, Object>> lastHealthDetails,
-                       RecyclePolicy recyclePolicy,
-                       Integer maxRunsPerPod,
-                       Integer podMaxAgeHours,
-                       boolean alwaysOn,
-                       String metricsGroupId,
-                       String metricsApplication) {
-        this(applicationId, name, sealId, description, healthEndpoints, capacity, createdAt, lastHealthCheckedAt, lastHealthStatus, lastHealthDetails, recyclePolicy, maxRunsPerPod, podMaxAgeHours, alwaysOn, metricsGroupId, metricsApplication, null, null);
-    }
 
 
     public Application {

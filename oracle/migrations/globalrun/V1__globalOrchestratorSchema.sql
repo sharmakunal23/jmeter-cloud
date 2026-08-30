@@ -101,9 +101,7 @@ CREATE TABLE "globalOrchestrator"."application" (
     "sealId"              VARCHAR2(128 CHAR),
     "description"         VARCHAR2(4000 CHAR),
     "metricsGroupId"      VARCHAR2(30 CHAR),                                 -- FK applicationGroup; NULL = ungrouped, metrics not routed
-    "metricsApplication"  VARCHAR2(64 CHAR),                                 -- the group classifier's value for this app's labels (LABEL.APPLICATION)
-    "grafanaLiveUrl"      VARCHAR2(2000 CHAR),                               -- per-app override of the group's live dashboard URL
-    "grafanaHistoryUrl"   VARCHAR2(2000 CHAR),                               -- per-app override of the group's history dashboard URL
+    "metricsApplication"  VARCHAR2(64 CHAR),                                 -- the group classifier's value for this app's labels (LABEL.APPLICATION); the dashboards are the group's
     "healthEndpoints"     CLOB                DEFAULT '[]' NOT NULL,  -- JSON array of URLs polled by ApplicationHealthPoller
     "recyclePolicy"       VARCHAR2(32 CHAR)   DEFAULT 'REUSE' NOT NULL,
     "maxRunsPerPod"       NUMBER(10),

@@ -123,8 +123,8 @@ describe("CreateApplicationDialog — validation", () => {
       fireEvent.click(screen.getByRole("button", { name: /\+ Add endpoint/i }));
     }
     expect(screen.queryByRole("button", { name: /\+ Add endpoint/i })).toBeNull();
-    // Endpoint inputs only — the two Grafana override inputs are type=url as well.
-    expect(document.querySelectorAll('input[type="url"]:not(#appGrafanaLive):not(#appGrafanaHistory)')).toHaveLength(8);
+    // Endpoint inputs only — the form has no other url inputs (the Grafana dashboards live on the group).
+    expect(document.querySelectorAll('input[type="url"]')).toHaveLength(8);
   });
 
   it("explicit capacity-grid copy points operators at the Capacity tab", () => {

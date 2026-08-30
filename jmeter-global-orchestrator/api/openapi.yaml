@@ -2356,8 +2356,6 @@ components:
         description:          { type: string, nullable: true }
         metricsGroupId:       { type: string, nullable: true, description: "The application group whose fact tables receive this app's metrics; its workers POST with `?groupId=` set to this. Null = ungrouped." }
         metricsApplication:   { type: string, nullable: true, description: "The group classifier's value for this app's labels (`LABEL.APPLICATION`, e.g. `CPS-PCI`); defaults to the upper-cased name when grouped." }
-        grafanaLiveUrl:       { type: string, nullable: true, description: "Per-app override of the group's live dashboard URL; null = the group's applies." }
-        grafanaHistoryUrl:    { type: string, nullable: true, description: "Per-app override of the group's history dashboard URL; null = the group's applies." }
         healthEndpoints:
           type: array
           description: "Health-check URLs polled every minute by ApplicationHealthPoller. Empty → polling disabled, status stays UNKNOWN."
@@ -2415,8 +2413,6 @@ components:
         description:     { type: string, nullable: true, description: "≤ 512 chars" }
         metricsGroupId:  { type: string, nullable: true, description: "An existing application group's id; 400 when unknown. Null = ungrouped." }
         metricsApplication: { type: string, nullable: true, description: "[A-Za-z0-9][A-Za-z0-9._-]{0,63}; null = upper-cased name when a group is set." }
-        grafanaLiveUrl:     { type: string, nullable: true, description: "Optional per-app override — absolute http(s) URL ≤ 2000 chars, 400 otherwise; blank = the group's." }
-        grafanaHistoryUrl:  { type: string, nullable: true, description: "Same rule." }
         healthEndpoints:
           type: array
           description: "Optional. Max 8 entries; each must be a valid http(s) URI ≤ 256 chars."
@@ -2447,8 +2443,6 @@ components:
         description:     { type: string, nullable: true }
         metricsGroupId:  { type: string, nullable: true, description: "Replaced wholesale — omit or null to clear the group." }
         metricsApplication: { type: string, nullable: true, description: "Replaced wholesale — null = upper-cased name when grouped." }
-        grafanaLiveUrl:     { type: string, nullable: true, description: "Replaced wholesale — blank/null = the group's." }
-        grafanaHistoryUrl:  { type: string, nullable: true, description: "Replaced wholesale — blank/null = the group's." }
         healthEndpoints:
           type: array
           items: { type: string }

@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { isDashboardUrl } from "../lib/grafanaLink";
 import { Link } from "react-router-dom";
 
 import {
@@ -71,8 +70,6 @@ export function CreateApplicationDialog({
   const [groups, setGroups] = useState<ApplicationGroup[] | null>(null);
   const [metricsGroupId, setMetricsGroupId] = useState(initial?.metricsGroupId ?? "");
   const [metricsApplication, setMetricsApplication] = useState(initial?.metricsApplication ?? "");
-  const [grafanaLiveUrl, setGrafanaLiveUrl] = useState(initial?.grafanaLiveUrl ?? "");
-  const [grafanaHistoryUrl, setGrafanaHistoryUrl] = useState(initial?.grafanaHistoryUrl ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
   // Soft-delete (edit mode): a two-step confirm that explains the semantics
@@ -117,10 +114,7 @@ export function CreateApplicationDialog({
       ? "letters / digits / . _ - only; max 64 chars"
       : null;
 
-  const dashboardUrlError = (v: string) => (v.trim() === "" || isDashboardUrl(v.trim()) ? null : "must be an absolute http(s) URL");
-  const grafanaError = dashboardUrlError(grafanaLiveUrl) ?? dashboardUrlError(grafanaHistoryUrl);
-  const canSubmit = !submitting && nameError === null && allEndpointsValid && metricsApplicationError === null
-    && grafanaError === null;
+  const canSubmit = !submitting && nameError === null && allEndpointsValid && metricsApplicationError === null;
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -139,8 +133,6 @@ export function CreateApplicationDialog({
       // Omitted = ungrouped; the server defaults a blank metricsApplication to the upper-cased name.
       metricsGroupId: metricsGroupId || undefined,
       metricsApplication: metricsGroupId ? (trimmedMetricsApplication || undefined) : undefined,
-      grafanaLiveUrl: grafanaLiveUrl.trim() || undefined,
-      grafanaHistoryUrl: grafanaHistoryUrl.trim() || undefined,
     };
     try {
       const result = isEdit
@@ -370,35 +362,6 @@ export function CreateApplicationDialog({
             </div>
           )}
 
-          <div className="formField">
-            <label htmlFor="appGrafanaLive">Grafana dashboard override</label>
-            <input
-              id="appGrafanaLive"
-              type="url"
-              value={grafanaLiveUrl}
-              onChange={(e) => setGrafanaLiveUrl(e.target.value)}
-              placeholder={metricsGroupId ? "blank = the group's live dashboard" : "https://grafana…/d/…"}
-              maxLength={2000}
-              aria-invalid={dashboardUrlError(grafanaLiveUrl) != null}
-            />
-            <input
-              id="appGrafanaHistory"
-              type="url"
-              value={grafanaHistoryUrl}
-              onChange={(e) => setGrafanaHistoryUrl(e.target.value)}
-              placeholder={metricsGroupId ? "history dashboard — blank = the group's" : "history dashboard (optional)"}
-              maxLength={2000}
-              aria-label="Grafana history dashboard override"
-              aria-invalid={dashboardUrlError(grafanaHistoryUrl) != null}
-              style={{ marginTop: "0.3rem" }}
-            />
-            <small>
-              "Open in Grafana" on this app's runs uses these before the group's dashboards.
-            </small>
-            {grafanaError && (
-              <p className="text--error" role="alert" style={{ fontSize: "0.78rem" }}>Dashboard URL {grafanaError}.</p>
-            )}
-          </div>
 
           {/* Capacity is intentionally NOT in this form post D-Capacity v2 polish.
               Compute costs money; capacity is sponsor-controlled. New apps land

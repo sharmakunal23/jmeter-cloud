@@ -60,9 +60,7 @@ public class ApplicationRepository {
                 nullableInt(rs, "podMaxAgeHours"),
                 rs.getBoolean("alwaysOn"),
                 rs.getString("metricsGroupId"),
-                rs.getString("metricsApplication"),
-                rs.getString("grafanaLiveUrl"),
-                rs.getString("grafanaHistoryUrl"));
+                rs.getString("metricsApplication"));
     }
 
     private static Integer nullableInt(ResultSet rs, String col) throws SQLException {
@@ -80,13 +78,12 @@ public class ApplicationRepository {
                 + "(\"applicationId\",\"name\",\"sealId\",\"description\","
                 + " \"healthEndpoints\",\"createdAt\","
                 + " \"recyclePolicy\",\"maxRunsPerPod\",\"podMaxAgeHours\","
-                + " \"alwaysOn\",\"metricsGroupId\",\"metricsApplication\",\"grafanaLiveUrl\",\"grafanaHistoryUrl\") "
-                + "VALUES (?,?,?,?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                + " \"alwaysOn\",\"metricsGroupId\",\"metricsApplication\") "
+                + "VALUES (?,?,?,?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 app.applicationId(), app.name(), app.sealId(), app.description(),
                 OracleBind.clob(endpointsJson), OracleBind.ts(app.createdAt()),
                 app.recyclePolicy().name(), app.maxRunsPerPod(), app.podMaxAgeHours(),
-                app.alwaysOn(), app.metricsGroupId(), app.metricsApplication(),
-                app.grafanaLiveUrl(), app.grafanaHistoryUrl());
+                app.alwaysOn(), app.metricsGroupId(), app.metricsApplication());
         return findById(app.applicationId()).orElseThrow();
     }
 
@@ -171,8 +168,7 @@ public class ApplicationRepository {
                               String description, List<String> healthEndpoints,
                               RecyclePolicy recyclePolicy, Integer maxRunsPerPod,
                               Integer podMaxAgeHours, boolean alwaysOn,
-                              String metricsGroupId, String metricsApplication,
-                              String grafanaLiveUrl, String grafanaHistoryUrl) {
+                              String metricsGroupId, String metricsApplication) {
         String endpointsJson = serialise(healthEndpoints == null ? List.of() : healthEndpoints);
         // RecyclePolicy may be null on the caller
         // boundary (operator omitted the field on PUT); the controller
@@ -185,10 +181,10 @@ public class ApplicationRepository {
                     "UPDATE \"globalOrchestrator\".\"application\" "
                     + "SET \"name\"=?, \"sealId\"=?, \"description\"=?, "
                     + "    \"healthEndpoints\"=?, \"alwaysOn\"=?, "
-                    + "    \"metricsGroupId\"=?, \"metricsApplication\"=?, \"grafanaLiveUrl\"=?, \"grafanaHistoryUrl\"=? "
+                    + "    \"metricsGroupId\"=?, \"metricsApplication\"=? "
                     + "WHERE \"applicationId\"=?",
                     name, sealId, description, OracleBind.clob(endpointsJson), alwaysOn,
-                    metricsGroupId, metricsApplication, grafanaLiveUrl, grafanaHistoryUrl, applicationId);
+                    metricsGroupId, metricsApplication, applicationId);
         } else {
             updated = jdbc.update(
                     "UPDATE \"globalOrchestrator\".\"application\" "
@@ -196,11 +192,11 @@ public class ApplicationRepository {
                     + "    \"healthEndpoints\"=?, "
                     + "    \"recyclePolicy\"=?, \"maxRunsPerPod\"=?, \"podMaxAgeHours\"=?, "
                     + "    \"alwaysOn\"=?, "
-                    + "    \"metricsGroupId\"=?, \"metricsApplication\"=?, \"grafanaLiveUrl\"=?, \"grafanaHistoryUrl\"=? "
+                    + "    \"metricsGroupId\"=?, \"metricsApplication\"=? "
                     + "WHERE \"applicationId\"=?",
                     name, sealId, description, OracleBind.clob(endpointsJson),
                     recyclePolicy.name(), maxRunsPerPod, podMaxAgeHours,
-                    alwaysOn, metricsGroupId, metricsApplication, grafanaLiveUrl, grafanaHistoryUrl, applicationId);
+                    alwaysOn, metricsGroupId, metricsApplication, applicationId);
         }
         if (updated == 0) {
             throw new EmptyResultDataAccessException("application not found: " + applicationId, 1);

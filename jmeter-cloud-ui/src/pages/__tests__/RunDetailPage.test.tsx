@@ -121,14 +121,14 @@ describe("RunDetailPage — Open in Grafana", () => {
     expect(screen.queryByRole("link", { name: /open in grafana/i })).toBeNull();
   });
 
-  it("the app's own URL wins over the group's; no group and no URL leaves the dashboards empty", async () => {
+  it("the dashboards are the group's only — a stale per-app URL is ignored; no group leaves the dashboards empty", async () => {
     api.get.mockResolvedValue(run("RUNNING", null, []));
     api.status.mockResolvedValue({ runId: "01J000RUN", state: "RUNNING", stateReason: null, members: [] });
     appsApi.list.mockResolvedValue([{ ...app, grafanaLiveUrl: "https://grafana.example.com/d/own?orgId=1" }]);
     groupsApi.get.mockResolvedValue(group);
     const { unmount } = renderPage();
     const panel = await screen.findByTestId("metricsPanel");
-    await waitFor(() => expect(JSON.parse(panel.getAttribute("data-dashboards")!).liveUrl).toBe("https://grafana.example.com/d/own?orgId=1"));
+    await waitFor(() => expect(JSON.parse(panel.getAttribute("data-dashboards")!).liveUrl).toBe(group.grafanaLiveUrl));
     unmount();
 
     appsApi.list.mockResolvedValue([{ ...app, metricsGroupId: null, metricsApplication: null }]);

@@ -46,10 +46,6 @@ export interface Application {
   metricsGroupId?: string | null;
   /** The group classifier's value for this app's labels (`LABEL.APPLICATION`, e.g. `CPS-PCI`). */
   metricsApplication?: string | null;
-  /** Per-app override of the group's live Grafana dashboard URL; null = the group's. */
-  grafanaLiveUrl?: string | null;
-  /** Per-app override of the group's history dashboard URL; null = the group's. */
-  grafanaHistoryUrl?: string | null;
 }
 
 export interface CreateApplicationRequest {
@@ -67,9 +63,6 @@ export interface CreateApplicationRequest {
   metricsGroupId?: string | null;
   /** Omitted/null = upper-cased name when grouped. */
   metricsApplication?: string | null;
-  /** Optional per-app dashboard overrides; blank/omitted keeps the group's. */
-  grafanaLiveUrl?: string | null;
-  grafanaHistoryUrl?: string | null;
 }
 
 export interface UpdateApplicationRequest extends CreateApplicationRequest {}

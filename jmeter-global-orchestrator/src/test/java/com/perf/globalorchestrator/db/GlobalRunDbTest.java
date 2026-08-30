@@ -212,7 +212,7 @@ class GlobalRunDbTest extends OracleDbTestSupport {
 
         assertThatThrownBy(() -> groups.delete("cps")).isInstanceOf(DataIntegrityViolationException.class);   // ORA-02292
 
-        applications.update(a.applicationId(), a.name(), null, null, List.of(), null, null, null, false, null, null, null, null);
+        applications.update(a.applicationId(), a.name(), null, null, List.of(), null, null, null, false, null, null);
         assertThat(applications.findById(a.applicationId()).orElseThrow().metricsGroupId()).isNull();
         assertThat(groups.delete("cps")).isTrue();
         assertThat(groups.findById("cps")).isEmpty();

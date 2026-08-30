@@ -196,8 +196,6 @@ public class ApplicationController {
         String metricsGroupId = resolveMetricsGroup(req.metricsGroupId());
         String metricsApplication = resolveMetricsApplication(
                 metricsGroupId, req.metricsApplication(), req.name().trim());
-        String grafanaLiveUrl = validateDashboardUrl("grafanaLiveUrl", req.grafanaLiveUrl());
-        String grafanaHistoryUrl = validateDashboardUrl("grafanaHistoryUrl", req.grafanaHistoryUrl());
         Application app = new Application(
                 Ulid.generate(),
                 req.name().trim(),
@@ -210,7 +208,7 @@ public class ApplicationController {
                 policy, req.maxRunsPerPod(), req.podMaxAgeHours(),
                 /* alwaysOn — AUTOMATION Phase C; null defaults to false. */
                 Boolean.TRUE.equals(req.alwaysOn()),
-                metricsGroupId, metricsApplication, grafanaLiveUrl, grafanaHistoryUrl);
+                metricsGroupId, metricsApplication);
         Application stored;
         try {
             stored = repo.insert(app);
@@ -257,8 +255,6 @@ public class ApplicationController {
         String metricsGroupId = resolveMetricsGroup(req.metricsGroupId());
         String metricsApplication = resolveMetricsApplication(
                 metricsGroupId, req.metricsApplication(), req.name().trim());
-        String grafanaLiveUrl = validateDashboardUrl("grafanaLiveUrl", req.grafanaLiveUrl());
-        String grafanaHistoryUrl = validateDashboardUrl("grafanaHistoryUrl", req.grafanaHistoryUrl());
         try {
             Application updated = repo.update(
                     applicationId,
@@ -271,9 +267,7 @@ public class ApplicationController {
                     req.podMaxAgeHours(),
                     alwaysOn,
                     metricsGroupId,
-                    metricsApplication,
-                    grafanaLiveUrl,
-                    grafanaHistoryUrl);
+                    metricsApplication);
             return ResponseEntity.ok(withCapacity(updated, capacityRepo.findByApplicationId(applicationId)));
         } catch (DuplicateKeyException e) {
             throw new ApplicationConflictException(req.name());
@@ -534,17 +528,7 @@ public class ApplicationController {
                 a.healthEndpoints(), capacity, a.createdAt(),
                 a.lastHealthCheckedAt(), a.lastHealthStatus(), a.lastHealthDetails(),
                 a.recyclePolicy(), a.maxRunsPerPod(), a.podMaxAgeHours(),
-                a.alwaysOn(), a.metricsGroupId(), a.metricsApplication(),
-                a.grafanaLiveUrl(), a.grafanaHistoryUrl());
-    }
-
-    /** The group controller's URL rule, surfaced as this controller's 400. */
-    private static String validateDashboardUrl(String field, String raw) {
-        try {
-            return ApplicationGroupController.validateUrl(field, raw);
-        } catch (ApplicationGroupController.GroupValidationException e) {
-            throw new ApplicationValidationException(e.getMessage());
-        }
+                a.alwaysOn(), a.metricsGroupId(), a.metricsApplication());
     }
 
     // ── Request bodies ─────────────────────────────────────────────
@@ -566,10 +550,7 @@ public class ApplicationController {
             /** An existing application group's id; null = ungrouped. */
             String metricsGroupId,
             /** The group classifier's value for this app's labels; null = upper-cased name when grouped. */
-            String metricsApplication,
-            /** Optional per-app dashboard overrides; blank = the group's. */
-            String grafanaLiveUrl,
-            String grafanaHistoryUrl) {}
+            String metricsApplication) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record UpdateApplicationRequest(
@@ -584,10 +565,7 @@ public class ApplicationController {
             /** Replaced wholesale: null clears the group. */
             String metricsGroupId,
             /** Replaced wholesale: null = upper-cased name when grouped. */
-            String metricsApplication,
-            /** Optional per-app dashboard overrides; blank = the group's. */
-            String grafanaLiveUrl,
-            String grafanaHistoryUrl) {}
+            String metricsApplication) {}
 
     // ── Exceptions + handlers ──────────────────────────────────────
 

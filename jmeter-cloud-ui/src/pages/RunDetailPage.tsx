@@ -83,8 +83,8 @@ export function RunDetailPage() {
     try { window.localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, pageTab); } catch { /* private mode */ }
   }, [pageTab]);
   const tabRefs = useRef<Map<PageTab, HTMLButtonElement | null>>(new Map());
-  // "Open in Grafana" (on the Metrics tab): the run's application (its dashboard
-  // overrides) + group (the dashboards, hot days). Loaded once — neither changes during a run.
+  // "Open in Grafana" (on the Metrics tab): the run's application (its metrics name)
+  // + group (the dashboards, hot days). Loaded once — neither changes during a run.
   const [dashboards, setDashboards] = useState<{ app: Application | null; group: ApplicationGroup | null } | null>(null);
 
   const fetchOnce = useCallback(() => {
@@ -178,11 +178,11 @@ export function RunDetailPage() {
   }
 
   const run = state.run;
-  // The app's own dashboard URLs win over the group's; no URL anywhere = no button.
+  // The dashboards are the group's — one place, set once; no group or no URL = no button.
   const grafanaDashboards: GrafanaDashboards | null = dashboards
     ? {
-        liveUrl: dashboards.app?.grafanaLiveUrl || dashboards.group?.grafanaLiveUrl,
-        historyUrl: dashboards.app?.grafanaHistoryUrl || dashboards.group?.grafanaHistoryUrl,
+        liveUrl: dashboards.group?.grafanaLiveUrl,
+        historyUrl: dashboards.group?.grafanaHistoryUrl,
         hotDays: dashboards.group?.hotDays,
         metricsApplication: dashboards.app?.metricsApplication,
       }

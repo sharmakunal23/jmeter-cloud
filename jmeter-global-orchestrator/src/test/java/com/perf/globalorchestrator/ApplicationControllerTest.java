@@ -110,7 +110,7 @@ class ApplicationControllerTest {
                 null, null, null, RecyclePolicy.REUSE, null, null, false, "cps", "CPS-PCI");
         when(repo.findById(ID)).thenReturn(Optional.of(existing));
         when(repo.update(eq(ID), eq("cps-pci"), isNull(), isNull(), anyList(), isNull(), isNull(), isNull(),
-                anyBoolean(), eq("cps"), eq("CPP"), isNull(), isNull()))
+                anyBoolean(), eq("cps"), eq("CPP")))
                 .thenReturn(new Application(ID, "cps-pci", null, null, List.of(), null, existing.createdAt(),
                         null, null, null, RecyclePolicy.REUSE, null, null, false, "cps", "CPP"));
         mvc.perform(put("/api/v1/applications/" + ID).contentType(MediaType.APPLICATION_JSON)
@@ -119,7 +119,7 @@ class ApplicationControllerTest {
                 .andExpect(jsonPath("$.metricsApplication").value("CPP"));
 
         when(repo.update(eq(ID), eq("cps-pci"), isNull(), isNull(), anyList(), isNull(), isNull(), isNull(),
-                anyBoolean(), isNull(), isNull(), isNull(), isNull()))
+                anyBoolean(), isNull(), isNull()))
                 .thenReturn(new Application(ID, "cps-pci", null, null, List.of(), null, existing.createdAt(),
                         null, null, null, RecyclePolicy.REUSE, null, null, false, null, null));
         mvc.perform(put("/api/v1/applications/" + ID).contentType(MediaType.APPLICATION_JSON)
@@ -129,17 +129,12 @@ class ApplicationControllerTest {
     }
 
     @Test
-    @DisplayName("POST stores the per-app Grafana overrides (trimmed, blank = none); a non-http URL is 400 and nothing is inserted")
-    void grafanaOverrides() throws Exception {
+    @DisplayName("the per-app Grafana override is gone: the fields are ignored on POST and never echoed — dashboards live on the group")
+    void noGrafanaOverride() throws Exception {
         mvc.perform(post("/api/v1/applications").contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"cps-pci\",\"metricsGroupId\":\"cps\",\"grafanaLiveUrl\":\" https://g.example.com/d/pci \",\"grafanaHistoryUrl\":\"  \"}"))
+                        .content("{\"name\":\"cps-pci\",\"metricsGroupId\":\"cps\",\"grafanaLiveUrl\":\"https://g.example.com/d/pci\"}"))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.grafanaLiveUrl").value("https://g.example.com/d/pci"))
+                .andExpect(jsonPath("$.grafanaLiveUrl").doesNotExist())
                 .andExpect(jsonPath("$.grafanaHistoryUrl").doesNotExist());
-        mvc.perform(post("/api/v1/applications").contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"checkout\",\"grafanaLiveUrl\":\"/d/relative\"}"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
-        verify(repo, times(1)).insert(any());
     }
 }
