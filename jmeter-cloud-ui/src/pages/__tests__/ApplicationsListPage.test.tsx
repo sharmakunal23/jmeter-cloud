@@ -20,8 +20,17 @@ vi.mock("../../api/runs", async () => {
   };
 });
 
+vi.mock("../../api/applicationGroups", async () => {
+  const actual = await vi.importActual<typeof import("../../api/applicationGroups")>("../../api/applicationGroups");
+  return {
+    ...actual,
+    applicationGroupsApi: { list: vi.fn(), get: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
+  };
+});
 import { applicationsApi } from "../../api/applications";
 import { runsApi } from "../../api/runs";
+import { applicationGroupsApi } from "../../api/applicationGroups";
+const groupsMock = applicationGroupsApi as unknown as { list: ReturnType<typeof vi.fn> };
 
 const apps = applicationsApi as unknown as {
   list: ReturnType<typeof vi.fn>;
@@ -34,6 +43,8 @@ beforeEach(() => {
   apps.create.mockReset();
   runs.listPage.mockReset();
   runs.listPage.mockResolvedValue({ runs: [], total: 0, offset: 0, limit: 200 });
+  groupsMock.list.mockReset();
+  groupsMock.list.mockResolvedValue([]);
   // Reset the persisted view-mode between tests so each starts at the
   // default (list, per D4 polish).
   try { localStorage.removeItem("jmeterCloud.applications.viewMode"); } catch { /* ignore */ }
@@ -180,5 +191,53 @@ describe("ApplicationsListPage — Create dialog", () => {
     })));
     // Dialog closes after success.
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+});
+
+describe("ApplicationsListPage — application groups", () => {
+  const cps = { groupId: "cps", name: "Servicing MQ", createdAt: "2026-08-29T00:00:00Z", applicationCount: 1 };
+
+  it("files applications under their group heading, ungrouped last (list view)", async () => {
+    groupsMock.list.mockResolvedValue([cps]);
+    apps.list.mockResolvedValue([
+      fixtureApp("zeta-svc"),
+      fixtureApp("cps-pci", { metricsGroupId: "cps", metricsApplication: "CPS-PCI" }),
+    ]);
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Servicing MQ")).toBeInTheDocument());
+    const rows = Array.from(document.querySelectorAll("tbody tr")).map((r) => r.textContent ?? "");
+    expect(rows[0]).toContain("Servicing MQ");
+    expect(rows[0]).toContain("cps");
+    expect(rows[1]).toContain("cps-pci");
+    expect(rows[2]).toContain("Ungrouped");
+    expect(rows[3]).toContain("zeta-svc");
+  });
+
+  it("renders no headings while no group exists", async () => {
+    apps.list.mockResolvedValue([fixtureApp("checkout-svc")]);
+    renderPage();
+    await waitFor(() => expect(screen.getByText("checkout-svc")).toBeInTheDocument());
+    expect(screen.queryByText("Ungrouped")).toBeNull();
+  });
+
+  it("the search box also matches a group's name", async () => {
+    groupsMock.list.mockResolvedValue([cps]);
+    apps.list.mockResolvedValue([
+      fixtureApp("zeta-svc"),
+      fixtureApp("cps-pci", { metricsGroupId: "cps" }),
+    ]);
+    renderPage();
+    await waitFor(() => expect(screen.getByText("zeta-svc")).toBeInTheDocument());
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "servicing" } });
+    await waitFor(() => expect(screen.queryByText("zeta-svc")).toBeNull());
+    expect(screen.getByText("cps-pci")).toBeInTheDocument();
+  });
+
+  it("Manage groups opens the groups dialog", async () => {
+    apps.list.mockResolvedValue([]);
+    renderPage();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Manage groups" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Manage groups" }));
+    expect(screen.getByRole("dialog", { name: "Manage application groups" })).toBeInTheDocument();
   });
 });

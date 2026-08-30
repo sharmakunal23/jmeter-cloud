@@ -1,6 +1,7 @@
 package com.perf.globalorchestrator.db;
 
 import com.perf.globalorchestrator.domain.Application;
+import com.perf.globalorchestrator.domain.ApplicationGroup;
 import com.perf.globalorchestrator.domain.CronJob;
 import com.perf.globalorchestrator.domain.CronJobKind;
 import com.perf.globalorchestrator.domain.MemberState;
@@ -10,15 +11,17 @@ import com.perf.globalorchestrator.domain.RecyclePolicy;
 import com.perf.globalorchestrator.domain.Run;
 import com.perf.globalorchestrator.domain.RunFleetMember;
 import com.perf.globalorchestrator.domain.RunState;
+import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.CronJobRepository;
-import com.perf.globalorchestrator.repo.MetricsPurgeRepository;
 import com.perf.globalorchestrator.repo.PodRepository;
 import com.perf.globalorchestrator.repo.RunRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -38,12 +41,13 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The control-plane schema's contract against the real migration on Oracle
  * Free: two claimers never share a worker, the cron claim returns due rows in
- * order, JSON and timestamps round-trip, NULLs inside expressions bind, and a
- * purge empties every metrics table for the run.
+ * order, JSON and timestamps round-trip, NULLs inside expressions bind, and the
+ * metrics pools resolve the hosted schema's unqualified names.
  */
 @SpringBootTest(properties = {
         "globalOrchestrator.pod.sweepInitialDelayMs=3600000",
@@ -53,10 +57,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 class GlobalRunDbTest extends OracleDbTestSupport {
 
     @Autowired ApplicationRepository applications;
+    @Autowired ApplicationGroupRepository groups;
     @Autowired PodRepository pods;
     @Autowired RunRepository runs;
     @Autowired CronJobRepository cronJobs;
-    @Autowired MetricsPurgeRepository purge;
+    @Autowired @Qualifier("metricsJdbcTemplate") JdbcTemplate metricsReader;
+    @Autowired @Qualifier("metricsPurgeJdbcTemplate") JdbcTemplate metricsPurge;
     @Autowired PlatformTransactionManager txManager;
 
     private final JdbcTemplate globalOwner = globalOwner();
@@ -65,14 +71,14 @@ class GlobalRunDbTest extends OracleDbTestSupport {
     private Application app(String id, String name) {
         return applications.insert(new Application(id, name, null, "db contract test",
                 List.of("http://" + name + "/health"), null, Instant.now(), null, null, null,
-                RecyclePolicy.REUSE, null, null, false));
+                RecyclePolicy.REUSE, null, null, false, null, null));
     }
 
     @Test
     void both_migrations_applied_and_every_object_is_valid() {
         assertThat(globalOwner.queryForObject("SELECT COUNT(*) FROM user_objects WHERE status <> 'VALID'", Integer.class)).isZero();
         assertThat(metricsOwner.queryForObject("SELECT COUNT(*) FROM user_objects WHERE status <> 'VALID'", Integer.class)).isZero();
-        assertThat(globalOwner.queryForObject("SELECT COUNT(*) FROM user_tables WHERE table_name <> 'flyway_schema_history'", Integer.class)).isEqualTo(12);
+        assertThat(globalOwner.queryForObject("SELECT COUNT(*) FROM user_tables WHERE table_name <> 'flyway_schema_history'", Integer.class)).isEqualTo(13);
     }
 
     @Test
@@ -95,7 +101,8 @@ class GlobalRunDbTest extends OracleDbTestSupport {
         assertThat(stamped.provisionedAt()).isEqualTo(provisioned);   // offset kept whatever the JVM zone
         assertThat(stamped.imageDigest()).isEqualTo("sha256:abc");
 
-        Instant created = Instant.now();
+        // TIMESTAMP(3) rounds a microsecond instant, so start from a millisecond one.
+        Instant created = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
         runs.insertRun(new Run("run-life-1", "na-east", "blob-1", null, "lifecycle", "tester",
                 RunState.STARTING, null, created, null, null, false, null));
         runs.insertFleetMember(new RunFleetMember("run-life-1", "life-w1", "na-east", MemberState.PENDING,
@@ -105,7 +112,7 @@ class GlobalRunDbTest extends OracleDbTestSupport {
         assertThat(pods.incrementRunsServed("life-w1")).isEqualTo(1);
 
         Run run = runs.findByRunId("run-life-1").orElseThrow();
-        assertThat(run.createdAt()).isEqualTo(created.truncatedTo(java.time.temporal.ChronoUnit.MILLIS));
+        assertThat(run.createdAt()).isEqualTo(created);
         RunFleetMember m = run.fleetMembers().get(0);
         assertThat(m.properties()).containsEntry("threads", "5").containsEntry("rampUp", "10");
         assertThat(m.fanoutStatusCode()).isEqualTo(202);
@@ -182,51 +189,32 @@ class GlobalRunDbTest extends OracleDbTestSupport {
     }
 
     @Test
-    void purge_empties_every_metrics_table_for_the_run() {
-        String run = "run-purge-1";
-        long t = Instant.now().getEpochSecond();
-        Integer landed = metricsOwner.execute((ConnectionCallback<Integer>) con -> {
-            // Staging rows live in the session, so the whole ingest is one transaction on one connection.
-            con.setAutoCommit(false);
-            try (PreparedStatement ps = con.prepareStatement(
-                    "INSERT INTO metrics.\"workerMetricStage\" (\"runId\",\"workerId\",\"label\",\"windowSecond\",\"region\","
-                    + "\"throughput\",\"errorCount\",\"sumElapsedMs\",\"p50Ms\",\"p90Ms\",\"p95Ms\",\"p99Ms\",\"maxMs\",\"activeThreads\","
-                    + "\"bytesReceived\",\"bytesSent\") VALUES (?,?,?,?,?,100,5,25000,200,400,500,900,1500,10,10000,2000)");
-                 PreparedStatement st = con.prepareStatement(
-                    "INSERT INTO metrics.\"workerMetricStatusStage\" (\"runId\",\"workerId\",\"label\",\"windowSecond\",\"region\",\"code\",\"n\") "
-                    + "VALUES (?,?,?,?,?,'200',95)")) {
-                for (int s = 0; s < 3; s++) {
-                    for (PreparedStatement p : List.of(ps, st)) {
-                        p.setString(1, run); p.setString(2, "w1"); p.setString(3, "login");
-                        p.setLong(4, t + s); p.setString(5, "na-east");
-                        p.addBatch();
-                    }
-                }
-                ps.executeBatch();
-                st.executeBatch();
-            }
-            int n;
-            try (CallableStatement cs = con.prepareCall("BEGIN metrics.\"metricsIngest\".\"ingestStaged\"(?); END;")) {
-                cs.registerOutParameter(1, Types.NUMERIC);
-                cs.execute();
-                n = cs.getInt(1);
-            }
-            con.commit();
-            return n;
-        });
-        assertThat(landed).isEqualTo(3);
-        assertThat(countIn("runLabel", run)).isEqualTo(1);
-
-        assertThat(purge.deleteByRunId(run)).isEqualTo(3);
-        for (String table : List.of("workerMetric", "workerMetricStatus", "runSecond", "runSecondStatus", "runLabel")) {
-            assertThat(countIn(table, run)).as(table).isZero();
-        }
-        assertThat(purge.deleteByRunIds(List.of("never-existed-1", "never-existed-2"))).isZero();   // no-bounds fallback
+    void metrics_schema_is_reachable_through_the_reader_pool_with_unqualified_names() {
+        // CURRENT_SCHEMA = CARDZATE_DB_GRAF on the reader pool: the hosted consumer's unqualified names resolve.
+        assertThat(metricsReader.queryForObject("SELECT COUNT(*) FROM GROUP_REGISTRY WHERE ENABLED = 1", Integer.class)).isEqualTo(2);
+        assertThat(metricsReader.queryForObject("SELECT TABLE_PREFIX FROM GROUP_REGISTRY WHERE GROUP_ID = ?", String.class, "cps")).isEqualTo("CPS");
+        assertThat(metricsReader.queryForObject("SELECT COUNT(*) FROM CPS_METRICS", Integer.class)).isZero();
+        // The purge pool resolves the same names and holds DELETE on the facts.
+        assertThat(metricsPurge.queryForObject("SELECT COUNT(*) FROM DEMO_METRICS_H", Integer.class)).isZero();
     }
 
-    private long countIn(String table, String run) {
-        Long n = metricsOwner.queryForObject(
-                "SELECT COUNT(*) FROM metrics.\"" + table + "\" WHERE \"runId\" = ?", Long.class, run);
-        return n == null ? 0 : n;
+    @Test
+    void application_group_round_trips_and_the_fk_refuses_a_delete_while_apps_remain() {
+        ApplicationGroup g = groups.insert(new ApplicationGroup("cps", "Servicing MQ", "db contract test", Instant.now(), null));
+        assertThat(g.groupId()).isEqualTo("cps");
+        assertThat(groups.countApplications("cps")).isZero();
+
+        Application a = applications.insert(new Application("app-grp", "cps-pci", null, null, List.of(), null,
+                Instant.now(), null, null, null, RecyclePolicy.REUSE, null, null, false, "cps", "CPS-PCI"));
+        assertThat(a.metricsGroupId()).isEqualTo("cps");
+        assertThat(a.metricsApplication()).isEqualTo("CPS-PCI");
+        assertThat(groups.applicationCounts()).containsEntry("cps", 1);
+
+        assertThatThrownBy(() -> groups.delete("cps")).isInstanceOf(DataIntegrityViolationException.class);   // ORA-02292
+
+        applications.update(a.applicationId(), a.name(), null, null, List.of(), null, null, null, false, null, null, null, null);
+        assertThat(applications.findById(a.applicationId()).orElseThrow().metricsGroupId()).isNull();
+        assertThat(groups.delete("cps")).isTrue();
+        assertThat(groups.findById("cps")).isEmpty();
     }
 }

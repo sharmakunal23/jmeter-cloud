@@ -58,7 +58,11 @@ public class ApplicationRepository {
                 RecyclePolicy.valueOf(rs.getString("recyclePolicy")),
                 nullableInt(rs, "maxRunsPerPod"),
                 nullableInt(rs, "podMaxAgeHours"),
-                rs.getBoolean("alwaysOn"));
+                rs.getBoolean("alwaysOn"),
+                rs.getString("metricsGroupId"),
+                rs.getString("metricsApplication"),
+                rs.getString("grafanaLiveUrl"),
+                rs.getString("grafanaHistoryUrl"));
     }
 
     private static Integer nullableInt(ResultSet rs, String col) throws SQLException {
@@ -76,12 +80,13 @@ public class ApplicationRepository {
                 + "(\"applicationId\",\"name\",\"sealId\",\"description\","
                 + " \"healthEndpoints\",\"createdAt\","
                 + " \"recyclePolicy\",\"maxRunsPerPod\",\"podMaxAgeHours\","
-                + " \"alwaysOn\") "
-                + "VALUES (?,?,?,?, ?, ?, ?, ?, ?, ?)",
+                + " \"alwaysOn\",\"metricsGroupId\",\"metricsApplication\",\"grafanaLiveUrl\",\"grafanaHistoryUrl\") "
+                + "VALUES (?,?,?,?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 app.applicationId(), app.name(), app.sealId(), app.description(),
                 OracleBind.clob(endpointsJson), OracleBind.ts(app.createdAt()),
                 app.recyclePolicy().name(), app.maxRunsPerPod(), app.podMaxAgeHours(),
-                app.alwaysOn());
+                app.alwaysOn(), app.metricsGroupId(), app.metricsApplication(),
+                app.grafanaLiveUrl(), app.grafanaHistoryUrl());
         return findById(app.applicationId()).orElseThrow();
     }
 
@@ -165,7 +170,9 @@ public class ApplicationRepository {
     public Application update(String applicationId, String name, String sealId,
                               String description, List<String> healthEndpoints,
                               RecyclePolicy recyclePolicy, Integer maxRunsPerPod,
-                              Integer podMaxAgeHours, boolean alwaysOn) {
+                              Integer podMaxAgeHours, boolean alwaysOn,
+                              String metricsGroupId, String metricsApplication,
+                              String grafanaLiveUrl, String grafanaHistoryUrl) {
         String endpointsJson = serialise(healthEndpoints == null ? List.of() : healthEndpoints);
         // RecyclePolicy may be null on the caller
         // boundary (operator omitted the field on PUT); the controller
@@ -177,20 +184,23 @@ public class ApplicationRepository {
             updated = jdbc.update(
                     "UPDATE \"globalOrchestrator\".\"application\" "
                     + "SET \"name\"=?, \"sealId\"=?, \"description\"=?, "
-                    + "    \"healthEndpoints\"=?, \"alwaysOn\"=? "
+                    + "    \"healthEndpoints\"=?, \"alwaysOn\"=?, "
+                    + "    \"metricsGroupId\"=?, \"metricsApplication\"=?, \"grafanaLiveUrl\"=?, \"grafanaHistoryUrl\"=? "
                     + "WHERE \"applicationId\"=?",
-                    name, sealId, description, OracleBind.clob(endpointsJson), alwaysOn, applicationId);
+                    name, sealId, description, OracleBind.clob(endpointsJson), alwaysOn,
+                    metricsGroupId, metricsApplication, grafanaLiveUrl, grafanaHistoryUrl, applicationId);
         } else {
             updated = jdbc.update(
                     "UPDATE \"globalOrchestrator\".\"application\" "
                     + "SET \"name\"=?, \"sealId\"=?, \"description\"=?, "
                     + "    \"healthEndpoints\"=?, "
                     + "    \"recyclePolicy\"=?, \"maxRunsPerPod\"=?, \"podMaxAgeHours\"=?, "
-                    + "    \"alwaysOn\"=? "
+                    + "    \"alwaysOn\"=?, "
+                    + "    \"metricsGroupId\"=?, \"metricsApplication\"=?, \"grafanaLiveUrl\"=?, \"grafanaHistoryUrl\"=? "
                     + "WHERE \"applicationId\"=?",
                     name, sealId, description, OracleBind.clob(endpointsJson),
                     recyclePolicy.name(), maxRunsPerPod, podMaxAgeHours,
-                    alwaysOn, applicationId);
+                    alwaysOn, metricsGroupId, metricsApplication, grafanaLiveUrl, grafanaHistoryUrl, applicationId);
         }
         if (updated == 0) {
             throw new EmptyResultDataAccessException("application not found: " + applicationId, 1);

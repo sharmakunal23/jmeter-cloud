@@ -3,7 +3,7 @@
  * registered-application surface (was: document-service's tag-derived
  * `/applications`). The registry stores operator-managed metadata
  * (sealId, description, healthEndpoints) and a health snapshot
- * polled every ~30s by ApplicationHealthPoller.
+ * polled every minute by ApplicationHealthPoller.
  */
 
 import { getActor } from "../actor";
@@ -42,6 +42,14 @@ export interface Application {
   podMaxAgeHours?: number | null;
   /** AUTOMATION Phase C — when true, scheduled DRAIN_REGION jobs skip this app. */
   alwaysOn?: boolean;
+  /** The application group whose tables receive this app's metrics (workers send it as `?groupId=`); null = ungrouped. */
+  metricsGroupId?: string | null;
+  /** The group classifier's value for this app's labels (`LABEL.APPLICATION`, e.g. `CPS-PCI`). */
+  metricsApplication?: string | null;
+  /** Per-app override of the group's live Grafana dashboard URL; null = the group's. */
+  grafanaLiveUrl?: string | null;
+  /** Per-app override of the group's history dashboard URL; null = the group's. */
+  grafanaHistoryUrl?: string | null;
 }
 
 export interface CreateApplicationRequest {
@@ -55,6 +63,13 @@ export interface CreateApplicationRequest {
   podMaxAgeHours?: number | null;
   /** AUTOMATION Phase C — defaults to false. */
   alwaysOn?: boolean;
+  /** An existing group's id; omitted/null = ungrouped (PUT replaces wholesale). */
+  metricsGroupId?: string | null;
+  /** Omitted/null = upper-cased name when grouped. */
+  metricsApplication?: string | null;
+  /** Optional per-app dashboard overrides; blank/omitted keeps the group's. */
+  grafanaLiveUrl?: string | null;
+  grafanaHistoryUrl?: string | null;
 }
 
 export interface UpdateApplicationRequest extends CreateApplicationRequest {}
@@ -69,7 +84,8 @@ export class ApplicationApiError extends Error {
   }
 }
 
-async function request<T>(
+/** Shared JSON fetch for the registry clients (applications, application groups). */
+export async function requestJson<T>(
   method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
   body?: unknown,
@@ -123,25 +139,25 @@ export function displayName(name: string): string {
 
 export const applicationsApi = {
   list: (signal?: AbortSignal) =>
-    request<Application[]>("GET", "/api/v1/applications", undefined, signal),
+    requestJson<Application[]>("GET", "/api/v1/applications", undefined, signal),
 
   /** Archived view — only soft-deleted (hidden) apps, the hard-delete/purge surface. */
   listHidden: (signal?: AbortSignal) =>
-    request<Application[]>("GET", "/api/v1/applications?hidden=true", undefined, signal),
+    requestJson<Application[]>("GET", "/api/v1/applications?hidden=true", undefined, signal),
 
   get: (applicationId: string, signal?: AbortSignal) =>
-    request<Application>("GET", `/api/v1/applications/${encodeURIComponent(applicationId)}`,
+    requestJson<Application>("GET", `/api/v1/applications/${encodeURIComponent(applicationId)}`,
       undefined, signal),
 
   create: (body: CreateApplicationRequest, signal?: AbortSignal) =>
-    request<Application>("POST", "/api/v1/applications", body, signal),
+    requestJson<Application>("POST", "/api/v1/applications", body, signal),
 
   update: (applicationId: string, body: UpdateApplicationRequest, signal?: AbortSignal) =>
-    request<Application>("PUT", `/api/v1/applications/${encodeURIComponent(applicationId)}`,
+    requestJson<Application>("PUT", `/api/v1/applications/${encodeURIComponent(applicationId)}`,
       body, signal),
 
   delete: (applicationId: string, signal?: AbortSignal) =>
-    request<void>("DELETE", `/api/v1/applications/${encodeURIComponent(applicationId)}`,
+    requestJson<void>("DELETE", `/api/v1/applications/${encodeURIComponent(applicationId)}`,
       undefined, signal),
 
   /**
@@ -156,7 +172,7 @@ export const applicationsApi = {
   purge: (applicationId: string, reason?: string, signal?: AbortSignal) => {
     const trimmed = reason?.trim();
     const body = trimmed ? { reason: trimmed } : undefined;
-    return request<PurgeApplicationResult>(
+    return requestJson<PurgeApplicationResult>(
       "POST",
       `/api/v1/applications/${encodeURIComponent(applicationId)}/purge`,
       body,

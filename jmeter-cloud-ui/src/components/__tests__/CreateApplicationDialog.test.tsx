@@ -12,7 +12,16 @@ vi.mock("../../api/applications", async () => {
     applicationsApi: { list: vi.fn(), get: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
   };
 });
+vi.mock("../../api/applicationGroups", async () => {
+  const actual = await vi.importActual<typeof import("../../api/applicationGroups")>("../../api/applicationGroups");
+  return {
+    ...actual,
+    applicationGroupsApi: { list: vi.fn(), get: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
+  };
+});
 import { applicationsApi, ApplicationApiError } from "../../api/applications";
+import { applicationGroupsApi } from "../../api/applicationGroups";
+const groupMocks = applicationGroupsApi as unknown as { list: ReturnType<typeof vi.fn> };
 const apiMocks = applicationsApi as unknown as {
   create: ReturnType<typeof vi.fn>;
   delete: ReturnType<typeof vi.fn>;
@@ -21,6 +30,8 @@ const apiMocks = applicationsApi as unknown as {
 beforeEach(() => {
   apiMocks.create.mockReset();
   apiMocks.delete.mockReset();
+  groupMocks.list.mockReset();
+  groupMocks.list.mockResolvedValue([]);
 });
 
 function fixtureApp(name = "checkout-svc"): Application {
@@ -112,7 +123,8 @@ describe("CreateApplicationDialog — validation", () => {
       fireEvent.click(screen.getByRole("button", { name: /\+ Add endpoint/i }));
     }
     expect(screen.queryByRole("button", { name: /\+ Add endpoint/i })).toBeNull();
-    expect(document.querySelectorAll('input[type="url"]')).toHaveLength(8);
+    // Endpoint inputs only — the two Grafana override inputs are type=url as well.
+    expect(document.querySelectorAll('input[type="url"]:not(#appGrafanaLive):not(#appGrafanaHistory)')).toHaveLength(8);
   });
 
   it("explicit capacity-grid copy points operators at the Capacity tab", () => {
@@ -209,5 +221,50 @@ describe("CreateApplicationDialog — soft-delete (edit mode)", () => {
     expect(onDeleted).not.toHaveBeenCalled();
     // Still on the confirmation (the operator can Cancel back).
     expect(screen.getByRole("button", { name: /Soft Delete Application/i })).toBeInTheDocument();
+  });
+});
+
+describe("CreateApplicationDialog — metrics group", () => {
+  const cps = { groupId: "cps", name: "Servicing MQ", createdAt: "2026-08-29T00:00:00Z", applicationCount: 0 };
+
+  it("posts metricsGroupId + metricsApplication when a group is picked", async () => {
+    groupMocks.list.mockResolvedValue([cps]);
+    apiMocks.create.mockResolvedValue(fixtureApp("cps-pci"));
+    render(<MemoryRouter><CreateApplicationDialog onCreated={vi.fn()} onClose={vi.fn()} /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByRole("option", { name: "Servicing MQ (cps)" })).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/Name \*/i), { target: { value: "cps-pci" } });
+    fireEvent.change(screen.getByLabelText(/Metrics group/i), { target: { value: "cps" } });
+    // The classifier value appears only once a group is chosen.
+    fireEvent.change(screen.getByLabelText(/Metrics application/i), { target: { value: "CPS-PCI" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Register$/i }));
+    await waitFor(() => expect(apiMocks.create).toHaveBeenCalled());
+    const body = apiMocks.create.mock.calls[0][0];
+    expect(body.metricsGroupId).toBe("cps");
+    expect(body.metricsApplication).toBe("CPS-PCI");
+  });
+
+  it("leaves both fields out when ungrouped, and the classifier field stays hidden", async () => {
+    apiMocks.create.mockResolvedValue(fixtureApp());
+    render(<MemoryRouter><CreateApplicationDialog onCreated={vi.fn()} onClose={vi.fn()} /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByLabelText(/Metrics group/i)).not.toBeDisabled());
+    expect(screen.queryByLabelText(/Metrics application/i)).toBeNull();
+    fireEvent.change(screen.getByLabelText(/Name \*/i), { target: { value: "checkout-svc" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Register$/i }));
+    await waitFor(() => expect(apiMocks.create).toHaveBeenCalled());
+    const body = apiMocks.create.mock.calls[0][0];
+    expect(body.metricsGroupId).toBeUndefined();
+    expect(body.metricsApplication).toBeUndefined();
+  });
+
+  it("edit mode pre-selects the app's group and rejects a malformed classifier value", async () => {
+    groupMocks.list.mockResolvedValue([cps]);
+    const app = { ...fixtureApp("cps-pci"), metricsGroupId: "cps", metricsApplication: "CPS-PCI" };
+    render(<MemoryRouter><CreateApplicationDialog mode="edit" initial={app} onCreated={vi.fn()} onClose={vi.fn()} /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByRole("option", { name: "Servicing MQ (cps)" })).toBeInTheDocument());
+    expect((screen.getByLabelText(/Metrics group/i) as HTMLSelectElement).value).toBe("cps");
+    expect((screen.getByLabelText(/Metrics application/i) as HTMLInputElement).value).toBe("CPS-PCI");
+    fireEvent.change(screen.getByLabelText(/Metrics application/i), { target: { value: "has space" } });
+    expect(screen.getByRole("button", { name: /Save changes/i })).toBeDisabled();
+    expect(screen.getByRole("alert")).toHaveTextContent(/letters \/ digits/);
   });
 });

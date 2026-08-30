@@ -8,6 +8,7 @@ import com.perf.globalorchestrator.domain.Ulid;
 import com.perf.globalorchestrator.provision.ProvisioningProperties;
 import com.perf.globalorchestrator.config.CacheConfig;
 import com.perf.globalorchestrator.repo.ApplicationCapacityRepository;
+import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.RunRepository;
 import com.perf.globalorchestrator.service.ApplicationPurgeService;
@@ -37,11 +38,18 @@ import java.net.URISyntaxException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
  * D-AppRegistry + D-Capacity v2 — REST surface for the registered-applications
  * registry and the per-region capacity matrix.
+ *
+ * <p>{@code metricsGroupId} must name an existing application group; it is
+ * what the app's workers send as {@code ?groupId=} on metrics POSTs.
+ * {@code metricsApplication} (the group classifier's value for this app's
+ * labels) defaults to the upper-cased name when a group is set. Both are
+ * replaced wholesale on PUT, like {@code sealId}.
  *
  * <p>Capacity in v2 is mandatory and per-region. {@code POST /applications}
  * accepts an optional {@code capacity[]} array; {@code PUT /applications/{id}}
@@ -73,6 +81,10 @@ public class ApplicationController {
     private static final int MAX_SEAL_ID_LEN = 128;
     private static final int MAX_DESCRIPTION_LEN = 512;
     private static final int MAX_POD_BUDGET = 1000;
+    /** LABEL.APPLICATION is VARCHAR2(64) in the metrics schema; the classifier emits values like CPS-PCI. */
+    private static final int MAX_METRICS_APPLICATION_LEN = 64;
+    private static final java.util.regex.Pattern METRICS_APPLICATION_PATTERN =
+            java.util.regex.Pattern.compile("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$");
 
     /**
      * Canonical region set — the four AWS USA regions this platform deploys
@@ -107,17 +119,20 @@ public class ApplicationController {
 
     private final ApplicationRepository repo;
     private final ApplicationCapacityRepository capacityRepo;
+    private final ApplicationGroupRepository groupRepo;
     private final RunRepository runRepo;
     private final ApplicationPurgeService purgeService;
     private final ProvisioningProperties provisioning;
 
     public ApplicationController(ApplicationRepository repo,
                                  ApplicationCapacityRepository capacityRepo,
+                                 ApplicationGroupRepository groupRepo,
                                  RunRepository runRepo,
                                  ApplicationPurgeService purgeService,
                                  ProvisioningProperties provisioning) {
         this.repo = repo;
         this.capacityRepo = capacityRepo;
+        this.groupRepo = groupRepo;
         this.runRepo = runRepo;
         this.purgeService = purgeService;
         this.provisioning = provisioning;
@@ -178,6 +193,11 @@ public class ApplicationController {
         // setting it on POST or via a subsequent PUT.
         RecyclePolicy policy = resolveRecyclePolicy(req.recyclePolicy());
         validateRecyclePolicy(policy, req.maxRunsPerPod(), req.podMaxAgeHours());
+        String metricsGroupId = resolveMetricsGroup(req.metricsGroupId());
+        String metricsApplication = resolveMetricsApplication(
+                metricsGroupId, req.metricsApplication(), req.name().trim());
+        String grafanaLiveUrl = validateDashboardUrl("grafanaLiveUrl", req.grafanaLiveUrl());
+        String grafanaHistoryUrl = validateDashboardUrl("grafanaHistoryUrl", req.grafanaHistoryUrl());
         Application app = new Application(
                 Ulid.generate(),
                 req.name().trim(),
@@ -189,7 +209,8 @@ public class ApplicationController {
                 null, null, null,
                 policy, req.maxRunsPerPod(), req.podMaxAgeHours(),
                 /* alwaysOn — AUTOMATION Phase C; null defaults to false. */
-                Boolean.TRUE.equals(req.alwaysOn()));
+                Boolean.TRUE.equals(req.alwaysOn()),
+                metricsGroupId, metricsApplication, grafanaLiveUrl, grafanaHistoryUrl);
         Application stored;
         try {
             stored = repo.insert(app);
@@ -233,6 +254,11 @@ public class ApplicationController {
         Application existing = repo.findById(applicationId).orElseThrow(
                 () -> new ApplicationNotFoundException(applicationId));
         boolean alwaysOn = req.alwaysOn() == null ? existing.alwaysOn() : req.alwaysOn();
+        String metricsGroupId = resolveMetricsGroup(req.metricsGroupId());
+        String metricsApplication = resolveMetricsApplication(
+                metricsGroupId, req.metricsApplication(), req.name().trim());
+        String grafanaLiveUrl = validateDashboardUrl("grafanaLiveUrl", req.grafanaLiveUrl());
+        String grafanaHistoryUrl = validateDashboardUrl("grafanaHistoryUrl", req.grafanaHistoryUrl());
         try {
             Application updated = repo.update(
                     applicationId,
@@ -243,7 +269,11 @@ public class ApplicationController {
                     policy,
                     req.maxRunsPerPod(),
                     req.podMaxAgeHours(),
-                    alwaysOn);
+                    alwaysOn,
+                    metricsGroupId,
+                    metricsApplication,
+                    grafanaLiveUrl,
+                    grafanaHistoryUrl);
             return ResponseEntity.ok(withCapacity(updated, capacityRepo.findByApplicationId(applicationId)));
         } catch (DuplicateKeyException e) {
             throw new ApplicationConflictException(req.name());
@@ -408,6 +438,32 @@ public class ApplicationController {
         return t.isEmpty() ? null : t;
     }
 
+    // ── Metrics group + classifier value ──────────────────────────
+
+    /** Blank → ungrouped; otherwise the group must exist (400 — the operator picks from the registry). */
+    private String resolveMetricsGroup(String raw) {
+        String groupId = trimOrNull(raw);
+        if (groupId == null) return null;
+        if (groupRepo.findById(groupId).isEmpty()) {
+            throw new ApplicationValidationException("unknown application group: " + groupId);
+        }
+        return groupId;
+    }
+
+    /** With a group, a blank value defaults to the upper-cased name; a supplied value is validated. */
+    private static String resolveMetricsApplication(String metricsGroupId, String raw, String name) {
+        String value = trimOrNull(raw);
+        if (value == null) {
+            return metricsGroupId == null ? null : name.toUpperCase(Locale.ROOT);
+        }
+        if (value.length() > MAX_METRICS_APPLICATION_LEN
+                || !METRICS_APPLICATION_PATTERN.matcher(value).matches()) {
+            throw new ApplicationValidationException(
+                    "metricsApplication must match [A-Za-z0-9][A-Za-z0-9._-]{0,63} — got " + value);
+        }
+        return value;
+    }
+
     // ── WORKER-HYGIENE Phase C — recycle policy validation ───────────
 
     private static final int MAX_RUNS_PER_POD_CEILING = 10_000;
@@ -478,7 +534,17 @@ public class ApplicationController {
                 a.healthEndpoints(), capacity, a.createdAt(),
                 a.lastHealthCheckedAt(), a.lastHealthStatus(), a.lastHealthDetails(),
                 a.recyclePolicy(), a.maxRunsPerPod(), a.podMaxAgeHours(),
-                a.alwaysOn());
+                a.alwaysOn(), a.metricsGroupId(), a.metricsApplication(),
+                a.grafanaLiveUrl(), a.grafanaHistoryUrl());
+    }
+
+    /** The group controller's URL rule, surfaced as this controller's 400. */
+    private static String validateDashboardUrl(String field, String raw) {
+        try {
+            return ApplicationGroupController.validateUrl(field, raw);
+        } catch (ApplicationGroupController.GroupValidationException e) {
+            throw new ApplicationValidationException(e.getMessage());
+        }
     }
 
     // ── Request bodies ─────────────────────────────────────────────
@@ -496,7 +562,14 @@ public class ApplicationController {
             Integer maxRunsPerPod,
             Integer podMaxAgeHours,
             /** AUTOMATION Phase C — null defaults to false (DRAIN_REGION jobs fire normally). */
-            Boolean alwaysOn) {}
+            Boolean alwaysOn,
+            /** An existing application group's id; null = ungrouped. */
+            String metricsGroupId,
+            /** The group classifier's value for this app's labels; null = upper-cased name when grouped. */
+            String metricsApplication,
+            /** Optional per-app dashboard overrides; blank = the group's. */
+            String grafanaLiveUrl,
+            String grafanaHistoryUrl) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record UpdateApplicationRequest(
@@ -507,7 +580,14 @@ public class ApplicationController {
             Integer maxRunsPerPod,
             Integer podMaxAgeHours,
             /** AUTOMATION Phase C — null = preserve current. */
-            Boolean alwaysOn) {}
+            Boolean alwaysOn,
+            /** Replaced wholesale: null clears the group. */
+            String metricsGroupId,
+            /** Replaced wholesale: null = upper-cased name when grouped. */
+            String metricsApplication,
+            /** Optional per-app dashboard overrides; blank = the group's. */
+            String grafanaLiveUrl,
+            String grafanaHistoryUrl) {}
 
     // ── Exceptions + handlers ──────────────────────────────────────
 

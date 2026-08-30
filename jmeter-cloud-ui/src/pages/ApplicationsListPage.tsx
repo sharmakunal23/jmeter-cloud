@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { formatRelative } from "../lib/time";
 
@@ -8,7 +8,9 @@ import {
   type Application,
 } from "../api/applications";
 import { runsApi, type Run } from "../api/runs";
+import { applicationGroupsApi, sortByGroup, type ApplicationGroup } from "../api/applicationGroups";
 import { CreateApplicationDialog } from "../components/CreateApplicationDialog";
+import { ApplicationGroupsDialog } from "../components/ApplicationGroupsDialog";
 import { PurgeConfirmDialog } from "../components/PurgeConfirmDialog";
 import { useToast, ToastView } from "../components/Toast";
 import { HealthBadge } from "../components/HealthBadge";
@@ -28,7 +30,7 @@ import {
  * <p>Operator-visible registry with two view modes (grid / list) — the
  * mode is persisted in localStorage so the operator's preference
  * survives reloads. Health badge per app is sourced from the
- * registry's {@code lastHealthStatus} field (updated every ~30s by
+ * registry's {@code lastHealthStatus} field (updated every minute by
  * {@code ApplicationHealthPoller}). Per-app run aggregates are stitched
  * client-side from {@code GET /api/v1/runs?limit=200} so the cards /
  * rows show recent activity at a glance.
@@ -55,14 +57,26 @@ interface AppAggregates {
 
 type State =
   | { status: "loading" }
-  | { status: "ok"; apps: Application[]; aggregates: Record<string, AppAggregates>; refreshedAt: Date }
+  | { status: "ok"; apps: Application[]; groups: ApplicationGroup[]; aggregates: Record<string, AppAggregates>; refreshedAt: Date }
   | { status: "error"; message: string };
+
+/** The group an application is filed under on this page, or null when ungrouped / unknown. */
+function groupOf(app: Application, groups: ApplicationGroup[]): ApplicationGroup | null {
+  return app.metricsGroupId ? groups.find((g) => g.groupId === app.metricsGroupId) ?? null : null;
+}
+
+/** Heading text for a run of apps in the same group; shown only once any group exists. */
+function groupHeading(app: Application, groups: ApplicationGroup[]): { key: string; name: string; id: string | null } {
+  const g = groupOf(app, groups);
+  return g ? { key: g.groupId, name: g.name, id: g.groupId } : { key: "", name: "Ungrouped", id: null };
+}
 
 export function ApplicationsListPage() {
   const [state, setState] = useState<State>({ status: "loading" });
   const [viewMode, setViewMode] = useState<ListViewMode>(() => readPersistedViewMode(VIEW_MODE_STORAGE_KEY));
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
+  const [showGroups, setShowGroups] = useState(false);
   const [refreshSeq, setRefreshSeq] = useState(0);
   // HARD-DELETE — the Archived view lists HIDDEN (soft-deleted) apps so the
   // operator can permanently purge a retired app and reclaim its storage.
@@ -78,10 +92,12 @@ export function ApplicationsListPage() {
     Promise.all([
       applicationsApi.list(ctl.signal),
       runsApi.listPage({ limit: RUN_AGG_LIMIT }, ctl.signal),
+      // Groups only decorate the page; a failed fetch renders the flat list.
+      applicationGroupsApi.list(ctl.signal).catch(() => [] as ApplicationGroup[]),
     ])
-      .then(([apps, runListing]) => {
+      .then(([apps, runListing, groups]) => {
         const aggregates = aggregateByApp(runListing.runs);
-        setState({ status: "ok", apps, aggregates, refreshedAt: new Date() });
+        setState({ status: "ok", apps: sortByGroup(apps, groups), groups, aggregates, refreshedAt: new Date() });
       })
       .catch((err: unknown) => {
         if (ctl.signal.aborted) return;
@@ -101,8 +117,13 @@ export function ApplicationsListPage() {
     if (state.status !== "ok") return [];
     const needle = search.trim().toLowerCase();
     if (!needle) return state.apps;
-    return state.apps.filter((a) => a.name.toLowerCase().includes(needle));
+    return state.apps.filter((a) => {
+      if (a.name.toLowerCase().includes(needle)) return true;
+      const g = groupOf(a, state.groups);
+      return g != null && (g.name.toLowerCase().includes(needle) || g.groupId.includes(needle));
+    });
   }, [state, search]);
+  const groups = state.status === "ok" ? state.groups : [];
 
   const { page, setPage, pageItems, total, pageSize } = useClientPagination(filteredApps, search);
 
@@ -131,6 +152,16 @@ export function ApplicationsListPage() {
           >
             + Register application
           </button>
+          {!archived && (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setShowGroups(true)}
+              title="Application groups — each routes its apps' metrics to its own tables"
+            >
+              Manage groups
+            </button>
+          )}
           <div className="segmentedToggle" role="tablist" aria-label="application view">
             <button
               type="button"
@@ -176,7 +207,7 @@ export function ApplicationsListPage() {
           <p>No applications registered yet.</p>
           <p className="ink-soft">
             Register one to launch runs against it. Health-check endpoints
-            (optional) will be polled every 30 seconds.
+            (optional) will be polled every minute.
           </p>
           <button type="button" className="btn btn--primary"
                   onClick={() => setShowCreate(true)}>
@@ -193,18 +224,25 @@ export function ApplicationsListPage() {
 
       {state.status === "ok" && filteredApps.length > 0 && viewMode === "grid" && (
         <ul className="appCardGrid" aria-label="application cards">
-          {pageItems.map((app) => (
-            <ApplicationCard
-              key={app.applicationId}
-              app={app}
-              agg={state.aggregates[app.name]}
-            />
-          ))}
+          {pageItems.map((app, i) => {
+            const heading = groupHeading(app, groups);
+            const first = i === 0 || groupHeading(pageItems[i - 1], groups).key !== heading.key;
+            return (
+              <Fragment key={app.applicationId}>
+                {groups.length > 0 && first && (
+                  <li className="appCardGrid__groupHeading" role="presentation">
+                    <GroupHeading name={heading.name} id={heading.id} />
+                  </li>
+                )}
+                <ApplicationCard app={app} agg={state.aggregates[app.name]} />
+              </Fragment>
+            );
+          })}
         </ul>
       )}
 
       {state.status === "ok" && filteredApps.length > 0 && viewMode === "list" && (
-        <ApplicationListView apps={pageItems} aggregates={state.aggregates} />
+        <ApplicationListView apps={pageItems} groups={groups} aggregates={state.aggregates} />
       )}
 
       {state.status === "ok" && filteredApps.length > 0 && (
@@ -219,7 +257,24 @@ export function ApplicationsListPage() {
           onClose={() => setShowCreate(false)}
         />
       )}
+
+      {showGroups && (
+        <ApplicationGroupsDialog
+          onClose={() => setShowGroups(false)}
+          onChanged={() => setRefreshSeq((n) => n + 1)}
+        />
+      )}
     </section>
+  );
+}
+
+/** One heading per run of applications in the same group ("Ungrouped" closes the list). */
+function GroupHeading({ name, id }: { name: string; id: string | null }) {
+  return (
+    <h2 className="appGroupHeading">
+      {name}
+      {id && <span className="mono ink-soft appGroupHeading__id">{id}</span>}
+    </h2>
   );
 }
 
@@ -382,8 +437,8 @@ function ApplicationCard({ app, agg }: { app: Application; agg?: AppAggregates }
 // ── Table (list view) ─────────────────────────────────────────────
 
 function ApplicationListView({
-  apps, aggregates,
-}: { apps: Application[]; aggregates: Record<string, AppAggregates> }) {
+  apps, groups, aggregates,
+}: { apps: Application[]; groups: ApplicationGroup[]; aggregates: Record<string, AppAggregates> }) {
   return (
     <table className="runsTable applicationListTable">
       <thead>
@@ -398,10 +453,18 @@ function ApplicationListView({
         </tr>
       </thead>
       <tbody>
-        {apps.map((app) => {
+        {apps.map((app, i) => {
           const agg = aggregates[app.name];
+          const heading = groupHeading(app, groups);
+          const first = i === 0 || groupHeading(apps[i - 1], groups).key !== heading.key;
           return (
-            <tr key={app.applicationId}>
+            <Fragment key={app.applicationId}>
+            {groups.length > 0 && first && (
+              <tr className="appGroupRow">
+                <td colSpan={7}><GroupHeading name={heading.name} id={heading.id} /></td>
+              </tr>
+            )}
+            <tr>
               <td>
                 <Link to={`/applications/${encodeURIComponent(app.name)}`} className="mono capacityListRow__name">
                   {app.name}
@@ -427,6 +490,7 @@ function ApplicationListView({
                 ) : <span className="ink-soft">—</span>}
               </td>
             </tr>
+            </Fragment>
           );
         })}
       </tbody>

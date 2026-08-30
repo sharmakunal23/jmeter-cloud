@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { isDashboardUrl } from "../lib/grafanaLink";
 import { Link } from "react-router-dom";
 
 import {
@@ -7,6 +8,7 @@ import {
   type Application,
   type CreateApplicationRequest,
 } from "../api/applications";
+import { applicationGroupsApi, type ApplicationGroup } from "../api/applicationGroups";
 
 /* D-Capacity v2 polish — capacity is sponsor-controlled, NOT operator-set.
  * The form no longer collects per-region maxAvailable. Newly-registered
@@ -32,6 +34,8 @@ import {
 
 const NAME_PATTERN = /^[a-z0-9]([-a-z0-9_]{0,62}[a-z0-9])?$/;
 const MAX_HEALTH_ENDPOINTS = 8;
+/** Mirrors the server: the group classifier's value for this app's labels (LABEL.APPLICATION, ≤ 64). */
+const METRICS_APPLICATION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 export interface CreateApplicationDialogProps {
   /**
@@ -62,6 +66,13 @@ export function CreateApplicationDialog({
   const [healthEndpoints, setHealthEndpoints] = useState<string[]>(initial?.healthEndpoints ?? []);
   // When true, scheduled DRAIN_REGION jobs skip this app.
   const [alwaysOn, setAlwaysOn] = useState<boolean>(initial?.alwaysOn ?? false);
+  // Metrics routing: the group whose tables receive this app's rows, and the
+  // classifier value its labels carry there. null = groups not loaded yet.
+  const [groups, setGroups] = useState<ApplicationGroup[] | null>(null);
+  const [metricsGroupId, setMetricsGroupId] = useState(initial?.metricsGroupId ?? "");
+  const [metricsApplication, setMetricsApplication] = useState(initial?.metricsApplication ?? "");
+  const [grafanaLiveUrl, setGrafanaLiveUrl] = useState(initial?.grafanaLiveUrl ?? "");
+  const [grafanaHistoryUrl, setGrafanaHistoryUrl] = useState(initial?.grafanaHistoryUrl ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
   // Soft-delete (edit mode): a two-step confirm that explains the semantics
@@ -78,6 +89,14 @@ export function CreateApplicationDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  useEffect(() => {
+    const ctl = new AbortController();
+    applicationGroupsApi.list(ctl.signal)
+      .then(setGroups)
+      .catch(() => { if (!ctl.signal.aborted) setGroups([]); });
+    return () => ctl.abort();
+  }, []);
+
   const trimmedName = name.trim();
   const nameError =
     trimmedName === "" ? "name is required"
@@ -92,8 +111,16 @@ export function CreateApplicationDialog({
     return null;
   });
   const allEndpointsValid = endpointErrors.every((e) => e === null);
+  const trimmedMetricsApplication = metricsApplication.trim();
+  const metricsApplicationError =
+    metricsGroupId && trimmedMetricsApplication && !METRICS_APPLICATION_PATTERN.test(trimmedMetricsApplication)
+      ? "letters / digits / . _ - only; max 64 chars"
+      : null;
 
-  const canSubmit = !submitting && nameError === null && allEndpointsValid;
+  const dashboardUrlError = (v: string) => (v.trim() === "" || isDashboardUrl(v.trim()) ? null : "must be an absolute http(s) URL");
+  const grafanaError = dashboardUrlError(grafanaLiveUrl) ?? dashboardUrlError(grafanaHistoryUrl);
+  const canSubmit = !submitting && nameError === null && allEndpointsValid && metricsApplicationError === null
+    && grafanaError === null;
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -109,6 +136,11 @@ export function CreateApplicationDialog({
       description: description.trim() || undefined,
       healthEndpoints: healthEndpoints.map((u) => u.trim()).filter(Boolean),
       alwaysOn,
+      // Omitted = ungrouped; the server defaults a blank metricsApplication to the upper-cased name.
+      metricsGroupId: metricsGroupId || undefined,
+      metricsApplication: metricsGroupId ? (trimmedMetricsApplication || undefined) : undefined,
+      grafanaLiveUrl: grafanaLiveUrl.trim() || undefined,
+      grafanaHistoryUrl: grafanaHistoryUrl.trim() || undefined,
     };
     try {
       const result = isEdit
@@ -236,7 +268,7 @@ export function CreateApplicationDialog({
                 ? <>Updating <span className="mono">{initial!.name}</span>. Capacity rows
                    replaced wholesale on save; health snapshot is owned by the poller
                    and isn't touched.</>
-                : "Persisted in the global registry. Health endpoints, when supplied, are polled every 30 seconds."}
+                : "Persisted in the global registry. Health endpoints, when supplied, are polled every minute."}
             </small>
           </div>
           <button type="button" className="btn btn--ghost" onClick={onClose} aria-label="Close">×</button>
@@ -293,6 +325,81 @@ export function CreateApplicationDialog({
             />
           </div>
 
+          <div className="formField">
+            <label htmlFor="appMetricsGroup">Metrics group</label>
+            <select
+              id="appMetricsGroup"
+              className="formSelect"
+              value={metricsGroupId}
+              onChange={(e) => setMetricsGroupId(e.target.value)}
+              disabled={groups === null}
+            >
+              <option value="">Ungrouped — metrics not routed</option>
+              {(groups ?? []).map((g) => (
+                <option key={g.groupId} value={g.groupId}>{g.name} ({g.groupId})</option>
+              ))}
+            </select>
+            <small>
+              Its id is what this app's workers send as <code>?groupId=</code> with every metrics
+              batch, so the rows land in the group's own tables.
+              {groups !== null && groups.length === 0 && " No groups yet — add one with \"Manage groups\" on the Applications page."}
+            </small>
+          </div>
+
+          {metricsGroupId && (
+            <div className="formField">
+              <label htmlFor="appMetricsApplication">Metrics application</label>
+              <input
+                id="appMetricsApplication"
+                type="text"
+                value={metricsApplication}
+                onChange={(e) => setMetricsApplication(e.target.value)}
+                placeholder={trimmedName ? trimmedName.toUpperCase() : "CPS-PCI"}
+                maxLength={64}
+                aria-invalid={metricsApplicationError != null}
+              />
+              <small>
+                How the group's label classifier names this app (<code>LABEL.APPLICATION</code>);
+                blank = <code>{trimmedName ? trimmedName.toUpperCase() : "the upper-cased name"}</code>.
+              </small>
+              {metricsApplicationError && (
+                <p className="text--error" role="alert" style={{ fontSize: "0.78rem" }}>
+                  {metricsApplicationError}
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="formField">
+            <label htmlFor="appGrafanaLive">Grafana dashboard override</label>
+            <input
+              id="appGrafanaLive"
+              type="url"
+              value={grafanaLiveUrl}
+              onChange={(e) => setGrafanaLiveUrl(e.target.value)}
+              placeholder={metricsGroupId ? "blank = the group's live dashboard" : "https://grafana…/d/…"}
+              maxLength={2000}
+              aria-invalid={dashboardUrlError(grafanaLiveUrl) != null}
+            />
+            <input
+              id="appGrafanaHistory"
+              type="url"
+              value={grafanaHistoryUrl}
+              onChange={(e) => setGrafanaHistoryUrl(e.target.value)}
+              placeholder={metricsGroupId ? "history dashboard — blank = the group's" : "history dashboard (optional)"}
+              maxLength={2000}
+              aria-label="Grafana history dashboard override"
+              aria-invalid={dashboardUrlError(grafanaHistoryUrl) != null}
+              style={{ marginTop: "0.3rem" }}
+            />
+            <small>
+              "Open in Grafana" on this app's runs uses these before the group's dashboards.
+            </small>
+            {grafanaError && (
+              <p className="text--error" role="alert" style={{ fontSize: "0.78rem" }}>Dashboard URL {grafanaError}.</p>
+            )}
+          </div>
+
           {/* Capacity is intentionally NOT in this form post D-Capacity v2 polish.
               Compute costs money; capacity is sponsor-controlled. New apps land
               at 0 across us-east + us-west; the operator's only path to a
@@ -326,7 +433,7 @@ export function CreateApplicationDialog({
           <fieldset className="createApp__endpoints">
             <legend>Health-check endpoints</legend>
             <small className="ink-soft">
-              Optional. Max {MAX_HEALTH_ENDPOINTS} URLs. Each gets a GET every ~30s; aggregate
+              Optional. Max {MAX_HEALTH_ENDPOINTS} URLs. Each gets a GET every minute; aggregate
               status (HEALTHY / DEGRADED / UNHEALTHY) shows on the application card.
             </small>
             {healthEndpoints.length === 0 && (

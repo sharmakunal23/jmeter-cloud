@@ -10,7 +10,7 @@ import java.util.Map;
  * D-AppRegistry — registered application with operator-managed metadata
  * + last health-check snapshot. Persisted in
  * {@code globalOrchestrator.application}; polled by
- * {@code ApplicationHealthPoller} every ~30s when {@code healthEndpoints}
+ * {@code ApplicationHealthPoller} every minute when {@code healthEndpoints}
  * is non-empty.
  *
  * <p>{@code lastHealthDetails} is a list of per-endpoint result maps
@@ -53,7 +53,45 @@ public record Application(
          * this app (production-like, never auto-drained). PROVISION_REGION and
          * LAUNCH_RUN are unaffected. V22 column default is false.
          */
-        boolean alwaysOn) {
+        boolean alwaysOn,
+        /**
+         * The {@link ApplicationGroup} this app's metrics are routed to — its
+         * workers POST with {@code ?groupId=} set to this. Null = ungrouped:
+         * runs still work, but the metrics-consumer has nowhere to route them.
+         */
+        String metricsGroupId,
+        /**
+         * The value the group's label classifier assigns to this app's labels
+         * ({@code LABEL.APPLICATION} in the metrics schema, e.g. {@code CPS-PCI});
+         * how a group's rows are faceted back to this app. Defaults to the
+         * upper-cased name when a group is set.
+         */
+        String metricsApplication,
+        /** Per-app override of the group's live Grafana dashboard URL; null = the group's applies. */
+        String grafanaLiveUrl,
+        /** Per-app override of the group's history dashboard URL; null = the group's applies. */
+        String grafanaHistoryUrl) {
+
+    /** Without dashboard overrides (the group's URLs apply). */
+    public Application(String applicationId,
+                       String name,
+                       String sealId,
+                       String description,
+                       List<String> healthEndpoints,
+                       List<ApplicationCapacity> capacity,
+                       Instant createdAt,
+                       Instant lastHealthCheckedAt,
+                       HealthStatus lastHealthStatus,
+                       List<Map<String, Object>> lastHealthDetails,
+                       RecyclePolicy recyclePolicy,
+                       Integer maxRunsPerPod,
+                       Integer podMaxAgeHours,
+                       boolean alwaysOn,
+                       String metricsGroupId,
+                       String metricsApplication) {
+        this(applicationId, name, sealId, description, healthEndpoints, capacity, createdAt, lastHealthCheckedAt, lastHealthStatus, lastHealthDetails, recyclePolicy, maxRunsPerPod, podMaxAgeHours, alwaysOn, metricsGroupId, metricsApplication, null, null);
+    }
+
 
     public Application {
         healthEndpoints = healthEndpoints == null ? List.of() : List.copyOf(healthEndpoints);
