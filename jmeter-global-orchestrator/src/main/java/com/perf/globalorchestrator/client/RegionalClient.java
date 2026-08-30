@@ -104,9 +104,11 @@ public class RegionalClient {
 
     public RegionCapabilities capabilities(String regionalUrl) {
         JsonNode n = json(send(regionalUrl, "GET", "/api/v1/capabilities", null));
+        JsonNode workersFree = n.path("capacity").path("workersFree");
         return new RegionCapabilities(
                 text(n, "region"), text(n, "namespace"), text(n, "headlessService"),
-                text(n, "image"), n.path("localOrchestratorPort").asInt(8080), text(n, "version"));
+                text(n, "image"), n.path("localOrchestratorPort").asInt(8080), text(n, "version"),
+                workersFree.isNumber() ? workersFree.asInt() : null);
     }
 
     public ProvisionResult createPod(String regionalUrl, PodSpec spec) {

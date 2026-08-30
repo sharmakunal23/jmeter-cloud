@@ -191,7 +191,7 @@ class RecycleEvaluatorTest {
         return new Application(
                 "appId", "demo", null, null, List.of(),
                 null, NOW, null, null, null,
-                policy, maxRuns, maxAgeHours, /* alwaysOn */ false);
+                policy, maxRuns, maxAgeHours, /* alwaysOn */ false, null, null);
     }
 
     private Instant daysAgo(int days) {

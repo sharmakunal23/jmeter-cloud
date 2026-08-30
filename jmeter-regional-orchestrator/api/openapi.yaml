@@ -70,6 +70,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: "`CAPACITY_EXHAUSTED` — the namespace's ResourceQuota cannot admit another worker (the message carries the headroom); refused before the API server is asked."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
         "502":
           description: "`CLUSTER_API_ERROR` — the Kubernetes API refused or failed."
           content:
@@ -322,6 +327,14 @@ components:
         image: { type: string, example: "jmeter-local-orchestrator:dev" }
         localOrchestratorPort: { type: integer, example: 8080 }
         version: { type: string, example: dev }
+        capacity:
+          type: object
+          description: "Live headroom of the namespace's ResourceQuotas (Track 8); a null dimension is not quota-bound. The hub refuses a spin up front when `workersFree` is below the shortfall."
+          properties:
+            podsFree:      { type: integer, nullable: true }
+            memoryFreeMi:  { type: integer, format: int64, nullable: true }
+            cpuFreeMillis: { type: integer, format: int64, nullable: true }
+            workersFree:   { type: integer, nullable: true, description: "Workers that fit across every bound dimension, given this region's worker shape." }
 
     PodSpec:
       type: object
@@ -397,6 +410,7 @@ components:
             - REGION_MISMATCH
             - POD_NOT_FOUND
             - CLUSTER_API_ERROR
+            - CAPACITY_EXHAUSTED
             - PATH_NOT_ALLOWED
             - WORKER_UNREACHABLE
             - WORKER_TIMEOUT

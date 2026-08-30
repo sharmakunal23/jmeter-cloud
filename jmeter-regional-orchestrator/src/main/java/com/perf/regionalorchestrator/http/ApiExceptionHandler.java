@@ -34,6 +34,12 @@ public class ApiExceptionHandler {
         return body(HttpStatus.NOT_FOUND, "POD_NOT_FOUND", e.getMessage());
     }
 
+    @ExceptionHandler(com.perf.regionalorchestrator.provision.CapacityExhaustedException.class)
+    public ResponseEntity<Map<String, String>> capacity(com.perf.regionalorchestrator.provision.CapacityExhaustedException e) {
+        LOG.warn("spin refused: {}", e.getMessage());
+        return body(HttpStatus.CONFLICT, "CAPACITY_EXHAUSTED", e.getMessage());
+    }
+
     @ExceptionHandler(KubernetesClientException.class)
     public ResponseEntity<Map<String, String>> clusterApi(KubernetesClientException e) {
         LOG.warn("cluster API call failed: {}", e.toString());

@@ -89,6 +89,27 @@ public class PodSpinService {
      * kubelet to report it ready, which is when the row flips LOST → IDLE.
      * Rolls the placeholder back if the region refuses to create it.
      */
+    /**
+     * Refuses a shortfall the region's namespace quota cannot admit (Track 8):
+     * the regional publishes its live headroom on {@code /api/v1/capabilities}
+     * and the hub polls it, so this costs no call. Unknown headroom passes —
+     * the regional still refuses at {@code POST /pods} ({@code 409
+     * CAPACITY_EXHAUSTED}).
+     */
+    public void assertCapacity(String region, int workersNeeded) {
+        Integer free = provisioner.availableWorkers(region);
+        if (free != null && free < workersNeeded) {
+            throw new RegionCapacityExceededException(region, workersNeeded, free);
+        }
+    }
+
+    public static final class RegionCapacityExceededException extends RuntimeException {
+        public RegionCapacityExceededException(String region, int needed, int free) {
+            super("region " + region + " can schedule " + free + " more worker(s) under its namespace quota, "
+                    + needed + " needed — raise the quota or lower the fleet");
+        }
+    }
+
     public SpinResult start(String applicationId, String applicationName, String region, String podName) {
         return start(applicationId, applicationName, region, podName, readyTimeoutMs);
     }

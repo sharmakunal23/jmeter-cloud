@@ -48,4 +48,13 @@ public interface PodProvisioner {
 
     /** {@code http://{podName}.{headlessService}:{port}} — valid before the pod exists. */
     String baseUrlFor(String podName);
+
+    /**
+     * How many more workers the namespace's quotas admit right now
+     * ({@link NamespaceCapacity#UNBOUNDED} when nothing bounds it) — the hub
+     * reads it from {@code GET /api/v1/capabilities} to refuse a spin up front.
+     */
+    default NamespaceCapacity capacity() {
+        return NamespaceCapacity.UNBOUNDED;
+    }
 }

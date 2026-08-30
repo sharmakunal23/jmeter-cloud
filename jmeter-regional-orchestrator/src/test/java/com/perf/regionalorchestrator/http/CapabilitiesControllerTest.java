@@ -19,10 +19,15 @@ class CapabilitiesControllerTest {
 
     static class Beans {
         @Bean RegionalProperties regionalProperties() { return new RegionalProperties("na-west"); }
+        @Bean com.perf.regionalorchestrator.provision.PodProvisioner podProvisioner() {
+            com.perf.regionalorchestrator.provision.PodProvisioner p = org.mockito.Mockito.mock(com.perf.regionalorchestrator.provision.PodProvisioner.class);
+            org.mockito.Mockito.when(p.capacity()).thenReturn(new com.perf.regionalorchestrator.provision.NamespaceCapacity(3, 18432L, null, 3));
+            return p;
+        }
         @Bean ProvisionerProperties provisionerProperties() {
             return new ProvisionerProperties("jmeter-cloud", "workers", "jmeter-local-orchestrator:dev", 8080,
                     "http://metrics-consumer:8083/api/v1/ingest",
-                    "http://document-service:8084", 6144, "500m", 10, null);
+                    "http://document-service:8084", 6144, "500m", 10, null, null);
         }
     }
 
@@ -37,6 +42,9 @@ class CapabilitiesControllerTest {
                 .andExpect(jsonPath("$.headlessService").value("workers"))
                 .andExpect(jsonPath("$.image").value("jmeter-local-orchestrator:dev"))
                 .andExpect(jsonPath("$.localOrchestratorPort").value(8080))
-                .andExpect(jsonPath("$.version").value("dev"));
+                .andExpect(jsonPath("$.version").value("dev"))
+                .andExpect(jsonPath("$.capacity.workersFree").value(3))
+                .andExpect(jsonPath("$.capacity.podsFree").value(3))
+                .andExpect(jsonPath("$.capacity.cpuFreeMillis").doesNotExist());
     }
 }

@@ -41,12 +41,45 @@ public class ProvisionerConfig {
             @Value("${regionalOrchestrator.podProvisioner.workerMemoryMb:6144}")                    long   workerMemoryMb,
             @Value("${regionalOrchestrator.podProvisioner.workerCpuRequest:500m}")                  String workerCpuRequest,
             @Value("${regionalOrchestrator.podProvisioner.gracePeriodSeconds:10}")                  int    gracePeriodSeconds,
-            @Value("${regionalOrchestrator.podProvisioner.jmeterJvmArgs:}")                          String jmeterJvmArgs) {
+            @Value("${regionalOrchestrator.podProvisioner.jmeterJvmArgs:}")                          String jmeterJvmArgs,
+            @Value("${regionalOrchestrator.podProvisioner.metricsIngestAuth:}")                      String metricsIngestAuth,
+            @Value("${regionalOrchestrator.podProvisioner.cpuMemoryResources:true}")                 boolean cpuMemoryResources,
+            @Value("${regionalOrchestrator.podProvisioner.workerCpuLimit:}")                         String workerCpuLimit,
+            @Value("${regionalOrchestrator.podProvisioner.workerEphemeralStorage:}")                 String workerEphemeralStorage,
+            @Value("${regionalOrchestrator.podProvisioner.serviceAccountName:}")                     String serviceAccountName,
+            @Value("${regionalOrchestrator.podProvisioner.imagePullSecret:}")                        String imagePullSecret,
+            @Value("${regionalOrchestrator.podProvisioner.runAsUser:}")                              String runAsUser,
+            @Value("${regionalOrchestrator.podProvisioner.runAsGroup:}")                             String runAsGroup,
+            @Value("${regionalOrchestrator.podProvisioner.fsGroup:}")                                String fsGroup,
+            @Value("${regionalOrchestrator.podProvisioner.extraLabels:}")                            String extraLabels,
+            @Value("${regionalOrchestrator.podProvisioner.workerJavaOpts:}")                         String workerJavaOpts) {
+        WorkerPodShape shape = new WorkerPodShape(
+                cpuMemoryResources,
+                WorkerPodShape.blankToNull(workerCpuLimit),
+                WorkerPodShape.blankToNull(workerEphemeralStorage),
+                WorkerPodShape.blankToNull(serviceAccountName),
+                WorkerPodShape.blankToNull(imagePullSecret),
+                parseId(runAsUser, "runAsUser"), parseId(runAsGroup, "runAsGroup"), parseId(fsGroup, "fsGroup"),
+                WorkerPodShape.parseLabels(extraLabels),
+                WorkerPodShape.blankToNull(workerJavaOpts));
         return new ProvisionerProperties(
                 namespace, headlessService, image, localOrchestratorPort,
                 metricsIngestUrl, documentServiceUrl,
                 workerMemoryMb, workerCpuRequest, gracePeriodSeconds,
-                jmeterJvmArgs == null || jmeterJvmArgs.isBlank() ? null : jmeterJvmArgs.trim());
+                jmeterJvmArgs == null || jmeterJvmArgs.isBlank() ? null : jmeterJvmArgs.trim(),
+                metricsIngestAuth == null || metricsIngestAuth.isBlank() ? null : metricsIngestAuth.trim(),
+                shape);
+    }
+
+    private static Long parseId(String raw, String name) {
+        if (raw == null || raw.isBlank()) return null;
+        try {
+            long v = Long.parseLong(raw.trim());
+            if (v < 0) throw new IllegalArgumentException("PODPROVISIONER_" + name + " must be >= 0");
+            return v;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("PODPROVISIONER_" + name + " must be an integer uid/gid, got '" + raw + "'");
+        }
     }
 
     @Bean(destroyMethod = "close")

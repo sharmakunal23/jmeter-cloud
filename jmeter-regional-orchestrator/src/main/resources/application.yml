@@ -22,10 +22,20 @@ management:
       exposure:
         # health,info ONLY — hosting infra provides observability. NEVER drop
         # health: the kube probes and the global's region probe depend on it.
-        include: health,info
+        include: keepalive,health,info
   endpoint:
     health:
       show-details: always
+      # Startup + liveness → /actuator/keepalive; readiness → the process
+      # state only (the cluster API is the regional's dependency, and a
+      # transient apiserver blip must not pull the relay out of rotation).
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState
   defaults:
     metrics:
       export:
@@ -63,6 +73,10 @@ regionalOrchestrator:
     # stamped, so they neither register nor heartbeat; the Pod list
     # (GET /api/v1/workers) is the hub's liveness truth.
     metricsIngestUrl:      ${PODPROVISIONER_METRICS_INGEST_URL:http://metrics-consumer:8083/api/v1/ingest}
+    # The whole Authorization value workers send on ingest (`Bearer <token>`,
+    # the hosted ingest.auth) — blank locally (the consumer's `local` profile
+    # has no auth filter); a Secret-backed env in a real cloud.
+    metricsIngestAuth:     ${PODPROVISIONER_METRICS_INGEST_AUTH:}
     documentServiceUrl:    ${DOCUMENT_SERVICE_URL:http://document-service:8084}
     # Hard memory limit (MiB) per worker — requests == limits so the
     # scheduler reserves what the worker really uses and a runaway worker
@@ -80,6 +94,35 @@ regionalOrchestrator:
     # worker's production default (-Xms2g -Xmx2g); a validation cluster sets
     # "-Xms256m -Xmx512m" with a matching workerMemoryMb.
     jmeterJvmArgs:         ${PODPROVISIONER_JMETER_JVM_ARGS:}
+
+    # ── Worker Pod shape on the hosted platform (Track 8) ─────────────
+    # Read the namespace's ResourceQuota + LimitRange BEFORE setting these
+    # (`kubectl get resourcequota,limitrange -n <ns>`). Defaults = the local shape.
+    # false under a hard-zero quota (requests.cpu: 0): no cpu/memory keys at
+    # all — bound the JVMs with JAVA_OPTS / JMETER_JVM_ARGS instead.
+    cpuMemoryResources:    ${PODPROVISIONER_CPU_MEMORY_RESOURCES:true}
+    # A CPU limit is required where the quota counts limits.cpu; blank keeps
+    # the request-only local default (no cfs throttling on a load generator).
+    workerCpuLimit:        ${PODPROVISIONER_WORKER_CPU_LIMIT:}
+    # ephemeral-storage request == limit (maxLimitRequestRatio: 1); the JTL of
+    # a long run lives here — size it to the LimitRange max (10Gi on GKP dev).
+    workerEphemeralStorage: ${PODPROVISIONER_WORKER_EPHEMERAL_STORAGE:}
+    # Workers never call the cluster API: the token is never mounted, and the
+    # SA is only the imagePullSecrets carrier. Blank = the namespace default.
+    serviceAccountName:    ${PODPROVISIONER_SERVICE_ACCOUNT_NAME:}
+    # Pod-level imagePullSecrets for a private worker image (the kubelet pulls).
+    imagePullSecret:       ${PODPROVISIONER_IMAGE_PULL_SECRET:}
+    # Pod securityContext (runAsNonRoot follows) — the image's least-privilege
+    # user and the platform's group; blank = the image's own user.
+    runAsUser:             ${PODPROVISIONER_RUN_AS_USER:}
+    runAsGroup:            ${PODPROVISIONER_RUN_AS_GROUP:}
+    fsGroup:               ${PODPROVISIONER_FS_GROUP:}
+    # `k=v,k2=v2` added to every worker Pod — what a platform NetworkPolicy
+    # selects on, for instance.
+    extraLabels:           ${PODPROVISIONER_EXTRA_LABELS:}
+    # The orchestrator JVM's flags, stamped as JAVA_OPTS (the worker image's
+    # ENTRYPOINT honours it); blank keeps the image default (-Xmx1g).
+    workerJavaOpts:        ${PODPROVISIONER_WORKER_JAVA_OPTS:}
 
   # ── Worker relay ──────────────────────────────────────────────────
   # readTimeoutMs bounds how long the hub's calling thread is held by one

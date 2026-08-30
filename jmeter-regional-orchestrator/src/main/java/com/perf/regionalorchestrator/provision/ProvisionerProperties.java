@@ -41,7 +41,24 @@ public record ProvisionerProperties(
         // The worker's default (-Xmx2g) is production sizing; a validation
         // cluster sets e.g. "-Xms256m -Xmx512m" alongside a smaller
         // workerMemoryMb. Blank keeps the worker's default.
-        String jmeterJvmArgs) {
+        String jmeterJvmArgs,
+        // Stamped as METRICS_INGEST_AUTH when non-null — the whole
+        // Authorization value (`Bearer <token>`), the hosted ingest.auth; from
+        // a Secret in a real cloud. Null = the consumer runs without auth (local).
+        String metricsIngestAuth,
+        // What the hosting platform dictates about a worker Pod's spec
+        // (PRIVATE-CLOUD-ALIGNMENT Track 8); WorkerPodShape.DEFAULTS locally.
+        WorkerPodShape shape) {
+
+    /** The local shape ({@link WorkerPodShape#DEFAULTS}). */
+    public ProvisionerProperties(String namespace, String headlessService, String image, int localOrchestratorPort,
+                                 String metricsIngestUrl, String documentServiceUrl, long workerMemoryMb,
+                                 String workerCpuRequest, int gracePeriodSeconds, String jmeterJvmArgs,
+                                 String metricsIngestAuth) {
+        this(namespace, headlessService, image, localOrchestratorPort, metricsIngestUrl, documentServiceUrl,
+                workerMemoryMb, workerCpuRequest, gracePeriodSeconds, jmeterJvmArgs, metricsIngestAuth,
+                WorkerPodShape.DEFAULTS);
+    }
 
     /** Label namespace for every Pod the provisioner manages. */
     public static final String LABEL_PREFIX           = "com.perf.jmeterCloud.";

@@ -37,7 +37,7 @@ class K8sPodProvisionerTest {
                 NS, "workers", "jmeter-local-orchestrator:dev", 8080,
                 "http://metrics-consumer:8083/api/v1/ingest",
                 "http://document-service:8084",
-                6144, "500m", 10, "-Xms256m -Xmx512m");
+                6144, "500m", 10, "-Xms256m -Xmx512m", "Bearer testToken");
         provisioner = new K8sPodProvisioner(client, props);
         // Isolate tests — the mock is per-class, not per-method.
         client.pods().inNamespace(NS).delete();
@@ -100,6 +100,7 @@ class K8sPodProvisionerTest {
                 .containsEntry("METRICS_INGEST_URL", "http://metrics-consumer:8083/api/v1/ingest")
                 .doesNotContainKey("SCHEMA_REGISTRY_URL")
                 .containsEntry("GRACE_PERIOD_SECONDS", "10")
+                .containsEntry("METRICS_INGEST_AUTH", "Bearer testToken")
                 .containsEntry("ARTIFACT_SOURCE", "DOCUMENT_SERVICE")
                 .containsEntry("HTTP_PORT", "8080")
                 // SLIMDOWN SL-F — no tracing env at all: the slimmed worker
@@ -275,5 +276,95 @@ class K8sPodProvisionerTest {
         Pod pod = client.pods().inNamespace(NS).withName(podName).get();
         Pod updated = new PodBuilder(pod).editOrNewStatus().withPhase(phase).endStatus().build();
         client.pods().inNamespace(NS).resource(updated).update();
+    }
+
+    // ── PRIVATE-CLOUD-ALIGNMENT Track 8 ─────────────────────────────────
+
+    private static ProvisionerProperties hosted(WorkerPodShape shape) {
+        return new ProvisionerProperties(NS, "workers", "registry.example.test/c1/jmeter-local-orchestrator@sha256:0", 8080,
+                "https://metrics-consumer.example.test/api/v1/ingest", "https://document-service.example.test",
+                6144, "500m", 10, "-Xms2g -Xmx2g", "Bearer t", shape);
+    }
+
+    @Test
+    @DisplayName("the local shape: cpu request + memory only, no SA token, no security context, three probes")
+    void localShapeAndProbes() {
+        provisioner.createAndStart(spec("payments-us-east-1-worker-1"));
+        Pod pod = client.pods().inNamespace(NS).withName("payments-us-east-1-worker-1").get();
+        var c = pod.getSpec().getContainers().get(0);
+        assertThat(c.getResources().getRequests()).containsOnlyKeys("memory", "cpu");
+        assertThat(c.getResources().getLimits()).containsOnlyKeys("memory");
+        assertThat(pod.getSpec().getAutomountServiceAccountToken()).isFalse();
+        assertThat(pod.getSpec().getSecurityContext()).isNull();
+        assertThat(pod.getSpec().getImagePullSecrets()).isEmpty();
+        assertThat(c.getStartupProbe().getHttpGet().getPath()).isEqualTo("/actuator/health");
+        assertThat(c.getReadinessProbe().getHttpGet().getPath()).isEqualTo("/actuator/health");
+        assertThat(c.getLivenessProbe().getHttpGet().getPath()).isEqualTo("/actuator/keepalive");
+        assertThat(c.getStartupProbe().getFailureThreshold()).isEqualTo(36);
+        assertThat(c.getEnv().stream().map(e -> e.getName())).doesNotContain("JAVA_OPTS");
+    }
+
+    @Test
+    @DisplayName("the hosted shape: cpu limit, ephemeral-storage request == limit, pull secret, security context, extra labels, JAVA_OPTS")
+    void hostedShape() {
+        WorkerPodShape shape = new WorkerPodShape(true, "2", "10Gi", "workers-sa", "regcred", 214818L, 99L, 99L,
+                java.util.Map.of("app", "jmeter-worker"), "-Xmx1g -XX:+UseG1GC");
+        provisioner = new K8sPodProvisioner(client, hosted(shape));
+        provisioner.createAndStart(spec("payments-us-east-1-worker-2"));
+        Pod pod = client.pods().inNamespace(NS).withName("payments-us-east-1-worker-2").get();
+        var c = pod.getSpec().getContainers().get(0);
+        assertThat(c.getResources().getLimits().get("cpu").toString()).isEqualTo("2");
+        assertThat(c.getResources().getRequests().get("ephemeral-storage")).isEqualTo(c.getResources().getLimits().get("ephemeral-storage"));
+        assertThat(c.getResources().getLimits().get("ephemeral-storage").toString()).isEqualTo("10Gi");
+        assertThat(pod.getSpec().getServiceAccountName()).isEqualTo("workers-sa");
+        assertThat(pod.getSpec().getAutomountServiceAccountToken()).isFalse();
+        assertThat(pod.getSpec().getImagePullSecrets()).extracting("name").containsExactly("regcred");
+        assertThat(pod.getSpec().getSecurityContext().getRunAsUser()).isEqualTo(214818L);
+        assertThat(pod.getSpec().getSecurityContext().getRunAsNonRoot()).isTrue();
+        assertThat(pod.getMetadata().getLabels()).containsEntry("app", "jmeter-worker")
+                .containsEntry(ProvisionerProperties.LABEL_MANAGED_BY, "regional-orchestrator");
+        assertThat(c.getEnv().stream().filter(e -> e.getName().equals("JAVA_OPTS")).findFirst().orElseThrow().getValue())
+                .isEqualTo("-Xmx1g -XX:+UseG1GC");
+    }
+
+    @Test
+    @DisplayName("a hard-zero quota shape omits cpu and memory entirely")
+    void hardZeroQuotaShape() {
+        WorkerPodShape shape = new WorkerPodShape(false, null, "1Gi", null, null, null, null, null, java.util.Map.of(), null);
+        provisioner = new K8sPodProvisioner(client, hosted(shape));
+        provisioner.createAndStart(spec("payments-us-east-1-worker-3"));
+        var c = client.pods().inNamespace(NS).withName("payments-us-east-1-worker-3").get().getSpec().getContainers().get(0);
+        assertThat(c.getResources().getRequests()).containsOnlyKeys("ephemeral-storage");
+        assertThat(c.getResources().getLimits()).containsOnlyKeys("ephemeral-storage");
+    }
+
+    @Test
+    @DisplayName("capacity: the tightest quota dimension bounds workersFree; an exhausted quota refuses the spin before the API is asked")
+    void capacityGuard() {
+        assertThat(provisioner.capacity()).isEqualTo(NamespaceCapacity.UNBOUNDED);
+        // pods: 3 of 5 used → 2 free; memory: 20 GiB hard, 2 GiB used → 18 GiB → 3 workers of 6 GiB; cpu unbounded.
+        client.resourceQuotas().inNamespace(NS).resource(new io.fabric8.kubernetes.api.model.ResourceQuotaBuilder()
+                .withNewMetadata().withName("default").endMetadata()
+                .withNewStatus()
+                    .addToHard("pods", new io.fabric8.kubernetes.api.model.Quantity("5"))
+                    .addToHard("requests.memory", new io.fabric8.kubernetes.api.model.Quantity("20Gi"))
+                    .addToUsed("pods", new io.fabric8.kubernetes.api.model.Quantity("3"))
+                    .addToUsed("requests.memory", new io.fabric8.kubernetes.api.model.Quantity("2Gi"))
+                .endStatus().build()).create();
+        NamespaceCapacity c = provisioner.capacity();
+        assertThat(c.podsFree()).isEqualTo(2);
+        assertThat(c.memoryFreeMi()).isEqualTo(18L * 1024);
+        assertThat(c.cpuFreeMillis()).isNull();
+        assertThat(c.workersFree()).isEqualTo(2);
+        provisioner.createAndStart(spec("payments-us-east-1-worker-4"));   // fits
+
+        client.resourceQuotas().inNamespace(NS).withName("default").edit(q -> new io.fabric8.kubernetes.api.model.ResourceQuotaBuilder(q)
+                .editStatus().addToUsed("pods", new io.fabric8.kubernetes.api.model.Quantity("5")).endStatus().build());
+        assertThat(provisioner.capacity().workersFree()).isZero();
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> provisioner.createAndStart(spec("payments-us-east-1-worker-5")))
+                .isInstanceOf(CapacityExhaustedException.class)
+                .hasMessageContaining("pods=0");
+        assertThat(client.pods().inNamespace(NS).withName("payments-us-east-1-worker-5").get()).isNull();
+        client.resourceQuotas().inNamespace(NS).withName("default").delete();
     }
 }

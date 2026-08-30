@@ -1,6 +1,10 @@
 package com.perf.regionalorchestrator.provision;
 
 import io.fabric8.kubernetes.api.model.EnvVar;
+import io.fabric8.kubernetes.api.model.LocalObjectReference;
+import io.fabric8.kubernetes.api.model.PodSecurityContext;
+import io.fabric8.kubernetes.api.model.ResourceQuota;
+import io.fabric8.kubernetes.api.model.ResourceRequirements;
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.PodBuilder;
 import io.fabric8.kubernetes.api.model.Quantity;
@@ -74,11 +78,13 @@ public class K8sPodProvisioner implements PodProvisioner {
         Pod existing = getPod(spec.podName());
         Pod pod;
         if (existing == null) {
+            checkCapacity();
             pod = create(buildPod(spec));
         } else if (isTerminal(existing)) {
             // A terminal bare Pod can't be restarted in place — recreate.
             LOG.info("Pod {} exists in terminal phase {}; recreating", spec.podName(), phase(existing));
             deleteAndAwait(spec.podName());
+            checkCapacity();
             pod = create(buildPod(spec));
         } else {
             LOG.info("Pod {} already exists (phase {}); reusing", spec.podName(), phase(existing));
@@ -273,36 +279,72 @@ public class K8sPodProvisioner implements PodProvisioner {
         create(buildPod(spec));
     }
 
+    /**
+     * The worker Pod spec: labels the hub selects on (+ the platform's extra
+     * labels), the headless-DNS identity, the three-probe pattern (startup +
+     * readiness on {@code /actuator/health} — the worker is usable only once
+     * its ingest probe is green; liveness on {@code /actuator/keepalive} — the
+     * process only), and whatever resources / security context the platform's
+     * quota and LimitRange dictate ({@link WorkerPodShape}). The SA token is
+     * never mounted: workers do not call the cluster API.
+     */
     private Pod buildPod(PodSpec spec) {
+        WorkerPodShape shape = props.shape();
         List<EnvVar> env = buildEnv(spec).entrySet().stream()
                 .map(e -> new EnvVar(e.getKey(), e.getValue(), null))
                 .collect(Collectors.toList());
+        Map<String, String> labels = new LinkedHashMap<>(shape.extraLabels());
+        labels.put(ProvisionerProperties.LABEL_APPLICATION_ID,   spec.applicationId());
+        labels.put(ProvisionerProperties.LABEL_APPLICATION_NAME, spec.applicationName());
+        labels.put(ProvisionerProperties.LABEL_REGION,           spec.region());
+        labels.put(ProvisionerProperties.LABEL_ROLE,             ProvisionerProperties.ROLE_LOCAL_ORCHESTRATOR);
+        labels.put(ProvisionerProperties.LABEL_MANAGED_BY,       ProvisionerProperties.MANAGED_BY);
 
-        Map<String, String> labels = Map.of(
-                ProvisionerProperties.LABEL_APPLICATION_ID,   spec.applicationId(),
-                ProvisionerProperties.LABEL_APPLICATION_NAME, spec.applicationName(),
-                ProvisionerProperties.LABEL_REGION,           spec.region(),
-                ProvisionerProperties.LABEL_ROLE,             ProvisionerProperties.ROLE_LOCAL_ORCHESTRATOR,
-                ProvisionerProperties.LABEL_MANAGED_BY,       ProvisionerProperties.MANAGED_BY);
+        ResourceRequirements resources = new ResourceRequirements();
+        Map<String, Quantity> requests = new LinkedHashMap<>();
+        Map<String, Quantity> limits = new LinkedHashMap<>();
+        if (shape.cpuMemoryResources()) {
+            Quantity memory = new Quantity(props.workerMemoryMb() + "Mi");
+            requests.put("memory", memory);
+            limits.put("memory", memory);
+            requests.put("cpu", new Quantity(props.workerCpuRequest()));
+            if (shape.workerCpuLimit() != null) {
+                limits.put("cpu", new Quantity(shape.workerCpuLimit()));
+            }
+        }
+        if (shape.ephemeralStorage() != null) {
+            Quantity eph = new Quantity(shape.ephemeralStorage());
+            requests.put("ephemeral-storage", eph);
+            limits.put("ephemeral-storage", eph);
+        }
+        resources.setRequests(requests);
+        resources.setLimits(limits);
 
-        Quantity memory = new Quantity(props.workerMemoryMb() + "Mi");
+        PodSecurityContext securityContext = null;
+        if (shape.hasSecurityContext()) {
+            securityContext = new PodSecurityContext();
+            securityContext.setRunAsNonRoot(true);
+            securityContext.setRunAsUser(shape.runAsUser());
+            securityContext.setRunAsGroup(shape.runAsGroup());
+            securityContext.setFsGroup(shape.fsGroup());
+        }
+        List<LocalObjectReference> pullSecrets = shape.imagePullSecret() == null
+                ? List.of() : List.of(new LocalObjectReference(shape.imagePullSecret()));
 
+        int port = props.localOrchestratorPort();
         return new PodBuilder()
                 .withNewMetadata()
                     .withName(spec.podName())
                     .withLabels(labels)
                 .endMetadata()
                 .withNewSpec()
-                    // Kubelet service-link env injection (REDIS_PORT=tcp://...)
-                    // collides with the env-var names the local-orch and its
-                    // Spring relaxed binding read. Workers discover everything
-                    // via DNS + the explicit env below.
                     .withEnableServiceLinks(false)
-                    // Stable DNS via the headless Service.
+                    .withAutomountServiceAccountToken(false)
+                    .withServiceAccountName(shape.serviceAccountName())
+                    .withImagePullSecrets(pullSecrets)
+                    .withSecurityContext(securityContext)
                     .withHostname(spec.podName())
                     .withSubdomain(props.headlessService())
-                    // Lifecycle is control-plane-owned; a kubelet restart
-                    // would resurrect a worker the recycler means to drain.
                     .withRestartPolicy("Never")
                     .withTerminationGracePeriodSeconds(DELETE_GRACE_SECONDS)
                     .addNewContainer()
@@ -310,31 +352,91 @@ public class K8sPodProvisioner implements PodProvisioner {
                         .withImage(props.image())
                         .withEnv(env)
                         .addNewPort()
-                            .withContainerPort(props.localOrchestratorPort())
+                            .withContainerPort(port)
                             .withName("http")
                         .endPort()
-                        .withNewResources()
-                            // requests == limits: the worker's memory use is
-                            // real (two JVMs + page cache); reserving less
-                            // just invites node-level OOM under co-tenancy.
-                            .addToRequests("memory", memory)
-                            .addToLimits("memory", memory)
-                            // CPU: request-only — a cfs-throttled load
-                            // generator measures its own throttling, not
-                            // the SUT.
-                            .addToRequests("cpu", new Quantity(props.workerCpuRequest()))
-                        .endResources()
+                        .withResources(resources)
+                        .withNewStartupProbe()
+                            .withNewHttpGet().withPath("/actuator/health").withNewPort(port).endHttpGet()
+                            .withPeriodSeconds(5).withTimeoutSeconds(5).withFailureThreshold(36)   // 180 s: image pull + JVM
+                        .endStartupProbe()
                         .withNewReadinessProbe()
-                            .withNewHttpGet()
-                                .withPath("/actuator/health")
-                                .withNewPort(props.localOrchestratorPort())
-                            .endHttpGet()
-                            .withInitialDelaySeconds(5)
-                            .withPeriodSeconds(5)
+                            .withNewHttpGet().withPath("/actuator/health").withNewPort(port).endHttpGet()
+                            .withPeriodSeconds(5).withTimeoutSeconds(5).withFailureThreshold(3)
                         .endReadinessProbe()
+                        .withNewLivenessProbe()
+                            .withNewHttpGet().withPath("/actuator/keepalive").withNewPort(port).endHttpGet()
+                            .withPeriodSeconds(10).withTimeoutSeconds(5).withFailureThreshold(3)
+                        .endLivenessProbe()
                     .endContainer()
                 .endSpec()
                 .build();
+    }
+
+    // ── Namespace-quota capacity guard (Track 8) ─────────────────────────
+
+    /**
+     * Refuses a spin the namespace's {@code ResourceQuota}s cannot admit —
+     * before the API server is asked, so the run fails with the quota's
+     * numbers instead of a Pod that sits Pending. Only dimensions a quota
+     * bounds are checked; a namespace without quotas is unbounded.
+     */
+    void checkCapacity() {
+        NamespaceCapacity c = capacity();
+        if (c.workersFree() != null && c.workersFree() < 1) {
+            throw new CapacityExhaustedException("namespace " + props.namespace()
+                    + " cannot admit another worker — quota headroom: pods=" + c.podsFree()
+                    + ", memoryMi=" + c.memoryFreeMi() + ", cpuMillis=" + c.cpuFreeMillis()
+                    + " (worker needs " + (props.shape().cpuMemoryResources()
+                            ? props.workerMemoryMb() + "Mi, " + props.workerCpuRequest() + " cpu" : "no cpu/memory") + ")");
+        }
+    }
+
+    @Override
+    public NamespaceCapacity capacity() {
+        List<ResourceQuota> quotas = k8s.resourceQuotas().inNamespace(props.namespace()).list().getItems();
+        Long podsFree = null, memFree = null, cpuFree = null;
+        for (ResourceQuota q : quotas) {
+            if (q.getStatus() == null || q.getStatus().getHard() == null) continue;
+            Map<String, Quantity> hard = q.getStatus().getHard();
+            Map<String, Quantity> used = q.getStatus().getUsed() == null ? Map.of() : q.getStatus().getUsed();
+            for (String key : List.of("pods", "count/pods")) {
+                if (hard.containsKey(key)) podsFree = tighter(podsFree, headroom(hard, used, key).longValue());
+            }
+            if (props.shape().cpuMemoryResources()) {
+                for (String key : List.of("requests.memory", "limits.memory")) {
+                    if (hard.containsKey(key)) memFree = tighter(memFree, headroom(hard, used, key).divide(MI, 0, java.math.RoundingMode.DOWN).longValue());
+                }
+                for (String key : List.of("requests.cpu", "limits.cpu")) {
+                    if (hard.containsKey(key)) cpuFree = tighter(cpuFree, headroom(hard, used, key).multiply(THOUSAND).longValue());
+                }
+            }
+        }
+        Integer workersFree = null;
+        if (podsFree != null) workersFree = (int) Math.max(0, podsFree);
+        if (memFree != null) {
+            long fit = Math.max(0, memFree / Math.max(1, props.workerMemoryMb()));
+            workersFree = workersFree == null ? (int) fit : (int) Math.min(workersFree, fit);
+        }
+        if (cpuFree != null) {
+            long perWorker = Math.max(1, Quantity.getAmountInBytes(new Quantity(props.workerCpuRequest())).multiply(THOUSAND).longValue());
+            long fit = Math.max(0, cpuFree / perWorker);
+            workersFree = workersFree == null ? (int) fit : (int) Math.min(workersFree, fit);
+        }
+        return new NamespaceCapacity(podsFree == null ? null : (int) Math.max(0, podsFree), memFree, cpuFree, workersFree);
+    }
+
+    private static final java.math.BigDecimal MI = java.math.BigDecimal.valueOf(1024L * 1024L);
+    private static final java.math.BigDecimal THOUSAND = java.math.BigDecimal.valueOf(1000L);
+
+    private static java.math.BigDecimal headroom(Map<String, Quantity> hard, Map<String, Quantity> used, String key) {
+        java.math.BigDecimal h = Quantity.getAmountInBytes(hard.get(key));
+        java.math.BigDecimal u = used.containsKey(key) ? Quantity.getAmountInBytes(used.get(key)) : java.math.BigDecimal.ZERO;
+        return h.subtract(u);
+    }
+
+    private static Long tighter(Long current, long candidate) {
+        return current == null ? candidate : Math.min(current, candidate);
     }
 
     private Map<String, String> buildEnv(PodSpec spec) {
@@ -353,6 +455,9 @@ public class K8sPodProvisioner implements PodProvisioner {
         // on it, so the worker never registers or heartbeats — the Pod list is
         // the hub's liveness truth. Workers POST straight to the metrics-consumer.
         e.put("METRICS_INGEST_URL",      props.metricsIngestUrl());
+        if (props.metricsIngestAuth() != null) {
+            e.put("METRICS_INGEST_AUTH", props.metricsIngestAuth());
+        }
         // Aggregator late-arrival grace (seconds). Set
         // here so the local-orch boots with it AND forwards it to every per-run
         // config (TestRunManager.buildPerRunConfig); a per-run POST /test
@@ -375,6 +480,9 @@ public class K8sPodProvisioner implements PodProvisioner {
         e.put("RUN_ID",                  "placeholder-pre-first-run");
         if (props.jmeterJvmArgs() != null) {
             e.put("JMETER_JVM_ARGS",     props.jmeterJvmArgs());
+        }
+        if (props.shape().workerJavaOpts() != null) {
+            e.put("JAVA_OPTS",           props.shape().workerJavaOpts());   // the orchestrator JVM (image ENTRYPOINT honours it)
         }
         // Tomcat.
         e.put("HTTP_BIND_ADDRESS",       "0.0.0.0");

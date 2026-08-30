@@ -64,4 +64,13 @@ public interface PodProvisioner {
 
     /** The URL the pod is reachable at inside its region, valid before the pod exists. */
     String baseUrlFor(String region, String podName);
+
+    /**
+     * Workers the region can still admit under its namespace quota, as last
+     * reported by its {@code /api/v1/capabilities}; {@code null} = unbounded or
+     * unknown. The spin path refuses a shortfall larger than this up front.
+     */
+    default Integer availableWorkers(String region) {
+        return null;
+    }
 }

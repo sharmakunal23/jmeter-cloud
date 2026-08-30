@@ -112,6 +112,6 @@ class PodRecyclerTest {
 
     private Application app(RecyclePolicy policy) {
         return new Application("appId", "demo", null, null, List.of(),
-                null, NOW, null, null, null, policy, null, null, false);
+                null, NOW, null, null, null, policy, null, null, false, null, null);
     }
 }

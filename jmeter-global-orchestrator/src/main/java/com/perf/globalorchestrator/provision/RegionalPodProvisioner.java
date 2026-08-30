@@ -103,6 +103,11 @@ public class RegionalPodProvisioner implements PodProvisioner {
     }
 
     @Override
+    public Integer availableWorkers(String region) {
+        return regions.capabilitiesOf(region).map(RegionCapabilities::workersFree).orElse(null);
+    }
+
+    @Override
     public String currentImageDigest(String region) {
         return regions.capabilitiesOf(region).map(RegionCapabilities::image).orElse(null);
     }
