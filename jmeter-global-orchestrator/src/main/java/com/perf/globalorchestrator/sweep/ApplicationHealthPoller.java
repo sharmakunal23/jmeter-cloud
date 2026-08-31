@@ -6,6 +6,7 @@ import com.perf.globalorchestrator.domain.ApplicationHealthHistory;
 import com.perf.globalorchestrator.domain.Ulid;
 import com.perf.globalorchestrator.repo.ApplicationHealthHistoryRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
+import com.perf.globalorchestrator.service.HealthProbe;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -51,16 +52,14 @@ public class ApplicationHealthPoller {
 
     private final ApplicationRepository repo;
     private final ApplicationHealthHistoryRepository historyRepo;
-    private final HttpClient http;
+    private final HealthProbe probe;
 
     public ApplicationHealthPoller(ApplicationRepository repo,
-                                   ApplicationHealthHistoryRepository historyRepo) {
+                                   ApplicationHealthHistoryRepository historyRepo,
+                                   HealthProbe probe) {
         this.repo = repo;
         this.historyRepo = historyRepo;
-        this.http = HttpClient.newBuilder()
-                .connectTimeout(PER_REQUEST_TIMEOUT)
-                .followRedirects(HttpClient.Redirect.NEVER)
-                .build();
+        this.probe = probe;
     }
 
     /**
@@ -105,7 +104,7 @@ public class ApplicationHealthPoller {
                 continue;
             }
             try {
-                List<Map<String, Object>> details = checkEndpoints(app.healthEndpoints());
+                List<Map<String, Object>> details = probe.probeAll(app.healthEndpoints(), PER_REQUEST_TIMEOUT);
                 HealthStatus status = aggregateStatus(details);
                 repo.updateHealth(app.applicationId(), status, Instant.now(), details);
                 recordTransitionIfChanged(app, status);
@@ -122,61 +121,7 @@ public class ApplicationHealthPoller {
         }
     }
 
-    private List<Map<String, Object>> checkEndpoints(List<String> urls) {
-        List<Map<String, Object>> out = new java.util.ArrayList<>(urls.size());
-        for (String url : urls) {
-            out.add(probe(url));
-        }
-        return out;
-    }
-
-    private Map<String, Object> probe(String url) {
-        Instant started = Instant.now();
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("url", url);
-        try {
-            HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .timeout(PER_REQUEST_TIMEOUT)
-                    .GET()
-                    .header("User-Agent", "jmeter-cloud/ApplicationHealthPoller")
-                    .build();
-            HttpResponse<Void> resp = http.send(req, HttpResponse.BodyHandlers.discarding());
-            long latency = Duration.between(started, Instant.now()).toMillis();
-            int code = resp.statusCode();
-            boolean ok = code >= 200 && code < 300;
-            result.put("statusCode", code);
-            result.put("latencyMs", latency);
-            result.put("ok", ok);
-            if (!ok) {
-                result.put("error", "non-2xx status " + code);
-            }
-        } catch (Exception e) {
-            long latency = Duration.between(started, Instant.now()).toMillis();
-            result.put("statusCode", null);
-            result.put("latencyMs", latency);
-            result.put("ok", false);
-            result.put("error", e.getClass().getSimpleName() + ": " + nullToBlank(e.getMessage()));
-            // InterruptedException etiquette — re-set the interrupt flag.
-            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
-        }
-        return result;
-    }
-
     static HealthStatus aggregateStatus(List<Map<String, Object>> details) {
-        if (details == null || details.isEmpty()) return HealthStatus.UNKNOWN;
-        int oks = 0;
-        int fails = 0;
-        for (Map<String, Object> d : details) {
-            if (Boolean.TRUE.equals(d.get("ok"))) oks++;
-            else fails++;
-        }
-        if (oks == details.size()) return HealthStatus.HEALTHY;
-        if (oks == 0) return HealthStatus.UNHEALTHY;
-        return HealthStatus.DEGRADED;
-    }
-
-    private static String nullToBlank(String s) {
-        return s == null ? "" : s;
+        return HealthProbe.aggregate(details);
     }
 }

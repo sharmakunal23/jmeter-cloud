@@ -15,6 +15,7 @@ import com.perf.globalorchestrator.domain.RunEventType;
 import com.perf.globalorchestrator.domain.RunFleetMember;
 import com.perf.globalorchestrator.domain.RunState;
 import com.perf.globalorchestrator.domain.Ulid;
+import com.perf.globalorchestrator.domain.WorkflowOrigin;
 import com.perf.globalorchestrator.http.FleetAllocationEntry;
 import com.perf.globalorchestrator.http.ScaleDownRunRequest;
 import com.perf.globalorchestrator.http.ScaleDownRunResponse;
@@ -193,15 +194,26 @@ public class RunService {
     }
 
     public Run startRun(StartRunRequest request, boolean bestEffort, Actor actor) {
+        return startRun(request, bestEffort, actor, null);
+    }
+
+    /**
+     * As {@link #startRun(StartRunRequest, boolean, Actor)}, stamping the
+     * workflow task the run belongs to. {@code origin} is a separate argument
+     * rather than a request field so no API caller can forge one; its task id
+     * is unique across {@code ORCH_RUN}, so a second launch for one task fails
+     * on the index instead of doubling the fleet.
+     */
+    public Run startRun(StartRunRequest request, boolean bestEffort, Actor actor, WorkflowOrigin origin) {
         validate(request);
         StartTransactionResult started;
         try {
-            started = self.openRunAndClaimPods(request, bestEffort, actor, null);
+            started = self.openRunAndClaimPods(request, bestEffort, actor, null, origin);
         } catch (InsufficientCapacityException shortfallEx) {
             if (!request.isSpinShortfall() || spinService == null) {
                 throw shortfallEx; // strict mode (or no provisioner wired) — propagate
             }
-            return launchAsync(request, bestEffort, actor, shortfallEx.shortfall());
+            return launchAsync(request, bestEffort, actor, shortfallEx.shortfall(), origin);
         }
         return completeLaunch(started, request);
     }
@@ -249,7 +261,7 @@ public class RunService {
      * claiming and stands down if it is no longer PREPARING.
      */
     private Run launchAsync(StartRunRequest request, boolean bestEffort, Actor actor,
-                            Map<String, RegionShortfall> shortfall) {
+                            Map<String, RegionShortfall> shortfall, WorkflowOrigin origin) {
         String runId = Ulid.generate();
         Instant now = Instant.now();
         int total = shortfall.values().stream().mapToInt(g -> g.requested() - g.claimed()).sum();
@@ -261,16 +273,18 @@ public class RunService {
                 (request.initiatedBy() != null && !request.initiatedBy().isBlank()) ? request.initiatedBy() : actor.name(),
                 RunState.PREPARING, reason, now, null, null,
                 request.isSaveResults(), List.of(), metricsGroupOf(request.application()),
-                resolvePlugins(request.pluginIds()));
+                resolvePlugins(request.pluginIds()),
+                origin == null ? null : origin.executionId(),
+                origin == null ? null : origin.taskId());
         runs.insertRun(preparing);
         runs.updateRunState(runId, RunState.PREPARING, reason);
         LOG.info("run {} PREPARING — {}", runId, reason);
-        launchPool.submit(() -> provisionThenLaunch(runId, request, bestEffort, actor, shortfall, total));
+        launchPool.submit(() -> provisionThenLaunch(runId, request, bestEffort, actor, shortfall, total, origin));
         return runs.findByRunId(runId).orElseThrow();
     }
 
     private void provisionThenLaunch(String runId, StartRunRequest request, boolean bestEffort, Actor actor,
-                                     Map<String, RegionShortfall> shortfall, int total) {
+                                     Map<String, RegionShortfall> shortfall, int total, WorkflowOrigin origin) {
         try {
             spinToFillShortfall(request.application(), shortfall,
                     ready -> runs.updateRunState(runId, RunState.PREPARING, provisioningReason(total, ready, shortfall)));
@@ -279,7 +293,7 @@ public class RunService {
                 LOG.info("run {} left PREPARING ({}) while provisioning — not launching", runId, current.state());
                 return;
             }
-            StartTransactionResult started = self.openRunAndClaimPods(request, bestEffort, actor, runId);
+            StartTransactionResult started = self.openRunAndClaimPods(request, bestEffort, actor, runId, origin);
             completeLaunch(started, request);
         } catch (RunNotPreparingException gone) {
             LOG.info("run {} was aborted while its workers were provisioned — claim rolled back", runId);
@@ -568,7 +582,7 @@ public class RunService {
      */
     @Transactional("transactionManager")
     protected StartTransactionResult openRunAndClaimPods(StartRunRequest request, boolean bestEffort, Actor actor) {
-        return openRunAndClaimPods(request, bestEffort, actor, null);
+        return openRunAndClaimPods(request, bestEffort, actor, null, null);
     }
 
     /**
@@ -577,7 +591,7 @@ public class RunService {
      */
     @Transactional("transactionManager")
     protected StartTransactionResult openRunAndClaimPods(StartRunRequest request, boolean bestEffort, Actor actor,
-                                                         String existingRunId) {
+                                                         String existingRunId, WorkflowOrigin origin) {
         List<FleetAllocationEntry> allocation = resolveAllocation(request);
         // Resolve BEFORE any claim so an unknown pluginId rejects the launch
         // with 400 while nothing is held; the resolved refs are the run's
@@ -722,7 +736,9 @@ public class RunService {
                 request.isSaveResults(),
                 List.of(),
                 metricsGroupOf(request.application()),
-                plugins);
+                plugins,
+                origin == null ? null : origin.executionId(),
+                origin == null ? null : origin.taskId());
         if (existingRunId == null) {
             runs.insertRun(run);
         }

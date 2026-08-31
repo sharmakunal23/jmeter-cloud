@@ -35,17 +35,26 @@ public class SmtpEmailSender implements EmailSender {
     }
 
     @Override
-    public void send(List<String> recipients, String subject, String htmlBody) {
+    public void send(EmailMessage message) {
+        if (!message.hasRecipients()) {
+            throw new EmailException("no recipients: nothing to send '" + message.subject() + "' to", null);
+        }
         try {
             MimeMessage msg = mail.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(msg, false, "UTF-8");
             helper.setFrom(from);
-            helper.setTo(recipients.toArray(new String[0]));
-            helper.setSubject(subject);
-            helper.setText(htmlBody, true);
+            if (!message.to().isEmpty())  helper.setTo(message.to().toArray(new String[0]));
+            if (!message.cc().isEmpty())  helper.setCc(message.cc().toArray(new String[0]));
+            if (!message.bcc().isEmpty()) helper.setBcc(message.bcc().toArray(new String[0]));
+            helper.setSubject(message.subject());
+            helper.setText(message.htmlBody(), true);
             mail.send(msg);
+        } catch (EmailException e) {
+            throw e;
         } catch (Exception e) {
-            throw new EmailException("SMTP send to " + recipients + " failed: " + e.getMessage(), e);
+            // Bcc stays out of the message: an exception string is logged, and a
+            // blind-copied address must not surface in a log line.
+            throw new EmailException("SMTP send to " + message.to() + " failed: " + e.getMessage(), e);
         }
     }
 

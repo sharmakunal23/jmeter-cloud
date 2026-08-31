@@ -14,7 +14,39 @@ import java.util.List;
 public interface EmailSender {
 
     /** Send one HTML email to all recipients. Throws {@link EmailException} on failure. */
-    void send(List<String> recipients, String subject, String htmlBody);
+    default void send(List<String> recipients, String subject, String htmlBody) {
+        send(new EmailMessage(recipients, List.of(), List.of(), subject, htmlBody));
+    }
+
+    /** Send one HTML email with carbon copies. Throws {@link EmailException} on failure. */
+    void send(EmailMessage message);
+
+    /**
+     * One addressed message. At least one of {@code to} / {@code cc} /
+     * {@code bcc} must be non-empty — a message with no recipient at all is a
+     * misconfigured workflow, not a silent no-op.
+     */
+    record EmailMessage(List<String> to, List<String> cc, List<String> bcc, String subject, String htmlBody) {
+
+        public EmailMessage {
+            to  = to  == null ? List.of() : List.copyOf(to);
+            cc  = cc  == null ? List.of() : List.copyOf(cc);
+            bcc = bcc == null ? List.of() : List.copyOf(bcc);
+        }
+
+        public boolean hasRecipients() {
+            return !to.isEmpty() || !cc.isEmpty() || !bcc.isEmpty();
+        }
+
+        /** Every address the message reaches — for logs and the task's recorded result. */
+        public List<String> allRecipients() {
+            List<String> all = new java.util.ArrayList<>(to.size() + cc.size() + bcc.size());
+            all.addAll(to);
+            all.addAll(cc);
+            all.addAll(bcc);
+            return List.copyOf(all);
+        }
+    }
 
     /** A short label ("smtp" / "ses") for logs + the report preview. */
     String backend();
