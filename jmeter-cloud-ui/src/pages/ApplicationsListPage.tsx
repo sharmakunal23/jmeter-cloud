@@ -101,7 +101,7 @@ export function ApplicationsListPage() {
   }, [state, search]);
   const groups = state.status === "ok" ? state.groups : [];
 
-  const { page, setPage, pageItems, total, pageSize } = useClientPagination(filteredApps, search);
+  const { page, setPage, pageItems, total, pageSize, setPageSize } = useClientPagination(filteredApps, search);
 
   return (
     <section className="applicationsListPage">
@@ -202,7 +202,7 @@ export function ApplicationsListPage() {
       )}
 
       {state.status === "ok" && filteredApps.length > 0 && (
-        <Paginator page={page} pageSize={pageSize} total={total} label="applications" onChange={setPage} />
+        <Paginator page={page} pageSize={pageSize} total={total} label="applications" onChange={setPage} onPageSizeChange={setPageSize} />
       )}
         </>
       )}
@@ -245,7 +245,7 @@ function ArchivedApplicationsView() {
   const [purgeApp, setPurgeApp] = useState<Application | null>(null);
   const { toast, showToast, dismiss } = useToast();
   const archivedApps = state.status === "ok" ? state.apps : [];
-  const { page, setPage, pageItems, total, pageSize } = useClientPagination(archivedApps);
+  const { page, setPage, pageItems, total, pageSize, setPageSize } = useClientPagination(archivedApps);
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -311,7 +311,7 @@ function ArchivedApplicationsView() {
       )}
 
       {state.status === "ok" && state.apps.length > 0 && (
-        <Paginator page={page} pageSize={pageSize} total={total} label="archived applications" onChange={setPage} />
+        <Paginator page={page} pageSize={pageSize} total={total} label="archived applications" onChange={setPage} onPageSizeChange={setPageSize} />
       )}
 
       {purgeApp && (

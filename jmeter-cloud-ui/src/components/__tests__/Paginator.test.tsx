@@ -50,6 +50,22 @@ describe("Paginator", () => {
     expect(count).toHaveTextContent("Showing 26–50 of 100 runs");
   });
 
+  it("singularizes the count label at exactly one item", () => {
+    render(<Paginator page={1} pageSize={10} total={1} label="applications" onChange={vi.fn()} />);
+    expect(screen.getByText("1 application")).toBeInTheDocument();
+  });
+
+  it("renders the rows-per-page picker only when onPageSizeChange is given, and fires it", () => {
+    const onPageSizeChange = vi.fn();
+    const { rerender } = render(
+      <Paginator page={1} pageSize={10} total={30} label="runs" onChange={vi.fn()} onPageSizeChange={onPageSizeChange} />,
+    );
+    fireEvent.change(screen.getByLabelText("rows per page"), { target: { value: "50" } });
+    expect(onPageSizeChange).toHaveBeenCalledWith(50);
+    rerender(<Paginator page={1} pageSize={10} total={30} label="runs" onChange={vi.fn()} />);
+    expect(screen.queryByLabelText("rows per page")).toBeNull();
+  });
+
   it("clamps page out-of-range upwards", () => {
     // page=99 against 4-page total → should still render & treat as last page
     render(<Paginator page={99} pageSize={25} total={100} onChange={vi.fn()} />);

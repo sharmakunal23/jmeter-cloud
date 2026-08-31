@@ -143,7 +143,7 @@ export function CapacityListPage() {
     return sorted;
   }, [state, search, sortKey, sortDir]);
 
-  const { page, setPage, pageItems, total, pageSize } =
+  const { page, setPage, pageItems, total, pageSize, setPageSize } =
     useClientPagination(sortedFiltered, `${search}|${sortKey}|${sortDir}`);
 
   function toggleSort(key: SortKey) {
@@ -251,7 +251,7 @@ export function CapacityListPage() {
       )}
 
       {!loading && sortedFiltered.length > 0 && (
-        <Paginator page={page} pageSize={pageSize} total={total} label="groups" onChange={setPage} />
+        <Paginator page={page} pageSize={pageSize} total={total} label="groups" onChange={setPage} onPageSizeChange={setPageSize} />
       )}
 
       {reconcileOpen && (

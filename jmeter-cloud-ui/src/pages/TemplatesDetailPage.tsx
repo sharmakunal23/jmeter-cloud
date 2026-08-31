@@ -75,7 +75,7 @@ export function TemplatesDetailPage() {
   }, [refreshTemplates]);
 
   const allTemplates = templates.status === "ok" ? templates.templates : [];
-  const { page, setPage, pageItems, total, pageSize } = useClientPagination(allTemplates, appNameParam);
+  const { page, setPage, pageItems, total, pageSize, setPageSize } = useClientPagination(allTemplates, appNameParam);
 
   async function confirmDelete() {
     if (!pendingDelete) return;
@@ -151,7 +151,7 @@ export function TemplatesDetailPage() {
             app={app}
             onDelete={(t) => setPendingDelete(t)}
           />
-          <Paginator page={page} pageSize={pageSize} total={total} label="templates" onChange={setPage} />
+          <Paginator page={page} pageSize={pageSize} total={total} label="templates" onChange={setPage} onPageSizeChange={setPageSize} />
         </>
       )}
 

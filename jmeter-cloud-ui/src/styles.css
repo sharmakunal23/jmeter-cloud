@@ -155,8 +155,19 @@ h4 { font-size: var(--fs-sm); }
 }
 .brandMark--lg { width: 1.8rem; height: 1.8rem; }
 
-/* ── App footer — team signature, site-wide (Layout wraps every route) ── */
+/* ── App footer — team signature, dock-style auto-reveal ──────────────
+   Fixed overlay, hidden below the viewport until Layout flips
+   .appFooter--visible when the cursor nears the bottom edge (macOS-Dock
+   behaviour). Sits UNDER the modal overlay (100) and toasts (1000); the
+   toast offset still keys off --footer-height. */
 .appFooter {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 90;
+  transform: translateY(100%);
+  transition: transform 180ms ease;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -170,6 +181,13 @@ h4 { font-size: var(--fs-sm); }
   background: var(--surface);
   font-size: var(--fs-sm);
   color: var(--ink-soft);
+}
+.appFooter--visible {
+  transform: translateY(0);
+  box-shadow: 0 -6px 18px rgba(15, 23, 42, 0.10);
+}
+@media (prefers-reduced-motion: reduce) {
+  .appFooter { transition: none; }
 }
 .appFooter__brand {
   display: inline-flex;
@@ -1416,7 +1434,12 @@ button.appDetailChip:disabled {
 
 /* ── UI-D3 Paginator ──────────────────────────────────────────────── */
 
+/* Sticky at the viewport bottom so the count/controls bar never drifts down
+   as the list grows; the surface + shadow keep rows legible sliding under. */
 .paginator {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1427,10 +1450,23 @@ button.appDetailChip:disabled {
   border: 1px solid var(--border, #e5e7eb);
   border-radius: 8px;
   background: var(--surface, #fff);
+  box-shadow: 0 -2px 8px rgba(15, 23, 42, 0.04);
   font-size: 0.85rem;
 }
-.paginator--single { justify-content: flex-end; color: var(--ink-soft, #6b7280); }
+.paginator--single { justify-content: flex-end; color: var(--ink-soft, #6b7280); gap: 1rem; }
 .paginator__count { color: var(--ink-soft, #6b7280); }
+.paginator__size {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--ink-soft, #6b7280);
+  white-space: nowrap;
+}
+.paginator__sizeSelect {
+  width: auto;
+  padding: 0.2rem 1.5rem 0.2rem 0.5rem;
+  font-size: 0.85rem;
+}
 .paginator__controls {
   display: inline-flex;
   align-items: center;
@@ -2739,6 +2775,10 @@ button.appDetailChip:disabled {
    map) and the chart modal keep their own sizes further down. */
 .modal--confirm { max-width: 42rem; }
 .modal--form    { max-width: 56rem; }
+
+/* Tabbed modals hold a FIXED body height (scrolls internally) so toggling
+   tabs never resizes the dialog — Manage groups is the reference. */
+.groupsModal .modal__body { height: min(34rem, calc(100vh - 12rem)); }
 
 .modal__titleRow {
   display: flex;

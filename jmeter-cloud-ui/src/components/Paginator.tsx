@@ -1,11 +1,13 @@
+import { LIST_PAGE_SIZE_OPTIONS } from "../hooks/useClientPagination";
+
 /**
- * URL-driven paginator. Drives the Applications-detail runs
- * list and is intended to be reused by any other table that needs
- * page navigation. {@code page} is 1-based for human readability.
+ * URL- or state-driven paginator, rendered as a sticky bar at the bottom of
+ * the viewport (CSS {@code position: sticky}) so the count and controls never
+ * drift down as a list grows. {@code page} is 1-based for human readability.
  *
- * <p>Stateless on its own — {@code onChange} fires when the operator
- * picks a page; the parent persists the chosen page (e.g. as a
- * {@code ?page=N} search param via React Router).
+ * <p>Stateless on its own — {@code onChange} fires when the operator picks a
+ * page, and {@code onPageSizeChange} (when provided) offers the shared
+ * rows-per-page picker (10 default / 25 / 50 / 100); the parent persists both.
  */
 
 export interface PaginatorProps {
@@ -14,23 +16,17 @@ export interface PaginatorProps {
   pageSize: number;
   /** Total rows across all pages (drives the page count). */
   total: number;
-  /** Optional label prefix for the visible "showing X-Y of Z" copy. */
+  /** Optional label for the visible count copy, plural ("runs"); auto-singularized at total 1. */
   label?: string;
   onChange: (nextPage: number) => void;
+  /** When provided, the bar renders the shared rows-per-page picker. */
+  onPageSizeChange?: (nextSize: number) => void;
 }
 
-export function Paginator({ page, pageSize, total, label = "items", onChange }: PaginatorProps) {
-  if (total <= pageSize) {
-    // Single-page result — no controls, just the count for orientation.
-    return (
-      <div className="paginator paginator--single" aria-label="pagination">
-        <span className="paginator__count">
-          {total} {label}
-        </span>
-      </div>
-    );
-  }
-
+export function Paginator({
+  page, pageSize, total, label = "items", onChange, onPageSizeChange,
+}: PaginatorProps) {
+  const noun = total === 1 && label.endsWith("s") ? label.slice(0, -1) : label;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.max(1, Math.min(page, totalPages));
   const firstShown = (safePage - 1) * pageSize + 1;
@@ -38,13 +34,43 @@ export function Paginator({ page, pageSize, total, label = "items", onChange }: 
   const hasPrev = safePage > 1;
   const hasNext = safePage < totalPages;
 
+  const sizePicker = onPageSizeChange != null && (
+    <label className="paginator__size">
+      Show
+      <select
+        className="formSelect paginator__sizeSelect"
+        value={pageSize}
+        onChange={(e) => onPageSizeChange(Number(e.target.value))}
+        aria-label="rows per page"
+      >
+        {LIST_PAGE_SIZE_OPTIONS.map((n) => (
+          <option key={n} value={n}>{n}</option>
+        ))}
+      </select>
+      per page
+    </label>
+  );
+
+  if (total <= pageSize) {
+    // Single-page result — the count (plus the picker) for orientation.
+    return (
+      <nav className="paginator paginator--single" aria-label="pagination">
+        <span className="paginator__count">
+          {total} {noun}
+        </span>
+        {sizePicker}
+      </nav>
+    );
+  }
+
   return (
     <nav className="paginator" aria-label="pagination">
       <span className="paginator__count">
         Showing <strong>{firstShown}</strong>–<strong>{lastShown}</strong>{" "}
-        of <strong>{total}</strong> {label}
+        of <strong>{total}</strong> {noun}
       </span>
       <span className="paginator__controls">
+        {sizePicker}
         <button
           type="button"
           className="btn btn--ghost"

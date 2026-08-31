@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet } from "react-router-dom";
 
 import { usePlatformCapabilities } from "../hooks/usePlatformCapabilities";
@@ -18,9 +19,32 @@ import { BrandMark } from "./BrandMark";
  * there the equivalent surface is the Data centers section on each application
  * (the group's pool). Capacity itself lists application groups — the pool is the group's.
  * Exactly one of the two is live at a time.
+ *
+ * <p>The footer is a dock-style overlay: hidden until the cursor nears the
+ * bottom edge (macOS-Dock style), so it costs no vertical space; the hide
+ * threshold sits well above the reveal threshold so it never flickers.
  */
+const FOOTER_REVEAL_PX = 24;
+const FOOTER_HIDE_PX = 96;
+
 export function Layout() {
   const { dynamicScalingEnabled } = usePlatformCapabilities();
+  const [footerVisible, setFooterVisible] = useState(false);
+
+  useEffect(() => {
+    function onMouseMove(e: MouseEvent) {
+      const fromBottom = window.innerHeight - e.clientY;
+      setFooterVisible((v) => (v ? fromBottom <= FOOTER_HIDE_PX : fromBottom <= FOOTER_REVEAL_PX));
+    }
+    function onMouseLeave() { setFooterVisible(false); }
+    window.addEventListener("mousemove", onMouseMove);
+    document.documentElement.addEventListener("mouseleave", onMouseLeave);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      document.documentElement.removeEventListener("mouseleave", onMouseLeave);
+    };
+  }, []);
+
   return (
     <div className="appShell">
       <header className="appHeader">
@@ -49,7 +73,7 @@ export function Layout() {
       <main className="appMain">
         <Outlet />
       </main>
-      <footer className="appFooter">
+      <footer className={`appFooter${footerVisible ? " appFooter--visible" : ""}`}>
         <span className="appFooter__brand">
           <BrandMark />
           CCB Card Performance

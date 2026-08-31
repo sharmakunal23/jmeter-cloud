@@ -156,7 +156,8 @@ export function HomePage() {
       <div className="homeGrid">
         {/* Left column — Applications. Home is a snapshot, so it caps at
             HOME_APPS_LIMIT (15) with a "view all" link rather than paginating;
-            the full Applications tab paginates at 15/page (useClientPagination). */}
+            the full Applications tab paginates (useClientPagination — the
+            shared 10/25/50/100 rows-per-page preference). */}
         <ApplicationsChecklist applications={applications} groups={groups} />
 
         {/* Right column — Platform + Scheduled runs stacked. Platform is

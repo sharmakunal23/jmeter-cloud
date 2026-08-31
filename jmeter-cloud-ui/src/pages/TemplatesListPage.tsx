@@ -107,7 +107,7 @@ export function TemplatesListPage() {
     return sorted;
   }, [state, search, sortKey, sortDir]);
 
-  const { page, setPage, pageItems, total, pageSize } =
+  const { page, setPage, pageItems, total, pageSize, setPageSize } =
     useClientPagination(sortedFiltered, `${search}|${sortKey}|${sortDir}`);
 
   function toggleSort(k: SortKey) {
@@ -185,7 +185,7 @@ export function TemplatesListPage() {
       )}
 
       {!loading && sortedFiltered.length > 0 && (
-        <Paginator page={page} pageSize={pageSize} total={total} label="applications" onChange={setPage} />
+        <Paginator page={page} pageSize={pageSize} total={total} label="applications" onChange={setPage} onPageSizeChange={setPageSize} />
       )}
     </section>
   );

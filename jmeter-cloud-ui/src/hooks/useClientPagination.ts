@@ -1,11 +1,25 @@
 import { useEffect, useMemo, useState } from "react";
 
-/**
- * Default page size for the nav-tab list pages (Applications, Capacity,
- * Documents, Templates, Automation). Show the top 15 rows, then paginate —
- * past that point the operator would have to scroll a long table to see more.
- */
-export const LIST_PAGE_SIZE = 15;
+/** Page-size choices offered by the paginator's rows-per-page picker. */
+export const LIST_PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const;
+
+/** Every list opens on the top 10; the picker goes up to 100. */
+export const DEFAULT_LIST_PAGE_SIZE = 10;
+
+/** ONE stored preference — picking a page size on any list applies to all of them. */
+const PAGE_SIZE_STORAGE_KEY = "jmeterCloud.listPageSize";
+
+/** The operator's persisted rows-per-page pick, clamped to the offered options. */
+export function readStoredPageSize(): number {
+  try {
+    const v = Number(localStorage.getItem(PAGE_SIZE_STORAGE_KEY));
+    return (LIST_PAGE_SIZE_OPTIONS as readonly number[]).includes(v) ? v : DEFAULT_LIST_PAGE_SIZE;
+  } catch { return DEFAULT_LIST_PAGE_SIZE; }
+}
+
+export function persistPageSize(next: number): void {
+  try { localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(next)); } catch { /* ignore */ }
+}
 
 /**
  * Client-side pagination over an already-fetched, already-filtered/sorted
@@ -15,24 +29,31 @@ export const LIST_PAGE_SIZE = 15;
  * <p>Pass {@code resetKey} (e.g. the search string and/or sort key) so the
  * view jumps back to page 1 whenever the underlying filter or ordering
  * changes. The page is additionally clamped to the valid range, so a
- * shrinking result set (e.g. a narrowing search while on a later page)
- * never leaves the operator stranded on an empty page.
+ * shrinking result set never leaves the operator stranded on an empty page.
  *
- * @returns the clamped 1-based {@code page}, a {@code setPage} setter wired
- *   straight to {@code <Paginator onChange>}, the {@code pageItems} slice to
- *   render, and {@code total} / {@code pageSize} for the paginator props.
+ * <p>The page size is the operator's shared preference (10 default, up to
+ * 100 — {@code setPageSize} persists it for every list at once); pass
+ * {@code fixedPageSize} to pin a bounded surface (e.g. a modal table) to its
+ * own size and leave the shared preference untouched.
  */
 export function useClientPagination<T>(
   items: T[],
   resetKey?: unknown,
-  pageSize: number = LIST_PAGE_SIZE,
+  fixedPageSize?: number,
 ) {
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSizeState] = useState<number>(() => fixedPageSize ?? readStoredPageSize());
 
   // Reset to the first page when the caller's filter/sort identity changes.
   useEffect(() => {
     setPage(1);
   }, [resetKey]);
+
+  function setPageSize(next: number) {
+    setPageSizeState(next);
+    setPage(1);
+    if (fixedPageSize == null) persistPageSize(next);
+  }
 
   const total = items.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -43,5 +64,5 @@ export function useClientPagination<T>(
     [items, safePage, pageSize],
   );
 
-  return { page: safePage, setPage, pageItems, total, pageSize };
+  return { page: safePage, setPage, pageItems, total, pageSize, setPageSize };
 }

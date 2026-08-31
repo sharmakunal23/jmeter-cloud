@@ -128,7 +128,7 @@ export function AutomationListPage() {
     return sorted;
   }, [state, search, sortKey, sortDir]);
 
-  const { page, setPage, pageItems, total, pageSize } =
+  const { page, setPage, pageItems, total, pageSize, setPageSize } =
     useClientPagination(sortedFiltered, `${search}|${sortKey}|${sortDir}`);
 
   function toggleSort(k: SortKey) {
@@ -239,7 +239,7 @@ export function AutomationListPage() {
       )}
 
       {!loading && sortedFiltered.length > 0 && (
-        <Paginator page={page} pageSize={pageSize} total={total} label="applications" onChange={setPage} />
+        <Paginator page={page} pageSize={pageSize} total={total} label="applications" onChange={setPage} onPageSizeChange={setPageSize} />
       )}
       </>
       )}

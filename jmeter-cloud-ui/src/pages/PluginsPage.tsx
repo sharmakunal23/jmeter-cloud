@@ -67,7 +67,7 @@ export function PluginsPage() {
       || p.version.toLowerCase().includes(needle)
       || p.fileName.toLowerCase().includes(needle));
   }, [items, search]);
-  const { page, setPage, pageItems, total, pageSize } = useClientPagination(filtered, search);
+  const { page, setPage, pageItems, total, pageSize, setPageSize } = useClientPagination(filtered, search);
 
   async function confirmDelete() {
     if (!toDelete) return;
@@ -170,7 +170,7 @@ export function PluginsPage() {
       )}
 
       {list.status === "ok" && filtered.length > 0 && (
-        <Paginator page={page} pageSize={pageSize} total={total} label="plugins" onChange={setPage} />
+        <Paginator page={page} pageSize={pageSize} total={total} label="plugins" onChange={setPage} onPageSizeChange={setPageSize} />
       )}
 
       {addOpen && (

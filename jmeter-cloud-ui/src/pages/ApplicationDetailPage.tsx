@@ -6,6 +6,7 @@ import { applicationsApi, type Application } from "../api/applications";
 import { usePlatformCapabilities } from "../hooks/usePlatformCapabilities";
 import { DataCentersSectionForApp } from "../components/DataCentersSection";
 import { Paginator } from "../components/Paginator";
+import { persistPageSize, readStoredPageSize } from "../hooks/useClientPagination";
 import { RegionBadgeList } from "../components/RegionBadge";
 import { CreateApplicationDialog } from "../components/CreateApplicationDialog";
 import { DeleteRunsConfirmDialog } from "../components/DeleteRunsConfirmDialog";
@@ -27,14 +28,12 @@ const MAX_COMPARE_SELECTION = 2;
 
 /**
  * Track UI-D3 — per-application detail. Header chips with rollups
- * (total runs, active runs); body is the runs list paginated 25 per
- * page (page driven by {@code ?page=N}). Wires up the new
- * {@code /api/v1/runs?application=…&offset=…&limit=25} backend
+ * (total runs, active runs); body is the runs list paginated by the shared
+ * rows-per-page preference (10 default; page driven by {@code ?page=N}).
+ * Wires up the {@code /api/v1/runs?application=…&offset=…&limit=…} backend
  * (UI-D3 added the {@code application} column + {@code X-Total-Count}
  * response header).
  */
-
-const PAGE_SIZE = 25;
 
 type State =
   | { status: "loading" }
@@ -63,7 +62,9 @@ function ApplicationDetailBody({ appName }: { appName: string }) {
   const { isStaticFleet } = usePlatformCapabilities();
   const [searchParams, setSearchParams] = useSearchParams();
   const page = Math.max(1, Number.parseInt(searchParams.get("page") ?? "1", 10) || 1);
-  const offset = (page - 1) * PAGE_SIZE;
+  // The same rows-per-page preference the client-paginated lists share.
+  const [pageSize, setPageSizeState] = useState<number>(readStoredPageSize);
+  const offset = (page - 1) * pageSize;
 
   const [state, setState] = useState<State>({ status: "loading" });
   // App-settings dialog state. We fetch the full Application record on
@@ -105,7 +106,7 @@ function ApplicationDetailBody({ appName }: { appName: string }) {
     setState({ status: "loading" });
     // Archived view → only hidden runs; active-count chip is irrelevant there.
     const listP = runsApi.listPage(
-      { application: appName, hidden: archived, offset, limit: PAGE_SIZE }, ctl.signal);
+      { application: appName, hidden: archived, offset, limit: pageSize }, ctl.signal);
     const activeP = archived
       ? Promise.resolve(null)
       : runsApi.listPage({ application: appName, activeOnly: true, limit: 200 }, ctl.signal);
@@ -118,7 +119,7 @@ function ApplicationDetailBody({ appName }: { appName: string }) {
         setState({ status: "error", message: err instanceof Error ? err.message : String(err) });
       });
     return () => ctl.abort();
-  }, [appName, offset, reloadNonce, archived]);
+  }, [appName, offset, pageSize, reloadNonce, archived]);
 
   // Switch between Active and Archived run views; reset to page 1 so the offset
   // is never out of range for the (different) result set.
@@ -134,6 +135,12 @@ function ApplicationDetailBody({ appName }: { appName: string }) {
     if (nextPage === 1) next.delete("page");
     else next.set("page", String(nextPage));
     setSearchParams(next);
+  }
+
+  function changePageSize(nextSize: number) {
+    persistPageSize(nextSize);
+    setPageSizeState(nextSize);
+    setPage(1);
   }
 
   const totalRuns = state.status === "ok" ? state.listing.total : null;
@@ -325,6 +332,7 @@ function ApplicationDetailBody({ appName }: { appName: string }) {
           onToggle={toggleSelected}
           archived={archived}
           onDeleteOne={(run) => setDeleteTargets([run])}
+          onPageSizeChange={changePageSize}
         />
       )}
 
@@ -393,7 +401,7 @@ function ApplicationDetailBody({ appName }: { appName: string }) {
 }
 
 function RunsTableForApp({
-  appName, listing, page, setPage, selected, onToggle, archived, onDeleteOne,
+  appName, listing, page, setPage, selected, onToggle, archived, onDeleteOne, onPageSizeChange,
 }: {
   appName: string;
   listing: RunListing;
@@ -403,6 +411,7 @@ function RunsTableForApp({
   onToggle: (runId: string) => void;
   archived: boolean;
   onDeleteOne: (run: Run) => void;
+  onPageSizeChange: (n: number) => void;
 }) {
   return (
     <>
@@ -482,6 +491,7 @@ function RunsTableForApp({
         total={listing.total}
         label="runs"
         onChange={setPage}
+        onPageSizeChange={onPageSizeChange}
       />
     </>
   );

@@ -202,6 +202,7 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
       infoTip="A group owns the worker pool its applications run on and names the metrics tables its workers write to."
       infoTipExample="group id cps → tables CPS_METRICS"
       width="form"
+      className="groupsModal"
       onClose={onClose}
       // While the delete confirmation is stacked on top, Esc must close only
       // that dialog — its own Modal handles it; this one stands down.
