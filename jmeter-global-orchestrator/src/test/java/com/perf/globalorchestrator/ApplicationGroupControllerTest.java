@@ -3,7 +3,6 @@ package com.perf.globalorchestrator;
 import com.perf.globalorchestrator.domain.ApplicationGroup;
 import com.perf.globalorchestrator.http.ApplicationGroupController;
 import com.perf.globalorchestrator.domain.RecyclePolicy;
-import com.perf.globalorchestrator.provision.ProvisioningProperties;
 import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.repo.GroupCapacityRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -49,9 +48,7 @@ class ApplicationGroupControllerTest {
     void setUp() {
         repo = mock(ApplicationGroupRepository.class);
         capacity = mock(GroupCapacityRepository.class);
-        ProvisioningProperties provisioning = mock(ProvisioningProperties.class);
-        when(provisioning.regions()).thenReturn(List.of("na-east", "na-west"));
-        mvc = MockMvcBuilders.standaloneSetup(new ApplicationGroupController(repo, capacity, provisioning)).build();
+        mvc = MockMvcBuilders.standaloneSetup(new ApplicationGroupController(repo, capacity)).build();
     }
 
     @Test
@@ -202,7 +199,7 @@ class ApplicationGroupControllerTest {
     }
 
     @Test
-    @DisplayName("the pool's policy lives on the group: POST validates it, seeds capacity at 0 per region; PUT replaces it; alwaysOn omitted is preserved")
+    @DisplayName("the pool's policy lives on the group: POST validates it and seeds NO capacity rows (clusters attach explicitly); PUT replaces it; alwaysOn omitted is preserved")
     void policyOnTheGroup() throws Exception {
         when(repo.findById("mq")).thenReturn(Optional.empty());
         when(repo.insert(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -212,8 +209,9 @@ class ApplicationGroupControllerTest {
                 .andExpect(jsonPath("$.recyclePolicy").value("MAX_RUNS"))
                 .andExpect(jsonPath("$.maxRunsPerPod").value(3))
                 .andExpect(jsonPath("$.alwaysOn").value(true));
-        verify(capacity).upsert("mq", "na-east", 0);
-        verify(capacity).upsert("mq", "na-west", 0);
+        verify(capacity, org.mockito.Mockito.never())
+                .upsert(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.anyInt());
         mvc.perform(post("/api/v1/applicationGroups").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"groupId\":\"mq2\",\"name\":\"MQ2\",\"recyclePolicy\":\"MAX_AGE\"}"))
                 .andExpect(status().isBadRequest())

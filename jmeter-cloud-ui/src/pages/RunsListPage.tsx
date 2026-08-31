@@ -223,7 +223,7 @@ function RunsTable({ searchParams, setSearchParams }: RunsTableProps) {
               <th aria-label="select" className="runsTable__check"></th>
               <th>Run ID</th>
               <th>State</th>
-              <th>Region</th>
+              <th>Cluster</th>
               <th>Fleet</th>
               <th>Started</th>
               <th>Initiated by</th>

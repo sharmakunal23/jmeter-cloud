@@ -12,10 +12,11 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * The {@link PodProvisioner} under {@code PROVISIONING_MODE=DYNAMIC}: every
- * call is forwarded to the region's {@code jmeter-regional-orchestrator}, so
- * this service never holds a cluster credential. A region without a regional
- * URL cannot provision — {@link com.perf.globalorchestrator.region.RegionUnavailableException}.
+ * The {@link PodProvisioner}: every call is forwarded to the region's
+ * {@code jmeter-regional-orchestrator}, so this service never holds a cluster
+ * credential. An unregistered region cannot provision —
+ * {@link com.perf.globalorchestrator.region.RegionUnavailableException}
+ * (clusters register at runtime, CLUSTER-CAPACITY).
  *
  * <p>{@link #currentImageDigest(String)} and {@link #baseUrlFor(String, String)}
  * come from the region's last probed capabilities, not a live call; before the
@@ -23,7 +24,6 @@ import java.util.Optional;
  * and the URL falls back to the platform default {@code {podName}.workers:8080}.
  */
 @Component
-@ConditionalOnProvisioningMode(ProvisioningMode.DYNAMIC)
 public class RegionalPodProvisioner implements PodProvisioner {
 
     private static final Logger LOG = LoggerFactory.getLogger(RegionalPodProvisioner.class);

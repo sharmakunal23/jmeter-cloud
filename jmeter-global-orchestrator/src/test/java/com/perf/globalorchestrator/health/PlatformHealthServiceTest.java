@@ -2,8 +2,6 @@ package com.perf.globalorchestrator.health;
 
 import com.perf.globalorchestrator.domain.RegionCapacity;
 import com.perf.globalorchestrator.health.PlatformHealth.Component;
-import com.perf.globalorchestrator.provision.ProvisioningMode;
-import com.perf.globalorchestrator.provision.ProvisioningProperties;
 import com.perf.globalorchestrator.region.RegionCapabilities;
 import com.perf.globalorchestrator.region.RegionRegistry;
 import com.perf.globalorchestrator.region.RegionStatus;
@@ -38,7 +36,6 @@ class PlatformHealthServiceTest {
     private HttpServer consumer, docs;
     private RegionRegistry regions;
     private PodRepository pods;
-    private ProvisioningProperties provisioning;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -46,8 +43,6 @@ class PlatformHealthServiceTest {
         docs = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         regions = mock(RegionRegistry.class);
         pods = mock(PodRepository.class);
-        provisioning = mock(ProvisioningProperties.class);
-        when(provisioning.mode()).thenReturn(ProvisioningMode.DYNAMIC);
     }
 
     @AfterEach
@@ -70,7 +65,7 @@ class PlatformHealthServiceTest {
     private PlatformHealthService service(String consumerUrl, String docsUrl) {
         return new PlatformHealthService(
                 () -> Health.up().withDetail("database", "Oracle").build(),
-                regions, pods, provisioning, consumerUrl, docsUrl, Duration.ofSeconds(2));
+                regions, pods, consumerUrl, docsUrl, Duration.ofSeconds(2));
     }
 
     private static String url(HttpServer s) {
@@ -93,13 +88,14 @@ class PlatformHealthServiceTest {
         when(regions.all()).thenReturn(List.of(
                 new RegionStatus("na-east", "http://na-east:30088", true, true, Instant.now(), null,
                         new RegionCapabilities("na-east", "ns", "workers", "img", 8080, "dev", 3))));
+        when(regions.ids()).thenReturn(List.of("na-east"));
         when(pods.regionCapacities()).thenReturn(List.of(new RegionCapacity("na-east", 2, 1, 0)));
 
         PlatformHealth h = service(url(consumer), url(docs)).probeAll();
         assertThat(h.status()).isEqualTo("UP");
         Component hub = byId(h.components(), "global-orchestrator");
         assertThat(hub.status()).isEqualTo("UP");
-        assertThat(hub.detail()).isEqualTo("provisioning DYNAMIC");
+        assertThat(hub.detail()).isEqualTo("1 cluster(s) registered");
         Component mc = byId(h.components(), "metrics-consumer");
         assertThat(mc.status()).isEqualTo("UP");                       // db UP; the aggregate 503 is idle-ness, not failure
         assertThat(mc.detail()).isEqualTo("idle — last envelope 12 min ago (normal between runs)");
@@ -124,10 +120,8 @@ class PlatformHealthServiceTest {
         when(regions.all()).thenReturn(List.of(
                 new RegionStatus("na-east", "http://na-east:30088", true, false, null, "HTTP connect timed out", null),
                 new RegionStatus("na-west", "http://na-west:30088", true, true, Instant.now(), null,
-                        new RegionCapabilities("na-west", "ns", "workers", "img", 8080, "dev")),
-                new RegionStatus("lab", null, false, null, null, null, null)));
-        when(pods.regionCapacities()).thenReturn(List.of(
-                new RegionCapacity("na-west", 3, 2, 1), new RegionCapacity("lab", 1, 1, 0)));
+                        new RegionCapabilities("na-west", "ns", "workers", "img", 8080, "dev"))));
+        when(pods.regionCapacities()).thenReturn(List.of(new RegionCapacity("na-west", 3, 2, 1)));
 
         int free = docs.getAddress().getPort();
         docs.stop(0);
@@ -141,17 +135,13 @@ class PlatformHealthServiceTest {
         assertThat(ds.detail()).startsWith("unreachable:");
         Component dcs = byId(h.components(), "regions");
         assertThat(dcs.status()).isEqualTo("DEGRADED");
-        assertThat(dcs.detail()).isEqualTo("1 of 3 region(s) down");
+        assertThat(dcs.detail()).isEqualTo("1 of 2 cluster(s) down");
         Component east = byId(dcs.components(), "region.na-east");
         assertThat(east.status()).isEqualTo("DOWN");
         assertThat(byId(east.components(), "region.na-east.regional-orchestrator").detail()).isEqualTo("HTTP connect timed out");
         Component west = byId(dcs.components(), "region.na-west");
         assertThat(west.status()).isEqualTo("DEGRADED");
         assertThat(byId(west.components(), "region.na-west.workers").detail()).isEqualTo("2 idle · 0 busy · 1 lost");
-        Component lab = byId(dcs.components(), "region.lab");
-        assertThat(lab.status()).isEqualTo("UP");
-        assertThat(lab.components()).extracting(Component::kind).containsExactly("workers");
-        assertThat(lab.detail()).isEqualTo("direct — operator-declared workers");
     }
 
     @Test
@@ -163,7 +153,7 @@ class PlatformHealthServiceTest {
         assertThat(svc.snapshot().status()).isEqualTo("UNKNOWN");
         svc.refresh();
         assertThat(svc.snapshot().status()).isEqualTo("DOWN");
-        assertThat(byId(svc.snapshot().components(), "regions").detail()).isEqualTo("no regions configured");
+        assertThat(byId(svc.snapshot().components(), "regions").detail()).isEqualTo("no clusters registered");
         assertThat(PlatformHealthService.humanBytes(774_266_000_000L)).isEqualTo("721 GB");
         assertThat(((Function<String, String>) PlatformHealthService::mapStatus).apply("OUT_OF_SERVICE")).isEqualTo("DOWN");
     }

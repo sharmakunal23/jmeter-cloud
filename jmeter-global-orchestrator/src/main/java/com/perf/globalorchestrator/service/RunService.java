@@ -123,8 +123,6 @@ public class RunService {
     private final PluginRepository pluginRepo;
     /** WORKER-HYGIENE Phase E — spin-to-fill on shortfall. Optional so tests can omit it. */
     private final com.perf.globalorchestrator.provision.PodSpinService spinService;
-    /** STATIC-FLEET Phase 2 — gates spin-to-fill; workers are operator-managed in STATIC mode. */
-    private final com.perf.globalorchestrator.provision.ProvisioningProperties provisioning;
     private final String region;
     private final int maxFleetSizePerRun;
     private final long spinHealthTimeoutMs;
@@ -166,7 +164,6 @@ public class RunService {
             PluginRepository pluginRepo,
             @org.springframework.beans.factory.annotation.Autowired(required = false)
             com.perf.globalorchestrator.provision.PodSpinService spinService,
-            com.perf.globalorchestrator.provision.ProvisioningProperties provisioning,
             @Value("${globalOrchestrator.region:us-east-1}") String region,
             @Value("${globalOrchestrator.fanoutThreads:8}") int fanoutThreads,
             @Value("${globalOrchestrator.maxFleetSizePerRun:100}") int maxFleetSizePerRun,
@@ -184,7 +181,6 @@ public class RunService {
         this.runTrends = runTrends;
         this.pluginRepo = pluginRepo;
         this.spinService = spinService;
-        this.provisioning = provisioning;
         this.region = region;
         this.maxFleetSizePerRun = maxFleetSizePerRun;
         this.spinHealthTimeoutMs = spinHealthTimeoutMs;
@@ -204,14 +200,6 @@ public class RunService {
         } catch (InsufficientCapacityException shortfallEx) {
             if (!request.isSpinShortfall() || spinService == null) {
                 throw shortfallEx; // strict mode (or no provisioner wired) — propagate
-            }
-            if (provisioning.isStatic()) {
-                LOG.info("spinShortfall ignored for application={} — {}=STATIC; "
-                        + "operator must declare more workers for {}",
-                        request.application(),
-                        com.perf.globalorchestrator.provision.ProvisioningMode.PROPERTY,
-                        shortfallEx.shortfall().keySet());
-                throw shortfallEx;
             }
             return launchAsync(request, bestEffort, actor, shortfallEx.shortfall());
         }

@@ -11,11 +11,13 @@ info:
     back from the application group's fact tables beside them.
 
     Pod selection is registry-driven and runs claim only IDLE pods from their
-    application group's pool in the run's region. Liveness has two sources: dynamic workers in a
-    routed region (`REGIONS=id=url`) are judged by the kubelet through the
-    region's `GET /api/v1/workers` (ready → IDLE, dead/absent → LOST with the
-    kubelet's reason); operator-declared workers self-register and heartbeat
-    every 30 s, and a sweeper marks them LOST after 90 s of silence.
+    application group's pool in the run's region. Clusters register at runtime
+    (`POST /api/v1/regions`, CLUSTER-CAPACITY); every registered cluster fronts
+    a regional orchestrator. Liveness has two sources: spun workers
+    (`SOURCE=DYNAMIC`) are judged by the kubelet through the region's
+    `GET /api/v1/workers` (ready → IDLE, dead/absent → LOST with the kubelet's
+    reason); operator-declared workers (`SOURCE=STATIC`) are health-probed by
+    the hub, and a sweeper marks them LOST after 90 s of silence.
   contact:
     name: Performance Engineering
   license:
@@ -35,19 +37,29 @@ tags:
     description: Fleet-wide run lifecycle — start, query, status, metrics roll-up.
   - name: pods
     description: Pod registry — self-registration + heartbeat protocol used by every local-orchestrator.
+  - name: regions
+    description: |
+      The cluster registry (CLUSTER-CAPACITY): clusters register at runtime
+      with their regional-orchestrator endpoint, validated before anything is
+      written; groups then reserve capacity on up to `maxClustersPerGroup` of
+      them. `region` is the axis name everywhere — "cluster" is the UI's word.
   - name: capacity
     description: |
       Per-(group, region) pod-budget management — the worker pool is the
       application group's (GROUP-CAPACITY, 2026-08-30): every application in
       the group draws on it. `PUT /api/v1/applicationGroups/{groupId}/capacity/{region}`
-      sets `maxAvailable`; the `/pods` sub-endpoints spin / restart / drain /
-      declare individual workers.
+      sets the group's RESERVATION on a registered cluster (CLUSTER-CAPACITY:
+      a group holds at most `maxClustersPerGroup` clusters, and the sum of
+      every group's reservations fits the cluster's `maxWorkers`); the `/pods`
+      sub-endpoints spin / restart / drain / declare individual workers —
+      spun (`SOURCE=DYNAMIC`) and declared (`SOURCE=STATIC`) workers coexist
+      in one pool and both count against the reservation.
   - name: platform
     description: |
-      Deployment-wide facts: `GET /api/v1/platform/capabilities` (what this
-      deployment can do — provisioning posture + region vocabulary, read once
-      at UI boot) plus the Spring Boot Actuator endpoints (health, info — the
-      only exposed set since SLIMDOWN SL-E).
+      Deployment-wide facts: `GET /api/v1/platform/capabilities` (the
+      registered clusters' region ids + `maxClustersPerGroup`, read once at UI
+      boot) plus the Spring Boot Actuator endpoints (health, info — the only
+      exposed set since SLIMDOWN SL-E).
   - name: cronJobs
     description: |
       CRON schedules that launch a run from a saved Template on a
@@ -58,8 +70,8 @@ tags:
     description: |
       Operator escape hatches for a stuck fleet — forced reconcile / recycle
       sweeps and a raw worker spin / teardown that skip the capacity and
-      in-use checks. Every route answers `409 PROVISIONING_DISABLED` under
-      `PROVISIONING_MODE=STATIC`.
+      in-use checks. The sweeps are scoped to `SOURCE=DYNAMIC` rows, so a
+      declared fleet is never touched.
   - name: ai
     description: |
       AI analysis — Claude-backed, server-side proxy. The
@@ -1222,11 +1234,9 @@ paths:
       description: |
         Registration is a pure DB operation: the application row is
         inserted in its group (`metricsGroupId` is required). Capacity is the
-        group's — its per-(group, region) rows were seeded at 0 when the group
-        was created, for this deployment's regions (the ones named by
-        `REGIONS`, see `GET /api/v1/platform/capabilities`, or the single
-        starter region `us-east-1` when it declares none). Pod counts are never set
-        here — capacity changes go through the capacity endpoints.
+        group's — the group attaches registered clusters and reserves workers
+        through the capacity endpoints (CLUSTER-CAPACITY; nothing is seeded at
+        group creation). Pod counts are never set here.
       requestBody:
         required: true
         content:
@@ -1234,7 +1244,7 @@ paths:
             schema: { $ref: "#/components/schemas/CreateApplicationRequest" }
       responses:
         "201":
-          description: Application created; capacity rows seeded at 0 for this deployment's regions.
+          description: Application created.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Application" }
@@ -1476,29 +1486,170 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/RegionCapacity" }
+    post:
+      tags: [regions]
+      summary: Register a cluster (CLUSTER-CAPACITY)
+      operationId: registerCluster
+      description: |
+        Registers a cluster at runtime after the validation chain passes:
+        the regional-orchestrator endpoint answers `/api/v1/capabilities`,
+        reports the same region id, and its `/api/v1/provisioningCheck` dry
+        run proves it can create worker Pods (image configured, RBAC verbs by
+        SelfSubjectAccessReview, quota headroom ≥ 1 worker). Nothing is
+        written unless every check passes; the `checks` array in either
+        response is the operator's ✓/✗ checklist. `region` stays the axis
+        name everywhere — "cluster" is the UI's display word.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterClusterRequest" }
+      responses:
+        "201":
+          description: Cluster registered (`cluster` + the passing `checks`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClusterRegistrationResponse" }
+        "400":
+          description: "`INVALID_REQUEST` — id/label/maxWorkers shape."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: |
+            `CLUSTER_EXISTS` (id already registered), `CLUSTER_NAME_TAKEN`
+            (display name in use) or `CLUSTER_URL_TAKEN` (that regional
+            already fronts another cluster) — id, display name and regional
+            URL must each be unique.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "422":
+          description: |
+            Validation failed — `code` is the first failing check's
+            (`INVALID_CLUSTER_URL`, `CLUSTER_UNREACHABLE`, `REGION_MISMATCH`,
+            `NO_WORKER_IMAGE`, `RBAC_DENIED`, `QUOTA_EXHAUSTED`) and `checks`
+            carries the whole checklist with per-check detail.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClusterValidationError" }
+
+  /api/v1/regions/{region}:
+    put:
+      tags: [regions]
+      summary: Edit a cluster (label, endpoint, ceiling)
+      operationId: updateCluster
+      description: |
+        Null fields keep their current value. A changed `regionalUrl` re-runs
+        the validation chain (422 on failure, nothing written); shrinking
+        `maxWorkers` below the groups' reservations answers
+        `409 CLUSTER_SHRINK_BELOW_RESERVED`.
+      parameters: [ { $ref: "#/components/parameters/regionPath" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateClusterRequest" }
+      responses:
+        "200":
+          description: Updated (`checks` present only when the URL was re-validated).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClusterRegistrationResponse" }
+        "404":
+          description: "`CLUSTER_NOT_REGISTERED`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: |
+            `CLUSTER_SHRINK_BELOW_RESERVED` (+ `maxWorkers`, `reserved`), or
+            `CLUSTER_NAME_TAKEN` / `CLUSTER_URL_TAKEN` when the edit would
+            steal another cluster's name or endpoint.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "422":
+          description: Re-validation of a changed URL failed (see POST).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClusterValidationError" }
+    delete:
+      tags: [regions]
+      summary: Deregister a cluster
+      operationId: deleteCluster
+      description: |
+        Refused while any group reservation or worker row references the
+        region — remove those first. Runs keep their historical region
+        strings; nothing rewrites them.
+      parameters: [ { $ref: "#/components/parameters/regionPath" } ]
+      responses:
+        "204": { description: Deregistered. }
+        "404":
+          description: "`CLUSTER_NOT_REGISTERED`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: "`CLUSTER_IN_USE` (+ `reservations`, `workers`)."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/regions/{region}/testProvision:
+    post:
+      tags: [regions]
+      summary: Deep validation — spin one probe worker (async)
+      operationId: testProvisionCluster
+      description: |
+        Spins one real probe worker (`probe-{region}-{epoch}`, groupId
+        `probe`, never in `ORCH_POD`), waits for the kubelet to report it
+        ready (bounded by `regionProbe.testProvisionTimeoutMs`, 180 s), then
+        deletes it and records PASS/FAIL with detail on the cluster row.
+        Asynchronous by design — a synchronous call could outlive the proxy
+        timeout; poll `GET /api/v1/regions/status` for `lastProbe`.
+      parameters: [ { $ref: "#/components/parameters/regionPath" } ]
+      responses:
+        "202":
+          description: "Probe started (`probing: true`)."
+          content:
+            application/json:
+              schema: { type: object }
+        "404":
+          description: "`CLUSTER_NOT_REGISTERED`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: "`PROBE_IN_PROGRESS` — one probe per cluster at a time."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /api/v1/regions/status:
     get:
-      tags: [pods]
-      summary: Configured regions and their reachability
+      tags: [regions]
+      summary: Registered clusters — registration, probe verdicts, reservations
       description: |
-        One entry per id in `REGIONS`, in declaration order. A routed region
-        (one configured as `id=url`) carries the last probe's verdict:
-        `reachable` is `null` until the first probe, then `true`/`false`
-        with `lastSeenAt` / `lastError`, plus the regional's `capabilities`
-        (worker image, DNS shape). A direct region has `routed: false` and
-        nothing to probe. The UI's Home checklist reads this.
+        One entry per registered cluster (`ORCH_REGION`), in region order —
+        the Clusters page's single read: the registration row (`label`,
+        `regionalUrl`, `maxWorkers`, `lastValidatedAt`, `lastProbe`), the
+        live probe verdict (`reachable` is `null` until the first probe, then
+        `true`/`false` with `lastSeenAt` / `lastError`, plus the regional's
+        `capabilities` — worker image, footprint, quota headroom), the sum of
+        the groups' reservations (`reservedWorkers`) and the registry's
+        worker count (`provisionedWorkers`).
       responses:
         "200":
-          description: Region statuses.
+          description: Cluster statuses.
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/RegionStatus" }
+                items: { $ref: "#/components/schemas/ClusterStatus" }
 
   # ────────────────────────────────────────────────────────────────────────
-  # Admin — escape hatches, DYNAMIC mode only
+  # Admin — escape hatches (sweeps scoped to SOURCE=DYNAMIC rows)
   # ────────────────────────────────────────────────────────────────────────
   /api/v1/admin/reconcilePods:
     post:
@@ -1506,8 +1657,8 @@ paths:
       summary: Force one reconciler sweep now
       description: |
         Runs the registry-vs-cluster reconcile the scheduler runs every tick
-        and reports what it changed. `409 PROVISIONING_DISABLED` in static
-        mode, where the reconciler is not wired.
+        and reports what it changed. Scoped to `SOURCE=DYNAMIC` rows — a
+        declared fleet is never reconciled away.
       responses:
         "200":
           description: Sweep summary.
@@ -1521,20 +1672,14 @@ paths:
                   started:        { type: integer, description: Registry rows whose worker was re-created. }
                   orphansDeleted: { type: integer, description: Registry rows with no worker that were removed. }
                   errors:         { type: integer }
-        "409":
-          description: Workers are operator-managed in this deployment.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ProvisioningDisabledResponse" }
-
   /api/v1/admin/recyclePods:
     post:
       tags: [admin]
       summary: Force one recycle sweep now
       description: |
         Runs the recycle-policy sweep immediately instead of waiting for its
-        cadence — the way to smoke-test a threshold policy. `409
-        PROVISIONING_DISABLED` in static mode.
+        cadence — the way to smoke-test a threshold policy. Declared workers
+        (`SOURCE=STATIC`) are never recycled.
       responses:
         "200":
           description: Sweep summary.
@@ -1547,12 +1692,6 @@ paths:
                   recycled: { type: integer }
                   skipped:  { type: integer }
                   errors:   { type: integer }
-        "409":
-          description: Workers are operator-managed in this deployment.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ProvisioningDisabledResponse" }
-
   /api/v1/admin/spinPod:
     post:
       tags: [admin]
@@ -1561,8 +1700,7 @@ paths:
         Allocates the next free name for the (group, region) and asks the
         region to create the worker — **without** the `maxAvailable` check
         `POST …/capacity/{region}/pods` enforces. For a stuck fleet only.
-        `400` when either field is blank, `404` for an unknown group,
-        `409 PROVISIONING_DISABLED` in static mode.
+        `400` when either field is blank, `404` for an unknown group.
       requestBody:
         required: true
         content:
@@ -1596,11 +1734,6 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "409":
-          description: Workers are operator-managed in this deployment.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ProvisioningDisabledResponse" }
 
   /api/v1/admin/pods/{podName}:
     parameters:
@@ -1613,7 +1746,9 @@ paths:
         run holds it; the registry row is removed by the next reconciler
         sweep (or `POST /api/v1/admin/reconcilePods`). `404 POD_NOT_REGISTERED`
         when the registry has no row (its region is then unknown), `409
-        PROVISIONING_DISABLED` in static mode.
+        POD_SOURCE_STATIC` for an operator-declared worker — the platform never
+        created it, so it never destroys it (release it through
+        `DELETE …/capacity/{region}/pods/{podName}` instead).
       responses:
         "200":
           description: The worker was stopped.
@@ -1631,10 +1766,10 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
         "409":
-          description: Workers are operator-managed in this deployment.
+          description: "`POD_SOURCE_STATIC` — an operator-declared worker is not the control plane's to tear down."
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ProvisioningDisabledResponse" }
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   # ────────────────────────────────────────────────────────────────────────
   # Capacity — the application group's worker pool (GROUP-CAPACITY).
@@ -1646,12 +1781,19 @@ paths:
       - { name: region,  in: path, required: true, schema: { type: string } }
     put:
       tags: [capacity]
-      summary: Set per-(group, region) maxAvailable directly
+      summary: Set the group's reservation on a cluster
       description: |
-        No approval flow — the
-        operator owns capacity. Refuses 409 `CAPACITY_SHRINK_BELOW_PROVISIONED`
-        when the requested ceiling is lower than the number of pods
-        currently provisioned (drain first).
+        `maxAvailable` is the group's RESERVATION on the registered cluster
+        (CLUSTER-CAPACITY) — spun and declared workers both count against it.
+        The write is serialised per cluster and holds three invariants:
+        `404 CLUSTER_NOT_REGISTERED` (register the cluster first),
+        `409 GROUP_CLUSTER_LIMIT` (a group holds at most `maxClustersPerGroup`
+        clusters — creating this row would exceed it) and
+        `409 CLUSTER_CAPACITY_EXCEEDED` (+ `maxWorkers`, `reservedByOthers`,
+        `requested` — the sum of every group's reservations must fit the
+        cluster's `maxWorkers`). Also refuses
+        `409 CAPACITY_SHRINK_BELOW_PROVISIONED` when the requested reservation
+        is lower than the pods currently provisioned (drain first).
       requestBody:
         required: true
         content:
@@ -1670,17 +1812,22 @@ paths:
         "400":
           description: Invalid maxAvailable.
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "404":
+          description: "`CLUSTER_NOT_REGISTERED` or `APPLICATION_GROUP_NOT_FOUND`."
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "409":
-          description: Would shrink below currently provisioned pod count.
+          description: |
+            `CAPACITY_SHRINK_BELOW_PROVISIONED`, `GROUP_CLUSTER_LIMIT` or
+            `CLUSTER_CAPACITY_EXCEEDED`.
           content: { application/json: { schema: { $ref: "#/components/schemas/CapacityShrinkResponse" } } }
     delete:
       tags: [capacity]
-      summary: Remove a region from the application
+      summary: Detach a cluster from the group
       description: |
-        The "deselect a region" half of the Capacity tab's region picker.
-        Drain-first: refuses 409 `REGION_NOT_EMPTY` when the region still has
-        provisioned workers (drain them first). 404 when the region isn't
-        configured for the application.
+        The "detach a cluster" half of the Capacity tab's cluster picker —
+        removes the group's reservation row. Drain-first: refuses 409
+        `REGION_NOT_EMPTY` while the pool still has workers there. 404 when
+        the group has no reservation on the cluster.
       responses:
         "204":
           description: Region removed.
@@ -1724,16 +1871,11 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "409":
           description: |
-            Either the spin would exceed `maxAvailable`
-            (`APPLICATION_CAPACITY_EXCEEDED`), or this deployment does not
-            provision (`PROVISIONING_DISABLED` — see
-            `GET /api/v1/platform/capabilities`).
+            The spin would exceed the group's reservation
+            (`APPLICATION_CAPACITY_EXCEEDED`).
           content:
             application/json:
-              schema:
-                oneOf:
-                  - $ref: "#/components/schemas/CapacityExceededResponse"
-                  - $ref: "#/components/schemas/ProvisioningDisabledResponse"
+              schema: { $ref: "#/components/schemas/CapacityExceededResponse" }
 
   /api/v1/applicationGroups/{groupId}/capacity/{region}/pods/{podName}/restart:
     parameters:
@@ -1758,10 +1900,9 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "409":
           description: |
-            `PROVISIONING_DISABLED` — workers are operator-managed in this
-            deployment (`PROVISIONING_MODE=STATIC`), so the control plane
-            does not restart them.
-          content: { application/json: { schema: { $ref: "#/components/schemas/ProvisioningDisabledResponse" } } }
+            `POD_SOURCE_STATIC` — an operator-declared worker is not the
+            control plane's to restart; manage it where it is deployed.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
 
   /api/v1/applicationGroups/{groupId}/capacity/{region}/pods/{podName}:
     parameters:
@@ -1770,13 +1911,15 @@ paths:
       - { name: podName, in: path, required: true, schema: { type: string, pattern: "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" }, description: "DNS-1123 label; anything else is 400 INVALID_POD_NAME." }
     put:
       tags: [capacity]
-      summary: Declare an operator-deployed worker (STATIC)
+      summary: Declare an operator-deployed worker (SOURCE=STATIC)
       description: |
         Binds a worker the operator deployed themselves to this
-        (group, region) pool. **Static mode only** — `409
-        PROVISIONING_REQUIRES_STATIC` when the deployment provisions its own
-        workers, where names are allocator-owned and `POST .../pods` (spin)
-        is the right call.
+        (group, region) pool, as a `SOURCE=STATIC` row that coexists with
+        spun workers (CLUSTER-CAPACITY). A NEW declaration consumes the
+        group's reservation exactly like a spin — `404
+        CAPACITY_REGION_NOT_FOUND` when the group has no reservation on the
+        cluster, `409 APPLICATION_CAPACITY_EXCEEDED` when it is full;
+        re-declaring an existing worker consumes nothing.
 
         PUT rather than a parallel `/staticPods` collection: the operator
         names the resource (they deployed it and know its name), the call is
@@ -1785,17 +1928,22 @@ paths:
         DELETE releases either.
 
         `podName` MUST equal the `workerId` the worker stamps on its metrics
-        or the `WORKER (RUN_ID, WORKER_KEY)` join breaks.
+        or the `WORKER (RUN_ID, WORKER_KEY)` join breaks. The worker's
+        `baseUrl` must be hub-reachable (an ingress FQDN on a hosted
+        cluster) — a declared worker is dialled directly, never through the
+        region's relay.
 
         The address is probed (`GET {baseUrl}/actuator/health`) before the
         declaration is accepted, so a typo fails here rather than at the next
         run launch. `?force=true` skips that check for a worker that is
         deployed but not up yet.
 
-        `maxAvailable` for the (group, region) is **derived** — it is
-        set to the declared worker count on every declare and release. There
-        is no separate capacity to approve in this mode, and
-        `PUT .../capacity/{region}` is refused accordingly.
+        Re-declaring a worker YOU declared is idempotent (it corrects the
+        address). Declaring over a worker the PLATFORM created
+        (`SOURCE=DYNAMIC`) is refused `409 POD_SOURCE_DYNAMIC` — the row would
+        flip to STATIC and the cluster would leak that Pod forever. A
+        re-declare that MOVES a worker into another cluster pays that cluster's
+        reservation like a new one.
       parameters:
         - name: force
           in: query
@@ -1825,26 +1973,30 @@ paths:
             (address did not answer and `force` was not set).
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "404":
-          description: groupId not registered.
+          description: |
+            `APPLICATION_GROUP_NOT_FOUND`, or `CAPACITY_REGION_NOT_FOUND` —
+            attach the cluster and reserve capacity first.
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "409":
           description: |
-            `PROVISIONING_REQUIRES_STATIC` (this deployment provisions its own
-            workers), `POD_BOUND_ELSEWHERE` (already declared to another
-            application), or `POD_IN_USE` (re-addressing a worker held by an
-            active run would break that run's follow-up calls to it).
+            `APPLICATION_CAPACITY_EXCEEDED` (the reservation is full — also
+            raised when a re-declare moves the worker INTO this cluster),
+            `POD_SOURCE_DYNAMIC` (the name belongs to a platform-created
+            worker), `POD_BOUND_ELSEWHERE` (already declared to another group),
+            or `POD_IN_USE` (re-addressing a worker held by an active run would
+            break that run's follow-up calls to it).
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
     delete:
       tags: [capacity]
-      summary: Release a pod — drain (dynamic) or undeclare (static)
+      summary: Release a pod — drain (spun) or undeclare (declared)
       description: |
-        Under `PROVISIONING_MODE=DYNAMIC` this is a full **drain**: the
-        container is stopped and removed, then the registry row is deleted.
-        Under `STATIC` it is an **undeclare** — the registry row is deleted
-        and the operator's worker keeps running, because the control plane
-        does not own it. The in-use guard, the stale-binding release and the
-        response shape are identical in both modes; only `containerStopped`
-        differs.
+        For a spun worker (`SOURCE=DYNAMIC`) this is a full **drain**: the
+        Pod is stopped and removed through its regional, then the registry
+        row is deleted. For a declared one (`SOURCE=STATIC`) it is an
+        **undeclare** — the registry row is deleted and the operator's worker
+        keeps running, because the control plane does not own it. The in-use
+        guard, the stale-binding release and the response shape are
+        identical; only `containerStopped` differs.
 
         Refuses 409 `POD_IN_USE` when the pod is held by an active run whose
         worker **container is still running** — a genuinely busy pod. To drain
@@ -1926,15 +2078,13 @@ paths:
       tags: [platform]
       summary: What this deployment can do — read once at UI boot
       description: |
-        Deployment posture the UI gates its surfaces on. Values are resolved
-        at boot from `PROVISIONING_MODE` / `REGIONS` and never change for
-        the life of the process. `regions` are the ids from `REGIONS`; which
-        of them are routed through a regional orchestrator, and whether it
-        answers, is `GET /api/v1/regions/status`.
+        Deployment facts the UI reads at boot: the registered clusters'
+        region ids (the runtime registry — refreshed by the probe's tick) and
+        `maxClustersPerGroup`. Whether each cluster's regional answers is
+        `GET /api/v1/regions/status`.
 
         This is deliberately server-side rather than a build-time UI flag:
-        a browser flag cannot enforce anything (hiding the Capacity tab
-        would leave the spin endpoints live) and would force a UI image
+        a browser flag cannot enforce anything and would force a UI image
         rebuild per environment, breaking the one-image-serves-docker-and-
         Kubernetes property. The server decides; the browser reflects.
       responses:
@@ -2283,6 +2433,15 @@ paths:
 components:
 
   parameters:
+
+    regionPath:
+      name: region
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[a-z0-9]([-a-z0-9]{0,18}[a-z0-9])?$" }
+      description: |
+        The cluster's region id — lowercase DNS-1123, max 20 chars so a
+        dynamic pod name `{groupId}-{region}-worker-{n}` stays a valid label.
 
     # AUDIT-TRAIL — shared X-Actor header on every state-changing run endpoint.
     XActorHeader:
@@ -3296,7 +3455,8 @@ components:
         podName:          { type: string, example: "payments-us-east-worker-1" }
         state:            { type: string, enum: [READY, IN_USE, LOST, STARTING, UNKNOWN, RECYCLING],
                             description: "RECYCLING is reported when the pod row is in DRAINING_FOR_RECYCLE state (WORKER-HYGIENE Phase D)." }
-        containerRunning: { type: boolean, description: "Live readback from `docker inspect` (provisioner.isRunning). False on daemon outages." }
+        source:           { type: string, enum: [DYNAMIC, STATIC], description: "DYNAMIC = spun by the regional; STATIC = operator-declared (CLUSTER-CAPACITY — both share the pool)." }
+        containerRunning: { type: boolean, description: "Spun pods: live readback from the region's Pod list. Declared workers: registry state (not LOST). False on region outages." }
         lastHeartbeat:    { type: string, format: date-time, nullable: true }
         blockedBy:        { $ref: "#/components/schemas/PodBlockedBy", nullable: true }
         runsServed:       { type: integer, format: int64, description: "WORKER-HYGIENE Phase F1 — count of runs claimed against this pod." }
@@ -3366,38 +3526,18 @@ components:
 
     PlatformCapabilities:
       type: object
-      required: [provisioningMode, dynamicScalingEnabled, podRecyclingEnabled, regions, regionLabel]
+      required: [regions, maxClustersPerGroup]
       properties:
-        provisioningMode:
-          type: string
-          enum: [DYNAMIC, STATIC]
-          description: |
-            `DYNAMIC` — the control plane owns worker lifecycle.
-            `STATIC` — workers are deployed and owned by the operator.
-        dynamicScalingEnabled:
-          type: boolean
-          description: |
-            Whether the control plane may create / destroy workers. Gates the
-            Capacity tab, the spin buttons and the run-launch shortfall prompt.
-        podRecyclingEnabled:
-          type: boolean
-          description: Whether the recycler runs. Gates the per-application recycle-policy editor.
         regions:
           type: array
           items: { type: string }
           description: |
-            Region ids this deployment uses; empty means "no override, use the
-            UI default". In static mode these are the operator's data centers.
-        regionLabel:
-          type: string
-          enum: [region, dataCenter]
-          description: |
-            What the UI should call the placement axis. The API and schema keep
-            saying `region` everywhere — it already IS the placement axis in the
-            pod registry, the capacity matrix, the claim SQL and the run request,
-            so renaming it would churn every query and the database for no
-            behavior change. This field makes the vocabulary seam machine-readable
-            instead of hardcoded in the browser.
+            The registered clusters' region ids (runtime registry — empty
+            until the first cluster is added). The API and schema keep saying
+            `region` everywhere; "cluster" is the UI's display word.
+        maxClustersPerGroup:
+          type: integer
+          description: How many clusters one application group may reserve capacity on (default 2).
     DeclarePodRequest:
       type: object
       required: [baseUrl]
@@ -3430,17 +3570,7 @@ components:
           description: Declared workers for this (group, region) after the call.
         maxAvailable:
           type: integer
-          description: |
-            The derived capacity written for this (group, region) —
-            always equal to `declared` in static mode.
-    ProvisioningDisabledResponse:
-      type: object
-      required: [code, message, action, provisioningMode]
-      properties:
-        code:             { type: string, enum: [PROVISIONING_DISABLED] }
-        message:          { type: string }
-        action:           { type: string, description: The refused operation, e.g. "spin a worker". }
-        provisioningMode: { type: string, enum: [STATIC] }
+          description: The group's reservation on the cluster (unchanged by a declare).
     CapacityExceededResponse:
       type: object
       required: [code, message, provisioned, maxAvailable]
@@ -3466,14 +3596,17 @@ components:
         podName:   { type: string }
         blockedBy: { $ref: "#/components/schemas/PodBlockedBy" }
 
-    RegionStatus:
+    ClusterStatus:
       type: object
-      required: [region, routed]
+      required: [region, label, regionalUrl, maxWorkers, reservedWorkers, provisionedWorkers, probing]
       properties:
         region: { type: string, example: na-east }
-        url: { type: string, nullable: true, example: "http://na-east-control-plane:30088" }
-        routed: { type: boolean, description: "True when REGIONS gave this region a regional orchestrator URL." }
-        reachable: { type: boolean, nullable: true, description: "Last probe verdict; null before the first probe or for a direct region." }
+        label: { type: string, example: "NA East (kind)", description: "The display name — what the UI shows as the Cluster." }
+        regionalUrl: { type: string, example: "http://na-east-control-plane:30088" }
+        maxWorkers: { type: integer, example: 20, maximum: 20, description: "The cluster ceiling group reservations must fit under — hard cap 20 (the 180 GB grant at 9 GB per worker)." }
+        reservedWorkers: { type: integer, example: 12, description: "SUM of every group's reservation on this cluster." }
+        provisionedWorkers: { type: integer, format: int64, example: 7, description: "Worker rows (spun + declared) in the registry for this region." }
+        reachable: { type: boolean, nullable: true, description: "Last probe verdict; null before the first probe." }
         lastSeenAt: { type: string, format: date-time, nullable: true }
         lastError: { type: string, nullable: true }
         capabilities:
@@ -3486,6 +3619,68 @@ components:
             image: { type: string }
             localOrchestratorPort: { type: integer }
             version: { type: string }
+            workersFree: { type: integer, nullable: true }
+            workerMemoryMb: { type: integer, format: int64, nullable: true }
+            workerEphemeralStorage: { type: string, nullable: true }
+        lastValidatedAt: { type: string, format: date-time, nullable: true }
+        lastProbe:
+          type: object
+          nullable: true
+          description: |
+            The last test-provisioning probe's verdict. Absent while one is
+            running — `LAST_PROBE_STATUS = RUNNING` is the cross-replica claim
+            and surfaces as `probing`, not as a verdict.
+          properties:
+            at: { type: string, format: date-time }
+            status: { type: string, enum: [PASS, FAIL] }
+            detail: { type: string }
+        probing: { type: boolean, description: "True while a test-provisioning probe holds this cluster's slot — read from the row, so every hub replica agrees." }
+
+    RegisterClusterRequest:
+      type: object
+      required: [region, label, regionalUrl]
+      properties:
+        region: { type: string, pattern: "^[a-z0-9]([-a-z0-9]{0,18}[a-z0-9])?$", example: na-east }
+        label: { type: string, maxLength: 255, example: "NA East (kind)", description: "Unique display name — two clusters must never present as one." }
+        regionalUrl: { type: string, maxLength: 512, example: "http://na-east-control-plane:30088", description: "Unique — one regional serves exactly one cluster." }
+        maxWorkers: { type: integer, minimum: 1, maximum: 20, default: 20 }
+
+    UpdateClusterRequest:
+      type: object
+      description: Null fields keep their current value; a changed regionalUrl re-runs validation.
+      properties:
+        label: { type: string, maxLength: 255, nullable: true }
+        regionalUrl: { type: string, maxLength: 512, nullable: true }
+        maxWorkers: { type: integer, minimum: 1, maximum: 20, nullable: true }
+
+    ClusterCheck:
+      type: object
+      required: [name, ok, detail, code]
+      properties:
+        name: { type: string, enum: [endpointReachable, regionMatches, imageConfigured, rbacPods, rbacPodsLog, rbacResourceQuotas, quotaHeadroom, provisioningCheck] }
+        ok: { type: boolean }
+        detail: { type: string, description: "What passed, or exactly what is wrong." }
+        code: { type: string, description: The stable error code this check reports when it fails. }
+
+    ClusterRegistrationResponse:
+      type: object
+      required: [cluster]
+      properties:
+        cluster: { $ref: "#/components/schemas/ClusterStatus" }
+        checks:
+          type: array
+          items: { $ref: "#/components/schemas/ClusterCheck" }
+
+    ClusterValidationError:
+      type: object
+      required: [code, message, region, checks]
+      properties:
+        code: { type: string, enum: [INVALID_CLUSTER_URL, CLUSTER_UNREACHABLE, REGION_MISMATCH, NO_WORKER_IMAGE, RBAC_DENIED, QUOTA_EXHAUSTED] }
+        message: { type: string }
+        region: { type: string }
+        checks:
+          type: array
+          items: { $ref: "#/components/schemas/ClusterCheck" }
 
     ErrorResponse:
       type: object
@@ -3510,6 +3705,18 @@ components:
             - CAPACITY_SHRINK_BELOW_PROVISIONED
             - POD_NOT_FOUND
             - POD_IN_USE
+            # CLUSTER-CAPACITY — the cluster registry + reservations.
+            - CLUSTER_NOT_REGISTERED
+            - CLUSTER_EXISTS
+            - CLUSTER_NAME_TAKEN
+            - CLUSTER_URL_TAKEN
+            - CLUSTER_IN_USE
+            - CLUSTER_SHRINK_BELOW_RESERVED
+            - CLUSTER_CAPACITY_EXCEEDED
+            - GROUP_CLUSTER_LIMIT
+            - POD_SOURCE_STATIC
+            - POD_SOURCE_DYNAMIC
+            - PROBE_IN_PROGRESS
             # AI analysis error codes — surfaced by AiController.
             - AI_DISABLED
             - AI_QUOTA_EXCEEDED

@@ -5,9 +5,7 @@ import com.perf.globalorchestrator.client.RegionalClient.WorkerLiveness;
 import com.perf.globalorchestrator.domain.Pod;
 import com.perf.globalorchestrator.domain.PodSource;
 import com.perf.globalorchestrator.domain.PodState;
-import com.perf.globalorchestrator.provision.ConditionalOnProvisioningMode;
 import com.perf.globalorchestrator.provision.PodProvisioner;
-import com.perf.globalorchestrator.provision.ProvisioningMode;
 import com.perf.globalorchestrator.region.RegionRegistry;
 import com.perf.globalorchestrator.region.RegionStatus;
 import com.perf.globalorchestrator.repo.PodRepository;
@@ -45,7 +43,6 @@ import java.util.stream.Collectors;
  * the workers are still running JMeter, and their metrics still land.
  */
 @Component
-@ConditionalOnProvisioningMode(ProvisioningMode.DYNAMIC)
 public class WorkerLivenessProbe {
 
     private static final Logger LOG = LoggerFactory.getLogger(WorkerLivenessProbe.class);

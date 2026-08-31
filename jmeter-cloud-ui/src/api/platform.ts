@@ -2,42 +2,30 @@
  * Typed client for `GET /api/v1/platform/capabilities` — what this
  * deployment can do.
  *
- * <p>STATIC-FLEET Phase 7. The posture lives on the server, not in a
- * build-time `VITE_` flag: a browser flag cannot enforce anything (hiding
- * the Capacity tab would leave the spin endpoints live) and would force a
- * UI image rebuild per environment, breaking the one-image-serves-docker-
- * and-Kubernetes property. The server decides; this file reflects.
+ * <p>CLUSTER-CAPACITY: the deployment-wide STATIC/DYNAMIC posture is gone —
+ * spun and declared workers coexist per pool. What remains deployment-wide is
+ * the registered clusters' region ids (the runtime registry) and how many
+ * clusters one group may reserve capacity on. Server-side on purpose: a
+ * build-time `VITE_` flag cannot enforce anything and would break the
+ * one-image-serves-docker-and-Kubernetes property.
  */
 
-export type ProvisioningMode = "DYNAMIC" | "STATIC";
-
-/** What the UI should call the placement axis. See `regionNoun`. */
-export type RegionLabel = "region" | "dataCenter";
-
 export interface PlatformCapabilities {
-  provisioningMode: ProvisioningMode;
-  /** Whether the control plane may create / destroy workers. */
-  dynamicScalingEnabled: boolean;
-  /** Whether the recycler runs — gates the recycle-policy editor. */
-  podRecyclingEnabled: boolean;
-  /** Region ids this deployment uses; empty means "no override". */
-  regions: string[];
-  regionLabel: RegionLabel;
+  /**
+   * How many clusters one application group may reserve capacity on. The
+   * cluster LIST is deliberately not here — it changes at runtime, so every
+   * surface reads `clustersApi.status()` instead of a boot-time snapshot.
+   */
+  maxClustersPerGroup: number;
 }
 
 /**
- * Assumed posture when the endpoint can't be reached (older backend, or
- * the jsdom test env with no `fetch`). Deliberately the historical
- * behaviour: everything visible, nothing hidden. Failing open on the UI is
- * right because the server still refuses what it must — a stale browser can
- * show a Spin button, but pressing it gets a clean `409`.
+ * Assumed shape when the endpoint can't be reached (older backend, or the
+ * jsdom test env with no `fetch`). Failing open on the UI is right because
+ * the server still refuses what it must.
  */
 export const DEFAULT_CAPABILITIES: PlatformCapabilities = {
-  provisioningMode: "DYNAMIC",
-  dynamicScalingEnabled: true,
-  podRecyclingEnabled: true,
-  regions: [],
-  regionLabel: "region",
+  maxClustersPerGroup: 2,
 };
 
 export const platformApi = {
@@ -47,12 +35,8 @@ export const platformApi = {
       throw new Error(`capabilities failed: HTTP ${resp.status}`);
     }
     const body = (await resp.json()) as Partial<PlatformCapabilities>;
-    // Tolerant read: a field the backend hasn't shipped yet falls back to the
-    // historical behaviour rather than rendering an empty UI.
-    return {
-      ...DEFAULT_CAPABILITIES,
-      ...body,
-      regions: Array.isArray(body.regions) ? body.regions : [],
-    };
+    // Tolerant read: a field the backend hasn't shipped yet falls back rather
+    // than rendering an empty UI.
+    return { ...DEFAULT_CAPABILITIES, ...body };
   },
 };

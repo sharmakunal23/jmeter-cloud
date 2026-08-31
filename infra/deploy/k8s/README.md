@@ -142,23 +142,18 @@ starts and the Flyway Job applies migrations are **normal** — the stack
 settles once the schema exists. Don't "fix" this with startup ordering
 hacks; fix a service only if it fails to converge after the DB is ready.
 
-## Static fleets — workers you deploy yourself
+## Declared workers — workers you deploy yourself
 
-If the control plane can't create worker Pods on demand — no API rights in
-the worker namespace, or a quota that caps allocation — set
-`PROVISIONING_MODE=STATIC` on the global-orchestrator and declare the
-workers you deployed with `kubectl`. The Capacity tab is replaced by the
-application page's **Data centers** section (declaring into the app's group
-pool), `maxAvailable` becomes derived
-from the declared count, liveness is probed rather than heartbeated, and
-the reconciler + recycler are not wired (the reconciler would otherwise
-delete the declared fleet at every boot).
+Declared (`SOURCE=STATIC`) and spun (`SOURCE=DYNAMIC`) workers coexist in one
+group pool since CLUSTER-CAPACITY (2026-08-31) — `PROVISIONING_MODE` is
+retired. Deploy workers with your own pipeline, register their cluster
+(validated `POST /api/v1/regions`), reserve capacity for the group, and
+declare each worker at a hub-reachable address; the hub health-probes them
+(`StaticPodProbe`) while the reconciler + recycler stay scoped to spun rows
+and can never touch a declared fleet.
 
-**Full playbook: [`staticFleet.md`](staticFleet.md)** — configuration, what
+**Full playbook: [`staticFleet.md`](staticFleet.md)** — the three steps, what
 env a worker needs, declaring, day-2 operations, and the security note.
-
-**STATIC is the platform default since 2026-07-27**; set `PROVISIONING_MODE=DYNAMIC` explicitly on a
-deployment that may create its own workers.
 
 ## Scaling posture — who can run >1 replica
 
@@ -227,7 +222,7 @@ choice, matching the accepted `ApplicationHealthPoller` deviation.
 Worker Pods are created by `jmeter-regional-orchestrator`, one per cluster,
 under a ServiceAccount with a namespace-scoped pods-only Role
 (`jmeter-regional-orchestrator/kube/kustomize/base/rbac.yml`) — the only cluster
-credential in the platform. The global-orchestrator holds none: it names its
-regions in `REGIONS=id=url,…` and forwards pod creation and worker calls to
-each region's regional. The `workers` headless Service lives with the
+credential in the platform. The global-orchestrator holds none: clusters register at runtime in its
+`ORCH_REGION` registry (validated `POST /api/v1/regions` — CLUSTER-CAPACITY)
+and it forwards pod creation and worker calls to each cluster's regional. The `workers` headless Service lives with the
 regional too (REGIONAL-SPLIT, 2026-08-28).

@@ -370,4 +370,27 @@ class K8sPodProvisionerTest {
         assertThat(client.pods().inNamespace(NS).withName("payments-us-east-1-worker-5").get()).isNull();
         client.resourceQuotas().inNamespace(NS).withName("default").delete();
     }
+
+    @Test
+    @DisplayName("capacity: ephemeral-storage bounds workersFree only when workers declare it (CLUSTER-CAPACITY)")
+    void capacityCountsEphemeralStorage() {
+        // 40 GiB ephemeral headroom; workers at 5Gi each → 8 fit, tighter than the 12 pods free.
+        client.resourceQuotas().inNamespace(NS).resource(new io.fabric8.kubernetes.api.model.ResourceQuotaBuilder()
+                .withNewMetadata().withName("default").endMetadata()
+                .withNewStatus()
+                    .addToHard("pods", new io.fabric8.kubernetes.api.model.Quantity("12"))
+                    .addToHard("requests.ephemeral-storage", new io.fabric8.kubernetes.api.model.Quantity("40Gi"))
+                .endStatus().build()).create();
+
+        WorkerPodShape withEphemeral = new WorkerPodShape(true, null, "5Gi", null, null, null, null, null, java.util.Map.of(), null);
+        NamespaceCapacity bounded = new K8sPodProvisioner(client, hosted(withEphemeral)).capacity();
+        assertThat(bounded.ephemeralFreeMi()).isEqualTo(40L * 1024);
+        assertThat(bounded.workersFree()).isEqualTo(8);
+
+        // No declared ephemeral shape → each pod takes the LimitRange default we cannot know: skip the dimension.
+        NamespaceCapacity unshaped = provisioner.capacity();
+        assertThat(unshaped.ephemeralFreeMi()).isNull();
+        assertThat(unshaped.workersFree()).isEqualTo(12);
+        client.resourceQuotas().inNamespace(NS).withName("default").delete();
+    }
 }

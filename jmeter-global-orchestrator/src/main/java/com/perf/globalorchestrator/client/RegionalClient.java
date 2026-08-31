@@ -105,10 +105,30 @@ public class RegionalClient {
     public RegionCapabilities capabilities(String regionalUrl) {
         JsonNode n = json(send(regionalUrl, "GET", "/api/v1/capabilities", null));
         JsonNode workersFree = n.path("capacity").path("workersFree");
+        JsonNode workerMemoryMb = n.path("workerMemoryMb");
         return new RegionCapabilities(
                 text(n, "region"), text(n, "namespace"), text(n, "headlessService"),
                 text(n, "image"), n.path("localOrchestratorPort").asInt(8080), text(n, "version"),
-                workersFree.isNumber() ? workersFree.asInt() : null);
+                workersFree.isNumber() ? workersFree.asInt() : null,
+                workerMemoryMb.isNumber() ? workerMemoryMb.asLong() : null,
+                text(n, "workerEphemeralStorage"));
+    }
+
+    /** One registration dry-run check reported by the regional's {@code GET /api/v1/provisioningCheck}. */
+    public record ProvisioningCheck(String name, boolean ok, String detail) {}
+
+    public record ProvisioningCheckResult(String region, String image, boolean ok,
+                                          List<ProvisioningCheck> checks) {}
+
+    /** The cluster-registration dry run (CLUSTER-CAPACITY): can this regional create worker Pods? */
+    public ProvisioningCheckResult provisioningCheck(String regionalUrl) {
+        JsonNode n = json(send(regionalUrl, "GET", "/api/v1/provisioningCheck", null));
+        List<ProvisioningCheck> checks = new ArrayList<>();
+        for (JsonNode c : n.path("checks")) {
+            checks.add(new ProvisioningCheck(text(c, "name"), c.path("ok").asBoolean(false), text(c, "detail")));
+        }
+        return new ProvisioningCheckResult(text(n, "region"), text(n, "image"),
+                n.path("ok").asBoolean(false), checks);
     }
 
     public ProvisionResult createPod(String regionalUrl, PodSpec spec) {

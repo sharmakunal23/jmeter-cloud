@@ -45,7 +45,7 @@
   <text x="581" y="275" text-anchor="middle" font-size="12" font-weight="600" fill="#115e59">regional-orchestrator · 8088</text>
   <text x="581" y="291" text-anchor="middle" font-size="10" fill="#475569">Pods · liveness · relays worker calls</text>
   <text x="712" y="280" font-size="9" fill="#64748b">one per data center</text>
-  <text x="712" y="291" font-size="9" fill="#64748b">REGIONS=id=url,…</text>
+  <text x="712" y="291" font-size="9" fill="#64748b">registry: ORCH_REGION</text>
 
   <!-- STORAGE band -->
   <rect x="30" y="328" width="840" height="76" rx="8" fill="none" stroke="#a7f3d0"/>

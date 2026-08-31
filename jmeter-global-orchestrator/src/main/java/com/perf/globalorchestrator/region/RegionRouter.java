@@ -30,6 +30,16 @@ public class RegionRouter {
                 .orElse(ref.baseUrl());
     }
 
+    /**
+     * Whether {@link #dial} would go through the region's relay — false for an
+     * operator-declared worker with a hub-reachable address, which batch
+     * callers (the status fetcher) must reach directly instead.
+     */
+    public boolean relayable(WorkerRef ref) {
+        return registry.urlOf(ref.region()).isPresent()
+                && isClusterPrivate(ref.baseUrl(), headlessServiceOf(ref.region()));
+    }
+
     private String headlessServiceOf(String region) {
         return registry.capabilitiesOf(region).map(RegionCapabilities::headlessService).orElse("workers");
     }

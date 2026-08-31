@@ -3,7 +3,6 @@ package com.perf.globalorchestrator;
 import com.perf.globalorchestrator.domain.Application;
 import com.perf.globalorchestrator.domain.ApplicationGroup;
 import com.perf.globalorchestrator.http.ApplicationController;
-import com.perf.globalorchestrator.provision.ProvisioningProperties;
 import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.RunRepository;
@@ -50,15 +49,13 @@ class ApplicationControllerTest {
     void setUp() {
         repo = mock(ApplicationRepository.class);
         groups = mock(ApplicationGroupRepository.class);
-        ProvisioningProperties provisioning = mock(ProvisioningProperties.class);
-        when(provisioning.regions()).thenReturn(List.of("na-east"));
         when(groups.findById("cps")).thenReturn(Optional.of(
                 new ApplicationGroup("cps", "Servicing MQ", null, Instant.now(), null)));
         when(groups.findById("nope")).thenReturn(Optional.empty());
         when(repo.insert(any())).thenAnswer(inv -> inv.getArgument(0));
         ApplicationController controller = new ApplicationController(
                 repo, groups, mock(RunRepository.class),
-                mock(ApplicationPurgeService.class), provisioning);
+                mock(ApplicationPurgeService.class));
         mvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 

@@ -194,7 +194,7 @@ function CompareColumn({
         <dl className="defList defList--compact">
           <dt>Test plan</dt>
           <dd className="mono">{entry.run.testPlanBlobId}</dd>
-          <dt>Regions</dt>
+          <dt>Clusters</dt>
           <dd><RegionBadgeList run={entry.run} /></dd>
           <dt>Fleet</dt>
           <dd>

@@ -9,13 +9,9 @@ import com.perf.globalorchestrator.provision.PodReconciler;
 import com.perf.globalorchestrator.provision.PodReconciler.ReconcileSummary;
 import com.perf.globalorchestrator.provision.PodRecycler;
 import com.perf.globalorchestrator.provision.PodSpec;
-import com.perf.globalorchestrator.provision.ProvisioningDisabledException;
-import com.perf.globalorchestrator.provision.ProvisioningProperties;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -33,14 +29,9 @@ import java.util.Optional;
  *
  * <p><b>The spin and teardown routes deliberately skip the capacity and in-use
  * checks</b> that {@link CapacityController}'s equivalents enforce. They exist
- * for when something is stuck; normal operation should never use them.
- *
- * <p>Every route here mutates worker lifecycle, so all four answer
- * {@code 409 PROVISIONING_DISABLED} under {@code PROVISIONING_MODE=STATIC}.
- * {@link PodReconciler} and {@link PodRecycler} are not beans in that mode —
- * their sweeps would destroy an operator-managed fleet — which is why they are
- * injected via {@link ObjectProvider}: absence is the expected state, not a
- * wiring failure.
+ * for when something is stuck; normal operation should never use them. The
+ * sweeps themselves are scoped to {@code SOURCE=DYNAMIC} rows, so a declared
+ * fleet is never touched (CLUSTER-CAPACITY).
  *
  * <p>Only authenticated operators should reach these in cloud mode; the local
  * profile leaves auth off.
@@ -49,34 +40,31 @@ import java.util.Optional;
 @RequestMapping("/api/v1/admin")
 public class AdminController {
 
-    private final ObjectProvider<PodReconciler> reconciler;
-    private final ObjectProvider<PodRecycler> recycler;
+    private final PodReconciler reconciler;
+    private final PodRecycler recycler;
     private final PodProvisioner provisioner;
     private final PodNameAllocator nameAllocator;
     private final ApplicationGroupRepository groups;
-    private final ProvisioningProperties provisioning;
     private final PodRepository pods;
 
     public AdminController(
-            ObjectProvider<PodReconciler> reconciler,
-            ObjectProvider<PodRecycler> recycler,
+            PodReconciler reconciler,
+            PodRecycler recycler,
             PodProvisioner provisioner,
             PodNameAllocator nameAllocator,
             ApplicationGroupRepository groups,
-            ProvisioningProperties provisioning,
             PodRepository pods) {
         this.reconciler    = reconciler;
         this.recycler      = recycler;
         this.provisioner   = provisioner;
         this.nameAllocator = nameAllocator;
         this.groups = groups;
-        this.provisioning  = provisioning;
         this.pods = pods;
     }
 
     @PostMapping("/reconcilePods")
     public ResponseEntity<Map<String, Object>> reconcilePods() {
-        ReconcileSummary summary = requireBean(reconciler, "reconcile workers").reconcile();
+        ReconcileSummary summary = reconciler.reconcile();
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("adopted",        summary.adopted);
         body.put("started",        summary.started);
@@ -92,8 +80,7 @@ public class AdminController {
      */
     @PostMapping("/recyclePods")
     public ResponseEntity<Map<String, Object>> recyclePods() {
-        PodRecycler.RecycleSummary summary =
-                requireBean(recycler, "recycle workers").doSweep();
+        PodRecycler.RecycleSummary summary = recycler.doSweep();
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("recycled", summary.recycled);
         body.put("skipped",  summary.skipped);
@@ -103,7 +90,6 @@ public class AdminController {
 
     @PostMapping("/spinPod")
     public ResponseEntity<Map<String, Object>> spinPod(@RequestBody SpinPodRequest req) {
-        provisioning.requireDynamic("spin a worker");
         if (req == null || req.groupId() == null || req.groupId().isBlank()
                 || req.region() == null || req.region().isBlank()) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
@@ -133,38 +119,28 @@ public class AdminController {
                     "code", "INVALID_POD_NAME",
                     "message", "podName must be a DNS-1123 label: " + podName));
         }
-        provisioning.requireDynamic("tear down worker " + podName);
         Optional<com.perf.globalorchestrator.domain.Pod> row = pods.findByPodId(podName);
         if (row.isEmpty()) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
                     "code", "POD_NOT_REGISTERED",
                     "message", "worker " + podName + " is not in the registry, so its region is unknown"));
         }
+        // An operator-declared worker is not ours to destroy — asking the
+        // regional to delete a Pod of that name would tear down something the
+        // platform never created, and the reconciler (DYNAMIC-scoped) would
+        // never GC the row either. Release it through the capacity endpoint.
+        if (row.get().source() == com.perf.globalorchestrator.domain.PodSource.STATIC) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                    "code", "POD_SOURCE_STATIC",
+                    "message", "worker " + podName + " is operator-declared — the control plane cannot tear it "
+                            + "down; release it with DELETE /api/v1/applicationGroups/"
+                            + row.get().groupId() + "/capacity/" + row.get().region() + "/pods/" + podName,
+                    "podName", podName));
+        }
         provisioner.stopAndRemove(row.get().region(), podName);
         // Registry row will be GC'd by the next reconciler sweep — caller
         // can also POST /admin/reconcilePods immediately to force it.
         return ResponseEntity.ok(Map.of("podName", podName, "stopped", true));
-    }
-
-    /**
-     * Resolves a bean that only exists under {@code PROVISIONING_MODE=DYNAMIC},
-     * translating absence into the same {@code 409} an explicit mode guard
-     * produces. Absence and static mode are the same fact here — the beans are
-     * conditional on exactly that property — so this can't mask a real wiring
-     * failure.
-     */
-    private static <T> T requireBean(ObjectProvider<T> provider, String action) {
-        T bean = provider.getIfAvailable();
-        if (bean == null) {
-            throw new ProvisioningDisabledException(action);
-        }
-        return bean;
-    }
-
-    @ExceptionHandler(ProvisioningDisabledException.class)
-    public ResponseEntity<Map<String, Object>> handleProvisioningDisabled(
-            ProvisioningDisabledException e) {
-        return ResponseEntity.status(HttpStatus.CONFLICT).body(e.toBody());
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

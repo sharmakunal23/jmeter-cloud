@@ -16,6 +16,7 @@ import {
 } from "../components/BulkActionConfirmDialog";
 import { RequestCapacityDialog } from "../components/RequestCapacityDialog";
 import { RegionPicker } from "../components/RegionPicker";
+import { DeclareWorkerDialog } from "../components/DeclareWorkerDialog";
 import { useVisiblePolling } from "../hooks/useVisiblePolling";
 
 /**
@@ -72,6 +73,7 @@ export function CapacityDetailPage() {
   >(null);
   const [requestCap, setRequestCap] = useState<{ region: string; current: number } | null>(null);
   const [managingRegions, setManagingRegions] = useState(false);
+  const [declaring, setDeclaring] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
@@ -242,6 +244,18 @@ export function CapacityDetailPage() {
           `Cannot shrink to ${requested}: ${provisioned} pod${provisioned === 1 ? "" : "s"} currently provisioned. Drain first.`,
         );
       }
+      if (err instanceof CapacityApiError && err.code === "CLUSTER_CAPACITY_EXCEEDED") {
+        const maxWorkers = err.extra?.maxWorkers as number | undefined;
+        const others = err.extra?.reservedByOthers as number | undefined;
+        const free = maxWorkers != null && others != null ? Math.max(0, maxWorkers - others) : undefined;
+        throw new Error(
+          `The cluster cannot fit this reservation — other groups hold ${others} of its ${maxWorkers} workers`
+          + (free != null ? `; at most ${free} can be reserved.` : "."),
+        );
+      }
+      if (err instanceof CapacityApiError && err.code === "CLUSTER_NOT_REGISTERED") {
+        throw new Error("This cluster is not registered any more — see the Clusters page.");
+      }
       throw err instanceof Error ? err : new Error(String(err));
     }
   }
@@ -266,11 +280,11 @@ export function CapacityDetailPage() {
     await refresh();
     const summary = `${toAdd.length} added, ${toRemove.length} removed`;
     if (failed === 0) {
-      showToast({ variant: "ok", text: `Regions updated — ${summary}` });
+      showToast({ variant: "ok", text: `Clusters updated — ${summary}` });
     } else if (ok === 0) {
-      showToast({ variant: "err", text: "Could not update regions", detail: firstError ?? "" });
+      showToast({ variant: "err", text: "Could not update clusters", detail: firstError ?? "" });
     } else {
-      showToast({ variant: "warn", text: `Regions partially updated — ${summary}`, detail: firstError ?? "" });
+      showToast({ variant: "warn", text: `Clusters partially updated — ${summary}`, detail: firstError ?? "" });
     }
   }
 
@@ -301,7 +315,7 @@ export function CapacityDetailPage() {
             className="btn btn--ghost"
             onClick={() => setManagingRegions(true)}
           >
-            Manage regions
+            Manage clusters
           </button>
           <Link to="/applications" className="btn btn--ghost" title={`The ${group.applicationCount ?? 0} application(s) in this group`}>
             Applications ({group.applicationCount ?? 0}) →
@@ -333,13 +347,14 @@ export function CapacityDetailPage() {
 
       {regions.length === 0 ? (
         <div className="emptyState">
-          <p>This group has no capacity regions configured.</p>
+          <p>This group has no clusters attached.</p>
           <p className="ink-soft">
-            Pick the USA regions it should run in (up to 4).
+            Attach up to two registered clusters and reserve capacity on them —
+            the group&apos;s applications share the pool.
           </p>
           <p>
             <button type="button" className="btn btn--primary" onClick={() => setManagingRegions(true)}>
-              + Add regions
+              + Attach clusters
             </button>
           </p>
         </div>
@@ -356,6 +371,7 @@ export function CapacityDetailPage() {
             onBulkRestart={(pods) => setBulkDialog({ region, action: "restart", pods })}
             onBulkDrain={(pods)   => setBulkDialog({ region, action: "drain",   pods })}
             onRequestCapacity={(current) => setRequestCap({ region, current })}
+            onDeclare={() => setDeclaring(region)}
             busy={busy}
           />
         ))
@@ -384,6 +400,19 @@ export function CapacityDetailPage() {
         />
       )}
 
+      {declaring && (
+        <DeclareWorkerDialog
+          groupId={group.groupId}
+          region={declaring}
+          onDone={async (message) => {
+            setDeclaring(null);
+            showToast({ variant: "ok", text: message });
+            await refreshOne(group.groupId, declaring);
+          }}
+          onCancel={() => setDeclaring(null)}
+        />
+      )}
+
       {managingRegions && (
         <RegionPicker
           groupName={group.name}
@@ -402,7 +431,7 @@ export function CapacityDetailPage() {
 
 function RegionPanel({
   snapshot, selection, onSelectionChange,
-  onProvision, onBulkRestart, onBulkDrain, onRequestCapacity, busy,
+  onProvision, onBulkRestart, onBulkDrain, onRequestCapacity, onDeclare, busy,
 }: {
   snapshot: CapacitySnapshot;
   selection: Set<string>;
@@ -411,6 +440,8 @@ function RegionPanel({
   onBulkRestart: (pods: PodView[]) => void;
   onBulkDrain:   (pods: PodView[]) => void;
   onRequestCapacity: (currentMax: number) => void;
+  /** CLUSTER-CAPACITY — declare an operator-deployed worker into this pool. */
+  onDeclare: () => void;
   busy: boolean;
 }) {
   const [provisionN, setProvisionN] = useState("1");
@@ -476,7 +507,7 @@ function RegionPanel({
         <div className="regionPanel__actions">
           <div className="provisionGroup" title={
             snapshot.spinnable === 0
-              ? "Request Capacity to raise the limit above the current ceiling."
+              ? "Reserve more capacity to raise the limit above the current ceiling."
               : `Provision up to ${snapshot.spinnable} more worker(s)`
           }>
             <input
@@ -515,10 +546,19 @@ function RegionPanel({
           <button
             type="button"
             className="btn btn--ghost"
+            onClick={onDeclare}
+            disabled={busy}
+            title="Bind a worker you deployed yourself — it counts against the reservation like a spun one"
+          >
+            + Declare a worker
+          </button>
+          <button
+            type="button"
+            className="btn btn--ghost"
             onClick={() => onRequestCapacity(snapshot.maxAvailable)}
             disabled={busy}
           >
-            Request Capacity
+            Reserve capacity
           </button>
         </div>
       </header>
@@ -573,6 +613,7 @@ function RegionPanel({
               </th>
               <th>Worker</th>
               <th>State</th>
+              <th>Source</th>
               <th>Container</th>
               {/* Phase F1 — WORKER-HYGIENE bookkeeping fields surfaced
                   per pod so operators can spot a pod approaching its
@@ -636,6 +677,16 @@ function PodRow({
       <td>
         <span className={`chip ${stateClass}`} title={stateTitle}>
           {pod.state}
+        </span>
+      </td>
+      <td>
+        <span
+          className="chip"
+          title={pod.source === "STATIC"
+            ? "Operator-deployed and declared — never restarted or recycled by the platform"
+            : "Spun by the cluster's regional orchestrator"}
+        >
+          {pod.source === "STATIC" ? "Declared" : "Spun"}
         </span>
       </td>
       <td>

@@ -157,27 +157,16 @@ globalOrchestrator:
   metricsPurgePassword:          ${ORACLE_METRICS_PURGER_PASSWORD:localdev}
   metricsPurgeStatementTimeoutMs: ${METRICS_PURGE_STATEMENT_TIMEOUT_MS:120000}
 
-  # ── STATIC-FLEET: provisioning posture ─────────────────────────────
-  # Whether this deployment may create worker pods at all.
-  #   STATIC (DEFAULT since 2026-07-27) — workers are deployed and owned by
-  #     the operator, which is this platform's normal deployment shape
-  #     (private clouds where on-demand provisioning is unavailable, or a
-  #     namespace quota caps what may be allocated). Spin / restart /
-  #     container teardown answer 409 PROVISIONING_DISABLED; PodReconciler
-  #     and PodRecycler are not wired AT ALL. That last part is
-  #     load-bearing: the reconciler's row-first pass deletes any registry
-  #     row whose Pod it cannot see, which with no cluster access
-  #     would wipe the operator's whole declared fleet at boot.
-  #   DYNAMIC — the control plane owns worker lifecycle: it spins,
-  #     restarts, drains and recycles through a PodProvisioner. Set this
-  #     explicitly when at least one region in REGIONS has a regional
-  #     orchestrator URL — that regional holds the cluster credential; this
-  #     service never does.
-  provisioning:
-    mode:    ${PROVISIONING_MODE:STATIC}
-    # The region list lives in globalOrchestrator.regions (REGIONS) above.
+  # ── CLUSTER-CAPACITY: group reservations on registered clusters ────
+  # Clusters live in ORCH_REGION (registered at runtime through
+  # POST /api/v1/regions after the validation chain passes); each application
+  # group reserves capacity on at most this many of them. STATIC and DYNAMIC
+  # workers coexist per row (ORCH_POD.SOURCE) — there is no deployment-wide
+  # provisioning mode any more.
+  capacity:
+    maxClustersPerGroup: ${MAX_CLUSTERS_PER_GROUP:2}
 
-  # ── STATIC-FLEET: declared-worker liveness probe (STATIC mode only) ─
+  # ── Declared-worker liveness probe (SOURCE=STATIC rows) ─────────────
   # Operator-deployed workers need not know this control plane exists, so
   # they may never POST /api/v1/heartbeat — which would let PodSweeper mark
   # the whole declared fleet LOST within pod.lostAfterMs and leave it
@@ -201,16 +190,11 @@ globalOrchestrator:
     probeConcurrency:    ${STATICPOD_PROBE_CONCURRENCY:8}
     probeTickBudgetMs:   ${STATICPOD_PROBE_TICK_BUDGET_MS:20000}
 
-  # ── Regions (REGIONAL-SPLIT) ─────────────────────────────────────
-  # Comma-separated `id` or `id=url`. An entry WITH a url is routed: its
-  # workers are created and reached through the jmeter-regional-orchestrator
-  # at that url (one per data-center cluster; NodePort 30088 on kind). A
-  # bare id is direct: operator-declared workers reached at their own
-  # baseUrl — the compose-only STATIC loop. The ids are what the UI offers
-  # as regions; empty keeps the UI on its own defaults.
-  #   REGIONS=na-east=http://na-east-control-plane:30088,na-west=http://na-west-control-plane:30088
-  regions: ${REGIONS:}
-  # How often each routed region's /api/v1/capabilities is polled — the
+  # ── Regions (REGIONAL-SPLIT → CLUSTER-CAPACITY) ───────────────────
+  # The region list is the ORCH_REGION table, written by the registration
+  # API — the REGIONS env var is retired. Every registered cluster fronts a
+  # jmeter-regional-orchestrator (NodePort 30088 on kind).
+  # How often each region's /api/v1/capabilities is polled — the
   # only source of "reachable" and of the worker image the recycler diffs.
   # GET /api/v1/platform/health is served from a snapshot the hub refreshes
   # on this cadence — every minute, like the application health poll
@@ -228,6 +212,10 @@ globalOrchestrator:
     initialDelayMs:           ${REGION_PROBE_INITIAL_DELAY_MS:2000}
     # Consecutive misses before a region is UNREACHABLE (one is a WAN blip).
     missesBeforeUnreachable:  ${REGION_PROBE_MISSES_BEFORE_UNREACHABLE:3}
+    # "Test provisioning" (CLUSTER-CAPACITY): how long the async deep probe
+    # waits for its one probe worker to go ready — matches the worker Pod's
+    # 180 s startup budget.
+    testProvisionTimeoutMs:   ${REGION_TEST_PROVISION_TIMEOUT_MS:180000}
   # Dynamic workers in routed regions never heartbeat; the kubelet is the
   # liveness truth. One GET /api/v1/workers per region per tick: ready
   # refreshes the row, dead/absent marks it LOST with the kubelet's reason

@@ -8,7 +8,6 @@ import com.perf.globalorchestrator.domain.Run;
 import com.perf.globalorchestrator.domain.RunEventType;
 import com.perf.globalorchestrator.domain.RunFleetMember;
 import com.perf.globalorchestrator.domain.RunState;
-import com.perf.globalorchestrator.provision.ProvisioningProperties;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.GroupCapacityRepository;
 import com.perf.globalorchestrator.repo.PluginRepository;
@@ -76,7 +75,6 @@ class RunServicePostRunEventsTest {
                 mock(RunTrendRepository.class),
                 mock(PluginRepository.class),
                 null,
-                mock(ProvisioningProperties.class),
                 "us-east-1", 1, 100, 1000L);
     }
 

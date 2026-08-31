@@ -5,10 +5,12 @@ and the application groups that route their metrics and own their worker pools â
 `/api/v1/applicationGroups`), per-(group, region) capacity, run state and the pod registry in the
 `ORCH_*` tables of the one Oracle schema `CARDZATE_DB_GRAF`, claims IDLE pods one row at a time with
 `FOR UPDATE SKIP LOCKED` (the `ORCH_CLAIMS` package), and fans a run out to many
-workers. It holds no cluster credential: under `PROVISIONING_MODE=DYNAMIC`
-it creates and reaches workers through each region's
-`jmeter-regional-orchestrator` (`REGIONS`), and directly by `baseUrl` in a
-region without one.
+workers. It holds no cluster credential: clusters register at runtime in
+`ORCH_REGION` (`POST /api/v1/regions`, validated against the cluster's
+`jmeter-regional-orchestrator` before anything is written â€” CLUSTER-CAPACITY),
+workers are created and reached through that regional, and an operator-declared
+worker is dialled directly at its hub-reachable `baseUrl`. Groups reserve
+capacity on at most two clusters, under each cluster's worker ceiling.
 
 ![global-orchestrator flow](docs/diagrams/globalOrchestrator.svg)
 

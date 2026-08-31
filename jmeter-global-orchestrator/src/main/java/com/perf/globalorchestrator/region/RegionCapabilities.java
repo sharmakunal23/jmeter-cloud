@@ -9,10 +9,19 @@ public record RegionCapabilities(
         int localOrchestratorPort,
         String version,
         /** Workers the region's namespace quota still admits (Track 8); null = unbounded / not reported. */
-        Integer workersFree) {
+        Integer workersFree,
+        /** The worker Pod's memory request == limit in MiB; null = not reported (older regional). */
+        Long workerMemoryMb,
+        /** The worker Pod's ephemeral-storage request == limit (e.g. "5Gi"); null = LimitRange default / not reported. */
+        String workerEphemeralStorage) {
 
     public RegionCapabilities(String region, String namespace, String headlessService, String image,
                               int localOrchestratorPort, String version) {
-        this(region, namespace, headlessService, image, localOrchestratorPort, version, null);
+        this(region, namespace, headlessService, image, localOrchestratorPort, version, null, null, null);
+    }
+
+    public RegionCapabilities(String region, String namespace, String headlessService, String image,
+                              int localOrchestratorPort, String version, Integer workersFree) {
+        this(region, namespace, headlessService, image, localOrchestratorPort, version, workersFree, null, null);
     }
 }

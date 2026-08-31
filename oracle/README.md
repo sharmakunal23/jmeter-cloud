@@ -13,7 +13,7 @@ metrics-consumer connects as the owner; `METRICS_READER`, `METRICS_PURGER` and
 
 | What | Where |
 |---|---|
-| Flyway `V1` (the hosted metrics layout), `V2` (the `ORCH_*` control plane + the users' grants) and each group's bundle (`R__group_<id>.sql`) | [`migrations/`](migrations/) |
+| Flyway `V1` (the hosted metrics layout), `V2` (the `ORCH_*` control plane + the users' grants), `V3` (the plugin library), `V4` (the cluster registry `ORCH_REGION`) and each group's bundle (`R__group_<id>.sql`) | [`migrations/`](migrations/) |
 | Group descriptors + the renderer that produces the bundles | [`groups/`](groups/) |
 | Owner + users — the DBA hand-off, run once as SYS | [`initdb/`](initdb/) |
 | Design and verified gates | [`docs/metricsSchema.md`](docs/metricsSchema.md), [`docs/controlPlaneSchema.md`](docs/controlPlaneSchema.md) |

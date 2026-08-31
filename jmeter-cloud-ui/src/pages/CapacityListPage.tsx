@@ -235,7 +235,7 @@ export function CapacityListPage() {
             <tr>
               <SortHeader label="Group"       k="name"        cur={sortKey} dir={sortDir} onClick={toggleSort} />
               <th>Activity</th>
-              <SortHeader label="Regions"     k="regions"     cur={sortKey} dir={sortDir} onClick={toggleSort} numeric />
+              <SortHeader label="Clusters"    k="regions"     cur={sortKey} dir={sortDir} onClick={toggleSort} numeric />
               <SortHeader label="Ready"       k="ready"       cur={sortKey} dir={sortDir} onClick={toggleSort} numeric />
               <SortHeader label="In Use"      k="inUse"       cur={sortKey} dir={sortDir} onClick={toggleSort} numeric />
               <SortHeader label="Usage"       k="provisioned" cur={sortKey} dir={sortDir} onClick={toggleSort} numeric />
@@ -409,7 +409,7 @@ function SkeletonTable() {
         <tr>
           <th>Group</th>
           <th>Activity</th>
-          <th className="num">Regions</th>
+          <th className="num">Clusters</th>
           <th className="num">Ready</th>
           <th className="num">In Use</th>
           <th className="num">Usage</th>

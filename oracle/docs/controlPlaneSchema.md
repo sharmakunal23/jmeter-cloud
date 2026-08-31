@@ -4,7 +4,9 @@ What `oracle/migrations/V2__controlPlaneSchema.sql` adds to `CARDZATE_DB_GRAF`
 beside the hosted metrics layout: the 13 `ORCH_`-prefixed control-plane tables
 and the one place a plain translation would have been wrong — the two claim
 queries. `V3__pluginLibrary.sql` (UX-DYNAMICS T3, 2026-08-30) adds the 14th,
-`ORCH_PLUGIN`, plus the run's `PLUGINS` snapshot column. The prefix keeps the two families apart in one schema (`ORCH_RUN` is a
+`ORCH_PLUGIN`, plus the run's `PLUGINS` snapshot column;
+`V4__clusterRegistry.sql` (CLUSTER-CAPACITY, 2026-08-31) the 15th,
+`ORCH_REGION`, plus the FK that makes every reservation name a registered cluster. The prefix keeps the two families apart in one schema (`ORCH_RUN` is a
 launch; `RUN` is the metrics dimension, `RUN.RUN_KEY = ORCH_RUN.RUN_ID`). For
 anyone adding a table or a repository.
 
@@ -16,7 +18,7 @@ anyone adding a table or a repository.
 | `ORCH_RUN_FLEET_MEMBER` | `(RUN_ID, WORKER_ID)` | FK → `ORCH_RUN` `ON DELETE CASCADE`; `PROPERTIES CLOB IS JSON`; `(WORKER_ID, STATE, CREATED_AT)` index serves the claim's `NOT EXISTS` |
 | `ORCH_APPLICATION_GROUP` | `GROUP_ID`, unique `NAME` | a team's applications **and their worker pool**; `GROUP_ID` (`[a-z][a-z0-9_]{0,29}`) = `GROUP_REGISTRY.GROUP_ID`, what workers send as `?groupId=`; `UPPER(groupId)` prefixes the group's `_METRICS` / `_METRICS_H` tables; carries the pod policy (`RECYCLE_POLICY` CHECKs + thresholds, `ALWAYS_ON NUMBER(1)`) |
 | `ORCH_APPLICATION` | `APPLICATION_ID`, unique `NAME` | `METRICS_GROUP_ID` **NOT NULL** FK → `ORCH_APPLICATION_GROUP` (no ON DELETE: a group with applications cannot be deleted; indexed) + `METRICS_APPLICATION` (the group classifier's `LABEL.APPLICATION` value); `HEALTH_ENDPOINTS`/`LAST_HEALTH_DETAILS` CLOB `IS JSON`. No pool policy here — it is the group's |
-| `ORCH_GROUP_CAPACITY` | `(GROUP_ID, REGION)` | FK → group cascade; `MAX_AVAILABLE BETWEEN 0 AND 1000` — every application in the group draws on it |
+| `ORCH_GROUP_CAPACITY` | `(GROUP_ID, REGION)` | FK → group cascade + FK → `ORCH_REGION` (V4, no action); `MAX_AVAILABLE BETWEEN 0 AND 1000` is the group's **reservation** on that cluster — every application in the group draws on it, and the SUM of reservations per region must fit the cluster's `MAX_WORKERS` (service-enforced under a `FOR UPDATE` of the `ORCH_REGION` row) |
 | `ORCH_POD` | `POD_ID` | FK → group (no action: a group with workers cannot be deleted); `SOURCE IN (DYNAMIC, STATIC)`; `(GROUP_ID, REGION, STATE, LAST_HEARTBEAT)` is the claim's candidate index **and** the FK index — without one, deleting a group takes a table lock on `ORCH_POD` |
 | `ORCH_RUN_EVENT` | `EVENT_ID` | FK → run cascade; `PAYLOAD CLOB IS JSON`; append-only |
 | `ORCH_CRON_JOB` | `CRON_JOB_ID`, unique `(APPLICATION_NAME, NAME)` | `KIND` + kind-fields CHECKs; `(ENABLED, NEXT_FIRE_AT)` index is the claim's candidate scan |
@@ -24,6 +26,7 @@ anyone adding a table or a repository.
 | `ORCH_RUN_TREND` | `RUN_ID` | `BINARY_DOUBLE` — these are stored ratios, not sums |
 | `ORCH_AI_RESPONSE` | `(KIND, CACHE_KEY, PROMPT_VERSION)` | `RESPONSE CLOB IS JSON` |
 | `ORCH_PLUGIN` (V3) | `PLUGIN_ID`, unique `NAME`, unique `SHA256` | the global JMeter plugin library — one version per plugin (upgrade = delete + re-register; rows immutable, no UPDATE grant); jar bytes live in a document-service blob (`BLOB_ID`); a delete is blocked `409` while a non-terminal run's snapshot references it |
+| `ORCH_REGION` (V4) | `REGION`, unique `LABEL`, unique `REGIONAL_URL` | a registered cluster, identified three ways and unique in all of them (id/PK, display name, endpoint — one regional serves one cluster): `MAX_WORKERS 1..20` (default 20, the hard cap — the 180 GB grant at 9 GB per worker), `LAST_VALIDATED_AT`, `LAST_PROBE_*` (the on-demand test-provisioning result). Delete is service-guarded — no capacity rows or pods may reference the region; `ORCH_POD.REGION` and `ORCH_RUN.ORIGIN_REGION` deliberately carry no FK (pods are service-guarded, runs are history) |
 
 Naming: every identifier UPPER_SNAKE, unquoted (the metrics layout's rule);
 tables `ORCH_<NAME>`, constraints and indexes `ORCH_<TABLE>_<COLS>_{PK,FK,UQ,CHK,IDX}` —
@@ -73,13 +76,21 @@ Both are called from a `BEGIN … END;` block with a `REF CURSOR` out parameter
 
 `GLOBAL_ORCHESTRATOR_WRITER` — the hub's run-state pool: full DML on `ORCH_RUN`,
 `ORCH_RUN_FLEET_MEMBER`, `ORCH_POD`, `ORCH_APPLICATION_GROUP`, `ORCH_APPLICATION`,
-`ORCH_GROUP_CAPACITY`, `ORCH_CRON_JOB`, `ORCH_AI_RESPONSE`; `SELECT, INSERT, DELETE`
+`ORCH_GROUP_CAPACITY`, `ORCH_CRON_JOB`, `ORCH_AI_RESPONSE`, `ORCH_REGION` (V4); `SELECT, INSERT, DELETE`
 on `ORCH_PLUGIN` (V3 — no UPDATE, rows are immutable); `SELECT, INSERT` on the
 append-only tables (plus `DELETE` where a purge path exists: `ORCH_RUN_TREND`,
 `ORCH_APPLICATION_HEALTH_HISTORY`); `EXECUTE` on `ORCH_CLAIMS` and `ORCH_ID_TABLE`.
 V2 also carries `METRICS_READER`'s / `METRICS_PURGER`'s grants on the shared
 metrics dimensions, so V1 stays the hosted file. The owner keeps DDL; every
 pool sets `CURRENT_SCHEMA = CARDZATE_DB_GRAF` and names tables bare.
+
+## Upgrading a database to V4 (the cluster registry)
+
+`V4` adds `ORCH_REGION` and an FK from `ORCH_GROUP_CAPACITY.REGION`. Because no
+cluster is registered when it runs, it **clears every existing reservation row**
+(the pools in `ORCH_POD` are untouched). After migrating, register each cluster
+(`POST /api/v1/regions`) and re-attach + re-reserve for every group — until then
+their launches answer `404 CAPACITY_REGION_NOT_FOUND`.
 
 ## Upgrading a database that has the two-schema layout
 

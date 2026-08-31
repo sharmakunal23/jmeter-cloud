@@ -18,7 +18,3 @@ spec:
               value: "jdbc:oracle:thin:@//oracle:1521/FREEPDB1"
             - name: METRICS_CONSUMER_URL          # the platform-health probe only
               value: "http://metrics-consumer:8083"
-            - name: PROVISIONING_MODE
-              value: DYNAMIC
-            - name: REGIONS
-              value: "local=http://jmeter-regional-orchestrator:8088"

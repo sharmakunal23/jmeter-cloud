@@ -44,8 +44,21 @@ public class RegionProbe {
     @Scheduled(fixedDelayString = "${globalOrchestrator.regionProbe.intervalMs:15000}",
                initialDelayString = "${globalOrchestrator.regionProbe.initialDelayMs:2000}")
     public void probe() {
+        try {
+            // Clusters register at runtime (CLUSTER-CAPACITY): pick up other
+            // replicas' writes once per tick.
+            registry.reload();
+        } catch (RuntimeException e) {
+            LOG.warn("region registry reload failed — probing the last snapshot: {}", e.toString());
+        }
+        // A deregistered cluster must not carry its miss count into a later
+        // re-registration, or the first blip flips it UNREACHABLE with no
+        // hysteresis (and the map would grow across register/deregister cycles).
+        misses.keySet().retainAll(registry.routedIds());
         for (String region : registry.routedIds()) {
-            String url = registry.urlOf(region).orElseThrow();
+            // Deregistered between the snapshot and here — nothing to probe.
+            String url = registry.urlOf(region).orElse(null);
+            if (url == null) continue;
             Boolean before = registry.statusOf(region).map(RegionStatus::reachable).orElse(null);
             try {
                 RegionCapabilities caps = client.capabilities(url);
@@ -56,8 +69,8 @@ public class RegionProbe {
                             region, url, caps.image(), caps.headlessService(), caps.localOrchestratorPort());
                 }
                 if (caps.region() != null && !caps.region().equals(region)) {
-                    LOG.warn("region {} at {} reports itself as '{}' — check REGIONS and the regional's REGION",
-                            region, url, caps.region());
+                    LOG.warn("region {} at {} reports itself as '{}' — check the cluster's registered id "
+                            + "and the regional's REGION env", region, url, caps.region());
                 }
             } catch (RuntimeException e) {
                 // Hysteresis: one missed probe on a busy WAN is not an outage.

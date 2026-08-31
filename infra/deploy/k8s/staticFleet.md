@@ -1,83 +1,52 @@
-# Static fleet — running against workers you deploy yourself
+# Declared workers — running against workers you deploy yourself
 
-**Who this is for:** a private cloud where the control plane cannot create
-worker Pods on demand — no API rights in the worker namespace, or a hard
-resource quota that means capacity is negotiated up front rather than grown
-on demand.
+**Who this is for:** an operator whose deployment pipeline (jules.yml) already
+deploys `jmeter-local-orchestrator` instances into a cluster, or whose quota
+posture means capacity is negotiated up front rather than grown on demand.
 
-In this mode you deploy workers with `kubectl` and **declare** them to the
-platform. Everything downstream is unchanged: runs claim declared workers,
-fan out to them, collect 15-second metric windows, and save results.
-
-> **This IS the default.** Since 2026-07-27 `PROVISIONING_MODE` defaults to
-> `STATIC`, because operator-managed fleets are this platform's normal
-> deployment shape. A deployment that CAN create its own workers — including
-> local compose dev, where the Capacity tab's Spin button depends on it —
-> must now set `PROVISIONING_MODE=DYNAMIC` explicitly.
+Since CLUSTER-CAPACITY (2026-08-31) there is **no deployment-wide provisioning
+mode** — `PROVISIONING_MODE` and `REGIONS` are retired. Declared
+(`SOURCE=STATIC`) and spun (`SOURCE=DYNAMIC`) workers coexist in one group
+pool, and both count against the group's reservation on the cluster.
+Everything downstream is unchanged: runs claim declared workers, fan out to
+them, collect 15-second metric windows, and save results.
 
 ---
 
-> Before choosing STATIC because "the namespace can't create Pods": the
-> regional's capacity guard (Track 8) reads the namespace quota and refuses
-> only what cannot fit — a quota that admits N workers runs DYNAMIC up to N.
+## The three steps
 
-## What changes when you flip it
+1. **Register the cluster** (once): Clusters → *+ Add cluster*, or
+   `POST /api/v1/regions {"region","label","regionalUrl","maxWorkers"}`.
+   Registration validates the regional endpoint (reachable, same region id,
+   worker image, RBAC, quota) before anything is written — every cluster
+   fronts a `jmeter-regional-orchestrator`, declared workers included.
+2. **Attach + reserve** (per group): Capacity → *your group* → *Manage
+   clusters* (max `maxClustersPerGroup`, default 2) → *Reserve capacity*.
+   The sum of every group's reservations never exceeds the cluster's
+   `maxWorkers`, so groups cannot fight for resources later.
+3. **Declare each worker** you deployed (below). A NEW declaration consumes
+   reservation headroom exactly like a spin; releasing frees it.
 
-| | `DYNAMIC` | `STATIC` (default) |
+## Declared vs spun — what differs per worker
+
+| | Spun (`SOURCE=DYNAMIC`) | Declared (`SOURCE=STATIC`) |
 |---|---|---|
-| Who creates workers | the control plane (`PodProvisioner`) | **you**, with `kubectl` |
-| Capacity tab | the worker-management surface | **hidden** — redirects to Applications |
-| Worker management | Capacity (per group) → spin / restart / drain | Application detail → **Data centers** → declare / release into the app's group pool |
-| `maxAvailable` | you set it; spin enforces it | **derived** — always equals the declared count |
-| Liveness | the kubelet, read through the regional's Pod list (`WorkerLivenessProbe`, 15 s) | platform probes the worker (`StaticPodProbe`, 30 s) |
-| Releasing a worker | stops + removes the container | removes the registry row; **your worker keeps running** |
-| Reconciler / recycler | running | **not wired at all** |
-| Placement axis called | "Region" | "Data center" |
+| Who creates it | the cluster's regional (`POST …/capacity/{region}/pods`) | **you**, with your own deployment |
+| Address | cluster-private (`{pod}.workers:8080`), dialled through the relay | **hub-reachable** (an ingress FQDN) — dialled directly, never relayed |
+| Liveness | the kubelet, via the regional's Pod list (`WorkerLivenessProbe`, 15 s) | the hub probes `/actuator/health` (`StaticPodProbe`, 30 s) |
+| Restart / recycle | the control plane's (`PodRecycler`, IMAGE_MISMATCH, restart button) | **never** — the platform uses it but doesn't manage it |
+| Releasing | stops + removes the Pod | removes the registry row; **your worker keeps running** |
 
-**Why the reconciler is off, and why it matters:** `PodReconciler`'s
-row-first pass deletes any registry row whose container it cannot see. With
-no substrate access it sees nothing, so it would read your entire declared
-fleet as orphaned and delete it at every boot. In static mode the bean does
-not exist — a structural guarantee, not a flag check.
-
----
-
-## Configure the control plane
-
-Two env vars on `jmeter-global-orchestrator` (port 8082).
-**`STATIC` is already the default** — set these only to be explicit, or to
-select `DYNAMIC`:
-
-```yaml
-- name: PROVISIONING_MODE
-  value: STATIC
-- name: REGIONS                   # your data centers, comma-separated (`id`, or `id=url` when the DC runs a jmeter-regional-orchestrator)
-  value: "na-east,na-west"
-```
-
-Compose: set them in `.env` (both are already plumbed through
-`jmeter-global-orchestrator/docker-compose.yml`).
-Kubernetes: patch `jmeter-global-orchestrator/kube/kustomize/base/deployment.yml` in
-your overlay.
-
-Confirm the control plane agrees with you before going further:
-
-```bash
-curl -s localhost:8082/api/v1/platform/capabilities
-# {"provisioningMode":"STATIC","dynamicScalingEnabled":false,
-#  "podRecyclingEnabled":false,"regions":["na-east","na-west"],
-#  "regionLabel":"dataCenter"}
-```
-
-The UI reads exactly this to decide what to render, so if the output looks
-right the screens will too.
+`PodReconciler` and `PodRecycler` are always wired but scoped to
+`SOURCE=DYNAMIC` rows — a declared fleet can never be reconciled away or
+recycled, whatever else changes.
 
 ---
 
 ## Deploy a worker
 
-Workers run the same `jmeter-local-orchestrator` image the dynamic
-substrate uses. What it needs:
+Workers run the same `jmeter-local-orchestrator` image the regionals spin.
+What it needs:
 
 | Env var | Required? | Why |
 |---|---|---|
@@ -90,21 +59,21 @@ substrate uses. What it needs:
 ```bash
 klogin -a na-east
 kubectl apply -f my-jmeter-workers.yaml
-kubectl get pods -o wide          # note each worker's address
+kubectl get pods -o wide          # note each worker's address / ingress host
 ```
 
 **Connectivity is bidirectional and both directions are required:** the
-control plane must reach each worker (fan-out, status polls, the liveness
-probe) and each worker must reach the metrics-consumer
-(`METRICS_INGEST_URL`).
+control plane must reach each worker at its declared `baseUrl` (fan-out,
+status polls, the liveness probe) and each worker must reach the
+metrics-consumer (`METRICS_INGEST_URL`).
 
 ---
 
 ## Declare your workers
 
-**UI:** Applications → *your app* → **Data centers** → *Declare a worker*.
-The worker joins the pool of the app's group — every application in that
-group can claim it. Give it the pod name and the address **the platform can reach it at** —
+**UI:** Capacity → *your group* → the cluster's panel → **+ Declare a worker**.
+The worker joins the group's pool — every application in that group can claim
+it. Give it the pod name and the address **the platform can reach it at** —
 which is not necessarily the address the worker sees itself as. The address
 is probed before the declaration is accepted, so a typo fails immediately
 rather than at your next run; *Declare anyway* skips that check for a worker
@@ -116,37 +85,26 @@ that is deployed but not up yet.
 curl -X PUT \
   "localhost:8082/api/v1/applicationGroups/${GROUP_ID}/capacity/na-east/pods/payments-na-east-worker-1" \
   -H 'Content-Type: application/json' \
-  -d '{"baseUrl":"http://payments-na-east-worker-1.workers:8080"}'
-# 201 {"podName":"…","source":"STATIC","reachable":true,"declared":1,"maxAvailable":1}
+  -d '{"baseUrl":"https://payments-na-east-worker-1.apps.mt-d2.example.net"}'
+# 201 {"podName":"…","source":"STATIC","reachable":true,"declared":1,"maxAvailable":5}
 ```
 
 Declaring is idempotent — re-declare the same name to correct its address.
-Add `?force=true` to accept an address that doesn't answer yet.
-
-**The data center does not need to exist first.** Declaring into a new one
-creates its capacity row, because capacity is derived from the declared
-count. (Releasing the last worker drives it back to 0 rather than removing
-the row; remove the data center itself on the group's Capacity page if you
-want it gone from the picker.)
-
-> **A freshly created group already lists your data centers.**
-> Creating a group seeds a capacity row at 0 for each region in
-> `REGIONS`, so its applications open showing exactly the places you
-> can declare workers into. (A deployment that sets no regions still gets
-> the historical single `us-east-1` starter row.)
+Add `?force=true` to accept an address that doesn't answer yet. A declare
+into a cluster the group holds no reservation on answers `404
+CAPACITY_REGION_NOT_FOUND` (attach + reserve first), and one past the
+reservation answers `409 APPLICATION_CAPACITY_EXCEEDED`.
 
 ---
 
 ## Run a test
 
 Unchanged. Launch from Applications → *your app* → **Start a new run**,
-allocating workers per data center. Capacity is derived, so "how many can I
-ask for" is simply "how many you declared into the group" — minus what the
-group's other applications are running right now.
-
-If you ask for more than are ready you get the shortfall prompt — on a
-static fleet it offers *proceed with what's ready* and tells you to deploy
-and declare another worker, rather than offering a spin that cannot happen.
+allocating workers per cluster. "How many can I ask for" is the group's
+reservation there — minus what the group's other applications are running
+right now. If you ask for more than are ready you get the shortfall prompt:
+provision the gap (spun workers can fill in beside declared ones) or proceed
+with what's ready.
 
 ---
 
@@ -159,11 +117,14 @@ probe with no action from you. Nothing needs re-declaring.
 
 **Retiring a worker.** *Release* it in the UI first (removes it from the
 registry so no new test is sent to it), then `kubectl delete` it. Releasing
-is refused while it is running a test — abort the run first.
+is refused while it is running a test — abort the run first. The admin
+escape hatch `DELETE /api/v1/admin/pods/{name}` deliberately refuses a
+declared worker (`409 POD_SOURCE_STATIC`) — the platform never destroys what
+it did not create.
 
 **Replacing the image.** Roll your workers however you normally do. The
-platform does not police worker images in this mode (`IMAGE_MISMATCH`
-recycling is a dynamic-substrate feature), so nothing fights your rollout.
+platform does not police declared workers' images (`IMAGE_MISMATCH`
+recycling only ever targets spun ones), so nothing fights your rollout.
 
 **Workers clean up after themselves.** Because a declared worker is never
 recycled, each one reaps a JMeter process that outlived its run (before
@@ -196,8 +157,8 @@ reachable from anywhere untrusted.
 
 ## Scope
 
-Static mode lives in `jmeter-global-orchestrator`, the platform's only control
-plane since 2026-08-28. **Don't point two control planes at one declared
-fleet** — each keeps its own registry, so both would hand runs to the same
-workers and neither would know; the symptom is the foreign-run error in
-*Day-2* above, on every other launch.
+Declared workers live in `jmeter-global-orchestrator`, the platform's only
+control plane since 2026-08-28. **Don't point two control planes at one
+declared fleet** — each keeps its own registry, so both would hand runs to
+the same workers and neither would know; the symptom is the foreign-run
+error in *Day-2* above, on every other launch.

@@ -1,7 +1,7 @@
 package com.perf.globalorchestrator.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.perf.globalorchestrator.region.RegionProperties;
+import com.perf.globalorchestrator.region.TestRegions;
 import com.perf.globalorchestrator.region.RegionRegistry;
 import com.perf.globalorchestrator.region.RegionRouter;
 import com.sun.net.httpserver.HttpServer;
@@ -44,7 +44,7 @@ class LocalOrchestratorClientHeaderTest {
         server.start();
         baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
         client = new LocalOrchestratorClient(new ObjectMapper(),
-                new RegionRouter(new RegionRegistry(new RegionProperties(""))));
+                new RegionRouter(TestRegions.registryOf()));
         worker = new WorkerRef("local", "w-1", baseUrl);
     }
 

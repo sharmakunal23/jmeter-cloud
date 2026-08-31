@@ -26,6 +26,9 @@ rules:
   - apiGroups: [""]
     resources: ["resourcequotas"]
     verbs: ["get", "list"]
+  # /api/v1/provisioningCheck (CLUSTER-CAPACITY) proves these verbs via
+  # SelfSubjectAccessReview — SSAR creation itself is granted to every
+  # authenticated principal by system:basic-user, so no rule is needed here.
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

@@ -5,7 +5,6 @@ import com.perf.globalorchestrator.client.WorkerStatusFetcher;
 import com.perf.globalorchestrator.domain.Actor;
 import com.perf.globalorchestrator.domain.PluginRef;
 import com.perf.globalorchestrator.http.StartRunRequest;
-import com.perf.globalorchestrator.provision.ProvisioningProperties;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.GroupCapacityRepository;
 import com.perf.globalorchestrator.repo.PluginRepository;
@@ -58,7 +57,6 @@ class RunServicePluginTest {
                 mock(RunTrendRepository.class),
                 plugins,
                 null,
-                mock(ProvisioningProperties.class),
                 "us-east-1", 1, 100, 1000L);
         // The @Transactional self-proxy is Spring-wired; point it at the plain
         // instance so startRun's self.openRunAndClaimPods call runs inline.

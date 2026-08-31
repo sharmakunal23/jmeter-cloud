@@ -306,7 +306,7 @@ export function RunDetailPage() {
         {run.state === "PREPARING" && (
           <div className="emptyState" data-testid="provisioningPanel" aria-live="polite">
             <p><strong>Provisioning workers…</strong></p>
-            <p className="ink-soft">{run.stateReason ?? "Waiting for the data centers to report the workers ready."}</p>
+            <p className="ink-soft">{run.stateReason ?? "Waiting for the clusters to report the workers ready."}</p>
             <p className="ink-soft">Metrics appear once the test is running.</p>
           </div>
         )}
@@ -593,7 +593,7 @@ function FleetTab({
                 )}
               </th>
               <th>Worker</th>
-              <th>Region</th>
+              <th>Cluster</th>
               <th>State</th>
               {/* Phase F2 — runsServed surfaced per member so the
                   operator can spot a pod near its recycle threshold
@@ -680,7 +680,7 @@ function MetadataTab({ run }: { run: Run }) {
     <dl className="defList">
       <dt>State reason</dt>
       <dd>{run.stateReason ?? "—"}</dd>
-      <dt>Regions</dt>
+      <dt>Clusters</dt>
       <dd><RegionBadgeList run={run} /></dd>
       <dt>Origin region</dt>
       <dd>

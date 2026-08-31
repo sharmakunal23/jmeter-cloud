@@ -21,10 +21,6 @@ spec:
               value: "jdbc:oracle:thin:@//REPLACE_ME_ORACLE_HOST:1521/REPLACE_ME_SERVICE"
             - name: METRICS_CONSUMER_URL          # the platform-health probe only
               value: "https://metrics-consumer.REPLACE_ME_PLATFORM_DOMAIN"
-            - name: PROVISIONING_MODE
-              value: DYNAMIC
-            - name: REGIONS
-              value: "REPLACE_ME_REGION_ID=https://jmeter-regional-orchestrator.REPLACE_ME_PLATFORM_DOMAIN"
           resources:
             requests:
               memory: 1536Mi

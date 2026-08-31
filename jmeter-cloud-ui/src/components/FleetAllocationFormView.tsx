@@ -106,7 +106,7 @@ export function FleetAllocationFormView({
             <table className="fleetForm__table">
                 <thead>
                     <tr>
-                        <th>Region</th>
+                        <th>Cluster</th>
                         <th>Add</th>
                         <th>Remove</th>
                         {/* UX16 — Status column dropped (info lives in the

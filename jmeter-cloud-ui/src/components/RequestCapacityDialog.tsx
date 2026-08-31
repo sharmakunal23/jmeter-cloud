@@ -60,8 +60,8 @@ export function RequestCapacityDialog({
 
   return (
     <Modal
-      title="Request capacity"
-      infoTip="Raises this group's per-region worker ceiling — the pool grows the next time provisioning reconciles."
+      title="Reserve capacity"
+      infoTip="Sets this group's worker reservation on the cluster — other groups can never take reserved workers, and the sum of all reservations must fit the cluster's ceiling."
       width="form"
       onClose={onCancel}
       closeDisabled={busy}
@@ -69,11 +69,11 @@ export function RequestCapacityDialog({
       <form onSubmit={handleSubmit} className="modal__body createApp" noValidate>
         <p style={{ margin: 0 }}>
           <span className="mono">{groupName}</span> ·{" "}
-          <span className="mono">{region}</span> · current cap{" "}
+          <span className="mono">{region}</span> · current reservation{" "}
           <span className="mono">{current}</span>
         </p>
         <div className="formField">
-          <label htmlFor="reqCapMax">New maximum</label>
+          <label htmlFor="reqCapMax">New reservation</label>
           <input
             id="reqCapMax"
             type="number"
@@ -111,7 +111,7 @@ export function RequestCapacityDialog({
         <Modal.Footer>
           <button type="button" className="btn" onClick={onCancel}>Cancel</button>
           <button type="submit" className="btn btn--primary" disabled={!canSubmit} aria-busy={busy}>
-            {busy ? "Saving…" : `Set max to ${Number.isNaN(parsed) ? "?" : parsed}`}
+            {busy ? "Saving…" : `Reserve ${Number.isNaN(parsed) ? "?" : parsed}`}
           </button>
         </Modal.Footer>
       </form>

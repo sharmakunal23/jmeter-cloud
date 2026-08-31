@@ -4,9 +4,9 @@
 # private-cloud shape: the global never holds a cluster credential and reaches
 # each region at http://<cluster>-control-plane:30088 over the compose network.
 #
-#   ./bootstrapRegions.sh up [na-east na-west]   # clusters + images + regional + bridge
+#   ./bootstrapRegions.sh up [na-east na-west]   # clusters + images + regional + bridge + registration
 #   ./bootstrapRegions.sh bridge                  # re-sync bridge Services after `docker compose up`
-#   ./bootstrapRegions.sh down                    # delete the clusters (compose untouched)
+#   ./bootstrapRegions.sh down                    # delete + deregister the clusters (compose untouched)
 #
 # Prereqs: kind + kubectl; the compose stack is up (global-orchestrator,
 # metrics-consumer, document-service); jmeter-local-orchestrator:dev is built.
@@ -53,15 +53,52 @@ YAML
   done
 }
 
-regionsLine() {
-  local out=()
-  for c in "${regions[@]}"; do out+=("$c=http://$c-control-plane:$nodePort"); done
-  local IFS=,; echo "REGIONS=${out[*]}"
+# CLUSTER-CAPACITY — the cluster registry lives in the hub's database, not an
+# env var: register each kind cluster through the validated API. A 409
+# CLUSTER_EXISTS is fine (idempotent re-run); a 422 prints the hub's checks.
+hub="${HUB_URL:-http://localhost:8082}"
+registerCluster() {
+  local c="$1" body status
+  body="$(printf '{"region":"%s","label":"%s (kind)","regionalUrl":"http://%s-control-plane:%s","maxWorkers":20}' \
+          "$c" "$c" "$c" "$nodePort")"
+  # `|| true` so an unreachable hub cannot kill the script under `set -e` AFTER
+  # the clusters, images and regionals are already up — report and carry on.
+  status="$(curl -s -o /tmp/registerCluster.$$ -w '%{http_code}' -X POST "$hub/api/v1/regions" \
+            -H 'Content-Type: application/json' -d "$body" || echo 000)"
+  case "$status" in
+    201) echo "  cluster $c registered (validated)" ;;
+    409) echo "  cluster $c already registered" ;;
+    000) echo "WARN: hub unreachable at $hub — cluster $c is NOT registered."
+         echo "      Start the hub, then: $0 up $c   (or POST /api/v1/regions yourself)" ;;
+    *)   echo "WARN: cluster $c registration → HTTP $status:"; cat /tmp/registerCluster.$$; echo ;;
+  esac
+  rm -f /tmp/registerCluster.$$
+}
+
+# A cluster that still holds reservations or workers is refused by design —
+# say so rather than swallowing the 409 and leaving a dead cluster listed.
+deregisterCluster() {
+  local c="$1" status
+  status="$(curl -s -o /tmp/deregisterCluster.$$ -w '%{http_code}' \
+            -X DELETE "${HUB_URL:-http://localhost:8082}/api/v1/regions/$c" || echo 000)"
+  case "$status" in
+    204) echo "  cluster $c deregistered" ;;
+    404) echo "  cluster $c was not registered" ;;
+    409) echo "  cluster $c KEPT — it still holds reservations or workers:"
+         cat /tmp/deregisterCluster.$$; echo
+         echo "      release them (Capacity page) then: curl -X DELETE $hub/api/v1/regions/$c" ;;
+    000) echo "  hub unreachable — cluster $c left registered" ;;
+    *)   echo "  cluster $c deregistration → HTTP $status"; cat /tmp/deregisterCluster.$$; echo ;;
+  esac
+  rm -f /tmp/deregisterCluster.$$
 }
 
 case "$cmd" in
   bridge) for c in "${regions[@]}"; do bridge "$c"; done; exit 0 ;;
-  down)   for c in "${regions[@]}"; do kind delete cluster --name "$c"; done; exit 0 ;;
+  down)   for c in "${regions[@]}"; do
+            deregisterCluster "$c"      # BEFORE the kind delete: a cluster with
+            kind delete cluster --name "$c"   # reservations/workers is refused, and
+          done; exit 0 ;;                     # the operator must be told, not silenced
   up)     ;;
   *)      echo "usage: $0 [up|bridge|down] [region ...]"; exit 64 ;;
 esac
@@ -90,12 +127,13 @@ for c in "${regions[@]}"; do
   k "$c" -n "$namespace" rollout status deployment/jmeter-regional-orchestrator --timeout=300s
 done
 
+echo "── registering the clusters with the hub ($hub) ──"
+for c in "${regions[@]}"; do registerCluster "$c"; done
+
 cat <<EOT
 
-Ready. Point the compose hub at the regions — in .env:
-  PROVISIONING_MODE=DYNAMIC
-  $(regionsLine)
-then: docker compose up -d global-orchestrator
+Ready. The clusters are registered in the hub's ORCH_REGION registry
+(PROVISIONING_MODE and REGIONS are retired — CLUSTER-CAPACITY).
 Check: curl -s localhost:8082/api/v1/regions/status | jq
 
 After a compose restart (container IPs change): $0 bridge

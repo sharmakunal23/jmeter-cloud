@@ -130,7 +130,7 @@ describe("CapacityDetailPage — per application group", () => {
     expect(screen.queryByText(/Worker lifecycle policy/)).toBeNull();
   });
 
-  it("Request Capacity success toast carries an Open Applications CTA", async () => {
+  it("Reserve capacity success toast carries an Open Applications CTA", async () => {
     groups.get.mockResolvedValue(fixtureGroup());
     cap.listPods.mockResolvedValue(snap());
     cap.setMax.mockResolvedValue({
@@ -139,10 +139,10 @@ describe("CapacityDetailPage — per application group", () => {
 
     renderAt("cps");
 
-    fireEvent.click(await screen.findByRole("button", { name: /Request Capacity/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Reserve capacity/ }));
     const dialog = await screen.findByRole("dialog");
-    fireEvent.change(within(dialog).getByLabelText(/New maximum/), { target: { value: "5" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: /Set max to 5/ }));
+    fireEvent.change(within(dialog).getByLabelText(/New reservation/), { target: { value: "5" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Reserve 5/ }));
 
     await waitFor(() => {
       // Toast appears with the follow-up CTA pointing at the Applications list.
@@ -255,7 +255,7 @@ describe("CapacityDetailPage — per application group", () => {
     });
   });
 
-  it("Request Capacity dialog → setMax(newMax) on submit", async () => {
+  it("Reserve capacity dialog → setMax(newMax) on submit", async () => {
     groups.get.mockResolvedValue(fixtureGroup());
     cap.listPods.mockResolvedValue(snap());
     cap.setMax.mockResolvedValue({
@@ -264,11 +264,11 @@ describe("CapacityDetailPage — per application group", () => {
 
     renderAt("cps");
 
-    fireEvent.click(await screen.findByRole("button", { name: /Request Capacity/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Reserve capacity/ }));
     const dialog = await screen.findByRole("dialog");
-    const input = within(dialog).getByLabelText(/New maximum/);
+    const input = within(dialog).getByLabelText(/New reservation/);
     fireEvent.change(input, { target: { value: "5" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: /Set max to 5/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /Reserve 5/ }));
 
     await waitFor(() => {
       expect(cap.setMax).toHaveBeenCalledWith("cps", "us-east", 5);

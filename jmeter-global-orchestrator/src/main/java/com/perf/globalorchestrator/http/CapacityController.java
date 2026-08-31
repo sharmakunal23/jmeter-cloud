@@ -13,15 +13,13 @@ import com.perf.globalorchestrator.provision.PodNameAllocator;
 import com.perf.globalorchestrator.provision.PodProvisioner;
 import com.perf.globalorchestrator.provision.PodSpec;
 import com.perf.globalorchestrator.provision.PodSpinService;
-import com.perf.globalorchestrator.provision.ProvisioningDisabledException;
-import com.perf.globalorchestrator.provision.ProvisioningProperties;
-import com.perf.globalorchestrator.provision.ProvisioningRequiresStaticException;
 import com.perf.globalorchestrator.provision.StaticPodDeclaration;
 import com.perf.globalorchestrator.repo.GroupCapacityRepository;
 import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.repo.PodRepository;
 import com.perf.globalorchestrator.repo.PodRepository.ActiveRunBinding;
 import com.perf.globalorchestrator.repo.RunRepository;
+import com.perf.globalorchestrator.service.GroupReservationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -70,7 +68,7 @@ public class CapacityController {
     private final PodProvisioner provisioner;
     private final PodNameAllocator allocator;
     private final PodSpinService spinService;
-    private final ProvisioningProperties provisioning;
+    private final GroupReservationService reservations;
     /** STATIC-FLEET Phase 3 — declare-time reachability check. */
     private final LocalOrchestratorClient localOrchestrators;
 
@@ -82,7 +80,7 @@ public class CapacityController {
             PodProvisioner provisioner,
             PodNameAllocator allocator,
             PodSpinService spinService,
-            ProvisioningProperties provisioning,
+            GroupReservationService reservations,
             LocalOrchestratorClient localOrchestrators) {
         this.localOrchestrators = localOrchestrators;
         this.groups       = groups;
@@ -92,24 +90,24 @@ public class CapacityController {
         this.provisioner  = provisioner;
         this.allocator    = allocator;
         this.spinService  = spinService;
-        this.provisioning = provisioning;
+        this.reservations = reservations;
     }
 
-    // ── PUT /capacity/{region} — set maxAvailable directly ────────────
+    // ── PUT /capacity/{region} — set the group's reservation ───────────
 
+    /**
+     * {@code maxAvailable} is the group's <b>reservation</b> on the cluster
+     * (CLUSTER-CAPACITY): spun and declared workers both count against it,
+     * and {@link GroupReservationService} holds the cluster-level invariants
+     * (registered cluster, ≤ maxClustersPerGroup, the sum of every group's
+     * reservations under the cluster's maxWorkers) inside one serialised
+     * transaction.
+     */
     @PutMapping
     public ResponseEntity<GroupCapacity> setMax(
             @PathVariable String groupId,
             @PathVariable String region,
             @RequestBody SetMaxRequest req) {
-        // Capacity is DERIVED from the declared worker
-        // count in static mode (D8). The operator already controls the count
-        // directly by declaring and undeclaring; a second editable knob would
-        // only be a way to make Max and reality disagree, and the next declare
-        // would silently overwrite whatever was set here.
-        provisioning.requireDynamic("set maxAvailable manually",
-                "capacity is derived from the declared worker count — declare or "
-                + "release workers instead");
         requireGroup(groupId);
         if (req == null) {
             throw new CapacityValidationException("request body is required");
@@ -118,17 +116,14 @@ public class CapacityController {
             throw new CapacityValidationException(
                     "maxAvailable must be 0.." + MAX_POD_BUDGET + "; got " + req.maxAvailable());
         }
-        // Sanity guard: don't let the operator shrink Max below the number of
-        // currently-provisioned pods. Forces them to drain first, which keeps
-        // the registry consistent with the budget at all times.
+        // Sanity guard: don't let the operator shrink the reservation below the
+        // number of currently-provisioned pods. Forces them to drain first, which
+        // keeps the registry consistent with the budget at all times.
         int provisioned = pods.countByGroupAndRegion(groupId, region);
         if (req.maxAvailable() < provisioned) {
             throw new CapacityShrinkBelowProvisionedException(provisioned, req.maxAvailable());
         }
-        capacityRepo.upsert(groupId, region, req.maxAvailable());
-        GroupCapacity updated = capacityRepo.find(groupId, region)
-                .orElseThrow(() -> new IllegalStateException("upsert produced no row"));
-        return ResponseEntity.ok(updated);
+        return ResponseEntity.ok(reservations.reserve(groupId, region, req.maxAvailable()));
     }
 
     // ── GET /capacity/{region}/pods — list pods with state ─────────────
@@ -182,10 +177,15 @@ public class CapacityController {
                 default   -> podState = p.state().name();
             }
             if (binding.isPresent()) inUse++;
-            boolean containerRunning = substrateReachable && "running".equals(liveStatus.get(p.podId()));
+            // A declared worker never appears in the regional's managed-Pod
+            // list — its registry state is the honest liveness evidence.
+            boolean containerRunning = p.source() == PodSource.STATIC
+                    ? p.state() != com.perf.globalorchestrator.domain.PodState.LOST
+                    : substrateReachable && "running".equals(liveStatus.get(p.podId()));
             views.add(new PodView(
                     p.podId(),
                     podState,
+                    p.source() == null ? PodSource.DYNAMIC.name() : p.source().name(),
                     containerRunning,
                     p.lastHeartbeat(),
                     binding.map(b -> new BlockedBy(b.runId(), b.state(), b.startedAt(), b.initiatedBy()))
@@ -207,9 +207,6 @@ public class CapacityController {
     public ResponseEntity<Map<String, Object>> spin(
             @PathVariable String groupId,
             @PathVariable String region) {
-        // Guard BEFORE the capacity lookups so the
-        // operator gets "provisioning is disabled", not "no capacity row".
-        provisioning.requireDynamic("spin a worker");
         requireGroup(groupId);
         int max = capacityRepo.find(groupId, region)
                 .map(GroupCapacity::maxAvailable)
@@ -233,9 +230,10 @@ public class CapacityController {
     // ── PUT /capacity/{region}/pods/{podName} — declare a worker ───────
 
     /**
-     * Declares an operator-deployed worker against
-     * this (group, region). Static mode only; {@code 409
-     * PROVISIONING_REQUIRES_STATIC} otherwise.
+     * Declares an operator-deployed worker against this (group, region) —
+     * a {@code SOURCE=STATIC} row that coexists with spun workers in the same
+     * pool (CLUSTER-CAPACITY). Declares count against the group's reservation
+     * exactly like spins.
      *
      * <p>PUT rather than a parallel {@code /staticPods} collection: the
      * operator names the resource (they deployed it and know its name), the
@@ -265,7 +263,6 @@ public class CapacityController {
                     "code", "INVALID_POD_NAME",
                     "message", "podName must be a DNS-1123 label: " + podName));
         }
-        provisioning.requireStatic("declare worker " + podName);
         requireGroup(groupId);
         if (req == null) {
             throw new CapacityValidationException("request body is required");
@@ -279,8 +276,20 @@ public class CapacityController {
 
         Optional<Pod> existing = pods.findByPodId(declaration.podName());
         boolean isNew = existing.isEmpty();
+        // True when this declare would newly occupy a slot in THIS region —
+        // either a brand-new worker, or one moving in from another region
+        // (declareStatic's MERGE rewrites REGION, so the move must be paid for
+        // here or the target's reservation is silently overrun).
+        boolean entersRegion = isNew || !region.equals(existing.get().region());
         if (existing.isPresent()) {
             Pod pod = existing.get();
+            // Never let a declaration steal a Pod the control plane created:
+            // the MERGE would flip SOURCE to STATIC, after which the reconciler
+            // skips it, the recycler refuses it and teardown 409s — the cluster
+            // leaks that worker forever.
+            if (pod.source() == PodSource.DYNAMIC) {
+                throw new PodSourceDynamicException(declaration.podName());
+            }
             // Never let a declaration silently steal a worker from another
             // group — that would let two pools' runs land on one worker.
             if (!groupId.equals(pod.groupId())) {
@@ -297,6 +306,19 @@ public class CapacityController {
             }
         }
 
+        // A declare consumes reservation headroom exactly like a spin
+        // (CLUSTER-CAPACITY): the group must have attached the cluster and
+        // reserved room. Re-declaring an existing worker consumes nothing.
+        int maxAvailable = capacityRepo.find(groupId, region)
+                .map(GroupCapacity::maxAvailable)
+                .orElseThrow(() -> new CapacityRegionNotFoundException(groupId, region));
+        if (entersRegion) {
+            int provisioned = pods.countByGroupAndRegion(groupId, region);
+            if (provisioned + 1 > maxAvailable) {
+                throw new CapacityExceededException(provisioned, maxAvailable);
+            }
+        }
+
         boolean reachable = localOrchestrators.isHealthy(
                 new WorkerRef(region, declaration.podName(), declaration.baseUrl()));
         if (!reachable && !force) {
@@ -304,10 +326,9 @@ public class CapacityController {
         }
 
         pods.declareStatic(declaration.podName(), region, declaration.baseUrl(), groupId);
-        int maxAvailable = syncDerivedCapacity(groupId, region);
 
         LOG.info("Declared operator-managed worker {} at {} for groupId={} region={} "
-                + "(new={}, reachable={}, derived maxAvailable={})",
+                + "(new={}, reachable={}, reservation={})",
                 declaration.podName(), declaration.baseUrl(), groupId, region,
                 isNew, reachable, maxAvailable);
 
@@ -323,23 +344,6 @@ public class CapacityController {
         return ResponseEntity.status(isNew ? HttpStatus.CREATED : HttpStatus.OK).body(body);
     }
 
-    /**
-     * STATIC-FLEET Phase 3 (D8) — in static mode {@code maxAvailable} is
-     * DERIVED: it always equals the number of declared workers for this
-     * (group, region). The operator controls the count by declaring
-     * and releasing, so there is nothing to approve and no second knob to
-     * drift. Keeping the row in sync means every downstream capacity check
-     * (run-launch cap, the capacity snapshot, the shortfall message) keeps
-     * working untouched.
-     *
-     * @return the value written
-     */
-    private int syncDerivedCapacity(String groupId, String region) {
-        int declared = pods.countByGroupAndRegion(groupId, region);
-        capacityRepo.upsert(groupId, region, declared);
-        return declared;
-    }
-
     // ── POST /capacity/{region}/pods/{podName}/restart ─────────────────
 
     @PostMapping("/pods/{podName}/restart")
@@ -352,9 +356,13 @@ public class CapacityController {
                     "code", "INVALID_POD_NAME",
                     "message", "podName must be a DNS-1123 label: " + podName));
         }
-        provisioning.requireDynamic("restart worker " + podName);
         requireGroup(groupId);
-        requirePodBoundToGroupRegion(groupId, region, podName);
+        Pod pod = requirePodBoundToGroupRegion(groupId, region, podName);
+        // Only the regional can restart a pod it created; a declared worker is
+        // the operator's — restarting it is not the control plane's to do.
+        if (pod.source() == PodSource.STATIC) {
+            throw new PodSourceStaticException(podName, "restart");
+        }
         provisioner.restart(region, podName);
         return ResponseEntity.ok(Map.of("podName", podName, "restarted", true));
     }
@@ -364,19 +372,18 @@ public class CapacityController {
     /**
      * Releases a worker from this (group, region).
      *
-     * <p>Under {@code PROVISIONING_MODE=DYNAMIC} this is a full drain: the
-     * container is stopped and removed, then the registry row is deleted.
-     * Under {@code STATIC} it is an <b>undeclare</b> — the registry row is
-     * deleted and the operator's worker keeps running, because the control
-     * plane does not own it. The in-use guard, the stale-binding release
-     * and the response shape are identical in both modes; only
-     * {@code containerStopped} in the body differs, so existing clients
-     * keep working unchanged.
+     * <p>For a spun worker ({@code SOURCE=DYNAMIC}) this is a full drain: the
+     * Pod is stopped and removed through its regional, then the registry row
+     * is deleted. For a declared one ({@code SOURCE=STATIC}) it is an
+     * <b>undeclare</b> — the registry row is deleted and the operator's worker
+     * keeps running, because the control plane does not own it. The in-use
+     * guard, the stale-binding release and the response shape are identical;
+     * only {@code containerStopped} in the body differs.
      *
-     * <p>The stale-binding path stays correct in static mode because
-     * {@code StaticPodProvisioner.isRunning} answers from the registry: a
-     * worker swept to {@code LOST} reads as not-running, so its zombie
-     * binding is released rather than blocking the undeclare forever.
+     * <p>The stale-binding check answers per source: a declared worker's
+     * liveness is its registry state (a worker swept to {@code LOST} reads as
+     * not-running, so its zombie binding is released rather than blocking the
+     * undeclare forever); a spun worker's is the regional's Pod state.
      */
     @DeleteMapping("/pods/{podName}")
     public ResponseEntity<Map<String, Object>> drain(
@@ -389,7 +396,8 @@ public class CapacityController {
                     "message", "podName must be a DNS-1123 label: " + podName));
         }
         requireGroup(groupId);
-        requirePodBoundToGroupRegion(groupId, region, podName);
+        Pod pod = requirePodBoundToGroupRegion(groupId, region, podName);
+        boolean dynamicPod = pod.source() != PodSource.STATIC;
         Optional<ActiveRunBinding> blocker = pods.findActiveRunBindingFor(podName);
         boolean staleBindingReleased = false;
         if (blocker.isPresent()) {
@@ -403,11 +411,16 @@ public class CapacityController {
             // run) and let the drain proceed. The proper way to terminate the
             // zombie run itself is POST /runs/{runId}/abort.
             boolean containerRunning;
-            try {
-                containerRunning = provisioner.isRunning(region, podName);
-            } catch (Exception e) {
-                // Daemon unreachable → can't be running → treat as stale.
-                containerRunning = false;
+            if (dynamicPod) {
+                try {
+                    containerRunning = provisioner.isRunning(region, podName);
+                } catch (Exception e) {
+                    // Region unreachable → can't be confirmed running → treat as stale.
+                    containerRunning = false;
+                }
+            } else {
+                // Declared worker: the registry is the only honest evidence.
+                containerRunning = pod.state() != com.perf.globalorchestrator.domain.PodState.LOST;
             }
             if (containerRunning) {
                 throw new PodInUseException(podName, blocker.get());
@@ -421,7 +434,7 @@ public class CapacityController {
                     podName, blocker.get().runId(), released,
                     blocker.get().state(), blocker.get().runId());
         }
-        boolean containerStopped = provisioning.isDynamic();
+        boolean containerStopped = dynamicPod;
         if (containerStopped) {
             provisioner.stopAndRemove(region, podName);
         } else {
@@ -434,10 +447,6 @@ public class CapacityController {
         body.put("podName", podName);
         body.put("drained", true);
         body.put("containerStopped", containerStopped);
-        if (provisioning.isStatic()) {
-            // D8 — Max tracks the declared count, so releasing lowers it.
-            body.put("maxAvailable", syncDerivedCapacity(groupId, region));
-        }
         if (staleBindingReleased) {
             body.put("staleBindingReleased", true);
         }
@@ -476,12 +485,11 @@ public class CapacityController {
                 .orElseThrow(() -> new ApplicationGroupController.GroupNotFoundException(groupId));
     }
 
-    private void requirePodBoundToGroupRegion(String groupId, String region, String podName) {
-        boolean bound = pods.findByGroupAndRegion(groupId, region).stream()
-                .anyMatch(p -> podName.equals(p.podId()));
-        if (!bound) {
-            throw new PodNotBoundException(podName, groupId, region);
-        }
+    private Pod requirePodBoundToGroupRegion(String groupId, String region, String podName) {
+        return pods.findByGroupAndRegion(groupId, region).stream()
+                .filter(p -> podName.equals(p.podId()))
+                .findFirst()
+                .orElseThrow(() -> new PodNotBoundException(podName, groupId, region));
     }
 
     // ── DTOs ───────────────────────────────────────────────────────────
@@ -500,7 +508,8 @@ public class CapacityController {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PodView(
             String podName,
-            String state,                // READY / IN_USE / LOST / UNKNOWN / RECYCLING
+            String state,                // READY / IN_USE / LOST / UNKNOWN / RECYCLING / STARTING
+            String source,               // DYNAMIC (spun) | STATIC (operator-declared) — CLUSTER-CAPACITY
             boolean containerRunning,
             Instant lastHeartbeat,
             BlockedBy blockedBy,
@@ -528,8 +537,26 @@ public class CapacityController {
 
     static final class CapacityRegionNotFoundException extends RuntimeException {
         CapacityRegionNotFoundException(String groupId, String region) {
-            super("no capacity row for groupId=" + groupId + " region=" + region
-                    + "; PUT /capacity/" + region + " first");
+            super("group " + groupId + " has no reservation on cluster " + region
+                    + "; attach the cluster and reserve capacity first (PUT /capacity/" + region + ")");
+        }
+    }
+    /** CLUSTER-CAPACITY — declaring over a worker the control plane created. */
+    static final class PodSourceDynamicException extends RuntimeException {
+        final String podName;
+        PodSourceDynamicException(String podName) {
+            super("worker " + podName + " was created by the platform (a spun worker) — declaring over it "
+                    + "would orphan the Pod it manages; drain it first, or declare under a different name");
+            this.podName = podName;
+        }
+    }
+    /** CLUSTER-CAPACITY — a lifecycle verb the control plane does not own on a declared worker. */
+    static final class PodSourceStaticException extends RuntimeException {
+        final String podName;
+        PodSourceStaticException(String podName, String action) {
+            super("worker " + podName + " is operator-declared — the control plane cannot "
+                    + action + " it; manage it where it is deployed");
+            this.podName = podName;
         }
     }
     static final class CapacityValidationException extends RuntimeException {
@@ -656,17 +683,39 @@ public class CapacityController {
                 "message",     e.getMessage(),
                 "provisioned", e.provisioned));
     }
-    /** STATIC-FLEET Phase 2 — spin / restart refused on an operator-managed fleet. */
-    @ExceptionHandler(ProvisioningDisabledException.class)
-    public ResponseEntity<Map<String, Object>> handleProvisioningDisabled(
-            ProvisioningDisabledException e) {
-        return ResponseEntity.status(HttpStatus.CONFLICT).body(e.toBody());
+    /** CLUSTER-CAPACITY — reservation targets an unregistered cluster. */
+    @ExceptionHandler(GroupReservationService.ClusterNotRegisteredException.class)
+    public ResponseEntity<Map<String, Object>> handleClusterNotRegistered(
+            GroupReservationService.ClusterNotRegisteredException e) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                "code", "CLUSTER_NOT_REGISTERED", "message", e.getMessage(), "region", e.region));
     }
-    /** STATIC-FLEET Phase 3 — declare refused on a self-provisioning deployment. */
-    @ExceptionHandler(ProvisioningRequiresStaticException.class)
-    public ResponseEntity<Map<String, Object>> handleRequiresStatic(
-            ProvisioningRequiresStaticException e) {
-        return ResponseEntity.status(HttpStatus.CONFLICT).body(e.toBody());
+    /** CLUSTER-CAPACITY — a group holds at most maxClustersPerGroup clusters. */
+    @ExceptionHandler(GroupReservationService.GroupClusterLimitException.class)
+    public ResponseEntity<Map<String, Object>> handleGroupClusterLimit(
+            GroupReservationService.GroupClusterLimitException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                "code", "GROUP_CLUSTER_LIMIT", "message", e.getMessage(), "maxClusters", e.maxClusters));
+    }
+    /** CLUSTER-CAPACITY — the cluster's ceiling cannot fit this reservation. */
+    @ExceptionHandler(GroupReservationService.ClusterCapacityExceededException.class)
+    public ResponseEntity<Map<String, Object>> handleClusterCapacityExceeded(
+            GroupReservationService.ClusterCapacityExceededException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                "code", "CLUSTER_CAPACITY_EXCEEDED", "message", e.getMessage(),
+                "maxWorkers", e.maxWorkers, "reservedByOthers", e.reservedByOthers, "requested", e.requested));
+    }
+    /** CLUSTER-CAPACITY — declare aimed at a platform-created worker. */
+    @ExceptionHandler(PodSourceDynamicException.class)
+    public ResponseEntity<Map<String, Object>> handlePodSourceDynamic(PodSourceDynamicException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                "code", "POD_SOURCE_DYNAMIC", "message", e.getMessage(), "podName", e.podName));
+    }
+    /** CLUSTER-CAPACITY — restart aimed at an operator-declared worker. */
+    @ExceptionHandler(PodSourceStaticException.class)
+    public ResponseEntity<Map<String, Object>> handlePodSourceStatic(PodSourceStaticException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                "code", "POD_SOURCE_STATIC", "message", e.getMessage(), "podName", e.podName));
     }
     @ExceptionHandler(PodBoundElsewhereException.class)
     public ResponseEntity<Map<String, Object>> handleBoundElsewhere(PodBoundElsewhereException e) {

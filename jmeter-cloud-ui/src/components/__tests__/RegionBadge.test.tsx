@@ -49,11 +49,11 @@ describe("RegionBadge", () => {
         expect(screen.getByText("us-east-1")).toBeInTheDocument();
     });
 
-    it("carries a region-prefixed aria-label so SR users hear what it represents", () => {
+    it("carries a cluster-prefixed aria-label so SR users hear what it represents", () => {
         render(<RegionBadge name="us-east-1" />);
         expect(screen.getByRole("status")).toHaveAttribute(
             "aria-label",
-            "region: us-east-1",
+            "cluster: us-east-1",
         );
     });
 
@@ -196,7 +196,7 @@ describe("RegionBadgeList", () => {
 
         expect(screen.getByRole("list")).toHaveAttribute(
             "aria-label",
-            "regions: us-east-1, us-west-2",
+            "clusters: us-east-1, us-west-2",
         );
     });
 

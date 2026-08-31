@@ -6,7 +6,7 @@ import com.perf.globalorchestrator.domain.Pod;
 import com.perf.globalorchestrator.domain.PodSource;
 import com.perf.globalorchestrator.domain.PodState;
 import com.perf.globalorchestrator.region.RegionCapabilities;
-import com.perf.globalorchestrator.region.RegionProperties;
+import com.perf.globalorchestrator.region.TestRegions;
 import com.perf.globalorchestrator.region.RegionRegistry;
 import com.perf.globalorchestrator.repo.PodRepository;
 import com.perf.globalorchestrator.service.RunService;
@@ -37,7 +37,7 @@ class WorkerLivenessProbeTest {
 
     @BeforeEach
     void setUp() {
-        regions = new RegionRegistry(new RegionProperties("na-east=" + URL + ",lab"));
+        regions = TestRegions.registryOf("na-east=" + URL);
         regions.markReachable("na-east", new RegionCapabilities("na-east", "jmeter-cloud", "workers", "img", 8080, "dev"));
         client = mock(RegionalClient.class);
         pods = mock(PodRepository.class);
@@ -61,7 +61,7 @@ class WorkerLivenessProbeTest {
     }
 
     @Test
-    @DisplayName("ready refreshes the heartbeat; OOMKilled marks LOST with the exit code and fails the members; absent marks LOST; starting is left alone; direct regions are never touched")
+    @DisplayName("ready refreshes the heartbeat; OOMKilled marks LOST with the exit code and fails the members; absent marks LOST; starting is left alone; unregistered regions are never touched")
     void verdicts() {
         when(pods.findBySource(PodSource.DYNAMIC)).thenReturn(List.of(
                 pod("w-ready", "na-east", PodState.IDLE),

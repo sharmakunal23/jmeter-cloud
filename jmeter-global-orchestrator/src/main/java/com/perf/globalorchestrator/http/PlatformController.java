@@ -1,12 +1,11 @@
 package com.perf.globalorchestrator.http;
 
-import com.perf.globalorchestrator.provision.ProvisioningProperties;
+import com.perf.globalorchestrator.service.GroupReservationService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.List;
 
 /**
  * Deployment capabilities the UI reads once at
@@ -19,19 +18,19 @@ import java.util.List;
  * — breaking the one-image-serves-docker-and-Kubernetes property KUBE-6
  * deliberately established. The server decides; the browser reflects.
  *
- * <p>Values are resolved at boot and never change for the life of the
- * process, so this is a plain read with no caching needed.
+ * <p>{@code regions} follows the runtime cluster registry (refreshed by the
+ * region probe's tick), so this stays a plain uncached read.
  */
 @RestController
 @RequestMapping("/api/v1/platform")
 public class PlatformController {
 
-    private final ProvisioningProperties provisioning;
+    private final GroupReservationService reservations;
     private final com.perf.globalorchestrator.health.PlatformHealthService platformHealth;
 
-    public PlatformController(ProvisioningProperties provisioning,
+    public PlatformController(GroupReservationService reservations,
                               com.perf.globalorchestrator.health.PlatformHealthService platformHealth) {
-        this.provisioning = provisioning;
+        this.reservations = reservations;
         this.platformHealth = platformHealth;
     }
 
@@ -49,36 +48,15 @@ public class PlatformController {
 
     @GetMapping("/capabilities")
     public ResponseEntity<Capabilities> capabilities() {
-        return ResponseEntity.ok(new Capabilities(
-                provisioning.mode().name(),
-                provisioning.isDynamic(),
-                provisioning.isDynamic(),
-                provisioning.regions(),
-                provisioning.regionLabel()));
+        return ResponseEntity.ok(new Capabilities(reservations.maxClustersPerGroup()));
     }
 
     /**
-     * @param provisioningMode      {@code DYNAMIC} | {@code STATIC}
-     * @param dynamicScalingEnabled whether the control plane may create /
-     *                              destroy workers — gates the Capacity tab,
-     *                              spin buttons and the shortfall prompt
-     * @param podRecyclingEnabled   whether the recycler runs — gates the
-     *                              per-application recycle-policy editor
-     * @param regions               region ids this deployment uses; empty
-     *                              means "no override, use the UI default".
-     *                              In static mode these are the operator's
-     *                              data centers
-     * @param regionLabel           {@code region} | {@code dataCenter} — what
-     *                              the UI should call the axis. The API and
-     *                              schema keep saying "region" everywhere —
-     *                              do not rename the column; this
-     *                              makes the vocabulary seam machine-readable
-     *                              instead of hardcoded in the browser
+     * @param maxClustersPerGroup how many clusters one application group may
+     *                            reserve capacity on. The cluster LIST is not
+     *                            here on purpose — it changes at runtime, so
+     *                            every surface reads {@code GET /api/v1/regions/status}
+     *                            instead of a boot-time snapshot.
      */
-    public record Capabilities(
-            String provisioningMode,
-            boolean dynamicScalingEnabled,
-            boolean podRecyclingEnabled,
-            List<String> regions,
-            String regionLabel) {}
+    public record Capabilities(int maxClustersPerGroup) {}
 }

@@ -4,7 +4,6 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.perf.globalorchestrator.domain.ApplicationGroup;
 import com.perf.globalorchestrator.domain.GroupCapacity;
 import com.perf.globalorchestrator.domain.RecyclePolicy;
-import com.perf.globalorchestrator.provision.ProvisioningProperties;
 import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.repo.GroupCapacityRepository;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -55,13 +54,10 @@ public class ApplicationGroupController {
 
     private final ApplicationGroupRepository repo;
     private final GroupCapacityRepository capacityRepo;
-    private final ProvisioningProperties provisioning;
 
-    public ApplicationGroupController(ApplicationGroupRepository repo, GroupCapacityRepository capacityRepo,
-                                      ProvisioningProperties provisioning) {
+    public ApplicationGroupController(ApplicationGroupRepository repo, GroupCapacityRepository capacityRepo) {
         this.repo = repo;
         this.capacityRepo = capacityRepo;
-        this.provisioning = provisioning;
     }
 
     @GetMapping
@@ -102,11 +98,9 @@ public class ApplicationGroupController {
         } catch (DuplicateKeyException e) {
             throw new GroupNameTakenException(name);
         }
-        // The pool starts empty in every region the deployment knows: a
-        // capacity row at 0 per region, raised through the Capacity tab.
-        for (String region : ApplicationController.seedRegions(provisioning)) {
-            capacityRepo.upsert(groupId, region, 0);
-        }
+        // The pool starts with NO clusters (CLUSTER-CAPACITY): the group
+        // attaches registered clusters and reserves capacity explicitly on
+        // the Capacity tab.
         return ResponseEntity.status(HttpStatus.CREATED).body(hydrate(stored.withApplicationCount(0)));
     }
 

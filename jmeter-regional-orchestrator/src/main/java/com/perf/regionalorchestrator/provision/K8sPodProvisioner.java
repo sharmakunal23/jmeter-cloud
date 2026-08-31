@@ -392,15 +392,17 @@ public class K8sPodProvisioner implements PodProvisioner {
             throw new CapacityExhaustedException("namespace " + props.namespace()
                     + " cannot admit another worker — quota headroom: pods=" + c.podsFree()
                     + ", memoryMi=" + c.memoryFreeMi() + ", cpuMillis=" + c.cpuFreeMillis()
+                    + ", ephemeralMi=" + c.ephemeralFreeMi()
                     + " (worker needs " + (props.shape().cpuMemoryResources()
-                            ? props.workerMemoryMb() + "Mi, " + props.workerCpuRequest() + " cpu" : "no cpu/memory") + ")");
+                            ? props.workerMemoryMb() + "Mi, " + props.workerCpuRequest() + " cpu" : "no cpu/memory")
+                    + (props.shape().ephemeralStorage() != null ? ", " + props.shape().ephemeralStorage() + " ephemeral" : "") + ")");
         }
     }
 
     @Override
     public NamespaceCapacity capacity() {
         List<ResourceQuota> quotas = k8s.resourceQuotas().inNamespace(props.namespace()).list().getItems();
-        Long podsFree = null, memFree = null, cpuFree = null;
+        Long podsFree = null, memFree = null, cpuFree = null, ephFree = null;
         for (ResourceQuota q : quotas) {
             if (q.getStatus() == null || q.getStatus().getHard() == null) continue;
             Map<String, Quantity> hard = q.getStatus().getHard();
@@ -416,6 +418,12 @@ public class K8sPodProvisioner implements PodProvisioner {
                     if (hard.containsKey(key)) cpuFree = tighter(cpuFree, headroom(hard, used, key).multiply(THOUSAND).longValue());
                 }
             }
+            if (props.shape().ephemeralStorage() != null) {
+                // Workers request == limit, so either quota key bounds them the same way.
+                for (String key : List.of("requests.ephemeral-storage", "limits.ephemeral-storage")) {
+                    if (hard.containsKey(key)) ephFree = tighter(ephFree, headroom(hard, used, key).divide(MI, 0, java.math.RoundingMode.DOWN).longValue());
+                }
+            }
         }
         Integer workersFree = null;
         if (podsFree != null) workersFree = (int) Math.max(0, podsFree);
@@ -428,7 +436,13 @@ public class K8sPodProvisioner implements PodProvisioner {
             long fit = Math.max(0, cpuFree / perWorker);
             workersFree = workersFree == null ? (int) fit : (int) Math.min(workersFree, fit);
         }
-        return new NamespaceCapacity(podsFree == null ? null : (int) Math.max(0, podsFree), memFree, cpuFree, workersFree);
+        if (ephFree != null) {
+            long perWorkerMi = Math.max(1, Quantity.getAmountInBytes(new Quantity(props.shape().ephemeralStorage()))
+                    .divide(MI, 0, java.math.RoundingMode.UP).longValue());
+            long fit = Math.max(0, ephFree / perWorkerMi);
+            workersFree = workersFree == null ? (int) fit : (int) Math.min(workersFree, fit);
+        }
+        return new NamespaceCapacity(podsFree == null ? null : (int) Math.max(0, podsFree), memFree, cpuFree, ephFree, workersFree);
     }
 
     private static final java.math.BigDecimal MI = java.math.BigDecimal.valueOf(1024L * 1024L);

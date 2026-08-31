@@ -212,7 +212,7 @@ function FleetFlowDiagramInner({
             <table className="visuallyHidden" aria-label="Fleet allocation by region">
                 <thead>
                     <tr>
-                        <th>Region</th>
+                        <th>Cluster</th>
                         <th>Claimed</th>
                         <th>Idle</th>
                         <th>Total</th>

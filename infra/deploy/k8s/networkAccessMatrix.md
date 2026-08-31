@@ -36,9 +36,9 @@ principal, at deploy time only.
 | `document-service` | 8084 | the UI's nginx (`/api/v1/blob*`) | uploads / downloads |
 | | 8084 | workers | fetch test plan + data files, upload results |
 | | 8084 | the hub | blob metadata, run archive, purge, `GET /actuator/health/readiness` |
-| `jmeter-regional-orchestrator` | 8088 | **the hub only** | `/api/v1/capabilities`, `/api/v1/pods*`, `/api/v1/workers*`, the relay |
-| worker Pods | 8080 | the regional (relay) — routed regions | `actuator/health`, `api/v1/test`, `api/v1/test/{drain,abort}`, `api/v1/logs` (the relay allow-list) |
-| | 8080 | the hub — direct regions only | the same calls, direct (operator-declared workers) |
+| `jmeter-regional-orchestrator` | 8088 | **the hub only** | `/api/v1/capabilities`, `/api/v1/provisioningCheck` (the add-cluster dry run), `/api/v1/pods*`, `/api/v1/workers*`, the relay |
+| worker Pods | 8080 | the regional (relay) — spun workers | `actuator/health`, `api/v1/test`, `api/v1/test/{drain,abort}`, `api/v1/logs` (the relay allow-list) |
+| | 8080 (or 443 ingress FQDN) | the hub — declared workers | the same calls, direct at the declared hub-reachable `baseUrl` |
 | Oracle | 1521 | the hub, the consumer, the Flyway Job | |
 | Redis | 6379 | the hub only | |
 | SMTP | 1025 local / the corporate relay | the hub only | run reports + alerts |
@@ -57,15 +57,15 @@ principal, at deploy time only.
 | | each regional | 8088 / 443 FQDN | control plane of every data center |
 | | document-service | 8084 / 443 FQDN | metadata, archive, purge, readiness probe |
 | | metrics-consumer | 8083 / 443 FQDN | `/actuator/health` probe only |
-| | declared workers (direct regions) | 8080 | fan-out, drain, abort, properties, logs |
+| | declared workers | 8080 / 443 FQDN | fan-out, status, drain, abort, properties, logs — dialled directly, never relayed |
 | | `api.anthropic.com` | 443 | AI run analysis (only when a key is set) |
 | | **the applications' health endpoints** (operator-configured URLs) | any | `ApplicationHealthPoller` — every minute |
 | `jmeter-metrics-consumer` | Oracle | 1521 | the only egress |
-| `jmeter-regional-orchestrator` | Kubernetes API | 6443 (endpoint IPs, post-DNAT) | fabric8 |
+| `jmeter-regional-orchestrator` | Kubernetes API | 6443 (endpoint IPs, post-DNAT) | fabric8 (pods + quotas; SelfSubjectAccessReview for the registration dry run — allowed by `system:basic-user`, no extra Role rule) |
 | | worker Pods | 8080 | the relay |
 | worker Pods | metrics-consumer | 8083 / 443 FQDN | ingest |
 | | document-service | 8084 / 443 FQDN | artifacts in, results out |
-| | hub | 8082 | **declared (STATIC) workers only**: register + heartbeat |
+| | hub | 8082 | **declared (STATIC) workers only**, optional: register + heartbeat |
 | | **the systems under test** | any | the load itself (SECURITY S-5/S-11 turns this into an allow-list) |
 | `document-service` | nothing | — | (an S3 endpoint only under the `-Pcloud` S3 backend) |
 | Flyway Job | Oracle | 1521 | migrations |

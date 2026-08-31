@@ -4,8 +4,6 @@ import com.perf.globalorchestrator.client.LocalOrchestratorClient;
 import com.perf.globalorchestrator.client.WorkerRef;
 import com.perf.globalorchestrator.domain.Pod;
 import com.perf.globalorchestrator.domain.PodSource;
-import com.perf.globalorchestrator.provision.ConditionalOnProvisioningMode;
-import com.perf.globalorchestrator.provision.ProvisioningMode;
 import com.perf.globalorchestrator.repo.PodRepository;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -34,9 +32,9 @@ import java.util.concurrent.TimeUnit;
  * refreshes {@code lastHeartbeat} — the same evidence a heartbeat gives — so
  * the claim path, sweeper, capacity views and drain guards need no changes.
  *
- * <p><b>STATIC rows only.</b> A DYNAMIC row left over from a mode flip belongs
- * to the (now absent) provisioner; probing it would resurrect a worker nothing
- * is maintaining.
+ * <p><b>STATIC rows only.</b> A DYNAMIC row's liveness is the kubelet's,
+ * through {@link WorkerLivenessProbe} — probing it here would put two judges
+ * on one worker.
  *
  * <p><b>Liveness, not readiness.</b> It hits {@code /actuator/health}, not the
  * worker's {@code /api/v1/ready}, because readiness folds in signals like ingest
@@ -50,7 +48,6 @@ import java.util.concurrent.TimeUnit;
  * corrupt anything.
  */
 @Component
-@ConditionalOnProvisioningMode(ProvisioningMode.STATIC)
 public class StaticPodProbe {
 
     private static final Logger LOG = LoggerFactory.getLogger(StaticPodProbe.class);

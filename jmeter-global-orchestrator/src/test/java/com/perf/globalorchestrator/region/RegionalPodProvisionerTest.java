@@ -67,7 +67,7 @@ class RegionalPodProvisionerTest {
         });
         regional.start();
         String url = "http://127.0.0.1:" + regional.getAddress().getPort();
-        registry = new RegionRegistry(new RegionProperties("na-east=" + url + ",na-west"));
+        registry = TestRegions.registryOf("na-east=" + url);
         RegionalClient client = new RegionalClient(new ObjectMapper(), 500, 2000);
         provisioner = new RegionalPodProvisioner(registry, client);
         probe = new RegionProbe(registry, client);
@@ -126,11 +126,11 @@ class RegionalPodProvisionerTest {
     }
 
     @Test
-    @DisplayName("a direct region cannot provision — RegionUnavailableException names the REGIONS fix")
-    void directRegionCannotProvision() {
+    @DisplayName("an unregistered region cannot provision — RegionUnavailableException names the registration fix")
+    void unregisteredRegionCannotProvision() {
         assertThatThrownBy(() -> provisioner.createAndStart(new PodSpec("w-1", "APP", "na-west")))
                 .isInstanceOf(RegionUnavailableException.class)
-                .hasMessageContaining("na-west=http://");
+                .hasMessageContaining("not a registered cluster");
         assertThat(seen).isEmpty();
     }
 
@@ -159,7 +159,7 @@ class RegionalPodProvisionerTest {
         RegionStatus status = registry.statusOf("na-east").orElseThrow();
         assertThat(status.reachable()).isTrue();
         assertThat(status.lastSeenAt()).isNotNull();
-        assertThat(registry.statusOf("na-west").orElseThrow().routed()).isFalse();
+        assertThat(registry.statusOf("na-west")).isEmpty();   // never registered
     }
 
     @Test

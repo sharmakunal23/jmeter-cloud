@@ -67,6 +67,8 @@ class GlobalRunDbTest extends OracleDbTestSupport {
     @Autowired ApplicationRepository applications;
     @Autowired ApplicationGroupRepository groups;
     @Autowired GroupCapacityRepository groupCapacity;
+    @Autowired com.perf.globalorchestrator.repo.RegionRepository regionRepo;
+    @Autowired com.perf.globalorchestrator.service.GroupReservationService reservations;
     @Autowired PodRepository pods;
     @Autowired RunRepository runs;
     @Autowired RunEventRepository runEvents;
@@ -78,6 +80,13 @@ class GlobalRunDbTest extends OracleDbTestSupport {
     @Autowired PlatformTransactionManager txManager;
 
     private final JdbcTemplate owner = owner();
+
+    /** A registered cluster (created on first use) — reservations FK ORCH_REGION since V4. */
+    private void ensureRegion(String region, int maxWorkers) {
+        if (regionRepo.find(region).isEmpty()) {
+            regionRepo.insert(region, region + " DC", "http://" + region + ":30088", maxWorkers);
+        }
+    }
 
     /** An application in the {@code cps} group (created on first use) — every application has a group. */
     private Application app(String id, String name) {
@@ -158,8 +167,8 @@ class GlobalRunDbTest extends OracleDbTestSupport {
     @Test
     void all_migrations_applied_and_every_object_is_valid() {
         assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_objects WHERE status <> 'VALID'", Integer.class)).isZero();
-        // 13 control-plane tables from V2 + ORCH_PLUGIN from V3.
-        assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_tables WHERE table_name LIKE 'ORCH\\_%' ESCAPE '\\'", Integer.class)).isEqualTo(14);
+        // 13 control-plane tables from V2 + ORCH_PLUGIN from V3 + ORCH_REGION from V4.
+        assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_tables WHERE table_name LIKE 'ORCH\\_%' ESCAPE '\\'", Integer.class)).isEqualTo(15);
         // One convention for the whole schema: nothing quoted-case except Flyway's own history table.
         assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_objects WHERE object_name <> UPPER(object_name) AND object_name NOT LIKE 'flyway\\_schema\\_history%' ESCAPE '\\'", Integer.class)).isZero();
         assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_tab_columns WHERE column_name <> UPPER(column_name) AND table_name <> 'flyway_schema_history'", Integer.class)).isZero();
@@ -284,6 +293,7 @@ class GlobalRunDbTest extends OracleDbTestSupport {
         assertThat(groupCapacity.countActivePodsForGroupRegion("cps", "na-east")).isZero();
 
         // The group's capacity rows: upsert, read back, the delete guard sees the pool.
+        ensureRegion("na-east", 20);
         groupCapacity.upsert("pool", "na-east", 3);
         assertThat(groupCapacity.find("pool", "na-east").orElseThrow().maxAvailable()).isEqualTo(3);
         assertThat(groupCapacity.findByGroupId("pool")).extracting(GroupCapacity::region).containsExactly("na-east");
@@ -445,5 +455,87 @@ class GlobalRunDbTest extends OracleDbTestSupport {
         runs.insertRun(new Run("01T3RUNPLUGINSAAAAAAAAAAA2", "na-east", "b", null, "pluginsApp", "t",
                 RunState.PREPARING, null, Instant.now(), null, null, false, List.of()));
         assertThat(runs.findByRunId("01T3RUNPLUGINSAAAAAAAAAAA2").orElseThrow().plugins()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("V4 cluster registry: the reservation FK holds, the region-row lock serialises "
+            + "concurrent reservations (no oversubscription window), and the probe verdict round-trips")
+    void cluster_registry_fk_lock_and_probe() throws Exception {
+        // FK: a reservation on an unregistered cluster is refused by the schema itself.
+        if (groups.findById("v4grp").isEmpty()) {
+            groups.insert(new ApplicationGroup("v4grp", "Group v4grp", "db contract test", Instant.now(), null));
+        }
+        if (groups.findById("v4grp2").isEmpty()) {
+            groups.insert(new ApplicationGroup("v4grp2", "Group v4grp2", "db contract test", Instant.now(), null));
+        }
+        assertThatThrownBy(() -> groupCapacity.upsert("v4grp", "never-registered", 1))
+                .isInstanceOf(DataIntegrityViolationException.class);
+
+        // The schema itself holds the three-way uniqueness (id is the PK) and
+        // the 20-worker cap.
+        ensureRegion("v4uniq", 20);
+        assertThatThrownBy(() -> regionRepo.insert("v4uniq2", "v4uniq DC", "http://other:30088", 20))
+                .as("duplicate LABEL").isInstanceOf(org.springframework.dao.DuplicateKeyException.class);
+        assertThatThrownBy(() -> regionRepo.insert("v4uniq2", "other DC", "http://v4uniq:30088", 20))
+                .as("duplicate REGIONAL_URL").isInstanceOf(org.springframework.dao.DuplicateKeyException.class);
+        assertThatThrownBy(() -> regionRepo.insert("v4over", "v4over DC", "http://v4over:30088", 21))
+                .as("MAX_WORKERS above the 20 cap").isInstanceOf(DataIntegrityViolationException.class);
+
+        // Probe verdict round-trip on the row.
+        ensureRegion("v4lock", 10);
+        regionRepo.recordProbe("v4lock", false, "probe worker did not become ready — Unschedulable");
+        var probed = regionRepo.find("v4lock").orElseThrow();
+        assertThat(probed.lastProbeStatus()).isEqualTo("FAIL");
+        assertThat(probed.lastProbeDetail()).contains("Unschedulable");
+        assertThat(probed.lastProbeAt()).isNotNull();
+
+        // Serialisation: transaction A locks the region row and reserves 6 of 10 for
+        // v4grp before committing; a concurrent reserve of 5 for v4grp2 must WAIT on
+        // the row lock, then see A's 6 and refuse (6 + 5 > 10). Without the FOR UPDATE
+        // it would have read 0 reserved and oversubscribed the cluster.
+        CountDownLatch aHoldsLock = new CountDownLatch(1);
+        CountDownLatch bFinished = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<Throwable> bOutcome = new java.util.concurrent.atomic.AtomicReference<>();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> a = pool.submit(() -> new TransactionTemplate(txManager).execute(status -> {
+                assertThat(regionRepo.lockMaxWorkers("v4lock")).contains(10);
+                groupCapacity.upsert("v4grp", "v4lock", 6);
+                aHoldsLock.countDown();
+                try {
+                    // Hold the lock long enough for B to be provably blocked on it.
+                    assertThat(bFinished.await(1, java.util.concurrent.TimeUnit.SECONDS))
+                            .as("B must still be waiting on A's region-row lock")
+                            .isFalse();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return null;
+            }));
+            Future<?> b = pool.submit(() -> {
+                try {
+                    aHoldsLock.await();
+                    reservations.reserve("v4grp2", "v4lock", 5);
+                } catch (Throwable t) {
+                    bOutcome.set(t);
+                } finally {
+                    bFinished.countDown();
+                }
+            });
+            a.get();
+            b.get();
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(bOutcome.get())
+                .isInstanceOf(com.perf.globalorchestrator.service.GroupReservationService.ClusterCapacityExceededException.class)
+                .hasMessageContaining("other groups hold 6 of its 10");
+        assertThat(groupCapacity.find("v4grp2", "v4lock")).isEmpty();
+
+        // A reservation that fits goes through, and the rollup sees both dimensions.
+        var written = reservations.reserve("v4grp2", "v4lock", 4);
+        assertThat(written.maxAvailable()).isEqualTo(4);
+        assertThat(groupCapacity.reservedByRegion().get("v4lock")).isEqualTo(10);
+        assertThat(groupCapacity.countByRegion("v4lock")).isEqualTo(2);
     }
 }

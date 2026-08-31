@@ -1,6 +1,5 @@
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 
-import { DynamicScalingRoute } from "./components/DynamicScalingRoute";
 import { Layout } from "./components/Layout";
 import { ApplicationsListPage } from "./pages/ApplicationsListPage";
 import { ApplicationDetailPage } from "./pages/ApplicationDetailPage";
@@ -8,6 +7,7 @@ import { AutomationListPage } from "./pages/AutomationListPage";
 import { AutomationDetailPage } from "./pages/AutomationDetailPage";
 import { CapacityListPage } from "./pages/CapacityListPage";
 import { CapacityDetailPage } from "./pages/CapacityDetailPage";
+import { ClustersPage } from "./pages/ClustersPage";
 import { DocumentsListPage } from "./pages/DocumentsListPage";
 import { DocumentsDetailPage } from "./pages/DocumentsDetailPage";
 import { HomePage } from "./pages/HomePage";
@@ -51,26 +51,14 @@ export function App() {
           <Route path="applications/:appName/runs/:runId" element={<RunDetailPage />} />
 
           {/* Capacity — one row per application group (the worker pool is the
-              group's; GROUP-CAPACITY 2026-08-30), drill-in per group.
-              STATIC-FLEET Phase 7 — both routes redirect to /applications on
-              a deployment that does not provision its own workers; the whole
-              surface is spin / restart / drain, which don't apply there. */}
-          <Route
-            path="capacity"
-            element={
-              <DynamicScalingRoute>
-                <CapacityListPage />
-              </DynamicScalingRoute>
-            }
-          />
-          <Route
-            path="capacity/:groupId"
-            element={
-              <DynamicScalingRoute>
-                <CapacityDetailPage />
-              </DynamicScalingRoute>
-            }
-          />
+              group's; GROUP-CAPACITY 2026-08-30), drill-in per group. Always
+              visible since CLUSTER-CAPACITY: spun and declared workers
+              coexist, so there is no posture to gate on. */}
+          <Route path="capacity" element={<CapacityListPage />} />
+          <Route path="capacity/:groupId" element={<CapacityDetailPage />} />
+
+          {/* Clusters — the runtime cluster registry (CLUSTER-CAPACITY). */}
+          <Route path="clusters" element={<ClustersPage />} />
 
           {/* Phase IA-Documents (2026-05-12) — list-then-drill-in IA
               matching `/capacity`. /documents shows apps with per-app

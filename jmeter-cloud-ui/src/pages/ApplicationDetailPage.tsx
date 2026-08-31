@@ -3,8 +3,6 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 
 import { runsApi, type Run, type RunListing } from "../api/runs";
 import { applicationsApi, type Application } from "../api/applications";
-import { usePlatformCapabilities } from "../hooks/usePlatformCapabilities";
-import { DataCentersSectionForApp } from "../components/DataCentersSection";
 import { Paginator } from "../components/Paginator";
 import { persistPageSize, readStoredPageSize } from "../hooks/useClientPagination";
 import { RegionBadgeList } from "../components/RegionBadge";
@@ -59,7 +57,6 @@ export function ApplicationDetailPage() {
 
 function ApplicationDetailBody({ appName }: { appName: string }) {
   const navigate = useNavigate();
-  const { isStaticFleet } = usePlatformCapabilities();
   const [searchParams, setSearchParams] = useSearchParams();
   const page = Math.max(1, Number.parseInt(searchParams.get("page") ?? "1", 10) || 1);
   // The same rows-per-page preference the client-paginated lists share.
@@ -350,12 +347,6 @@ function ApplicationDetailBody({ appName }: { appName: string }) {
         />
       )}
 
-      {/* STATIC-FLEET Phase 7 — the operator-facing worker surface on a fleet
-          this platform does not provision: the application's GROUP pool,
-          declared from here. Mutually exclusive with the Capacity tab, which
-          is hidden in that mode. */}
-      {isStaticFleet && <DataCentersSectionForApp appName={appName} />}
-
       {deleteTargets && deleteTargets.length > 0 && (
         <DeleteRunsConfirmDialog
           selected={deleteTargets}
@@ -421,7 +412,7 @@ function RunsTableForApp({
             <th aria-label="select" className="runsTable__check"></th>
             <th>Run</th>
             <th>State</th>
-            <th>Regions</th>
+            <th>Clusters</th>
             <th>Pods</th>
             <th>Started</th>
             <th aria-label="actions"></th>

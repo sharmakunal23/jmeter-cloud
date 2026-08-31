@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.perf.globalorchestrator.domain.RegionCapacity;
 import com.perf.globalorchestrator.health.PlatformHealth.Component;
-import com.perf.globalorchestrator.provision.ProvisioningProperties;
 import com.perf.globalorchestrator.region.RegionCapabilities;
 import com.perf.globalorchestrator.region.RegionRegistry;
 import com.perf.globalorchestrator.region.RegionStatus;
@@ -51,7 +50,6 @@ public class PlatformHealthService {
     private final Supplier<HealthComponent> ownHealth;
     private final RegionRegistry regions;
     private final PodRepository pods;
-    private final ProvisioningProperties provisioning;
     private final String metricsConsumerUrl;
     private final String documentServiceUrl;
     private final Duration probeTimeout;
@@ -61,21 +59,19 @@ public class PlatformHealthService {
 
     @org.springframework.beans.factory.annotation.Autowired   // two constructors: this is the one Spring uses
     public PlatformHealthService(HealthEndpoint healthEndpoint, RegionRegistry regions, PodRepository pods,
-                                 ProvisioningProperties provisioning,
                                  @Value("${metricsConsumer.baseUrl:http://metrics-consumer:8083}") String metricsConsumerUrl,
                                  @Value("${documentService.baseUrl:http://document-service:8084}") String documentServiceUrl,
                                  @Value("${globalOrchestrator.platformHealth.probeTimeoutMs:3000}") long probeTimeoutMs) {
-        this(healthEndpoint::health, regions, pods, provisioning, metricsConsumerUrl, documentServiceUrl,
+        this(healthEndpoint::health, regions, pods, metricsConsumerUrl, documentServiceUrl,
                 Duration.ofMillis(probeTimeoutMs));
     }
 
     PlatformHealthService(Supplier<HealthComponent> ownHealth, RegionRegistry regions, PodRepository pods,
-                          ProvisioningProperties provisioning, String metricsConsumerUrl, String documentServiceUrl,
+                          String metricsConsumerUrl, String documentServiceUrl,
                           Duration probeTimeout) {
         this.ownHealth = ownHealth;
         this.regions = regions;
         this.pods = pods;
-        this.provisioning = provisioning;
         this.metricsConsumerUrl = stripSlash(metricsConsumerUrl);
         this.documentServiceUrl = stripSlash(documentServiceUrl);
         this.probeTimeout = probeTimeout;
@@ -146,11 +142,12 @@ public class PlatformHealthService {
                 status = PlatformHealth.worse(status, optional && PlatformHealth.DOWN.equals(s) ? PlatformHealth.DEGRADED : s);
             }
         }
-        String detail = PlatformHealth.UP.equals(status) ? "provisioning " + provisioning.mode().name()
+        String detail = PlatformHealth.UP.equals(status)
+                ? regions.ids().size() + " cluster(s) registered"
                 : children.stream().filter(c -> !PlatformHealth.UP.equals(c.status())).map(Component::name).findFirst()
                         .map(n -> n + " is not healthy").orElse(null);
         return new Component("global-orchestrator", "Global orchestrator", "service", status, detail, null, now, null,
-                Map.of("provisioningMode", provisioning.mode().name()), children);
+                Map.of("registeredClusters", regions.ids().size()), children);
     }
 
     private static void collect(String prefix, HealthComponent node, List<Component> out) {
@@ -291,7 +288,7 @@ public class PlatformHealthService {
             List<Component> children = new ArrayList<>();
             String regionStatus = PlatformHealth.UP;
             String regionDetail;
-            if (r.routed()) {
+            {
                 String s = r.reachable() == null ? PlatformHealth.UNKNOWN : r.reachable() ? PlatformHealth.UP : PlatformHealth.DOWN;
                 RegionCapabilities caps = r.capabilities();
                 String d = PlatformHealth.DOWN.equals(s) ? (r.lastError() == null ? "unreachable" : r.lastError())
@@ -308,8 +305,6 @@ public class PlatformHealthService {
                         s, d, r.url(), r.lastSeenAt(), null, facts.isEmpty() ? null : facts, null));
                 regionStatus = s;
                 regionDetail = PlatformHealth.DOWN.equals(s) ? "regional orchestrator unreachable" : null;
-            } else {
-                regionDetail = "direct — operator-declared workers";
             }
             RegionCapacity rc = counts.get(r.region());
             long total = rc == null ? 0 : rc.totalPods(), idle = rc == null ? 0 : rc.idlePods(), lost = rc == null ? 0 : rc.lostPods();
@@ -337,10 +332,10 @@ public class PlatformHealthService {
             status = PlatformHealth.UP;
         }
         long down = regionsOut.stream().filter(c -> PlatformHealth.DOWN.equals(c.status())).count();
-        String detail = regionsOut.isEmpty() ? "no regions configured"
-                : PlatformHealth.UNKNOWN.equals(status) ? "waiting for the first region probe"
-                : down == 0 ? regionsOut.size() + " region(s) serving" : down + " of " + regionsOut.size() + " region(s) down";
-        return new Component("regions", "Data centers", "regions", status, detail, null, now, null, null, regionsOut);
+        String detail = regionsOut.isEmpty() ? "no clusters registered"
+                : PlatformHealth.UNKNOWN.equals(status) ? "waiting for the first cluster probe"
+                : down == 0 ? regionsOut.size() + " cluster(s) serving" : down + " of " + regionsOut.size() + " cluster(s) down";
+        return new Component("regions", "Clusters", "regions", status, detail, null, now, null, null, regionsOut);
     }
 
     // ── helpers ───────────────────────────────────────────────────────

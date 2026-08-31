@@ -135,6 +135,37 @@ public class GroupCapacityRepository {
         return n == null ? 0 : n;
     }
 
+    /**
+     * Other groups' reservations on one cluster — the oversubscription check
+     * (CLUSTER-CAPACITY). Call after {@link RegionRepository#lockMaxWorkers}
+     * in the same transaction: the region-row lock serialises writers.
+     */
+    public int sumReservedForRegionExcluding(String region, String groupId) {
+        Integer n = jdbc.queryForObject(
+                "SELECT COALESCE(SUM(MAX_AVAILABLE), 0) FROM ORCH_GROUP_CAPACITY "
+                + "WHERE REGION = ? AND GROUP_ID <> ?",
+                Integer.class, region, groupId);
+        return n == null ? 0 : n;
+    }
+
+    /** region → SUM of every group's reservation — the Clusters page's "Reserved" column. */
+    public Map<String, Integer> reservedByRegion() {
+        Map<String, Integer> out = new java.util.LinkedHashMap<>();
+        jdbc.query(
+                "SELECT REGION, SUM(MAX_AVAILABLE) AS RESERVED FROM ORCH_GROUP_CAPACITY "
+                + "GROUP BY REGION ORDER BY REGION",
+                (ResultSet rs) -> { out.put(rs.getString("REGION"), rs.getInt("RESERVED")); });
+        return out;
+    }
+
+    /** Capacity rows referencing one cluster — the cluster-delete guard. */
+    public int countByRegion(String region) {
+        Integer n = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM ORCH_GROUP_CAPACITY WHERE REGION = ?",
+                Integer.class, region);
+        return n == null ? 0 : n;
+    }
+
     /** Capacity rows a group holds (any region) — the delete guard. */
     public int countByGroupId(String groupId) {
         Integer n = jdbc.queryForObject(

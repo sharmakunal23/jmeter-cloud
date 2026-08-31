@@ -3,13 +3,15 @@ package com.perf.globalorchestrator.provision;
 import java.util.List;
 
 /**
- * Lifecycle of the worker pods the control plane owns under
- * {@code PROVISIONING_MODE=DYNAMIC} — spun up on demand, bound to one
- * application, addressed by {@code (region, podName)} because each region's
- * pods live in a different cluster. {@link RegionalPodProvisioner} forwards
- * every call to that region's {@code jmeter-regional-orchestrator};
- * {@link StaticPodProvisioner} answers reads from the registry and refuses
- * writes.
+ * Lifecycle of the worker pods the control plane creates — spun up on demand
+ * into a group's pool, addressed by {@code (region, podName)} because each
+ * region's pods live in a different cluster. {@link RegionalPodProvisioner}
+ * forwards every call to that region's {@code jmeter-regional-orchestrator}.
+ *
+ * <p>Operator-declared workers ({@code ORCH_POD.SOURCE = STATIC}) are NOT
+ * driven through here — the platform never created them, so it never creates,
+ * restarts or destroys them; the sweepers filter on that column
+ * (CLUSTER-CAPACITY).
  *
  * <p>Pod name == network hostname == registry key, allocated as
  * {@code {groupId}-{region}-worker-{n}}. {@link #createAndStart} is

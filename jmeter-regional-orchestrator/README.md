@@ -12,5 +12,6 @@ hub for data (metrics, artifacts) only.
 API contract: [`api/openapi.yaml`](api/openapi.yaml) — browsable at
 <http://localhost:8088/swagger-ui.html>.
 
-Worker-Pod shape, the capacity guard and the hosted egress rules:
+Worker-Pod shape, the capacity guard, the registration dry-run
+(`GET /api/v1/provisioningCheck`) and the hosted egress rules:
 [`docs/workerPodShape.md`](docs/workerPodShape.md).

@@ -23,8 +23,9 @@ services:
     # Worker provisioning happens inside each region's cluster through its
     # jmeter-regional-orchestrator, so this container holds no cluster
     # credential, mounts no docker socket and runs as the image's
-    # unprivileged user. On compose alone the platform is STATIC (declare
-    # workers); point REGIONS at the kind regions for DYNAMIC.
+    # unprivileged user. Clusters register at runtime (POST /api/v1/regions,
+    # CLUSTER-CAPACITY) — compose alone has none until the kind regions are
+    # up (infra/deploy/k8s/local/bootstrapRegions.sh registers them).
     environment:
       HTTP_PORT:                "8082"
       HTTP_BIND_ADDRESS:        0.0.0.0
@@ -45,20 +46,11 @@ services:
       # creates per-app workers on demand; the static URL list is dead.
       GLOBAL_ORCHESTRATOR_REGION:             ${GLOBAL_ORCHESTRATOR_REGION:-us-east-1}
       GLOBAL_ORCHESTRATOR_FANOUT_THREADS:     ${GLOBAL_ORCHESTRATOR_FANOUT_THREADS:-32}
-      # STATIC-FLEET — whether this deployment may create workers at all.
-      # STATIC is the platform default (2026-07-27): workers are deployed and
-      # owned by the operator, spin / restart / teardown answer 409, and the
-      # reconciler + recycler are not wired.
-      # NOTE FOR LOCAL DEV: compose alone has no cluster, so spin answers
-      # 409 (STATIC) or 503 REGION_UNREACHABLE (DYNAMIC with no routed
-      # region). For the spin-a-worker loop bring up the kind regions
-      # (infra/deploy/k8s/local/bootstrapRegions.sh) and set
-      # PROVISIONING_MODE=DYNAMIC + REGIONS=id=url,… in .env.
-      # REGIONS lists the deployment's regions (= data centers), each
-      # optionally with its regional orchestrator URL — `id` is direct,
-      # `id=url` is routed through that cluster's jmeter-regional-orchestrator.
-      PROVISIONING_MODE:                      ${PROVISIONING_MODE:-STATIC}
-      REGIONS:                                ${REGIONS:-}
+      # NOTE FOR LOCAL DEV: the cluster registry lives in Oracle
+      # (ORCH_REGION) — bring up the kind regions with
+      # infra/deploy/k8s/local/bootstrapRegions.sh, which registers each one
+      # via POST /api/v1/regions. PROVISIONING_MODE and REGIONS are retired
+      # (CLUSTER-CAPACITY): STATIC and DYNAMIC workers coexist per row.
       DOCUMENT_SERVICE_URL:                   ${DOCUMENT_SERVICE_URL:-http://document-service:8084}
       # CACHE C-0 (2026-05-26) — shared Redis cache. Consumed by
       # application.yml's spring.data.redis.* placeholders.

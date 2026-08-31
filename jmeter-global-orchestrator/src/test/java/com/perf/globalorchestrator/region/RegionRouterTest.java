@@ -8,8 +8,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class RegionRouterTest {
 
-    private final RegionRouter router = new RegionRouter(new RegionRegistry(
-            new RegionProperties("na-east=http://na-east-control-plane:30088,na-west")));
+    private final RegionRouter router = new RegionRouter(
+            TestRegions.registryOf("na-east=http://na-east-control-plane:30088"));
 
     @Test
     @DisplayName("a routed region dials through its relay; a direct or unknown region dials the worker's baseUrl")

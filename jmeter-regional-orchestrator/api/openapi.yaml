@@ -43,6 +43,23 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Capabilities" }
 
+  /api/v1/provisioningCheck:
+    get:
+      tags: [capabilities]
+      summary: Cluster-registration dry run — can this regional create worker Pods?
+      operationId: provisioningCheck
+      description: |
+        The hub calls this while registering the cluster (CLUSTER-CAPACITY):
+        worker image configured, the ServiceAccount's RBAC verbs proven by
+        SelfSubjectAccessReview, and the namespace quota admitting ≥ 1 worker.
+        A failed check is reported in its row, never as an HTTP error.
+      responses:
+        "200":
+          description: Per-check results; `ok` is the roll-up.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProvisioningCheckResponse" }
+
   /api/v1/pods:
     post:
       tags: [pods]
@@ -333,10 +350,30 @@ components:
           type: object
           description: "Live headroom of the namespace's ResourceQuotas (Track 8); a null dimension is not quota-bound. The hub refuses a spin up front when `workersFree` is below the shortfall."
           properties:
-            podsFree:      { type: integer, nullable: true }
-            memoryFreeMi:  { type: integer, format: int64, nullable: true }
-            cpuFreeMillis: { type: integer, format: int64, nullable: true }
-            workersFree:   { type: integer, nullable: true, description: "Workers that fit across every bound dimension, given this region's worker shape." }
+            podsFree:        { type: integer, nullable: true }
+            memoryFreeMi:    { type: integer, format: int64, nullable: true }
+            cpuFreeMillis:   { type: integer, format: int64, nullable: true }
+            ephemeralFreeMi: { type: integer, format: int64, nullable: true, description: "ephemeral-storage headroom in MiB; null when unbounded or workers declare no ephemeral-storage." }
+            workersFree:     { type: integer, nullable: true, description: "Workers that fit across every bound dimension, given this region's worker shape." }
+        workerMemoryMb: { type: integer, format: int64, example: 4096, description: "The worker Pod's memory request == limit, MiB." }
+        workerEphemeralStorage: { type: string, nullable: true, example: 5Gi, description: "The worker Pod's ephemeral-storage request == limit; null = the LimitRange default." }
+
+    ProvisioningCheckResponse:
+      type: object
+      required: [region, image, ok, checks]
+      properties:
+        region: { type: string, example: na-east }
+        image: { type: string, example: "jmeter-local-orchestrator:dev" }
+        ok: { type: boolean, description: True only when every check passed. }
+        checks:
+          type: array
+          items:
+            type: object
+            required: [name, ok, detail]
+            properties:
+              name: { type: string, enum: [imageConfigured, rbacPods, rbacPodsLog, rbacResourceQuotas, quotaHeadroom] }
+              ok: { type: boolean }
+              detail: { type: string, description: What passed, or exactly what is wrong. }
 
     PodSpec:
       type: object

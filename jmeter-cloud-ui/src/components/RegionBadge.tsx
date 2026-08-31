@@ -17,7 +17,7 @@ export function RegionBadge({ name }: { name: string }) {
         <span
             className={`regionBadge regionBadge--c${colorIdx}`}
             role="status"
-            aria-label={`region: ${name}`}
+            aria-label={`cluster: ${name}`}
             data-region={name}
         >
             <span className="regionBadge__dot" aria-hidden="true" />
@@ -52,7 +52,7 @@ export function RegionBadgeList({ run, maxVisible = MAX_VISIBLE }: {
         <span
             className="regionBadgeList"
             role="list"
-            aria-label={`regions: ${regions.join(", ")}`}
+            aria-label={`clusters: ${regions.join(", ")}`}
         >
             {visible.map((r) => (
                 <span role="listitem" key={r}>

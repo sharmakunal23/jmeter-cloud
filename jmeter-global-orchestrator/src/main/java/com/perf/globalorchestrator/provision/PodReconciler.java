@@ -29,17 +29,12 @@ import java.util.Map;
  * next pod; it never throws, because capacity drift beats a boot failure when
  * the substrate is briefly unreachable.
  *
- * <p><b>Not wired under {@code PROVISIONING_MODE=STATIC}</b>, and the bean's
- * absence is the point rather than an in-method guard: "the reconciler does not
- * exist in static mode" is a structural guarantee where "every entry point
- * remembers to check a flag" is only a promise. The row-first pass deletes any
- * row whose worker the provisioner cannot see, and with an operator-managed
- * fleet there is nothing to ask — so it would read the entire declared fleet as
- * orphaned and delete it on the next boot. {@code AdminController} injects it
- * optionally and answers {@code 409 PROVISIONING_DISABLED} when absent.
+ * <p><b>Scoped to {@code SOURCE=DYNAMIC} rows</b> (CLUSTER-CAPACITY): a
+ * declared worker is the operator's — the regional never lists it, so the
+ * row-first pass would read the entire declared fleet as orphaned and delete
+ * it. The source filter is the structural guarantee that cannot happen.
  */
 @Component
-@ConditionalOnProvisioningMode(ProvisioningMode.DYNAMIC)
 public class PodReconciler {
 
     private static final Logger LOG = LoggerFactory.getLogger(PodReconciler.class);
@@ -107,6 +102,9 @@ public class PodReconciler {
         }
 
         for (ProvisionedPod c : containerByPodId.values()) {
+            // A cluster-validation probe pod is nobody's worker — it lives for
+            // seconds and the prober deletes it.
+            if (com.perf.globalorchestrator.region.TestProvisionService.PROBE_GROUP_ID.equals(c.groupId())) continue;
             try {
                 List<Pod> rows = pods.findByGroupAndRegion(c.groupId(), c.region());
                 Pod existing = rows.stream()
@@ -144,9 +142,12 @@ public class PodReconciler {
         }
 
         // ── Pass 2 — row-first (orphan deletion) ────────────────────────
-        // Walk every pod row; if no container matches, the row is an orphan.
+        // Walk every DYNAMIC pod row; if no container matches, the row is an
+        // orphan. A SOURCE=STATIC row is the operator's declared worker — the
+        // regional never lists it, so "absent from the list" proves nothing.
         for (Pod row : pods.findAll()) {
             if (row.groupId() == null) continue;
+            if (row.source() == com.perf.globalorchestrator.domain.PodSource.STATIC) continue;
             // A region whose list call failed proves nothing about its pods —
             // deleting its rows here would wipe a live fleet just because the
             // regional restarted with the hub. Keep them; the liveness probe

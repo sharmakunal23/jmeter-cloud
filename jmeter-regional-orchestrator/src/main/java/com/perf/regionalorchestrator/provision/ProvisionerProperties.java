@@ -8,9 +8,14 @@ package com.perf.regionalorchestrator.provision;
  * from inside the cluster.
  *
  * <p><b>{@code workerMemoryMb} is the hard memory limit on every spawned worker
- * and must fit two JVMs</b> — the orchestrator ({@code -Xmx1g}) plus its JMeter
- * child ({@code -Xmx2g}), native overhead, and page cache for the multi-GB JTL
- * it tails; 6 GiB is sized for a 12-hour run at 200-250 rps. Requests equal
+ * and must fit two JVMs WHOLE</b> — not just their {@code -Xmx}: two heaps, two
+ * metaspaces and code caches, JMeter's direct buffers and thread stacks, plus
+ * page cache for the JTL it tails. Sizing memory without re-sizing
+ * {@code workerJavaOpts} + {@code jmeterJvmArgs} together is how this platform
+ * has OOMKilled workers before. The hosted overlays pair 4096 MiB with
+ * {@code -Xmx768m} / {@code -Xmx1536m} (the 9 GB footprint: 4 Gi memory + 5 Gi
+ * ephemeral, 20 workers per 180 GB cluster); 6144 with {@code -Xmx1g} /
+ * {@code -Xmx2g} is the roomier shape for long high-rate runs. Requests equal
  * limits so a runaway worker OOMs inside its own cgroup.
  */
 public record ProvisionerProperties(

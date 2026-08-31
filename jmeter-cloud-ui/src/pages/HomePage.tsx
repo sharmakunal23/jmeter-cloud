@@ -360,7 +360,7 @@ function CapacityRollup({ rows }: { rows: CapacityRollupRow[] }) {
           <table className="runsTable capacityRollupTable">
             <thead>
               <tr>
-                <th>Region</th>
+                <th>Cluster</th>
                 <th className="num">In Use</th>
                 <th className="num">Ready</th>
                 <th className="num">Max</th>

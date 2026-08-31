@@ -48,12 +48,11 @@ import java.util.Set;
  * {@link PodSpinService#spin} but bypasses the cap check, since the row just
  * removed was holding that slot.
  *
- * <p>Not wired under {@code PROVISIONING_MODE=STATIC} — destroying a worker and
- * creating a replacement is not ours to do when the operator owns the fleet.
- * Injectors treat it as optional and refuse or SKIP when absent.
+ * <p><b>Scoped to {@code SOURCE=DYNAMIC} rows</b> (CLUSTER-CAPACITY) —
+ * destroying a worker and creating a replacement is not ours to do when the
+ * operator deployed it; a declared worker is never recycled.
  */
 @Component
-@ConditionalOnProvisioningMode(ProvisioningMode.DYNAMIC)
 public class PodRecycler {
 
     private static final Logger LOG = LoggerFactory.getLogger(PodRecycler.class);
@@ -107,6 +106,9 @@ public class PodRecycler {
         for (Pod pod : pods.findAll()) {
             if (pod.groupId() == null) {
                 continue; // never auto-recycle a pod whose pool is unknown
+            }
+            if (pod.source() == com.perf.globalorchestrator.domain.PodSource.STATIC) {
+                continue; // a declared worker is the operator's — never recycled
             }
             if (pod.state() != com.perf.globalorchestrator.domain.PodState.IDLE) {
                 // LOST → operator decision. DRAINING_FOR_RECYCLE → already
@@ -192,6 +194,10 @@ public class PodRecycler {
      * guard lost (the pod is no longer IDLE); true on a successful drain.
      */
     public boolean drainOne(Pod pod, ApplicationGroup group, RecycleReason reason) {
+        if (pod.source() == com.perf.globalorchestrator.domain.PodSource.STATIC) {
+            LOG.debug("drainOne skipped {} — operator-declared workers are never recycled", pod.podId());
+            return false;
+        }
         return recycle(pod, group, reason);
     }
 

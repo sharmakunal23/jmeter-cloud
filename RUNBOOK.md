@@ -56,13 +56,15 @@ docker compose ps                                   # health of every container
 docker compose logs -f global-orchestrator          # follow one service's logs
 ```
 
-Workers (`jmeter-local-orchestrator`) are **not** started by Compose. Under the default
-`PROVISIONING_MODE=STATIC` you run one yourself (`docker run … jmeter-local-orchestrator:dev`
-on the `jmeter-cloud_default` network with `POD_NAME`, `RUN_ID`, `JTL_PATH`, `SENTINEL_PATH`,
-`METRICS_INGEST_URL` set) and **declare** it into a group's pool —
-`PUT /api/v1/applicationGroups/{groupId}/capacity/{region}/pods/{podName}` or the UI's
-**Capacity** page; every application in the group draws on that pool. On-demand provisioning
-needs `PROVISIONING_MODE=DYNAMIC` and kind regions (§8b).
+Workers (`jmeter-local-orchestrator`) are **not** started by Compose, and compose alone has
+no cluster: bring up the kind regions first (§8b — `bootstrapRegions.sh up` creates AND
+registers them via `POST /api/v1/regions`; CLUSTER-CAPACITY retired `PROVISIONING_MODE`/
+`REGIONS`). Then either spin workers from the UI's **Capacity** page, or run one yourself
+(`docker run … jmeter-local-orchestrator:dev` on the `jmeter-cloud_default` network with
+`POD_NAME`, `RUN_ID`, `JTL_PATH`, `SENTINEL_PATH`, `METRICS_INGEST_URL` set) and **declare**
+it — `PUT /api/v1/applicationGroups/{groupId}/capacity/{region}/pods/{podName}` — after
+attaching the cluster to the group and reserving capacity; every application in the group
+draws on that pool, and spun + declared workers coexist.
 
 ## 4. Service endpoints & ports
 
@@ -91,7 +93,7 @@ Overrides: `HTTP_PORT` on each service, `JMX_PORT` for the JMX bridge.
 Easiest path is the UI:
 
 1. Open **http://localhost:8086**.
-2. **Capacity** → pick the application's group → **declare** the worker you started (§3) for its region; under DYNAMIC with kind regions the same page spins one.
+2. **Clusters** → register the cluster if it isn't yet, then **Capacity** → pick the application's group → attach the cluster + reserve capacity → **declare** the worker you started (§3), or **Provision** one through the cluster's regional.
 3. **Documents** → upload a `.jmx` test plan.
    (Optional) **Plugins** → add a JMeter plugin jar once — name + version, one
    version per plugin — and pick it in the launcher's Plugins field; the jars
@@ -179,11 +181,11 @@ concurrently and converge via readiness gates. A restart or two on the
 Java services while oracle starts and the Flyway Job applies
 migrations is **normal** (a from-scratch boot converges in well under a
 minute); don't "fix" it with ordering hacks. Worker pods are created by the
-in-cluster `jmeter-regional-orchestrator` (`REGION=local`), which the
-global reaches at `REGIONS=local=http://jmeter-regional-orchestrator:8088`
-under `PROVISIONING_MODE=DYNAMIC` — the kind overlay sets both; the compose
-stack alone has no cluster and stays STATIC (see §8b for the two-cluster
-setup).
+in-cluster `jmeter-regional-orchestrator` (`REGION=local`); register it as
+the cluster `local` once the hub is up —
+`POST /api/v1/regions {"region":"local","label":"local (kind)","regionalUrl":"http://jmeter-regional-orchestrator:8088"}`
+(CLUSTER-CAPACITY: the registry lives in `ORCH_REGION`, not env; see §8b for
+the two-cluster setup).
 
 On the hosted platform there is no umbrella: each service's `jules.yml`
 pipeline builds `Dockerfile.privateCloud` and applies
@@ -203,10 +205,7 @@ and relays the hub's worker calls. The global never holds a cluster credential.
 
 ```bash
 docker compose up -d                                   # the hub
-infra/deploy/k8s/local/bootstrapRegions.sh up          # clusters na-east + na-west
-# then, in .env:  PROVISIONING_MODE=DYNAMIC
-#                 REGIONS=na-east=http://na-east-control-plane:30088,na-west=http://na-west-control-plane:30088
-docker compose up -d global-orchestrator
+infra/deploy/k8s/local/bootstrapRegions.sh up          # clusters na-east + na-west, registered via POST /api/v1/regions
 curl -s localhost:8082/api/v1/regions/status | jq      # both reachable: true
 
 infra/deploy/k8s/local/bootstrapRegions.sh bridge      # after any compose restart

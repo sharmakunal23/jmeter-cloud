@@ -3,7 +3,6 @@ package com.perf.globalorchestrator.http;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.perf.globalorchestrator.domain.Application;
 import com.perf.globalorchestrator.domain.Ulid;
-import com.perf.globalorchestrator.provision.ProvisioningProperties;
 import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.RunRepository;
@@ -81,68 +80,21 @@ public class ApplicationController {
     private static final java.util.regex.Pattern METRICS_APPLICATION_PATTERN =
             java.util.regex.Pattern.compile("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$");
 
-    /**
-     * Canonical region set — the four AWS USA regions this platform deploys
-     * to. The UI's region picker (Capacity tab) offers exactly these; the
-     * backend keeps {@code capacity.region} free-form (so dummy/local data
-     * and future regions still round-trip), but new apps seed from here.
-     *
-     * <ul>
-     *   <li>{@code us-east-1} — N. Virginia</li>
-     *   <li>{@code us-east-2} — Ohio</li>
-     *   <li>{@code us-west-1} — N. California</li>
-     *   <li>{@code us-west-2} — Oregon</li>
-     * </ul>
-     */
-    static final List<String> USA_REGIONS =
-            List.of("us-east-1", "us-east-2", "us-west-1", "us-west-2");
-
-    /**
-     * Fallback starter region for a deployment that declares no region
-     * vocabulary of its own: a single primary region seeded at 0
-     * ({@code us-east-1}); operators add the other USA regions (up to 4) via
-     * the Capacity tab's region picker. Capacity ceilings still go through
-     * {@code PUT /capacity/{region}} — seeding at 0 means "region exists, no
-     * workers yet."
-     *
-     * <p>Superseded per-deployment by {@code REGIONS} — see
-     * {@link #seedRegions()}.
-     */
-    private static final List<String> DEFAULT_SEEDED_REGIONS = List.of("us-east-1");
-
     private static final Logger LOG = LoggerFactory.getLogger(ApplicationController.class);
 
     private final ApplicationRepository repo;
     private final ApplicationGroupRepository groupRepo;
     private final RunRepository runRepo;
     private final ApplicationPurgeService purgeService;
-    private final ProvisioningProperties provisioning;
 
     public ApplicationController(ApplicationRepository repo,
                                  ApplicationGroupRepository groupRepo,
                                  RunRepository runRepo,
-                                 ApplicationPurgeService purgeService,
-                                 ProvisioningProperties provisioning) {
+                                 ApplicationPurgeService purgeService) {
         this.repo = repo;
         this.groupRepo = groupRepo;
         this.runRepo = runRepo;
         this.purgeService = purgeService;
-        this.provisioning = provisioning;
-    }
-
-    /**
-     * The regions a newly-registered group's pool starts with, seeded at 0
-     * (used by {@link ApplicationGroupController#create}).
-     *
-     * <p>A deployment that declares its own region vocabulary
-     * ({@code REGIONS} — the operator's data centers in static mode) seeds
-     * exactly those, so the group opens showing the places workers can
-     * actually be declared into. Otherwise the historical single primary
-     * region stands.
-     */
-    static List<String> seedRegions(ProvisioningProperties provisioning) {
-        List<String> declared = provisioning.regions();
-        return declared.isEmpty() ? DEFAULT_SEEDED_REGIONS : declared;
     }
 
     @GetMapping

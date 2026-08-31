@@ -5328,3 +5328,23 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
 .uTooltip__mark { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 2px; flex-shrink: 0; }
 .uTooltip__label { color: var(--ink-soft); flex: 1 1 auto; }
 .uTooltip__value { font-variant-numeric: tabular-nums; margin-left: 0.6rem; }
+
+/* ── CLUSTER-CAPACITY — the Clusters page + registration checklist ── */
+.clusterCell { display: flex; flex-direction: column; gap: 0.15rem; }
+.clusterCell small { font-size: 0.75rem; }
+.clusterChecks {
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--line, #d8d8d3);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.clusterChecks li { display: flex; gap: 0.55rem; align-items: baseline; font-size: 0.85rem; }
+.clusterChecks li > span:last-child { display: flex; flex-direction: column; gap: 0.1rem; }
+.clusterChecks li small { color: var(--ink-soft, #6b6b66); font-size: 0.78rem; }
+.clusterChecks__row--ok  > span:first-child { color: var(--ok, #2c7a3f); font-weight: 600; }
+.clusterChecks__row--fail > span:first-child { color: var(--err, #b3261e); font-weight: 600; }
+.clusterChecks__row--fail strong { color: var(--err, #b3261e); }

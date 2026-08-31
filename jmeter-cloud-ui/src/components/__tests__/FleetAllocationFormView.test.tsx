@@ -103,7 +103,7 @@ describe("FleetAllocationFormView — table + delta", () => {
     // Status column dropped (info lives in the flow view).
     // Capacity column dropped too (HeaderNode in the flow view
     // already shows X/max + "ready now" + the "+N to spin" chip).
-    it("renders exactly 3 columns: Region · Add · Remove", () => {
+    it("renders exactly 3 columns: Cluster · Add · Remove", () => {
         setup({
             value: [{ region: "local-east-1", count: 3 }],
             workerStatuses: { "local-east-1": ["HEALTHY", "HEALTHY", "UNHEALTHY"] },
@@ -112,7 +112,7 @@ describe("FleetAllocationFormView — table + delta", () => {
         const headers = Array.from(
             document.querySelectorAll('.fleetForm__table thead th'),
         ).map((h) => h.textContent);
-        expect(headers).toEqual(["Region", "Add", "Remove"]);
+        expect(headers).toEqual(["Cluster", "Add", "Remove"]);
     });
 });
 

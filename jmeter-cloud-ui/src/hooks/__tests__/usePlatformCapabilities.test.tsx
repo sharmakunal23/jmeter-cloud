@@ -10,12 +10,8 @@ function Probe() {
   const caps = usePlatformCapabilities();
   return (
     <div>
-      <span data-testid="mode">{caps.provisioningMode}</span>
-      <span data-testid="dynamic">{String(caps.dynamicScalingEnabled)}</span>
-      <span data-testid="static">{String(caps.isStaticFleet)}</span>
-      <span data-testid="regions">{caps.regions.join(",")}</span>
-      <span data-testid="noun">{caps.regionNoun()}</span>
-      <span data-testid="nounPlural">{caps.regionNoun({ plural: true, capitalize: true })}</span>
+      <span data-testid="maxClusters">{caps.maxClustersPerGroup}</span>
+      <span data-testid="loading">{String(caps.loading)}</span>
     </div>
   );
 }
@@ -32,56 +28,30 @@ describe("usePlatformCapabilities", () => {
   beforeEach(() => __resetPlatformCapabilitiesCache());
   afterEach(() => vi.unstubAllGlobals());
 
-  it("reports the static posture and the data-center vocabulary", async () => {
-    stubCapabilities({
-      provisioningMode: "STATIC",
-      dynamicScalingEnabled: false,
-      podRecyclingEnabled: false,
-      regions: ["na-east", "na-west"],
-      regionLabel: "dataCenter",
-    });
+  it("reports the per-group cluster limit", async () => {
+    stubCapabilities({ maxClustersPerGroup: 3 });
 
     render(<Probe />);
 
-    await waitFor(() => expect(screen.getByTestId("mode")).toHaveTextContent("STATIC"));
-    expect(screen.getByTestId("dynamic")).toHaveTextContent("false");
-    expect(screen.getByTestId("static")).toHaveTextContent("true");
-    expect(screen.getByTestId("regions")).toHaveTextContent("na-east,na-west");
-    expect(screen.getByTestId("noun")).toHaveTextContent("data center");
-    expect(screen.getByTestId("nounPlural")).toHaveTextContent("Data centers");
+    await waitFor(() => expect(screen.getByTestId("loading")).toHaveTextContent("false"));
+    expect(screen.getByTestId("maxClusters")).toHaveTextContent("3");
   });
 
-  it("a failing probe degrades to the historical everything-visible posture — a stale browser "
-     + "may show a Spin button, but the server still refuses it", async () => {
+  it("a failing probe degrades to the default limit of 2 — the server still refuses what it must", async () => {
     stubCapabilities(undefined, false);
 
     render(<Probe />);
 
-    await waitFor(() => expect(screen.getByTestId("dynamic")).toHaveTextContent("true"));
-    expect(screen.getByTestId("mode")).toHaveTextContent("DYNAMIC");
-    expect(screen.getByTestId("noun")).toHaveTextContent("region");
+    await waitFor(() => expect(screen.getByTestId("loading")).toHaveTextContent("false"));
+    expect(screen.getByTestId("maxClusters")).toHaveTextContent("2");
   });
 
-  it("tolerates a backend that hasn't shipped every field yet", async () => {
-    stubCapabilities({ provisioningMode: "STATIC", dynamicScalingEnabled: false });
+  it("tolerates a body from an older backend that still sends the retired cluster list", async () => {
+    stubCapabilities({ regions: ["lab"] });
 
     render(<Probe />);
 
-    await waitFor(() => expect(screen.getByTestId("static")).toHaveTextContent("true"));
-    expect(screen.getByTestId("regions")).toHaveTextContent("");
-    expect(screen.getByTestId("noun")).toHaveTextContent("region");
-  });
-
-  it("probes once for the whole session no matter how many consumers mount", async () => {
-    stubCapabilities({
-      provisioningMode: "STATIC", dynamicScalingEnabled: false,
-      podRecyclingEnabled: false, regions: [], regionLabel: "dataCenter",
-    });
-
-    render(<><Probe /><Probe /><Probe /></>);
-
-    await waitFor(() =>
-      expect(screen.getAllByTestId("mode")[0]).toHaveTextContent("STATIC"));
-    expect(fetch).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByTestId("loading")).toHaveTextContent("false"));
+    expect(screen.getByTestId("maxClusters")).toHaveTextContent("2");
   });
 });

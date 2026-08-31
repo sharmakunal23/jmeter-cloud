@@ -25,6 +25,8 @@ export interface PodBlockedBy {
 export interface PodView {
   podName: string;
   state: PodState;
+  /** DYNAMIC = spun by the cluster's regional; STATIC = operator-declared (CLUSTER-CAPACITY). */
+  source?: "DYNAMIC" | "STATIC";
   containerRunning: boolean;
   lastHeartbeat?: string | null;
   blockedBy?: PodBlockedBy | null;

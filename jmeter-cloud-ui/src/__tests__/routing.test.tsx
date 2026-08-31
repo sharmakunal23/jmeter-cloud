@@ -105,12 +105,12 @@ describe("UI-D1 routing — legacy URLs 404 (no redirect)", () => {
 });
 
 describe("UI-D1 routing — top nav", () => {
-    it("renders the 6 primary tabs in standardized order", () => {
+    it("renders the 7 primary tabs in standardized order", () => {
         renderAt("/");
         const nav = screen.getByRole("navigation", { name: "primary" });
         expect(nav).toBeInTheDocument();
-        // Profiling was removed (2026-05-28, out of scope) — only the 5 core tabs remain.
-        const order = ["Applications", "Capacity", "Documents", "Plugins", "Templates", "Automation"];
+        // Clusters joined the nav with CLUSTER-CAPACITY (runtime cluster registry).
+        const order = ["Applications", "Capacity", "Clusters", "Documents", "Plugins", "Templates", "Automation"];
         for (const label of order) {
             expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
         }

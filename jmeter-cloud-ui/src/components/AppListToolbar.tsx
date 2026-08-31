@@ -21,7 +21,7 @@ export interface AppListToolbarProps {
   total: number;
   loading?: boolean;
   /** What the list holds, singular — "application" (default), "group", or "plugin"; drives the placeholder and the count. */
-  noun?: "application" | "group" | "plugin";
+  noun?: "application" | "group" | "plugin" | "cluster";
 }
 
 export function AppListToolbar({
@@ -30,6 +30,7 @@ export function AppListToolbar({
   const placeholder =
     noun === "group" ? "Filter by group name or id…"
     : noun === "plugin" ? "Filter by plugin name…"
+    : noun === "cluster" ? "Filter by cluster name, id or endpoint…"
     : "Filter by application name…";
   const searchRef = useRef<HTMLInputElement | null>(null);
 
@@ -59,6 +60,7 @@ export function AppListToolbar({
         className="appListToolbar__search"
         aria-label={
           noun === "group" ? "Filter groups by name or id"
+          : noun === "cluster" ? "Filter clusters"
           : noun === "plugin" ? "Filter plugins by name"
           : "Filter applications by name"
         }
