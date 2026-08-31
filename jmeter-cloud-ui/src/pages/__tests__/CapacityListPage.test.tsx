@@ -191,22 +191,6 @@ describe("CapacityListPage — one row per application group", () => {
     expect(document.activeElement).toBe(search);
   });
 
-  it("Grid view renders one .appCard per group + clicking it navigates to the drill-in by group id", async () => {
-    try { localStorage.setItem("jmeterCloud.capacity.listViewMode", "grid"); } catch { /* ignore */ }
-    apps.list.mockResolvedValue([appA(), appB()]);
-    cap.listPods.mockImplementation((groupId: string, region: string) =>
-      Promise.resolve(snap(groupId, region, { provisioned: 0 })),
-    );
-
-    render(<MemoryRouter><CapacityListPage /></MemoryRouter>);
-
-    const alphaCard = await screen.findByRole("link", { name: /Open capacity for alpha/i });
-    expect(alphaCard.className).toContain("appCard");
-    expect(alphaCard).toHaveAttribute("href", "/capacity/alpha");
-    expect(screen.getByRole("link", { name: /Open capacity for beta/i })).toBeInTheDocument();
-    try { localStorage.removeItem("jmeterCloud.capacity.listViewMode"); } catch { /* ignore */ }
-  });
-
   it("renders the per-region totals chip strip aggregated across groups", async () => {
     apps.list.mockResolvedValue([appA(), appB()]);
     cap.listPods.mockImplementation((groupId: string, region: string) =>

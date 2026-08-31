@@ -9,14 +9,6 @@ import { AppListToolbar } from "../components/AppListToolbar";
 import { Paginator } from "../components/Paginator";
 import { useClientPagination } from "../hooks/useClientPagination";
 import { ReconcileWorkersDialog } from "../components/ReconcileWorkersDialog";
-import {
-  ViewModeToggle,
-  type ListViewMode,
-  persistViewMode,
-  readPersistedViewMode,
-} from "../components/ViewModeToggle";
-
-const VIEW_MODE_STORAGE_KEY = "jmeterCloud.capacity.listViewMode";
 
 /**
  * Capacity list — one row per application group, since the worker pool is
@@ -59,7 +51,6 @@ export function CapacityListPage() {
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
-  const [viewMode, setViewMode] = useState<ListViewMode>(() => readPersistedViewMode(VIEW_MODE_STORAGE_KEY));
   const [reconcileOpen, setReconcileOpen] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
 
@@ -67,11 +58,6 @@ export function CapacityListPage() {
     setToast(t);
     window.setTimeout(() => setToast((cur) => (cur === t ? null : cur)), 6000);
   }, []);
-
-  function changeViewMode(next: ListViewMode) {
-    setViewMode(next);
-    persistViewMode(VIEW_MODE_STORAGE_KEY, next);
-  }
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -204,7 +190,6 @@ export function CapacityListPage() {
               {t.inUse > 0 && <span className="mono ink-soft">· {t.inUse} in use</span>}
             </span>
           ))}
-          <ViewModeToggle viewMode={viewMode} onChange={changeViewMode} />
           {/* Registry-wide reconcile — the operator's cleanup for a worker
               stuck after its container died (drops the orphaned row so the
               slot frees up). Global on purpose; lives on the list page, not a
@@ -244,12 +229,6 @@ export function CapacityListPage() {
             <p className="ink-soft">No groups match "{search}".</p>
           )}
         </div>
-      ) : viewMode === "grid" ? (
-        <ul className="appCardGrid" aria-label="application group capacity cards">
-          {pageItems.map((r) => (
-            <CapacityCard key={r.group.groupId} row={r} />
-          ))}
-        </ul>
       ) : (
         <table className="runsTable capacityListTable">
           <thead>
@@ -320,37 +299,6 @@ function summariseReconcile(result: ReconcileWorkersResult): Toast {
   return { variant: "ok", text: `Reconcile complete — ${summary}` };
 }
 
-// ── Grid card (Capacity) ─────────────────────────────────────────
-
-function CapacityCard({ row }: { row: RowAggregate }) {
-  const ratio = row.maxAvailable > 0 ? (row.ready + row.inUse) / row.maxAvailable : 0;
-  const variant: "ok" | "warn" | "err" =
-    ratio >= 1 ? "err" : ratio >= 0.8 ? "warn" : "ok";
-  const href = `/capacity/${encodeURIComponent(row.group.groupId)}`;
-  return (
-    <li>
-      <Link to={href} className="appCard" aria-label={`Open capacity for ${row.group.name}`}>
-        <div className="appCard__head">
-          <h3 className="appCard__name">{row.group.name} <span className="mono ink-soft appGroupHeading__id">{row.group.groupId}</span></h3>
-          <ActivityChip lastActivity={row.mostRecentActivity} hasWorkers={row.provisioned > 0} />
-        </div>
-        <div className="appCard__body">
-          <span className="chip"><span className="mono">regions</span><span className="mono">{row.regions}</span></span>
-          <span className="chip chip--ok"><span className="mono">ready</span><span className="mono">{row.ready}</span></span>
-          {row.inUse > 0 && <span className="chip chip--warn"><span className="mono">in use</span><span className="mono">{row.inUse}</span></span>}
-        </div>
-        <div className={`capacityBar capacityBar--${variant}`} aria-hidden="true">
-          <span style={{ width: `${Math.min(100, Math.round(ratio * 100))}%` }} />
-        </div>
-        <div className="appCard__footer">
-          <span className="mono">{row.provisioned}/{row.maxAvailable} workers</span>
-          <span>{Math.round(ratio * 100)}%</span>
-        </div>
-      </Link>
-    </li>
-  );
-}
-
 // ── Row ──────────────────────────────────────────────────────────
 
 function CapacityListRow({ row }: { row: RowAggregate }) {
@@ -383,7 +331,6 @@ function CapacityListRow({ row }: { row: RowAggregate }) {
         >
           {row.group.name}
         </Link>
-        <span className="mono ink-soft appGroupHeading__id">{row.group.groupId}</span>
       </td>
       <td>
         <ActivityChip lastActivity={row.mostRecentActivity} hasWorkers={row.provisioned > 0} />

@@ -164,32 +164,6 @@ describe("TemplatesListPage — Phase IA-Templates", () => {
     expect(chip).toHaveTextContent("3");
   });
 
-  it("Grid view renders one .appCard per app + clicking it navigates to the drill-in (via Link)", async () => {
-    try { localStorage.setItem("jmeterCloud.templates.listViewMode", "grid"); } catch { /* ignore */ }
-    apps.list.mockResolvedValue([appA(), appB()]);
-    templates.list.mockResolvedValue([template({ application: "alpha" })]);
-
-    render(<MemoryRouter><TemplatesListPage /></MemoryRouter>);
-
-    const alphaCard = await screen.findByRole("link", { name: /Open templates for alpha/i });
-    expect(alphaCard.className).toContain("appCard");
-    expect(alphaCard).toHaveAttribute("href", "/templates/alpha");
-    expect(screen.getByRole("link", { name: /Open templates for beta/i })).toBeInTheDocument();
-  });
-
-  it("clicking the View toggle persists the new mode to localStorage", async () => {
-    try { localStorage.removeItem("jmeterCloud.templates.listViewMode"); } catch { /* ignore */ }
-    apps.list.mockResolvedValue([appA()]);
-    templates.list.mockResolvedValue([]);
-
-    render(<MemoryRouter><TemplatesListPage /></MemoryRouter>);
-    await screen.findByRole("link", { name: "alpha" });
-
-    fireEvent.click(screen.getByRole("tab", { name: "Grid" }));
-
-    expect(localStorage.getItem("jmeterCloud.templates.listViewMode")).toBe("grid");
-  });
-
   it("empty registry shows the 'register an application first' empty state", async () => {
     apps.list.mockResolvedValue([]);
     templates.list.mockResolvedValue([]);

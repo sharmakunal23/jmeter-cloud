@@ -34,7 +34,7 @@ function run(runId: string, state: Run["state"]): Run {
 }
 
 describe("DeleteRunsConfirmDialog", () => {
-  it("hides only terminal runs (skips active) and reports the hidden ids", async () => {
+  it("archives only terminal runs (skips active) and reports the archived ids", async () => {
     deleteMock.mockResolvedValue(run("x", "COMPLETED"));
     const onDeleted = vi.fn();
     const onClose = vi.fn();
@@ -47,12 +47,12 @@ describe("DeleteRunsConfirmDialog", () => {
       />,
     );
 
-    expect(screen.getByRole("heading", { name: /Delete 3 runs\?/ })).toBeInTheDocument();
-    // 2 terminal will hide, 1 active is skipped — shown as the two list sections.
-    expect(screen.getByRole("heading", { name: /Will hide \(2\)/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Archive 3 runs\?/ })).toBeInTheDocument();
+    // 2 terminal will archive, 1 active is skipped — shown as the two list sections.
+    expect(screen.getByRole("heading", { name: /Will archive \(2\)/ })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /Skipped \(1\)/ })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /^Hide 2$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Archive 2$/ }));
     await waitFor(() => expect(deleteMock).toHaveBeenCalledTimes(2));
 
     const ids = deleteMock.mock.calls.map((c) => c[0]);
@@ -65,7 +65,7 @@ describe("DeleteRunsConfirmDialog", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("disables Hide when every selected run is still active", () => {
+  it("disables Archive when every selected run is still active", () => {
     render(
       <DeleteRunsConfirmDialog
         selected={[run("r1", "RUNNING"), run("r2", "DRAINING")]}
@@ -74,7 +74,7 @@ describe("DeleteRunsConfirmDialog", () => {
       />,
     );
     expect(screen.getByText(/All selected runs are still active/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Hide 0/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Archive 0/ })).toBeDisabled();
   });
 
   it("on partial failure reports the successes, surfaces the error, and stays open", async () => {
@@ -96,7 +96,7 @@ describe("DeleteRunsConfirmDialog", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /^Hide 2$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Archive 2$/ }));
     await waitFor(() => expect(deleteMock).toHaveBeenCalledTimes(2));
 
     expect(await screen.findByText(/RUN_NOT_DELETABLE/)).toBeInTheDocument();

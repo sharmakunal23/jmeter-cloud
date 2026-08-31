@@ -1,10 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { PluginApiError, pluginsApi, type PluginSummary } from "../api/plugins";
 import { AddPluginDialog } from "../components/AddPluginDialog";
+import { AppListToolbar } from "../components/AppListToolbar";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { InfoTip } from "../components/InfoTip";
+import { Paginator } from "../components/Paginator";
 import { ToastView, useToast } from "../components/Toast";
+import { useClientPagination } from "../hooks/useClientPagination";
 import { formatRelative } from "../lib/time";
 
 /**
@@ -26,6 +29,7 @@ function formatSize(bytes: number): string {
 
 export function PluginsPage() {
   const [list, setList] = useState<ListState>({ status: "loading" });
+  const [search, setSearch] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [toDelete, setToDelete] = useState<PluginSummary | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -51,6 +55,19 @@ export function PluginsPage() {
       });
     return () => ctl.abort();
   }, []);
+
+  // Same filter affordance as every other tab: '/' focuses, narrows by name
+  // (version and file name match too — both are how operators know a jar).
+  const items = list.status === "ok" ? list.items : [];
+  const filtered = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    if (!needle) return items;
+    return items.filter((p) =>
+      p.name.toLowerCase().includes(needle)
+      || p.version.toLowerCase().includes(needle)
+      || p.fileName.toLowerCase().includes(needle));
+  }, [items, search]);
+  const { page, setPage, pageItems, total, pageSize } = useClientPagination(filtered, search);
 
   async function confirmDelete() {
     if (!toDelete) return;
@@ -87,6 +104,15 @@ export function PluginsPage() {
         </button>
       </header>
 
+      <AppListToolbar
+        noun="plugin"
+        search={search}
+        onSearchChange={setSearch}
+        count={filtered.length}
+        total={items.length}
+        loading={list.status === "loading"}
+      />
+
       {list.status === "loading" && <p className="ink-soft">Loading plugins…</p>}
       {list.status === "error" && (
         <div className="formError" role="alert">{list.message}</div>
@@ -100,7 +126,12 @@ export function PluginsPage() {
           </p>
         </div>
       )}
-      {list.status === "ok" && list.items.length > 0 && (
+      {list.status === "ok" && list.items.length > 0 && filtered.length === 0 && (
+        <div className="emptyState">
+          <p className="ink-soft">No plugins match "{search}".</p>
+        </div>
+      )}
+      {list.status === "ok" && filtered.length > 0 && (
         <table className="runsTable">
           <thead>
             <tr>
@@ -114,7 +145,7 @@ export function PluginsPage() {
             </tr>
           </thead>
           <tbody>
-            {list.items.map((p) => (
+            {pageItems.map((p) => (
               <tr key={p.pluginId}>
                 <td className="mono" title={p.description ?? undefined}>{p.name}</td>
                 <td>{p.version}</td>
@@ -136,6 +167,10 @@ export function PluginsPage() {
             ))}
           </tbody>
         </table>
+      )}
+
+      {list.status === "ok" && filtered.length > 0 && (
+        <Paginator page={page} pageSize={pageSize} total={total} label="plugins" onChange={setPage} />
       )}
 
       {addOpen && (

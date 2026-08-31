@@ -162,21 +162,6 @@ describe("DocumentsListPage — Phase IA-Documents", () => {
     expect(document.activeElement).toBe(search);
   });
 
-  it("Grid view renders one .appCard per app + clicking it navigates to the drill-in", async () => {
-    try { localStorage.setItem("jmeterCloud.documents.listViewMode", "grid"); } catch { /* ignore */ }
-    apps.list.mockResolvedValue([appA(), appB()]);
-    blobs.list.mockResolvedValue(listing([
-      blob({ blobId: "1", application: "alpha", type: "testPlan" }),
-    ]));
-
-    render(<MemoryRouter><DocumentsListPage /></MemoryRouter>);
-
-    const alphaCard = await screen.findByRole("link", { name: /Open documents for alpha/i });
-    expect(alphaCard.className).toContain("appCard");
-    expect(alphaCard).toHaveAttribute("href", "/documents/alpha");
-    try { localStorage.removeItem("jmeterCloud.documents.listViewMode"); } catch { /* ignore */ }
-  });
-
   it("renders cross-app totals chips above the table", async () => {
     apps.list.mockResolvedValue([appA(), appB()]);
     blobs.list.mockResolvedValue(listing([

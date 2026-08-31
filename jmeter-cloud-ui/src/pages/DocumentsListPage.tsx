@@ -7,14 +7,6 @@ import { blobsApi, type BlobType } from "../api/blobs";
 import { AppListToolbar } from "../components/AppListToolbar";
 import { Paginator } from "../components/Paginator";
 import { useClientPagination } from "../hooks/useClientPagination";
-import {
-  ViewModeToggle,
-  type ListViewMode,
-  persistViewMode,
-  readPersistedViewMode,
-} from "../components/ViewModeToggle";
-
-const VIEW_MODE_STORAGE_KEY = "jmeterCloud.documents.listViewMode";
 
 /**
  * Phase IA-Documents (2026-05-12) — Documents list view following the
@@ -63,12 +55,6 @@ export function DocumentsListPage() {
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
-  const [viewMode, setViewMode] = useState<ListViewMode>(() => readPersistedViewMode(VIEW_MODE_STORAGE_KEY));
-
-  function changeViewMode(next: ListViewMode) {
-    setViewMode(next);
-    persistViewMode(VIEW_MODE_STORAGE_KEY, next);
-  }
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -177,7 +163,6 @@ export function DocumentsListPage() {
               </span>
             ))
           )}
-          <ViewModeToggle viewMode={viewMode} onChange={changeViewMode} />
         </div>
       </header>
 
@@ -204,12 +189,6 @@ export function DocumentsListPage() {
             <p className="ink-soft">No applications match "{search}".</p>
           )}
         </div>
-      ) : viewMode === "grid" ? (
-        <ul className="appCardGrid" aria-label="application document cards">
-          {pageItems.map((r) => (
-            <DocumentsCard key={r.app.applicationId} row={r} />
-          ))}
-        </ul>
       ) : (
         <table className="runsTable capacityListTable">
           <thead>
@@ -277,36 +256,6 @@ function DocumentsListRow({ row }: { row: RowAggregate }) {
       <td className="mono num">{row.byType.other}</td>
       <td className="mono num"><strong>{row.total}</strong></td>
     </tr>
-  );
-}
-
-// ── Grid card (Documents) ────────────────────────────────────────
-
-function DocumentsCard({ row }: { row: RowAggregate }) {
-  const href = `/documents/${encodeURIComponent(row.app.name)}`;
-  return (
-    <li>
-      <Link to={href} className="appCard" aria-label={`Open documents for ${row.app.name}`}>
-        <div className="appCard__head">
-          <h3 className="appCard__name">{row.app.name}</h3>
-          <ActivityChip lastUpload={row.mostRecentUpload} hasDocs={row.total > 0} />
-        </div>
-        <div className="appCard__body">
-          {TYPES_IN_TABLE.map((t) => (
-            row.byType[t] > 0 && (
-              <span key={t} className="chip">
-                <span className="mono">{labelFor(t)}</span>
-                <span className="mono">{row.byType[t]}</span>
-              </span>
-            )
-          ))}
-          {row.total === 0 && <span className="ink-soft" style={{ fontSize: "0.78rem" }}>no documents</span>}
-        </div>
-        <div className="appCard__footer">
-          <span className="mono">{row.total} total</span>
-        </div>
-      </Link>
-    </li>
   );
 }
 

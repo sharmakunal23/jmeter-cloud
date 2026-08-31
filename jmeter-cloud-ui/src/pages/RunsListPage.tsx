@@ -136,7 +136,7 @@ function RunsTable({ searchParams, setSearchParams }: RunsTableProps) {
     });
     fetchOnce();
     showToast(
-      `${deletedRunIds.length} run${deletedRunIds.length === 1 ? "" : "s"} hidden.`,
+      `${deletedRunIds.length} run${deletedRunIds.length === 1 ? "" : "s"} archived.`,
     );
   };
 
@@ -182,7 +182,7 @@ function RunsTable({ searchParams, setSearchParams }: RunsTableProps) {
               className="btn btn--danger btn--sm"
               onClick={() => setDeleteOpen(true)}
             >
-              Delete selected
+              Archive selected
             </button>
           </span>
         )}

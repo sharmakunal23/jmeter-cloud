@@ -45,9 +45,6 @@ beforeEach(() => {
   runs.listPage.mockResolvedValue({ runs: [], total: 0, offset: 0, limit: 200 });
   groupsMock.list.mockReset();
   groupsMock.list.mockResolvedValue([]);
-  // Reset the persisted view-mode between tests so each starts at the
-  // default (list, per D4 polish).
-  try { localStorage.removeItem("jmeterCloud.applications.viewMode"); } catch { /* ignore */ }
 });
 
 function renderPage() {
@@ -75,14 +72,14 @@ function fixtureApp(name: string, overrides: Partial<Application> = {}): Applica
 }
 
 describe("ApplicationsListPage — registry rendering", () => {
-  it("renders one row per application (default list view)", async () => {
+  it("renders one row per application (single list view — Grid is decommissioned)", async () => {
     apps.list.mockResolvedValue([fixtureApp("checkout-svc"), fixtureApp("payment-api")]);
     renderPage();
     await waitFor(() => expect(screen.getByText("checkout-svc")).toBeInTheDocument());
     expect(screen.getByText("payment-api")).toBeInTheDocument();
-    // List view renders a table; cards (role=listitem) only appear in grid view.
+    // The one and only view is the table — no card grid, no view toggle.
     expect(screen.getByRole("columnheader", { name: "Health" })).toBeInTheDocument();
-    expect(screen.queryAllByRole("listitem")).toHaveLength(0);
+    expect(screen.queryByRole("tab", { name: "Grid" })).toBeNull();
   });
 
   it("each card link uses the URL-encoded name as the path segment", async () => {
@@ -99,38 +96,6 @@ describe("ApplicationsListPage — registry rendering", () => {
     renderPage();
     await waitFor(() => expect(screen.getByText(/No applications registered yet/i)).toBeInTheDocument());
     expect(screen.getByRole("button", { name: /Register your first application/i })).toBeInTheDocument();
-  });
-});
-
-describe("ApplicationsListPage — view-mode toggle", () => {
-  it("renders Grid + List tabs; List is default + active", async () => {
-    apps.list.mockResolvedValue([fixtureApp("a")]);
-    renderPage();
-    await waitFor(() => expect(screen.getByRole("tab", { name: "Grid" })).toBeInTheDocument());
-    expect(screen.getByRole("tab", { name: "List" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "Grid" })).toHaveAttribute("aria-selected", "false");
-  });
-
-  it("clicking Grid swaps in the card view (cards rendered as listitems)", async () => {
-    apps.list.mockResolvedValue([fixtureApp("a")]);
-    renderPage();
-    await waitFor(() => expect(screen.getByRole("tab", { name: "Grid" })).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("tab", { name: "Grid" }));
-    expect(screen.getAllByRole("listitem").length).toBeGreaterThan(0);
-    expect(screen.queryByRole("columnheader", { name: "Health" })).toBeNull();
-  });
-
-  it("Grid view persists across re-mounts via localStorage", async () => {
-    apps.list.mockResolvedValue([fixtureApp("a")]);
-    const utils = renderPage();
-    await waitFor(() => expect(screen.getByRole("tab", { name: "Grid" })).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("tab", { name: "Grid" }));
-    utils.unmount();
-
-    apps.list.mockResolvedValue([fixtureApp("a")]);
-    runs.listPage.mockResolvedValue({ runs: [], total: 0, offset: 0, limit: 200 });
-    renderPage();
-    await waitFor(() => expect(screen.getAllByRole("listitem").length).toBeGreaterThan(0));
   });
 });
 
@@ -210,8 +175,9 @@ describe("ApplicationsListPage — application groups", () => {
     renderPage();
     await waitFor(() => expect(screen.getByText("Servicing MQ")).toBeInTheDocument());
     const rows = Array.from(document.querySelectorAll("tbody tr")).map((r) => r.textContent ?? "");
+    // Heading shows the group NAME only — the id lives in Manage groups.
     expect(rows[0]).toContain("Servicing MQ");
-    expect(rows[0]).toContain("cps");
+    expect(rows[0]).not.toContain("cps");
     expect(rows[1]).toContain("cps-pci");
     expect(rows[2]).toContain("Zed team");
     expect(rows[3]).toContain("zeta-svc");

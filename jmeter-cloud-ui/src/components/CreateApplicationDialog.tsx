@@ -70,9 +70,9 @@ export function CreateApplicationDialog({
   const [metricsApplication, setMetricsApplication] = useState(initial?.metricsApplication ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
-  // Soft-delete (edit mode): a two-step confirm that explains the semantics
-  // before the destructive call. `deleting`/`deleteError` mirror the
-  // submitting/serverError pair for the delete path.
+  // Archive (edit-mode soft delete): a two-step confirm that explains the
+  // semantics before the call. `deleting`/`deleteError` mirror the
+  // submitting/serverError pair for the archive path.
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -155,7 +155,7 @@ export function CreateApplicationDialog({
       onDeleted?.();
     } catch (err) {
       if (err instanceof ApplicationApiError && err.code === "APPLICATION_HAS_ACTIVE_RUNS") {
-        setDeleteError("This application has active runs — abort them or let them finish before hiding it.");
+        setDeleteError("This application has active runs — abort them or let them finish before archiving it.");
       } else if (err instanceof ApplicationApiError) {
         setDeleteError(`${err.code}: ${err.message}`);
       } else {
@@ -177,20 +177,20 @@ export function CreateApplicationDialog({
     setHealthEndpoints((prev) => [...prev, ""]);
   }
 
-  // ── Soft-delete confirmation (edit mode) ───────────────────────────
+  // ── Archive confirmation (edit mode) ───────────────────────────────
   if (isEdit && confirmingDelete) {
     return (
       <ConfirmDialog
-        title="Delete application?"
-        infoTip="Soft-delete — the application is hidden from lists; its runs, files, and group are kept."
+        title="Archive application?"
+        infoTip="The application moves to the Archived tab; its runs, files, and group are kept."
         danger
         busy={deleting}
-        confirmLabel="Soft-delete application"
+        confirmLabel="Archive application"
         onConfirm={() => { void handleDelete(); }}
         onCancel={() => { setConfirmingDelete(false); setDeleteError(null); }}
         body={
           <>
-            <p>Soft-deleting <span className="mono">{initial!.name}</span> will remove it from
+            <p>Archiving <span className="mono">{initial!.name}</span> will remove it from
               the applications list and the launcher. Its group's workers and capacity are untouched.</p>
             <p className="ink-soft" style={{ margin: "0.5rem 0" }}>
               <strong>Retained:</strong> this app's run history, metrics, and uploaded files
@@ -296,7 +296,7 @@ export function CreateApplicationDialog({
             >
               <option value="" disabled>{groups === null ? "Loading groups…" : "Pick a group"}</option>
               {(groups ?? []).map((g) => (
-                <option key={g.groupId} value={g.groupId}>{g.name} ({g.groupId})</option>
+                <option key={g.groupId} value={g.groupId}>{g.name}</option>
               ))}
             </select>
             {groups !== null && groups.length === 0 && (
@@ -392,7 +392,7 @@ export function CreateApplicationDialog({
                 style={{ marginRight: "auto" }}
                 onClick={() => setConfirmingDelete(true)}
               >
-                Delete application
+                Archive application
               </button>
             )}
             <button type="button" className="btn" onClick={onClose}>Cancel</button>

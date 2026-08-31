@@ -139,7 +139,7 @@ describe("ApplicationDetailPage", () => {
     });
   });
 
-  it("per-row Delete is disabled for active runs, enabled for terminal runs", async () => {
+  it("per-row Archive is disabled for active runs, enabled for terminal runs", async () => {
     mocks.listPage.mockResolvedValue({
       runs: [
         fixtureRun("ACT", { state: "RUNNING" }),
@@ -149,21 +149,21 @@ describe("ApplicationDetailPage", () => {
     });
     renderAt("/applications/checkout-svc");
     await waitFor(() => expect(screen.getByText("DONE")).toBeInTheDocument());
-    expect(screen.getByRole("button", { name: /delete run ACT/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /delete run DONE/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /archive run ACT/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /archive run DONE/i })).toBeEnabled();
   });
 
-  it("clicking a row's Delete opens the confirm dialog for that run", async () => {
+  it("clicking a row's Archive opens the confirm dialog for that run", async () => {
     mocks.listPage.mockResolvedValue({
       runs: [fixtureRun("DONE", { state: "COMPLETED" })], total: 1, offset: 0, limit: 25,
     });
     renderAt("/applications/checkout-svc");
     await waitFor(() => expect(screen.getByText("DONE")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: /delete run DONE/i }));
-    expect(screen.getByRole("heading", { name: /Delete 1 run\?/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /archive run DONE/i }));
+    expect(screen.getByRole("heading", { name: /Archive 1 run\?/ })).toBeInTheDocument();
   });
 
-  it("selecting runs reveals 'Delete selected' which opens a bulk confirm dialog", async () => {
+  it("selecting runs reveals 'Archive selected' which opens a bulk confirm dialog", async () => {
     mocks.listPage.mockResolvedValue({
       runs: [
         fixtureRun("R1", { state: "COMPLETED" }),
@@ -173,11 +173,11 @@ describe("ApplicationDetailPage", () => {
     });
     renderAt("/applications/checkout-svc");
     await waitFor(() => expect(screen.getByText("R1")).toBeInTheDocument());
-    expect(screen.queryByRole("button", { name: /Delete selected/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Archive selected/i })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("checkbox", { name: /select R1/i }));
     fireEvent.click(screen.getByRole("checkbox", { name: /select R2/i }));
-    fireEvent.click(screen.getByRole("button", { name: /Delete selected \(2\)/i }));
-    expect(screen.getByRole("heading", { name: /Delete 2 runs\?/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Archive selected \(2\)/i }));
+    expect(screen.getByRole("heading", { name: /Archive 2 runs\?/ })).toBeInTheDocument();
   });
 });

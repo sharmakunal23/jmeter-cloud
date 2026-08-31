@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { InfoTip } from "./InfoTip";
+import { Paginator } from "./Paginator";
+import { useClientPagination } from "../hooks/useClientPagination";
 import { isDashboardUrl } from "../lib/grafanaLink";
 
 import {
@@ -69,6 +71,12 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
   const [deleteTarget, setDeleteTarget] = useState<ApplicationGroup | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Two tabs — the existing-groups table and the add form stacked made the
+  // modal overflow, and mixing them read as one giant form.
+  const [tab, setTab] = useState<"existing" | "add">("existing");
+  const groups = list.status === "ok" ? list.groups : [];
+  const { page, setPage, pageItems, total, pageSize } = useClientPagination(groups, undefined, 8);
+
   useEffect(() => {
     const ctl = new AbortController();
     applicationGroupsApi.list(ctl.signal)
@@ -118,6 +126,7 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
       });
       setGroupId(""); setName(""); setDescription(""); setPolicy(DEFAULT_POLICY);
       showToast({ variant: "ok", text: `Group "${name.trim()}" created.` });
+      setTab("existing");
       changed();
     } catch (err) {
       setCreateError(describe(err));
@@ -199,12 +208,28 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
       closeDisabled={deleteTarget !== null}
     >
       <div className="modal__body">
-        {list.status === "loading" && <p className="ink-soft">Loading groups…</p>}
-        {list.status === "error" && <p className="text--error">{list.message}</p>}
-        {list.status === "ok" && list.groups.length === 0 && (
-          <p className="ink-soft">No groups yet.</p>
+        <div className="tabBar" role="tablist" aria-label="Application group views">
+          <button
+            type="button" role="tab" aria-selected={tab === "existing"}
+            className={`tabBar__tab ${tab === "existing" ? "tabBar__tab--active" : ""}`}
+            onClick={() => setTab("existing")}
+          >
+            Existing groups {list.status === "ok" && <span className="tabBar__count">{list.groups.length}</span>}
+          </button>
+          <button
+            type="button" role="tab" aria-selected={tab === "add"}
+            className={`tabBar__tab ${tab === "add" ? "tabBar__tab--active" : ""}`}
+            onClick={() => setTab("add")}
+          >
+            Add a group
+          </button>
+        </div>
+        {tab === "existing" && list.status === "loading" && <p className="ink-soft">Loading groups…</p>}
+        {tab === "existing" && list.status === "error" && <p className="text--error">{list.message}</p>}
+        {tab === "existing" && list.status === "ok" && list.groups.length === 0 && (
+          <p className="ink-soft">No groups yet — add one on the "Add a group" tab.</p>
         )}
-        {list.status === "ok" && list.groups.length > 0 && (
+        {tab === "existing" && list.status === "ok" && list.groups.length > 0 && (
           <table className="runsTable applicationListTable" aria-label="application groups">
             <thead>
               <tr>
@@ -215,7 +240,7 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
               </tr>
             </thead>
             <tbody>
-              {list.groups.map((g) => (
+              {pageItems.map((g) => (
                 <tr key={g.groupId}>
                   {editingId === g.groupId ? (
                     <>
@@ -331,10 +356,14 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
             </tbody>
           </table>
         )}
+        {tab === "existing" && list.status === "ok" && list.groups.length > 0 && (
+          <Paginator page={page} pageSize={pageSize} total={total} label="groups" onChange={setPage} />
+        )}
 
+        {tab === "add" && (
         <form onSubmit={handleCreate} className="createApp" noValidate style={{ marginTop: "1rem" }}>
           <fieldset className="createApp__endpoints">
-            <legend>Add a group</legend>
+            <legend>New group</legend>
             <div className="formField">
               <div className="formField__labelRow">
                 <label htmlFor="groupIdInput">Id *</label>
@@ -443,6 +472,7 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
             </button>
           </fieldset>
         </form>
+        )}
       </div>
 
       {deleteTarget && (

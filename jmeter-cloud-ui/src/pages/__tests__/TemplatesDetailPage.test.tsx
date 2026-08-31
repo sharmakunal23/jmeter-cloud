@@ -33,9 +33,6 @@ beforeEach(() => {
   apps.list.mockReset();
   templates.list.mockReset();
   templates.delete.mockReset();
-  // Default to list view so the table renders deterministically (the toggle
-  // persists across runs via localStorage).
-  try { localStorage.setItem("jmeterCloud.templates.viewMode", "list"); } catch { /* ignore */ }
 });
 
 function fixtureApp(): Application {

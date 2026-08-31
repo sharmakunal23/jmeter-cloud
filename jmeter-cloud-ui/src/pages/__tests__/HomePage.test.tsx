@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 import { HomePage } from "../HomePage";
@@ -126,27 +126,29 @@ describe("HomePage — health checklist", () => {
     expect(screen.getByRole("heading", { name: "Upcoming scheduled runs", level: 2 })).toBeInTheDocument();
   });
 
-  it("Platform section renders the hub's health tree — services with their dependencies indented beneath", async () => {
+  it("Platform section shows one row per service plus a single Database row — no facts, no details toggle", async () => {
     apps.list.mockResolvedValue([]);
     renderPage();
     await waitFor(() => {
       const platform = screen.getByRole("list", { name: "platform checks" });
       expect(platform).toHaveTextContent("Global orchestrator");
+      expect(platform).toHaveTextContent("Database");
       expect(platform).toHaveTextContent("Metrics consumer");
       expect(platform).toHaveTextContent("Document service");
       expect(platform).toHaveTextContent("Data centers");
     });
-    // Compact by default: dependencies stay folded while everything is UP …
+    // Service-level rows only: the dependency tree, free-space / envelope
+    // facts, and probe latencies stay off Home (operator request 2026-08-30).
     expect(screen.queryByTestId("health-db.globalrunDataSource")).toBeNull();
-    expect(screen.getByTestId("health-metrics-consumer")).toHaveTextContent(/idle — last envelope 12 min ago · 4 ms/);
+    expect(screen.queryByText(/last envelope/)).toBeNull();
+    expect(screen.queryByText(/GB free/)).toBeNull();
+    expect(screen.queryByText(/4 ms/)).toBeNull();
+    expect(screen.getByTestId("health-database")).toHaveTextContent("UP");
+    expect(screen.queryByRole("button", { name: "Show details" })).toBeNull();
     expect(screen.getByText(/All healthy/)).toBeInTheDocument();
-    // … and "Show details" unfolds the whole tree.
-    fireEvent.click(screen.getByRole("button", { name: "Show details" }));
-    expect(screen.getByTestId("health-db.globalrunDataSource")).toHaveClass("healthTree__row--depth1");
-    expect(screen.getByRole("button", { name: "Hide details" })).toBeInTheDocument();
   });
 
-  it("data centers nest under the hub's tree: a region DOWN carries its regional's error, workers keep their counts; the header counts what needs attention", async () => {
+  it("a region DOWN surfaces as the Data centers row's reason — no tree, and the header counts the failing rows", async () => {
     apps.list.mockResolvedValue([]);
     healthMock.get.mockResolvedValue(healthFixture({
       status: "DEGRADED",
@@ -165,14 +167,13 @@ describe("HomePage — health checklist", () => {
       ],
     }));
     renderPage();
-    await waitFor(() => expect(screen.getByTestId("health-region.na-west")).toBeInTheDocument());
-    expect(screen.getByTestId("health-region.na-west")).toHaveTextContent(/DOWN/);
-    expect(screen.getByTestId("health-region.na-west.regional-orchestrator")).toHaveTextContent(/connection refused/);
-    expect(screen.getByTestId("health-region.na-west.regional-orchestrator")).toHaveClass("healthTree__row--depth2");
-    // Only the failing branch unfolds: the healthy region and its children stay folded.
-    expect(screen.queryByTestId("health-region.na-east")).toBeNull();
-    expect(screen.queryByTestId("health-region.na-west.workers")).toBeNull();
-    expect(screen.getByText(/3 components need attention/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("health-regions")).toBeInTheDocument());
+    expect(screen.getByTestId("health-regions")).toHaveTextContent(/DEGRADED/);
+    expect(screen.getByTestId("health-regions")).toHaveTextContent(/1 of 2 region\(s\) down/);
+    // The failing branch is folded into the service row — Home shows no tree.
+    expect(screen.queryByTestId("health-region.na-west")).toBeNull();
+    expect(screen.queryByTestId("health-region.na-west.regional-orchestrator")).toBeNull();
+    expect(screen.getByText(/1 component needs attention/)).toBeInTheDocument();
     expect(regions.status).not.toHaveBeenCalled();
   });
 

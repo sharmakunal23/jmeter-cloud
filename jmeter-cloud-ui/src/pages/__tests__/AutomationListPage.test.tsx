@@ -152,19 +152,6 @@ describe("AutomationListPage — Phase IA-Automation", () => {
     expect(document.activeElement).toBe(search);
   });
 
-  it("Grid view renders one .appCard per app + the 'no schedules' chip when empty", async () => {
-    try { localStorage.setItem("jmeterCloud.automation.listViewMode", "grid"); } catch { /* ignore */ }
-    apps.list.mockResolvedValue([appA()]);
-    cronJobs.list.mockResolvedValue([]);
-
-    render(<MemoryRouter><AutomationListPage /></MemoryRouter>);
-
-    const alphaCard = await screen.findByRole("link", { name: /Open automation for alpha/i });
-    expect(alphaCard.className).toContain("appCard");
-    expect(alphaCard).toHaveAttribute("href", "/automation/alpha");
-    try { localStorage.removeItem("jmeterCloud.automation.listViewMode"); } catch { /* ignore */ }
-  });
-
   it("empty registry shows the 'register an application first' empty state", async () => {
     apps.list.mockResolvedValue([]);
     cronJobs.list.mockResolvedValue([]);

@@ -166,7 +166,7 @@ describe("CreateApplicationDialog — server error surfacing", () => {
   });
 });
 
-describe("CreateApplicationDialog — soft-delete (edit mode)", () => {
+describe("CreateApplicationDialog — archive (edit mode)", () => {
   function renderEdit(overrides: Partial<{ onDeleted: () => void; onClose: () => void }> = {}) {
     const onDeleted = overrides.onDeleted ?? vi.fn();
     const onClose = overrides.onClose ?? vi.fn();
@@ -184,22 +184,22 @@ describe("CreateApplicationDialog — soft-delete (edit mode)", () => {
     return { onDeleted, onClose };
   }
 
-  it("create mode has no Delete button; edit mode does", () => {
+  it("create mode has no Archive button; edit mode does", () => {
     const { unmount } = render(
       <MemoryRouter><CreateApplicationDialog onCreated={vi.fn()} onClose={vi.fn()} /></MemoryRouter>,
     );
-    expect(screen.queryByRole("button", { name: /Delete application/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Archive application/i })).toBeNull();
     unmount();
 
     renderEdit();
-    expect(screen.getByRole("button", { name: /Delete application/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Archive application/i })).toBeInTheDocument();
   });
 
-  it("clicking Delete shows a focused confirmation (what changes + what's retained, no Kafka-internals copy)", () => {
+  it("clicking Archive shows a focused confirmation (what changes + what's retained, no Kafka-internals copy)", () => {
     renderEdit();
-    fireEvent.click(screen.getByRole("button", { name: /^Delete application$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Archive application$/i }));
 
-    expect(screen.getByRole("button", { name: /Soft-delete application/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Archive application$/i })).toBeInTheDocument();
     expect(screen.getByText(/remove it from the applications list/i)).toBeInTheDocument();
     expect(screen.getByText(/run history, metrics, and uploaded files/i)).toBeInTheDocument();
     // No implementation-detail / behavior-detail copy the operator doesn't need.
@@ -209,12 +209,12 @@ describe("CreateApplicationDialog — soft-delete (edit mode)", () => {
     expect(screen.queryByRole("button", { name: /^Save changes$/i })).toBeNull();
   });
 
-  it("confirming calls applicationsApi.delete with the app id + invokes onDeleted", async () => {
+  it("confirming the archive calls applicationsApi.delete with the app id + invokes onDeleted", async () => {
     apiMocks.delete.mockResolvedValue(undefined);
     const { onDeleted } = renderEdit();
 
-    fireEvent.click(screen.getByRole("button", { name: /^Delete application$/i }));
-    fireEvent.click(screen.getByRole("button", { name: /Soft-delete application/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Archive application$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Archive application$/i }));
 
     await waitFor(() => expect(apiMocks.delete).toHaveBeenCalledWith("01J0CHECKOUTAAAAAAAAAAAAAA"));
     await waitFor(() => expect(onDeleted).toHaveBeenCalled());
@@ -226,13 +226,13 @@ describe("CreateApplicationDialog — soft-delete (edit mode)", () => {
     );
     const { onDeleted } = renderEdit();
 
-    fireEvent.click(screen.getByRole("button", { name: /^Delete application$/i }));
-    fireEvent.click(screen.getByRole("button", { name: /Soft-delete application/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Archive application$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Archive application$/i }));
 
     expect(await screen.findByText(/has active runs — abort/i)).toBeInTheDocument();
     expect(onDeleted).not.toHaveBeenCalled();
     // Still on the confirmation (the operator can Cancel back).
-    expect(screen.getByRole("button", { name: /Soft-delete application/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Archive application$/i })).toBeInTheDocument();
   });
 });
 
@@ -243,7 +243,7 @@ describe("CreateApplicationDialog — application group", () => {
     groupMocks.list.mockResolvedValue([cps]);
     apiMocks.create.mockResolvedValue(fixtureApp("cps-pci"));
     render(<MemoryRouter><CreateApplicationDialog onCreated={vi.fn()} onClose={vi.fn()} /></MemoryRouter>);
-    await waitFor(() => expect(screen.getByRole("option", { name: "Servicing MQ (cps)" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("option", { name: "Servicing MQ" })).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText(/Name \*/i), { target: { value: "cps-pci" } });
     fireEvent.change(screen.getByLabelText("Application group *"), { target: { value: "cps" } });
     // The classifier value appears only once a group is chosen.
@@ -258,7 +258,7 @@ describe("CreateApplicationDialog — application group", () => {
   it("a group is required: no 'Ungrouped' option, Register stays disabled until one is picked", async () => {
     groupMocks.list.mockResolvedValue([cps]);
     render(<MemoryRouter><CreateApplicationDialog onCreated={vi.fn()} onClose={vi.fn()} /></MemoryRouter>);
-    await waitFor(() => expect(screen.getByRole("option", { name: "Servicing MQ (cps)" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("option", { name: "Servicing MQ" })).toBeInTheDocument());
     expect(screen.queryByRole("option", { name: /Ungrouped/ })).toBeNull();
     fireEvent.change(screen.getByLabelText(/Name \*/i), { target: { value: "checkout-svc" } });
     expect(screen.getByRole("button", { name: /^Register$/i })).toBeDisabled();
@@ -279,7 +279,7 @@ describe("CreateApplicationDialog — application group", () => {
     groupMocks.list.mockResolvedValue([cps]);
     const app = { ...fixtureApp("cps-pci"), metricsGroupId: "cps", metricsApplication: "CPS-PCI" };
     render(<MemoryRouter><CreateApplicationDialog mode="edit" initial={app} onCreated={vi.fn()} onClose={vi.fn()} /></MemoryRouter>);
-    await waitFor(() => expect(screen.getByRole("option", { name: "Servicing MQ (cps)" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("option", { name: "Servicing MQ" })).toBeInTheDocument());
     expect((screen.getByLabelText("Application group *") as HTMLSelectElement).value).toBe("cps");
     expect((screen.getByLabelText("Metrics application") as HTMLInputElement).value).toBe("CPS-PCI");
     fireEvent.change(screen.getByLabelText("Metrics application"), { target: { value: "has space" } });

@@ -8,14 +8,6 @@ import { AppListToolbar } from "../components/AppListToolbar";
 import { Paginator } from "../components/Paginator";
 import { useClientPagination } from "../hooks/useClientPagination";
 import { PlatformSchedulesSection } from "../components/PlatformSchedulesSection";
-import {
-  ViewModeToggle,
-  type ListViewMode,
-  persistViewMode,
-  readPersistedViewMode,
-} from "../components/ViewModeToggle";
-
-const VIEW_MODE_STORAGE_KEY = "jmeterCloud.automation.listViewMode";
 
 /**
  * Phase IA-Automation (2026-05-13) — list view following the IA pattern
@@ -56,15 +48,9 @@ export function AutomationListPage() {
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
-  const [viewMode, setViewMode] = useState<ListViewMode>(() => readPersistedViewMode(VIEW_MODE_STORAGE_KEY));
   // Two tabs so a long list of platform reports never pushes the app list
   // off-screen (operator request).
   const [tab, setTab] = useState<"applications" | "platform">("applications");
-
-  function changeViewMode(next: ListViewMode) {
-    setViewMode(next);
-    persistViewMode(VIEW_MODE_STORAGE_KEY, next);
-  }
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -178,7 +164,6 @@ export function AutomationListPage() {
               <span className="mono">{totalCount}</span>
             </span>
           )}
-          {tab === "applications" && <ViewModeToggle viewMode={viewMode} onChange={changeViewMode} />}
         </div>
       </header>
 
@@ -233,12 +218,6 @@ export function AutomationListPage() {
             <p className="ink-soft">No applications match "{search}".</p>
           )}
         </div>
-      ) : viewMode === "grid" ? (
-        <ul className="appCardGrid" aria-label="application automation cards">
-          {pageItems.map((r) => (
-            <AutomationCard key={r.app.applicationId} row={r} />
-          ))}
-        </ul>
       ) : (
         <table className="runsTable capacityListTable">
           <thead>
@@ -314,40 +293,6 @@ function AutomationListRow({ row }: { row: RowAggregate }) {
       </td>
       <td className="mono num"><strong>{row.total}</strong></td>
     </tr>
-  );
-}
-
-// ── Grid card (Automation) ───────────────────────────────────────
-
-function AutomationCard({ row }: { row: RowAggregate }) {
-  const href = `/automation/${encodeURIComponent(row.app.name)}`;
-  return (
-    <li>
-      <Link to={href} className="appCard" aria-label={`Open automation for ${row.app.name}`}>
-        <div className="appCard__head">
-          <h3 className="appCard__name">{row.app.name}</h3>
-          <ActivityChip lastFire={row.mostRecentFire} hasJobs={row.total > 0} />
-        </div>
-        <div className="appCard__body">
-          {row.total > 0 ? (
-            <>
-              <span className="chip chip--ok">
-                <span className="mono">enabled</span>
-                <span className="mono">{row.enabled}/{row.total}</span>
-              </span>
-              {row.nextFire && (
-                <span className="chip">
-                  <span className="mono">next</span>
-                  <span className="mono">{formatFuture(row.nextFire.toISOString())}</span>
-                </span>
-              )}
-            </>
-          ) : (
-            <span className="ink-soft" style={{ fontSize: "0.78rem" }}>no schedules</span>
-          )}
-        </div>
-      </Link>
-    </li>
   );
 }
 

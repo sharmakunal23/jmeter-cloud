@@ -17,35 +17,22 @@ import { HealthBadge } from "../components/HealthBadge";
 import { AppListToolbar } from "../components/AppListToolbar";
 import { Paginator } from "../components/Paginator";
 import { useClientPagination } from "../hooks/useClientPagination";
-import {
-  ViewModeToggle,
-  type ListViewMode,
-  persistViewMode,
-  readPersistedViewMode,
-} from "../components/ViewModeToggle";
 
 /**
  * D-AppRegistry — Applications surface.
  *
- * <p>Operator-visible registry with two view modes (grid / list) — the
- * mode is persisted in localStorage so the operator's preference
- * survives reloads. Health badge per app is sourced from the
+ * <p>Operator-visible registry rendered as one grouped, paginated list.
+ * Health badge per app is sourced from the
  * registry's {@code lastHealthStatus} field (updated every minute by
  * {@code ApplicationHealthPoller}). Per-app run aggregates are stitched
- * client-side from {@code GET /api/v1/runs?limit=200} so the cards /
- * rows show recent activity at a glance.
+ * client-side from {@code GET /api/v1/runs?limit=200} so the rows show
+ * recent activity at a glance.
  *
  * <p>"Register application" opens {@link CreateApplicationDialog} —
  * was inline on {@code <NewRunPage>}, moved here per the
  * D-AppRegistry brief.
  */
 
-// Standardization sweep (2026-05-13) — local ViewMode type/component +
-// readStoredViewMode helper deleted; the page now uses the shared
-// <ViewModeToggle> + readPersistedViewMode/persistViewMode from
-// src/components/ViewModeToggle.tsx so List always renders LEFT of Grid
-// (matching the four IA tabs).
-const VIEW_MODE_STORAGE_KEY = "jmeterCloud.applications.viewMode";
 const RUN_AGG_LIMIT = 200;
 const ACTIVE_STATES = new Set(["PREPARING", "STARTING", "RUNNING", "DRAINING"]);
 
@@ -61,14 +48,13 @@ type State =
   | { status: "error"; message: string };
 
 /** Heading for a run of apps in the same group (every app has one; the id stands in until the groups list catches up). */
-function groupHeading(app: Application, groups: ApplicationGroup[]): { key: string; name: string; id: string } {
+function groupHeading(app: Application, groups: ApplicationGroup[]): { key: string; name: string } {
   const g = groupOfApplication(groups, app);
-  return { key: app.metricsGroupId, name: g?.name ?? app.metricsGroupId, id: app.metricsGroupId };
+  return { key: app.metricsGroupId, name: g?.name ?? app.metricsGroupId };
 }
 
 export function ApplicationsListPage() {
   const [state, setState] = useState<State>({ status: "loading" });
-  const [viewMode, setViewMode] = useState<ListViewMode>(() => readPersistedViewMode(VIEW_MODE_STORAGE_KEY));
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [showGroups, setShowGroups] = useState(false);
@@ -76,11 +62,6 @@ export function ApplicationsListPage() {
   // HARD-DELETE — the Archived view lists HIDDEN (soft-deleted) apps so the
   // operator can permanently purge a retired app and reclaim its storage.
   const [archived, setArchived] = useState(false);
-
-  function changeViewMode(next: ListViewMode) {
-    setViewMode(next);
-    persistViewMode(VIEW_MODE_STORAGE_KEY, next);
-  }
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -126,7 +107,7 @@ export function ApplicationsListPage() {
     <section className="applicationsListPage">
       {/* Standardized header — same shape as Capacity / Documents / Templates /
           Automation: a titleGroup (h1 + "Refreshed" line) on the left and a
-          shared .pageHeader__actions group (primary action + view toggle) on
+          shared .pageHeader__actions group (primary action + Active/Archived toggle) on
           the right, so spacing + structure match across every list tab. */}
       <header className="pageHeader">
         <div className="pageHeader__titleGroup">
@@ -173,12 +154,11 @@ export function ApplicationsListPage() {
               aria-selected={archived}
               className={`btn ${archived ? "btn--primary" : "btn--ghost"}`}
               onClick={() => setArchived(true)}
-              title="Hidden (soft-deleted) applications — permanently delete them here to reclaim storage"
+              title="Archived applications — permanently delete them here to reclaim storage"
             >
               Archived
             </button>
           </div>
-          {!archived && <ViewModeToggle viewMode={viewMode} onChange={changeViewMode} />}
         </div>
       </header>
 
@@ -217,26 +197,7 @@ export function ApplicationsListPage() {
         </div>
       )}
 
-      {state.status === "ok" && filteredApps.length > 0 && viewMode === "grid" && (
-        <ul className="appCardGrid" aria-label="application cards">
-          {pageItems.map((app, i) => {
-            const heading = groupHeading(app, groups);
-            const first = i === 0 || groupHeading(pageItems[i - 1], groups).key !== heading.key;
-            return (
-              <Fragment key={app.applicationId}>
-                {first && (
-                  <li className="appCardGrid__groupHeading" role="presentation">
-                    <GroupHeading name={heading.name} id={heading.id} />
-                  </li>
-                )}
-                <ApplicationCard app={app} agg={state.aggregates[app.name]} />
-              </Fragment>
-            );
-          })}
-        </ul>
-      )}
-
-      {state.status === "ok" && filteredApps.length > 0 && viewMode === "list" && (
+      {state.status === "ok" && filteredApps.length > 0 && (
         <ApplicationListView apps={pageItems} groups={groups} aggregates={state.aggregates} />
       )}
 
@@ -263,14 +224,9 @@ export function ApplicationsListPage() {
   );
 }
 
-/** One heading per run of applications in the same group. */
-function GroupHeading({ name, id }: { name: string; id: string }) {
-  return (
-    <h2 className="appGroupHeading">
-      {name}
-      <span className="mono ink-soft appGroupHeading__id">{id}</span>
-    </h2>
-  );
+/** One heading per run of applications in the same group — name only; the id lives in Manage groups. */
+function GroupHeading({ name }: { name: string }) {
+  return <h2 className="appGroupHeading">{name}</h2>;
 }
 
 /**
@@ -288,6 +244,8 @@ function ArchivedApplicationsView() {
   const [reloadSeq, setReloadSeq] = useState(0);
   const [purgeApp, setPurgeApp] = useState<Application | null>(null);
   const { toast, showToast, dismiss } = useToast();
+  const archivedApps = state.status === "ok" ? state.apps : [];
+  const { page, setPage, pageItems, total, pageSize } = useClientPagination(archivedApps);
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -305,7 +263,7 @@ function ArchivedApplicationsView() {
   return (
     <>
       <p className="ink-soft" style={{ margin: "0 0 0.75rem" }}>
-        Soft-deleted applications. Permanently deleting one removes its runs,
+        Archived applications. Permanently deleting one removes its runs,
         result files, metric data, and registry record — this cannot be undone.
       </p>
 
@@ -328,7 +286,7 @@ function ArchivedApplicationsView() {
             </tr>
           </thead>
           <tbody>
-            {state.apps.map((app) => (
+            {pageItems.map((app) => (
               <tr key={app.applicationId}>
                 <td>
                   <span className="mono">{displayName(app.name)}</span>{" "}
@@ -350,6 +308,10 @@ function ArchivedApplicationsView() {
             ))}
           </tbody>
         </table>
+      )}
+
+      {state.status === "ok" && state.apps.length > 0 && (
+        <Paginator page={page} pageSize={pageSize} total={total} label="archived applications" onChange={setPage} />
       )}
 
       {purgeApp && (
@@ -382,53 +344,6 @@ function ArchivedApplicationsView() {
   );
 }
 
-// ── Cards (grid view) ─────────────────────────────────────────────
-
-function ApplicationCard({ app, agg }: { app: Application; agg?: AppAggregates }) {
-  const target = `/applications/${encodeURIComponent(app.name)}`;
-  const runs = agg?.totalRuns ?? 0;
-  const active = agg?.activeRuns ?? 0;
-
-  return (
-    <li>
-      {/* Standardization sweep (2026-05-13) — Applications cards now use
-          the unified .appCard shell shared with Capacity / Documents /
-          Templates / Automation. Health badge sits in the head row with
-          flex-wrap so it never overflows the card on narrow widths. */}
-      <Link to={target} className="appCard" aria-label={`Open ${app.name}`}>
-        <div className="appCard__head">
-          <h3 className="appCard__name">{app.name}</h3>
-          <HealthBadge app={app} compact />
-        </div>
-        {app.sealId && (
-          <div className="appCard__sealId mono ink-soft">{app.sealId}</div>
-        )}
-        {app.description && (
-          <p className="appCard__desc">{app.description}</p>
-        )}
-        <dl className="appCard__stats">
-          <div><dt>Runs</dt><dd className="mono">{runs}</dd></div>
-          {active > 0 && (
-            <div><dt>Active</dt><dd className="mono appCard__active">{active}</dd></div>
-          )}
-          <div><dt>Endpoints</dt><dd className="mono">{app.healthEndpoints.length}</dd></div>
-        </dl>
-        {agg?.lastRun ? (
-          <p className="ink-soft appCard__lastRun appCard__footer">
-            Last run:{" "}
-            <span className={`badge badge--${badgeVariantForRunState(agg.lastRun.state)}`}>
-              {agg.lastRun.state}
-            </span>{" "}
-            <span className="mono">{formatRelative(agg.lastRun.createdAt)}</span>
-          </p>
-        ) : (
-          <p className="ink-soft appCard__hint appCard__footer">No runs yet — click to launch one.</p>
-        )}
-      </Link>
-    </li>
-  );
-}
-
 // ── Table (list view) ─────────────────────────────────────────────
 
 function ApplicationListView({
@@ -456,7 +371,7 @@ function ApplicationListView({
             <Fragment key={app.applicationId}>
             {first && (
               <tr className="appGroupRow">
-                <td colSpan={7}><GroupHeading name={heading.name} id={heading.id} /></td>
+                <td colSpan={7}><GroupHeading name={heading.name} /></td>
               </tr>
             )}
             <tr>

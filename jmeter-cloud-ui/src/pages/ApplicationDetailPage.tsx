@@ -181,7 +181,7 @@ function ApplicationDetailBody({ appName }: { appName: string }) {
       return next;
     });
     setReloadNonce((n) => n + 1);
-    showToast(`${deletedRunIds.length} run${deletedRunIds.length === 1 ? "" : "s"} hidden.`);
+    showToast(`${deletedRunIds.length} run${deletedRunIds.length === 1 ? "" : "s"} archived.`);
   }
 
   return (
@@ -231,7 +231,7 @@ function ApplicationDetailBody({ appName }: { appName: string }) {
           aria-selected={archived}
           className={`btn ${archived ? "btn--primary" : "btn--ghost"}`}
           onClick={() => selectArchived(true)}
-          title="Hidden (soft-deleted) runs — permanently delete them here to reclaim storage"
+          title="Archived runs — permanently delete them here to reclaim storage"
         >
           Archived
         </button>
@@ -288,9 +288,9 @@ function ApplicationDetailBody({ appName }: { appName: string }) {
             type="button"
             className="appDetailChip appDetailChip--action appDetailChip--danger"
             onClick={() => setDeleteTargets(selectedRuns)}
-            title="Hide the selected runs from this list (soft delete — data is retained)"
+            title="Archive the selected runs — they move to the Archived tab; results and metrics are kept"
           >
-            Delete selected ({selectedRuns.length})
+            Archive selected ({selectedRuns.length})
           </button>
         )}
       </div>
@@ -455,7 +455,7 @@ function RunsTableForApp({
                 <td className="runsTable__actions">
                   {/* Archived view → permanent delete is a SELECTION action
                       (check rows, then "Delete permanently (N)"); no per-row
-                      button. Active view keeps the per-row hide. */}
+                      button. Active view keeps the per-row archive. */}
                   {!archived && (
                     <button
                       type="button"
@@ -463,11 +463,11 @@ function RunsTableForApp({
                       onClick={() => onDeleteOne(run)}
                       disabled={!terminal}
                       title={terminal
-                        ? "Delete (hide) this run"
-                        : "Active runs can't be deleted — abort or let it finish first"}
-                      aria-label={`delete run ${run.runId}`}
+                        ? "Archive this run — it moves to the Archived tab"
+                        : "Active runs can't be archived — abort or let it finish first"}
+                      aria-label={`archive run ${run.runId}`}
                     >
-                      Delete
+                      Archive
                     </button>
                   )}
                 </td>

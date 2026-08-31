@@ -53,6 +53,15 @@ describe("PluginsPage", () => {
     expect(screen.getByText("casutg.jar")).toBeInTheDocument();
   });
 
+  it("filter narrows by plugin name, like every other tab", async () => {
+    listMock.mockResolvedValue([P1, { ...P1, pluginId: "p2", name: "jpgc-tst", fileName: "tst.jar", sha256: "b" }]);
+    renderPage();
+    await waitFor(() => expect(screen.getByText("jpgc-tst")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("Filter plugins by name"), { target: { value: "casutg" } });
+    await waitFor(() => expect(screen.queryByText("jpgc-tst")).not.toBeInTheDocument());
+    expect(screen.getByText("jpgc-casutg")).toBeInTheDocument();
+  });
+
   it("empty library renders the empty state", async () => {
     listMock.mockResolvedValue([]);
     renderPage();

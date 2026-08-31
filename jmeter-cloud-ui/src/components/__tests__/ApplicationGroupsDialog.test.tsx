@@ -46,6 +46,8 @@ describe("ApplicationGroupsDialog", () => {
     render(<ApplicationGroupsDialog onClose={vi.fn()} onChanged={onChanged} />);
     await waitFor(() => expect(screen.getByText("Servicing MQ")).toBeInTheDocument());
 
+    // The add form lives on its own tab now.
+    fireEvent.click(screen.getByRole("tab", { name: /Add a group/ }));
     fireEvent.change(screen.getByLabelText(/^Id \*/i), { target: { value: "CPP" } });
     fireEvent.change(screen.getByLabelText(/^Name \*/i), { target: { value: "Card Payments" } });
     expect(screen.getByRole("button", { name: /Add group/i })).toBeDisabled();
@@ -65,6 +67,7 @@ describe("ApplicationGroupsDialog", () => {
     api.create.mockRejectedValue(new ApplicationApiError(409, "APPLICATION_GROUP_ID_TAKEN", "taken"));
     render(<ApplicationGroupsDialog onClose={vi.fn()} />);
     await waitFor(() => expect(screen.getByText("Servicing MQ")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: /Add a group/ }));
     fireEvent.change(screen.getByLabelText(/^Id \*/i), { target: { value: "cps" } });
     fireEvent.change(screen.getByLabelText(/^Name \*/i), { target: { value: "Again" } });
     fireEvent.click(screen.getByRole("button", { name: /Add group/i }));
@@ -96,7 +99,8 @@ describe("ApplicationGroupsDialog", () => {
     // The read-only row summarises the policy.
     expect(screen.getByText(/After every run — drain \+ spin a fresh replacement\. Always on\./)).toBeInTheDocument();
 
-    // Add: pick "Drain after every run" + always on.
+    // Add: pick "Drain after every run" + always on (the add form is a tab).
+    fireEvent.click(screen.getByRole("tab", { name: /Add a group/ }));
     fireEvent.change(screen.getByLabelText(/^Id \*/i), { target: { value: "cpp" } });
     fireEvent.change(screen.getByLabelText(/^Name \*/i), { target: { value: "Card Payments" } });
     const addForm = screen.getByRole("button", { name: /Add group/i }).closest("form")!;

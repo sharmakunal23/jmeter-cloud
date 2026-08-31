@@ -4,14 +4,14 @@ import { runsApi, GlobalOrchestratorError, type Run } from "../api/runs";
 import { Modal } from "./Modal";
 
 /**
- * Confirmation modal for hiding ("deleting") one or more runs so they drop out
- * of the run lists — the declutter primitive. Soft-delete: the run's row, fleet
- * members, audit trail, and any saved results are RETAINED (reversible), so the
- * copy says "hide", not "permanently delete".
+ * Confirmation modal for archiving one or more runs so they drop out of the
+ * run lists — the declutter primitive. Archiving is a soft delete: the run's
+ * row, fleet members, audit trail, and any saved results are RETAINED and the
+ * run moves to the Archived tab, so the copy says "archive", never "delete".
  *
  * <p>Mirrors {@link BulkActionConfirmDialog}: the dialog partitions the
- * selection client-side into "will hide" (terminal runs) vs "skipped" (active
- * runs can't be hidden — they're still important and pin live pods), so the
+ * selection client-side into "will archive" (terminal runs) vs "skipped"
+ * (active runs can't be archived — they pin live pods), so the
  * operator sees exactly what will happen before confirming. Fires the deletes
  * in parallel and reports any per-run failures inline rather than closing on a
  * partial success.
@@ -72,8 +72,8 @@ export function DeleteRunsConfirmDialog({ selected, onDeleted, onClose }: Delete
 
   return (
     <Modal
-      title={`Delete ${selected.length} run${selected.length === 1 ? "" : "s"}?`}
-      infoTip="Soft-delete — the runs disappear from every list, but their results and metrics are kept."
+      title={`Archive ${selected.length} run${selected.length === 1 ? "" : "s"}?`}
+      infoTip="The runs move to the Archived tab — their results and metrics are kept."
       width="confirm"
       onClose={onClose}
       closeDisabled={busy}
@@ -89,14 +89,14 @@ export function DeleteRunsConfirmDialog({ selected, onDeleted, onClose }: Delete
             disabled={busy || willHide.length === 0}
             aria-busy={busy}
           >
-            {busy ? "Hiding…" : `Hide ${willHide.length}`}
+            {busy ? "Archiving…" : `Archive ${willHide.length}`}
           </button>
         </>
       }
     >
       {willHide.length > 0 && (
         <section className="bulkActionList">
-          <h4 className="bulkActionList__title">Will hide ({willHide.length})</h4>
+          <h4 className="bulkActionList__title">Will archive ({willHide.length})</h4>
           <ul className="bulkActionList__items">
             {willHide.map((r) => (
               <li key={r.runId}>
@@ -122,14 +122,14 @@ export function DeleteRunsConfirmDialog({ selected, onDeleted, onClose }: Delete
             ))}
           </ul>
           <small className="ink-soft" style={{ display: "block", marginTop: "0.4rem" }}>
-            Active runs can't be hidden — abort or let them finish first.
+            Active runs can't be archived — abort or let them finish first.
           </small>
         </section>
       )}
 
       {willHide.length === 0 && (
         <p className="text--error" role="alert" style={{ marginTop: "0.6rem" }}>
-          All selected runs are still active. Nothing to hide.
+          All selected runs are still active. Nothing to archive.
         </p>
       )}
 
@@ -152,7 +152,7 @@ export function DeleteRunsConfirmDialog({ selected, onDeleted, onClose }: Delete
 
       {errors.length > 0 && (
         <div className="formError" role="alert" style={{ marginTop: "0.6rem" }}>
-          <strong>{errors.length} run{errors.length === 1 ? "" : "s"} could not be hidden:</strong>
+          <strong>{errors.length} run{errors.length === 1 ? "" : "s"} could not be archived:</strong>
           <ul style={{ margin: "0.3rem 0 0", paddingLeft: "1.2rem" }}>
             {errors.map((e) => (
               <li key={e.runId}>

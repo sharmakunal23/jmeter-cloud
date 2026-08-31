@@ -7,16 +7,6 @@ import { templatesApi } from "../api/templates";
 import { AppListToolbar } from "../components/AppListToolbar";
 import { Paginator } from "../components/Paginator";
 import { useClientPagination } from "../hooks/useClientPagination";
-import {
-  ViewModeToggle,
-  type ListViewMode,
-  persistViewMode,
-  readPersistedViewMode,
-} from "../components/ViewModeToggle";
-
-// Distinct from `jmeterCloud.templates.viewMode` (DETAIL page's grid/list)
-// so toggling on the list view doesn't change the operator's per-app pick.
-const VIEW_MODE_STORAGE_KEY = "jmeterCloud.templates.listViewMode";
 
 /**
  * Phase IA-Templates (2026-05-13) — list view following the IA pattern
@@ -54,12 +44,6 @@ export function TemplatesListPage() {
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
-  const [viewMode, setViewMode] = useState<ListViewMode>(() => readPersistedViewMode(VIEW_MODE_STORAGE_KEY));
-
-  function changeViewMode(next: ListViewMode) {
-    setViewMode(next);
-    persistViewMode(VIEW_MODE_STORAGE_KEY, next);
-  }
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -157,7 +141,6 @@ export function TemplatesListPage() {
               <span className="mono">{totalCount}</span>
             </span>
           )}
-          <ViewModeToggle viewMode={viewMode} onChange={changeViewMode} />
         </div>
       </header>
 
@@ -184,12 +167,6 @@ export function TemplatesListPage() {
             <p className="ink-soft">No applications match "{search}".</p>
           )}
         </div>
-      ) : viewMode === "grid" ? (
-        <ul className="appCardGrid" aria-label="application template cards">
-          {pageItems.map((r) => (
-            <TemplatesCard key={r.app.applicationId} row={r} />
-          ))}
-        </ul>
       ) : (
         <table className="runsTable capacityListTable">
           <thead>
@@ -249,27 +226,6 @@ function TemplatesListRow({ row }: { row: RowAggregate }) {
       </td>
       <td className="mono num"><strong>{row.count}</strong></td>
     </tr>
-  );
-}
-
-// ── Grid card (Templates) ────────────────────────────────────────
-
-function TemplatesCard({ row }: { row: RowAggregate }) {
-  const href = `/templates/${encodeURIComponent(row.app.name)}`;
-  return (
-    <li>
-      <Link to={href} className="appCard" aria-label={`Open templates for ${row.app.name}`}>
-        <div className="appCard__head">
-          <h3 className="appCard__name">{row.app.name}</h3>
-          <ActivityChip lastSave={row.mostRecentSave} hasTemplates={row.count > 0} />
-        </div>
-        <div className="appCard__body">
-          {row.count > 0
-            ? <span className="chip"><span className="mono">templates</span><span className="mono">{row.count}</span></span>
-            : <span className="ink-soft" style={{ fontSize: "0.78rem" }}>no templates</span>}
-        </div>
-      </Link>
-    </li>
   );
 }
 

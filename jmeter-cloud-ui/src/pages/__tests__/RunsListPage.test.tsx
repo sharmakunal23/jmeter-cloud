@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 
 // Selection contract: unlimited multi-select (bulk delete needs any number).
 // Compare lights up only at exactly 2;
-// Delete selected appears at >= 1. The page is otherwise covered by the
+// Archive selected appears at >= 1. The page is otherwise covered by the
 // integration smoke when the comparison panel is mounted (RunsComparePage tests).
 
 const mocks = vi.hoisted(() => ({
@@ -106,18 +106,18 @@ describe("RunsListPage — selection: compare (exactly 2) + bulk delete (>= 1)",
     expect(screen.queryByRole("link", { name: /Compare 2 runs/i })).not.toBeInTheDocument();
   });
 
-  it("Delete selected appears at >= 1 selection and opens the confirm dialog", async () => {
+  it("Archive selected appears at >= 1 selection and opens the confirm dialog", async () => {
     await renderListWithRuns(["A", "B", "C"]);
     // Hidden with nothing selected.
-    expect(screen.queryByRole("button", { name: /Delete selected/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Archive selected/i })).not.toBeInTheDocument();
 
     fireEvent.click(checkboxFor("A"));
-    const del = screen.getByRole("button", { name: /Delete selected/i });
+    const del = screen.getByRole("button", { name: /Archive selected/i });
     expect(del).toBeInTheDocument();
 
     fireEvent.click(del);
-    // The confirm dialog mounts (fixture runs are COMPLETED → hideable).
-    expect(screen.getByRole("heading", { name: /Delete 1 run\?/ })).toBeInTheDocument();
+    // The confirm dialog mounts (fixture runs are COMPLETED → archivable).
+    expect(screen.getByRole("heading", { name: /Archive 1 run\?/ })).toBeInTheDocument();
   });
 
   it("clicking an already-selected row deselects it (toggle still works in both directions)", async () => {

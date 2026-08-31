@@ -9,7 +9,7 @@ import {
 import { runsApi, type Run } from "../api/runs";
 import { applicationGroupsApi, sortByGroup, type ApplicationGroup } from "../api/applicationGroups";
 import { regionsApi, type RegionCapacity } from "../api/regions";
-import { platformHealthApi, hubUnreachable, unhealthy, type PlatformHealth, type PlatformHealthComponent, type PlatformStatus } from "../api/platformHealth";
+import { platformHealthApi, hubUnreachable, type PlatformHealth, type PlatformHealthComponent, type PlatformStatus } from "../api/platformHealth";
 import { cronJobsApi, isReportKind, type CronJobKind } from "../api/automation";
 import { useVisiblePolling } from "../hooks/useVisiblePolling";
 import { describeCron, formatInZone } from "../lib/cron";
@@ -20,12 +20,13 @@ import { formatFuture, formatRelative } from "../lib/time";
  *
  * <p>Two sections:
  * <ul>
- *   <li><strong>Health checklist</strong> — every backend service
- *       (global-orch, document-service, oracle) plus every registered
- *       application. Each row shows a HEALTHY / DEGRADED / UNHEALTHY /
- *       UNKNOWN badge. The platform tree comes from the hub's
- *       {@code GET /api/v1/platform/health} (it probes everything, regionals included); apps use
- *       the registry's poller-populated {@code lastHealthStatus}.</li>
+ *   <li><strong>Health checklist</strong> — one row per platform service
+ *       (plus one "Database" row) and every registered application, each
+ *       with an UP / DOWN-style badge and nothing else. The statuses come
+ *       from the hub's {@code GET /api/v1/platform/health} (it probes
+ *       everything, regionals included), collapsed by
+ *       {@code simplifyPlatform}; apps use the registry's poller-populated
+ *       {@code lastHealthStatus}.</li>
  *   <li><strong>Upcoming CRON jobs</strong> — currently a stub. The
  *       Automation track ships the real scheduler; this section
  *       reserves the layout slot.</li>
@@ -113,12 +114,12 @@ export function HomePage() {
   if (state.status === "error")   return <p className="text--error">{state.message}</p>;
 
   const { applications, groups, health, capacityByRegion, refreshedAt } = state.summary;
-  const attention = unhealthy(health);
+  const platformRows = simplifyPlatform(health);
   const everythingHealthy =
     health.status === "UP" &&
     applications.every((a) => (a.lastHealthStatus ?? "UNKNOWN") === "HEALTHY");
   const failingChecks =
-    attention.filter((c) => c.status === "DOWN" || c.status === "DEGRADED").length +
+    platformRows.filter((r) => r.status === "DOWN" || r.status === "DEGRADED").length +
     applications.filter((a) => {
       const s = a.lastHealthStatus ?? "UNKNOWN";
       return s === "UNHEALTHY" || s === "DEGRADED";
@@ -161,7 +162,7 @@ export function HomePage() {
         {/* Right column — Platform + Scheduled runs stacked. Platform is
             small (3 rows today), Schedule is a stub for D6. */}
         <div className="homeGrid__right">
-          <PlatformChecklist health={health} />
+          <PlatformChecklist status={health.status} checkedAt={health.checkedAt} rows={platformRows} />
           <CapacityRollup rows={capacityByRegion} />
           <ScheduleChecklist />
         </div>
@@ -228,68 +229,103 @@ function ApplicationsChecklist({ applications, groups }: { applications: Applica
   );
 }
 
-function PlatformChecklist({ health }: { health: PlatformHealth }) {
-  const attention = unhealthy(health);
-  // Compact by default: one row per service (and one for the data centers).
-  // Only a branch that is not UP unfolds — the reason must stay visible —
-  // and "Show details" opens the whole tree.
-  const [expanded, setExpanded] = useState(false);
+interface PlatformRow { id: string; name: string; status: PlatformStatus; reason?: string }
+
+const STATUS_RANK: Record<PlatformStatus, number> = { UP: 0, UNKNOWN: 1, DEGRADED: 2, DOWN: 3 };
+function worseOf(a: PlatformStatus, b: PlatformStatus): PlatformStatus {
+  return STATUS_RANK[b] > STATUS_RANK[a] ? b : a;
+}
+/** A database dependency anywhere in the tree — folded into the one "Database" row. */
+function isDatabase(c: PlatformHealthComponent): boolean {
+  return c.name.startsWith("Oracle") || c.id === "db" || c.id.startsWith("db.") || c.id.endsWith(".db");
+}
+
+/**
+ * Collapses the hub's health tree to what the operator needs at a glance: one
+ * row per top-level service (worst status across its non-database branch, with
+ * the first failing reason) plus a single "Database" row aggregating every
+ * database dependency. Healthy rows carry no facts — free space, envelope
+ * ages, and probe latencies stay in the hub's tree, not on Home.
+ */
+function simplifyPlatform(health: PlatformHealth): PlatformRow[] {
+  const dbParts: PlatformHealthComponent[] = [];
+  const collectDb = (c: PlatformHealthComponent) => {
+    if (isDatabase(c)) dbParts.push(c);
+    (c.components ?? []).forEach(collectDb);
+  };
+  health.components.forEach(collectDb);
+
+  // The hub already aggregates each branch into its top-level status — trust
+  // it; the walk below only finds a one-line reason for a row that is not UP.
+  const rows: PlatformRow[] = health.components.map((top) => {
+    let reason: string | undefined;
+    if (top.status !== "UP") {
+      reason = top.detail ?? undefined;
+      const walk = (c: PlatformHealthComponent) => {
+        if (isDatabase(c)) return; // reported on the Database row instead
+        if (c !== top && c.status !== "UP") {
+          reason ??= `${c.name}: ${c.detail ?? c.status.toLowerCase()}`;
+        }
+        (c.components ?? []).forEach(walk);
+      };
+      walk(top);
+    }
+    return { id: top.id, name: top.name, status: top.status, reason };
+  });
+
+  if (dbParts.length > 0) {
+    let status: PlatformStatus = "UP";
+    let reason: string | undefined;
+    for (const p of dbParts) {
+      if (p.status !== "UP") {
+        status = worseOf(status, p.status);
+        reason ??= `${p.name}: ${p.detail ?? p.status.toLowerCase()}`;
+      }
+    }
+    rows.splice(Math.min(1, rows.length), 0, { id: "database", name: "Database", status, reason });
+  }
+  return rows;
+}
+
+/**
+ * One row per platform service plus the single "Database" row — the operator
+ * needs UP/DOWN per service, not the dependency tree. Only a row that is not
+ * UP shows its one-line reason; healthy rows show the name and the badge.
+ */
+function PlatformChecklist({ status, checkedAt, rows }: { status: PlatformStatus; checkedAt: string; rows: PlatformRow[] }) {
+  const attention = rows.filter((r) => r.status !== "UP").length;
   return (
     <section className="checklist">
       <header className="checklist__head">
         <h2>Platform</h2>
         <small className="ink-soft">
-          {health.status === "UP"
-            ? `All healthy · checked ${formatRelative(health.checkedAt)}`
-            : health.status === "UNKNOWN"
+          {status === "UP"
+            ? `All healthy · checked ${formatRelative(checkedAt)}`
+            : status === "UNKNOWN"
               ? "Waiting for the first health round"
-              : `${attention.length} component${attention.length === 1 ? "" : "s"} need attention · checked ${formatRelative(health.checkedAt)}`}
+              : `${attention} component${attention === 1 ? "" : "s"} need${attention === 1 ? "s" : ""} attention · checked ${formatRelative(checkedAt)}`}
         </small>
-        <button type="button" className="btn btn--ghost btn--sm checklist__toggle"
-                onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
-          {expanded ? "Hide details" : "Show details"}
-        </button>
       </header>
       <ul className="checklist__items healthTree" aria-label="platform checks">
-        {health.components.map((c) => <HealthTreeRow key={c.id} component={c} depth={0} expanded={expanded} />)}
+        {rows.map((r) => (
+          <li key={r.id} className="checklistRow healthTree__row" data-testid={`health-${r.id}`}>
+            <div className="checklistRow__link checklistRow__link--static">
+              <span className="checklistRow__label mono">{r.name}</span>
+              {r.status !== "UP" && r.reason && (
+                <small className="checklistRow__detail ink-soft">{r.reason}</small>
+              )}
+              <span
+                className={`healthBadge healthBadge--${BADGE[r.status] ?? "unknown"} healthBadge--compact checklistRow__badge`}
+                aria-label={`status: ${r.status.toLowerCase()}`}
+              >
+                <span className="healthBadge__dot" aria-hidden="true" />
+                {r.status}
+              </span>
+            </div>
+          </li>
+        ))}
       </ul>
     </section>
-  );
-}
-
-/**
- * One node of the hub's health tree. Children render only when the tree is
- * expanded or this node is not UP (then only the children that are not UP —
- * the path to the reason). The detail line is the hub's one-liner; a service
- * shows its probe latency.
- */
-function HealthTreeRow({ component: c, depth, expanded }: { component: PlatformHealthComponent; depth: number; expanded: boolean }) {
-  const meta = c.latencyMs != null ? `${c.latencyMs} ms` : null;
-  const children = (c.components ?? []).filter((child) => expanded || child.status !== "UP");
-  return (
-    <>
-      <li className={`checklistRow healthTree__row healthTree__row--depth${Math.min(depth, 3)} healthTree__row--${c.kind}`}
-          data-testid={`health-${c.id}`}>
-        <div className="checklistRow__link checklistRow__link--static">
-          <span className={`checklistRow__label ${c.kind === "dependency" || c.kind === "workers" ? "" : "mono"}`}>
-            {c.name}
-          </span>
-          {(c.detail || meta) && (
-            <small className="checklistRow__detail ink-soft" title={c.url ?? undefined}>
-              {[c.detail, meta].filter(Boolean).join(" · ")}
-            </small>
-          )}
-          <span
-            className={`healthBadge healthBadge--${BADGE[c.status] ?? "unknown"} healthBadge--compact checklistRow__badge`}
-            aria-label={`status: ${c.status.toLowerCase()}`}
-          >
-            <span className="healthBadge__dot" aria-hidden="true" />
-            {c.status}
-          </span>
-        </div>
-      </li>
-      {children.map((child) => <HealthTreeRow key={child.id} component={child} depth={depth + 1} expanded={expanded} />)}
-    </>
   );
 }
 
