@@ -91,6 +91,16 @@ tags:
       `StartRunRequest.pluginIds` and every worker stages the jars into its
       JMeter `search_paths` — the image is never mutated.
 
+  - name: workflows
+    description: |
+      Group-scoped task graphs: health checks, load tests, emails, waits and
+      approval gates wired into a DAG. An edge carries a condition
+      (`ON_SUCCESS`, `ON_FAILURE`, `ALWAYS`) and two edges out of one task run
+      their targets in parallel — the shape of the graph is the only thing that
+      expresses ordering. Executions are advanced by a tick-driven engine, so a
+      restart costs at most one tick and N replicas each advance an execution
+      exactly once.
+
 paths:
 
   # ────────────────────────────────────────────────────────────────────────
@@ -2430,6 +2440,338 @@ paths:
                             recentP95Ms:   { type: number, format: double }
                             deltaPct:      { type: number, format: double }
 
+  # ────────────────────────────────────────────────────────────────────────
+  # Workflows
+  # ────────────────────────────────────────────────────────────────────────
+  /api/v1/workflows/groups:
+    get:
+      tags: [workflows]
+      summary: Application groups with workflow counts
+      description: |
+        The Workflows landing surface: every application group, who owns it, and
+        how many workflows it holds. A workflow's load tests draw on its group's
+        reserved capacity, which is why the group — not the application — is the
+        unit of navigation.
+      responses:
+        "200":
+          description: One row per group.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/WorkflowGroupSummary" }
+
+  /api/v1/workflows:
+    get:
+      tags: [workflows]
+      summary: Workflows in one group
+      description: Each row carries its most recent execution, so a list needs no follow-up call.
+      parameters:
+        - name: groupId
+          in: query
+          required: true
+          schema: { type: string, pattern: "^[a-z][a-z0-9_]{0,29}$" }
+      responses:
+        "200":
+          description: The group's workflows, by name.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Workflow" }
+        "404": { description: "No such group." }
+    post:
+      tags: [workflows]
+      summary: Create a workflow
+      description: |
+        The graph is validated before it is stored — shape (acyclic, ≤ 64 tasks,
+        ≤ 16 load tests, per-task config) and references (the applications named
+        exist and belong to this group, the clusters allocated are reserved).
+        Capacity only warns here: a draft outlives today's reservation, and the
+        launch is where it is enforced.
+      parameters:
+        - $ref: "#/components/parameters/XActorHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SaveWorkflowRequest" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workflow" }
+        "400":
+          description: "`WORKFLOW_INVALID` — the body carries every violation, so the builder can mark all the bad tasks at once."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkflowInvalidError" }
+        "409": { description: "`WORKFLOW_NAME_TAKEN` — that name is used in this group." }
+
+  /api/v1/workflows/validate:
+    post:
+      tags: [workflows]
+      summary: Validate a draft without saving it
+      description: |
+        The same checks a save runs, plus the capacity picture: peak concurrent
+        workers per cluster against the group's reservation. The peak is the
+        graph's maximum-weight antichain — the most that can ever run at once —
+        not a per-task maximum, and `capacity[].tasks` names the tasks behind
+        each number.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [groupId, graph]
+              properties:
+                groupId: { type: string }
+                graph:   { $ref: "#/components/schemas/WorkflowGraph" }
+      responses:
+        "200":
+          description: Errors, warnings and the per-cluster demand.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkflowValidation" }
+
+  /api/v1/workflows/{workflowId}:
+    parameters:
+      - name: workflowId
+        in: path
+        required: true
+        schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+    get:
+      tags: [workflows]
+      summary: One workflow
+      responses:
+        "200":
+          description: The workflow and its graph.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workflow" }
+        "404": { description: "No such workflow." }
+    put:
+      tags: [workflows]
+      summary: Save a workflow
+      description: |
+        `revision` is required and must be the one the editor loaded; a stale
+        value is `409 WORKFLOW_REVISION_CONFLICT` rather than an overwrite, so
+        two operators on one canvas cannot silently discard each other's work.
+      parameters:
+        - $ref: "#/components/parameters/XActorHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SaveWorkflowRequest" }
+      responses:
+        "200":
+          description: Saved; `revision` is bumped.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workflow" }
+        "400": { description: "`WORKFLOW_INVALID`, or `BAD_REQUEST` when `revision` is missing." }
+        "409": { description: "`WORKFLOW_REVISION_CONFLICT` — reload and re-apply. `WORKFLOW_NAME_TAKEN` for a duplicate name." }
+        "404": { description: "No such workflow." }
+    delete:
+      tags: [workflows]
+      summary: Delete a workflow
+      description: |
+        Idempotent. Refused while an execution is running — deleting the
+        definition mid-flight would strand the engine. Past executions survive
+        the delete: they snapshot the name and graph they ran.
+      responses:
+        "204": { description: "Gone." }
+        "409": { description: "`WORKFLOW_RUNNING` — cancel the executions first." }
+
+  /api/v1/workflows/{workflowId}/executions:
+    parameters:
+      - name: workflowId
+        in: path
+        required: true
+        schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+    post:
+      tags: [workflows]
+      summary: Launch a workflow
+      description: |
+        Opens an execution with one task per node and lets the engine take it
+        from the next tick. The capacity pre-flight is the hard gate: a graph
+        whose peak exceeds the group's reservation is refused before any task
+        runs, rather than passing its health checks, sending its "starting now"
+        mail and then failing on the third load test.
+      parameters:
+        - $ref: "#/components/parameters/XActorHeader"
+      responses:
+        "202":
+          description: Accepted; the execution is RUNNING with every task PENDING.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkflowExecution" }
+        "409":
+          description: |
+            `WORKFLOW_CAPACITY_EXCEEDED` — the body names the clusters, the peak
+            and the tasks that make it up; `WORKFLOW_ALREADY_RUNNING` — one
+            execution of a workflow at a time, because the capacity pre-flight
+            reasons about the graph in isolation and a second concurrent copy
+            would be cleared against the same reservation; or
+            `WORKFLOW_DISABLED`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkflowCapacityError" }
+        "400": { description: "`WORKFLOW_INVALID` — the stored graph no longer validates (an application moved group, a cluster lost its reservation)." }
+        "404": { description: "No such workflow." }
+    get:
+      tags: [workflows]
+      summary: Execution history
+      description: Newest first, capped at 200. Task rows are omitted — the execution's own endpoint carries those.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 25 }
+      responses:
+        "200":
+          description: Past and current executions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/WorkflowExecution" }
+
+  /api/v1/workflowExecutions/{executionId}:
+    parameters:
+      - name: executionId
+        in: path
+        required: true
+        schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+    get:
+      tags: [workflows]
+      summary: One execution and its tasks
+      description: |
+        The graph is the snapshot taken at launch, so a workflow edited since
+        still renders exactly what ran.
+      responses:
+        "200":
+          description: The execution with every task row.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkflowExecution" }
+        "404": { description: "No such execution." }
+
+  /api/v1/workflowExecutions/{executionId}/runs:
+    parameters:
+      - name: executionId
+        in: path
+        required: true
+        schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+    get:
+      tags: [workflows]
+      summary: Run ids this execution launched
+      description: |
+        In node order; the execution's metrics panel charts these and splits the
+        series by application.
+      responses:
+        "200":
+          description: Zero or more run ids.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: string }
+
+  /api/v1/workflowExecutions/{executionId}/cancel:
+    parameters:
+      - name: executionId
+        in: path
+        required: true
+        schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+    post:
+      tags: [workflows]
+      summary: Cancel an execution
+      description: |
+        Settles every open task and the execution. A run a load-test task
+        already started keeps going — aborting someone's load test is its own
+        decision, made on the run page.
+      parameters:
+        - $ref: "#/components/parameters/XActorHeader"
+      responses:
+        "200":
+          description: Cancelled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkflowExecution" }
+        "409": { description: "`EXECUTION_NOT_CANCELLABLE` — it already finished." }
+
+  /api/v1/workflowExecutions/{executionId}/tasks/{taskId}/approve:
+    parameters:
+      - name: executionId
+        in: path
+        required: true
+        schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+      - name: taskId
+        in: path
+        required: true
+        schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+    post:
+      tags: [workflows]
+      summary: Approve a parked task
+      description: |
+        Settles the task and pulls the execution's next tick forward, so the
+        branch continues within a tick instead of at the idle poll.
+      parameters:
+        - $ref: "#/components/parameters/XActorHeader"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note: { type: string, description: "Why, in the approver's words; kept on the task." }
+      responses:
+        "200":
+          description: Approved; the task is SUCCEEDED.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkflowExecution" }
+        "409": { description: "`TASK_NOT_AWAITING_APPROVAL` — somebody answered it, or it timed out." }
+
+  /api/v1/workflowExecutions/{executionId}/tasks/{taskId}/reject:
+    parameters:
+      - name: executionId
+        in: path
+        required: true
+        schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+      - name: taskId
+        in: path
+        required: true
+        schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+    post:
+      tags: [workflows]
+      summary: Reject a parked task
+      description: |
+        Fails the task, which is what an `ON_FAILURE` edge out of an approval
+        gate is for — "not now" gets its own path rather than ending the run.
+      parameters:
+        - $ref: "#/components/parameters/XActorHeader"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note: { type: string }
+      responses:
+        "200":
+          description: Rejected; the task is FAILED.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkflowExecution" }
+        "409": { description: "`TASK_NOT_AWAITING_APPROVAL`." }
+
 components:
 
   parameters:
@@ -2458,6 +2800,280 @@ components:
         `oidcSubject` / `iamRole`.
 
   schemas:
+
+    # ── WORKFLOWS ──────────────────────────────────────────────────────
+    # WorkflowGraph is both the wire shape the builder posts and the CLOB the
+    # database stores. Nodes are discriminated on `type`; unknown fields are
+    # ignored on read, so React Flow's own per-node keys survive a round trip.
+    WorkflowGraph:
+      type: object
+      required: [v, nodes, edges]
+      properties:
+        v:
+          type: integer
+          enum: [1]
+          description: Wire version. Anything else is rejected.
+        nodes:
+          type: array
+          maxItems: 64
+          description: "At most 64 tasks, of which at most 16 may be load tests — the caps that keep the capacity analysis exact and cheap."
+          items: { $ref: "#/components/schemas/WorkflowNode" }
+        edges:
+          type: array
+          items: { $ref: "#/components/schemas/WorkflowEdge" }
+
+    WorkflowEdge:
+      type: object
+      required: [id, source, target]
+      properties:
+        id:     { type: string }
+        source: { type: string, description: "Node id the edge leaves." }
+        target: { type: string, description: "Node id the edge enters." }
+        condition:
+          type: string
+          enum: [ON_SUCCESS, ON_FAILURE, ALWAYS]
+          default: ON_SUCCESS
+          description: |
+            When the target may run. `ALWAYS` means the source succeeded **or**
+            failed — a source that was skipped or cancelled never ran, so it
+            satisfies nothing. Drawing an `ON_FAILURE` edge also declares the
+            source's failure *handled*, which is what lets a
+            test-then-mail-either-way workflow finish SUCCEEDED.
+
+    WorkflowNode:
+      type: object
+      required: [type, id, name, position]
+      discriminator:
+        propertyName: type
+      properties:
+        type:
+          type: string
+          enum: [HEALTH_CHECK, LOAD_TEST, EMAIL, DELAY, APPROVAL]
+        id:       { type: string, pattern: "^[A-Za-z0-9_-]{1,64}$" }
+        name:     { type: string, maxLength: 255 }
+        position:
+          type: object
+          description: Canvas coordinates, round-tripped so a reopened builder looks unchanged.
+          properties:
+            x: { type: number }
+            y: { type: number }
+        joinPolicy:
+          type: string
+          enum: [ALL, ANY]
+          default: ALL
+          description: "With several inbound edges: `ALL` needs every one satisfied, `ANY` needs one."
+        # ── HEALTH_CHECK ──
+        application:
+          type: string
+          description: "HEALTH_CHECK / LOAD_TEST — the application, which must belong to the workflow's group."
+        requirement:
+          type: string
+          enum: [ALL, ANY, AT_LEAST]
+          default: ALL
+          description: "HEALTH_CHECK — how many endpoints must return 2xx."
+        minHealthy:  { type: integer, minimum: 1, description: "HEALTH_CHECK — required when `requirement` is AT_LEAST; clamped to the endpoint count." }
+        attempts:        { type: integer, minimum: 1, maximum: 10, default: 1, description: "HEALTH_CHECK — tries, spanning ticks." }
+        intervalSeconds: { type: integer, minimum: 5, maximum: 300, default: 15, description: "HEALTH_CHECK — gap between tries." }
+        timeoutSeconds:  { type: integer, minimum: 1, maximum: 30, default: 5, description: "HEALTH_CHECK — per-endpoint request timeout." }
+        # ── LOAD_TEST ──
+        templateBlobId: { type: string, description: "LOAD_TEST — the saved template supplying the plan, data files and plugins." }
+        fleetAllocation:
+          type: array
+          description: |
+            LOAD_TEST — required and authoritative: the node pins the fleet, the
+            template supplies the plan. Capacity has to be answerable without
+            fetching every template, and the operator has to see the number the
+            workflow will actually reserve. The template's own allocation is
+            reused verbatim only when the counts match and `properties` is
+            empty; otherwise the per-worker property snapshots are rebuilt from
+            the template's `globalProperties`, because that is where a run's
+            `-J` values live.
+          items:
+            type: object
+            required: [region, count]
+            properties:
+              region: { type: string }
+              count:  { type: integer, minimum: 1, maximum: 1000 }
+        properties:
+          type: object
+          additionalProperties: { type: string, maxLength: 256 }
+          description: "LOAD_TEST — `-J` overrides layered over the template's globals. Keys match `[A-Za-z_][A-Za-z0-9_.]{0,63}`."
+        saveResults: { type: boolean, description: "LOAD_TEST — overrides the template's setting when present." }
+        successWhen:
+          type: string
+          enum: [COMPLETED_ONLY, ANY_TERMINAL]
+          default: COMPLETED_ONLY
+          description: "LOAD_TEST — `ANY_TERMINAL` passes the task however the run ended."
+        maxDurationMinutes:
+          type: integer
+          minimum: 1
+          maximum: 1440
+          default: 120
+          description: "LOAD_TEST — watchdog; the run is aborted and the task fails when it overruns."
+        # ── EMAIL ──
+        to:
+          type: array
+          items: { type: string }
+          description: "EMAIL — empty inherits the group's `notifyTo`; `cc` and `bcc` inherit theirs the same way."
+        cc:      { type: array, items: { type: string } }
+        bcc:     { type: array, items: { type: string } }
+        subject: { type: string, maxLength: 255, description: "EMAIL — `${…}` placeholders are resolved against the execution." }
+        body:    { type: string, maxLength: 20000, description: "EMAIL — as `subject`. An unknown placeholder renders empty rather than failing the send." }
+        includeSummary: { type: boolean, description: "EMAIL — append a table of every task's state, timing and result." }
+        # ── DELAY ──
+        seconds: { type: integer, minimum: 1, maximum: 86400, description: "DELAY — how long to wait." }
+        # ── APPROVAL ──
+        instructions: { type: string, maxLength: 4000, description: "APPROVAL — what the approver is being asked." }
+        deadlineMinutes:
+          type: integer
+          minimum: 1
+          maximum: 10080
+          description: "APPROVAL — fail the task if nobody answers in time; absent waits indefinitely."
+
+    Workflow:
+      type: object
+      required: [workflowId, groupId, name, graph, enabled, revision, createdAt, updatedAt]
+      properties:
+        workflowId:  { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+        groupId:     { type: string }
+        name:        { type: string, description: "Unique within the group." }
+        description: { type: string, nullable: true }
+        graph:       { $ref: "#/components/schemas/WorkflowGraph" }
+        enabled:     { type: boolean, description: "A disabled workflow cannot be launched." }
+        revision:
+          type: integer
+          description: "Optimistic lock. Send the value you loaded on PUT; a stale one is 409."
+        createdBy:   { type: string, nullable: true }
+        createdAt:   { type: string, format: date-time }
+        updatedBy:   { type: string, nullable: true }
+        updatedAt:   { type: string, format: date-time }
+        lastExecution:
+          nullable: true
+          description: Hydrated on list reads only.
+          allOf: [{ $ref: "#/components/schemas/WorkflowExecutionSummary" }]
+
+    WorkflowExecutionSummary:
+      type: object
+      properties:
+        executionId: { type: string }
+        state:       { type: string, enum: [RUNNING, SUCCEEDED, FAILED, CANCELLED] }
+        startedAt:   { type: string, format: date-time }
+        completedAt: { type: string, format: date-time, nullable: true }
+
+    WorkflowExecution:
+      type: object
+      required: [executionId, workflowId, groupId, workflowName, graph, state, triggeredBy, startedAt]
+      properties:
+        executionId:  { type: string }
+        workflowId:   { type: string }
+        groupId:      { type: string }
+        workflowName: { type: string, description: "Snapshot: a rename never rewrites history." }
+        graph:        { $ref: "#/components/schemas/WorkflowGraph" }
+        state:        { type: string, enum: [RUNNING, SUCCEEDED, FAILED, CANCELLED] }
+        stateReason:  { type: string, nullable: true }
+        triggeredBy:  { type: string }
+        startedAt:    { type: string, format: date-time }
+        completedAt:  { type: string, format: date-time, nullable: true }
+        nextTickAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: "When the engine will next advance it; non-null exactly while RUNNING."
+        tasks:
+          type: array
+          items: { $ref: "#/components/schemas/WorkflowTask" }
+
+    WorkflowTask:
+      type: object
+      required: [taskId, executionId, nodeId, type, name, state, attempt]
+      properties:
+        taskId:      { type: string }
+        executionId: { type: string }
+        nodeId:      { type: string, description: "The graph node this row instantiates." }
+        type:        { type: string, enum: [HEALTH_CHECK, LOAD_TEST, EMAIL, DELAY, APPROVAL] }
+        name:        { type: string }
+        state:
+          type: string
+          enum: [PENDING, RUNNING, AWAITING_APPROVAL, SUCCEEDED, FAILED, SKIPPED, CANCELLED]
+          description: "`SKIPPED` means its join can no longer be satisfied — an upstream branch went the other way."
+        attempt:         { type: integer }
+        applicationName: { type: string, nullable: true }
+        runId:
+          type: string
+          nullable: true
+          description: "LOAD_TEST only. A task launches at most one run, enforced by a unique index."
+        startedAt:   { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+        dueAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: "When this task next wants attention — a delay's due time, an approval's deadline, a health check's next attempt, a load test's watchdog."
+        result:      { type: object, nullable: true, description: "Per-type detail the UI renders." }
+        errorReason: { type: string, nullable: true }
+
+    WorkflowGroupSummary:
+      type: object
+      properties:
+        groupId:       { type: string }
+        name:          { type: string }
+        description:   { type: string, nullable: true }
+        teamName:      { type: string, nullable: true }
+        workflowCount: { type: integer }
+        notifyTo:      { type: array, items: { type: string } }
+        notifyCc:      { type: array, items: { type: string } }
+        notifyBcc:     { type: array, items: { type: string } }
+
+    SaveWorkflowRequest:
+      type: object
+      required: [name, graph]
+      properties:
+        groupId:     { type: string, description: "Required on create; ignored on update — a workflow never changes group." }
+        name:        { type: string, maxLength: 255 }
+        description: { type: string, nullable: true }
+        graph:       { $ref: "#/components/schemas/WorkflowGraph" }
+        enabled:     { type: boolean, default: true }
+        revision:    { type: integer, description: "Required on PUT: the revision the editor loaded." }
+
+    WorkflowValidation:
+      type: object
+      properties:
+        valid:    { type: boolean }
+        errors:   { type: array, items: { type: string }, description: "Block a save." }
+        warnings: { type: array, items: { type: string }, description: "Do not block a save; over-subscribed capacity lands here." }
+        capacity:
+          type: array
+          items:
+            type: object
+            properties:
+              region:      { type: string }
+              peakWorkers: { type: integer, description: "The most this graph can want at once in this cluster." }
+              tasks:       { type: array, items: { type: string }, description: "The tasks that make up that peak." }
+              reserved:    { type: integer, description: "The group's reservation in this cluster." }
+              fits:        { type: boolean }
+
+    WorkflowInvalidError:
+      type: object
+      properties:
+        code:    { type: string, enum: [WORKFLOW_INVALID] }
+        message: { type: string }
+        validation: { $ref: "#/components/schemas/WorkflowValidation" }
+
+    WorkflowCapacityError:
+      type: object
+      properties:
+        code:    { type: string, enum: [WORKFLOW_CAPACITY_EXCEEDED, WORKFLOW_ALREADY_RUNNING, WORKFLOW_DISABLED] }
+        message: { type: string }
+        clusters:
+          type: array
+          items:
+            type: object
+            properties:
+              region:      { type: string }
+              peakWorkers: { type: integer }
+              tasks:       { type: array, items: { type: string } }
+              reserved:    { type: integer }
+              fits:        { type: boolean }
 
     # ── AUTOMATION — CRON schedules ────────────────────────────────────
     # CronJobSummary mirrors CronJobSummary in jmeter-cloud-ui/src/api/automation.ts
