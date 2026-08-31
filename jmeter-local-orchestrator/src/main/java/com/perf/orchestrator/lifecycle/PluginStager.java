@@ -44,6 +44,10 @@ public final class PluginStager {
 
     private static final Logger LOG = LoggerFactory.getLogger(PluginStager.class);
 
+    /** Mirrors {@code PluginSpec.FILE_NAME_PATTERN} — see the ';' note in {@link #validateBundleEntryName}. */
+    private static final java.util.regex.Pattern BUNDLE_ENTRY_PATTERN =
+            java.util.regex.Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,254}");
+
     private static final int BUFFER_BYTES = 16 * 1024;
 
     private final Path pluginsRoot;
@@ -74,6 +78,14 @@ public final class PluginStager {
             boolean cached = spec.isBundle() ? Files.isDirectory(target) : Files.isRegularFile(target);
             if (cached) {
                 LOG.info("plugin cache hit for {} ({}) — download skipped", spec.fileName(), spec.blobId());
+                try {
+                    // True LRU: a hit refreshes mtime so hot plugins outlive
+                    // cold ones in the sweep (otherwise it is FIFO-by-stage-time).
+                    Files.setLastModifiedTime(target,
+                            java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis()));
+                } catch (IOException ignored) {
+                    // Best-effort — a failed touch only weakens eviction order.
+                }
                 continue;
             }
             Optional<InputStream> body = source.fetch(ArtifactSource.KIND_PLUGIN,
@@ -214,6 +226,13 @@ public final class PluginStager {
             throw new ArtifactValidationException("INVALID_ARCHIVE",
                     "Plugin bundle entries must be flat (no directories); got '" + name + "'.");
         }
+        // The same rule as PluginSpec.fileName — jar names ride -Jsearch_paths
+        // joined with ';', so ';' (or any other exotic char) in an entry name
+        // would silently split the path list mid-run.
+        if (!BUNDLE_ENTRY_PATTERN.matcher(name).matches()) {
+            throw new ArtifactValidationException("INVALID_ARCHIVE",
+                    "Plugin bundle entry '" + name + "' must match [A-Za-z0-9][A-Za-z0-9._-]* .");
+        }
         if (name.length() >= 2 && name.charAt(1) == ':') {
             throw new ArtifactValidationException("INVALID_ARCHIVE",
                     "Plugin bundle entry name uses a Windows drive letter: '" + name + "'.");
@@ -285,6 +304,16 @@ public final class PluginStager {
             for (Path p : (Iterable<Path>) top::iterator) {
                 String name = p.getFileName().toString();
                 if (keep.contains(name)) continue;
+                // Crashed staging/eviction leftovers (*.tmpdir / *.evict.tmp)
+                // are always garbage — collect them first, unconditionally.
+                if (name.contains(".tmp")) {
+                    try {
+                        deleteRecursively(p);
+                    } catch (IOException io) {
+                        LOG.warn("plugin cache could not remove leftover {}: {}", p, io.toString());
+                    }
+                    continue;
+                }
                 long bytes = sizeOf(p);
                 long mtime;
                 try {
@@ -307,7 +336,14 @@ public final class PluginStager {
         for (CacheEntry e : entries) {
             if (totalEntries <= cacheMaxEntries && totalBytes <= cacheMaxBytes) break;
             try {
-                deleteRecursively(e.path());
+                // Rename-then-delete: a crash mid-delete must never leave a
+                // partial dir under the cache key — a later run would trust
+                // it as a cache hit and launch with missing jars. The rename
+                // is atomic; the doomed copy is *.evict.tmp, which the
+                // leftover pass above garbage-collects.
+                Path doomed = e.path().resolveSibling(e.path().getFileName() + ".evict.tmp");
+                atomicMove(e.path(), doomed);
+                deleteRecursively(doomed);
                 totalEntries--;
                 totalBytes -= e.bytes();
                 LOG.info("plugin cache evicted {} ({} bytes)", e.path().getFileName(), e.bytes());

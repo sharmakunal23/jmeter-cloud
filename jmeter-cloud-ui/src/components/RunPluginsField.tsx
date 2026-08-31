@@ -80,7 +80,9 @@ export function RunPluginsField({
             const unknown = unknownIds.includes(id);
             return (
               <span key={id} className={`chip${unknown ? " chip--warn" : ""}`}>
-                {p ? `${p.name}@${p.version}` : `${id.slice(0, 8)}… (removed from library)`}
+                {p ? `${p.name}@${p.version}`
+                  : plugins == null ? `${id.slice(0, 8)}…`
+                  : `${id.slice(0, 8)}… (removed from library)`}
                 <button
                   type="button"
                   className="chip__remove"

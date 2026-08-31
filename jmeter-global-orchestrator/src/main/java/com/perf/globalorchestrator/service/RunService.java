@@ -1931,7 +1931,8 @@ public class RunService {
             Map<String, RunFleetMember> byId = new LinkedHashMap<>();
             for (RunFleetMember m : active) byId.put(m.workerId(), m);
             targets = new java.util.ArrayList<>(request.workerIds().size());
-            for (String id : request.workerIds()) {
+            // Dedup — a repeated id would double-push and double-count `requested`.
+            for (String id : new java.util.LinkedHashSet<>(request.workerIds())) {
                 RunFleetMember m = byId.get(id);
                 if (m == null) {
                     throw new IllegalArgumentException(
@@ -2084,6 +2085,10 @@ public class RunService {
         if (snapRunId != null && !runId.equals(snapRunId.toString())) return; // a later run on this worker
         Object uploadState = snap.get("uploadState");
         if (uploadState == null || !"UPLOADED".equals(uploadState.toString())) return;
+        // Bound the fast-path set (one entry per (run,worker) forever
+        // otherwise); a clear only costs re-checks — the durable read-set +
+        // deterministic eventId stay authoritative.
+        if (resultsSavedEmitted.size() > 20_000) resultsSavedEmitted.clear();
         if (!resultsSavedEmitted.add(runId + "|" + workerId)) return; // intra-process concurrency dedup
         Object target = snap.get("uploadTarget");
         try {
@@ -2126,6 +2131,7 @@ public class RunService {
         // The status parsers stringify scalars, so the flag arrives as the
         // String "true", never Boolean.TRUE.
         if (!"true".equals(String.valueOf(snap.get("artifactsCleared")))) return;
+        if (artifactsClearedEmitted.size() > 20_000) artifactsClearedEmitted.clear(); // same bound as resultsSavedEmitted
         if (!artifactsClearedEmitted.add(runId + "|" + workerId)) return;
         try {
             audit.record(RunAuditWriter.deterministicId("artifactsCleared:" + runId + ":" + workerId),

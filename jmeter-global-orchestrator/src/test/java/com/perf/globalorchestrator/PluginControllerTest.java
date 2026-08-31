@@ -121,6 +121,41 @@ class PluginControllerTest {
     }
 
     @Test
+    @DisplayName("a fileName the worker would reject (space) can never register — 400 INVALID_PLUGIN_FILE")
+    void register_fileNameWorkerWouldReject() throws Exception {
+        // The classic case: a downloaded jar named with spaces. Without the
+        // mirror rule this 201s and then poisons every run that selects it
+        // (workers 400 the fan-out on PluginSpec.fileName).
+        blobIs("plugin", "jmeter plugins manager.jar", 4096);
+        mvc.perform(post("/api/v1/plugins").contentType(MediaType.APPLICATION_JSON)
+                        .content(body("jpm", "1.0")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_PLUGIN_FILE"));
+        verify(repo, never()).insert(any());
+    }
+
+    @Test
+    @DisplayName("a fileName over 255 chars is 400, not an ORA-12899 500")
+    void register_fileNameTooLong() throws Exception {
+        blobIs("plugin", "a".repeat(260) + ".jar", 4096);
+        mvc.perform(post("/api/v1/plugins").contentType(MediaType.APPLICATION_JSON)
+                        .content(body("longname", "1.0")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_PLUGIN_FILE"));
+    }
+
+    @Test
+    @DisplayName("a document-service outage is 503 DOCUMENT_SERVICE_UNAVAILABLE, not a raw 500")
+    void register_docServiceDown() throws Exception {
+        when(documents.fetchBlobMetadata(BLOB))
+                .thenThrow(new DocumentServiceClient.BlobAccessException("doc-service unreachable"));
+        mvc.perform(post("/api/v1/plugins").contentType(MediaType.APPLICATION_JSON)
+                        .content(body("any", "1.0")))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("DOCUMENT_SERVICE_UNAVAILABLE"));
+    }
+
+    @Test
     @DisplayName("metadata without a sha256 is 400 BLOB_METADATA_INCOMPLETE, not a 500")
     void register_noSha256() throws Exception {
         when(documents.fetchBlobMetadata(BLOB))

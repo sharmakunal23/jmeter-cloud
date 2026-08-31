@@ -71,6 +71,34 @@ class PluginStagerTest {
     }
 
     @Test
+    @DisplayName("a bundle entry with ';' is rejected — it would split -Jsearch_paths")
+    void semicolonEntryRejected() throws IOException {
+        byte[] zip = zipOf(Map.of("dep;1.jar", new byte[]{1}));
+        assertThatThrownBy(() -> new PluginStager(config(Map.of()))
+                .stage(new CountingSource(zip), "r1", List.of(new PluginSpec(U2, "bundle.zip"))))
+                .isInstanceOf(ArtifactValidationException.class)
+                .hasMessageContaining("must match");
+    }
+
+    @Test
+    @DisplayName("crashed staging/eviction leftovers (*.tmpdir / *.evict.tmp) are garbage-collected by the sweep")
+    void leftoverTmpDirsCollected() throws IOException {
+        Path root = base.resolve("plugins");
+        Files.createDirectories(root.resolve(U2 + ".tmpdir"));
+        Files.write(root.resolve(U2 + ".tmpdir").resolve("partial.jar"), new byte[]{1});
+        Files.createDirectories(root.resolve(U3 + ".evict.tmp"));
+        Files.write(root.resolve(U3 + ".evict.tmp").resolve("old.jar"), new byte[]{2});
+
+        CountingSource source = new CountingSource(new byte[]{7});
+        new PluginStager(config(Map.of()))
+                .stage(source, "r1", List.of(new PluginSpec(U1, "a.jar")));
+
+        assertThat(root.resolve(U2 + ".tmpdir")).doesNotExist();
+        assertThat(root.resolve(U3 + ".evict.tmp")).doesNotExist();
+        assertThat(root.resolve(U1 + ".jar")).exists();
+    }
+
+    @Test
     @DisplayName("a cached jar is a cache hit — the source is never consulted")
     void jarCacheHitSkipsFetch() throws IOException {
         Path cached = base.resolve("plugins").resolve(U1 + ".jar");

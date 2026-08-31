@@ -251,8 +251,10 @@ paths:
       summary: Push runtime JMeter properties (UX-DYNAMICS T5)
       description: |
         Forwards the map into the RUNNING JMeter child via the BeanShell
-        server as `props.put("k","v")` statements — raw scripts are never
-        accepted. Only plan values read through `${__P(name)}` /
+        server as `setprop("k","v")` statements (the stock
+        `extras/startup.bsh` helper — a customized startup file must keep it) —
+        raw scripts are never accepted. The Sessiond's reply is checked: an
+        eval error is a 502, never a silent success. Only plan values read through `${__P(name)}` /
         `${__property(name)}` observe the update, at their next evaluation —
         thread counts and once-read config do not change. At most 50 entries;
         per-entry rules match `properties` on `POST /api/v1/test`.
@@ -276,7 +278,7 @@ paths:
         "404":
           description: NO_ACTIVE_RUN — no test is running.
         "502":
-          description: BEANSHELL_UNREACHABLE — the server refused the push (JMeter may still be starting).
+          description: BEANSHELL_UNREACHABLE — the server refused or failed to evaluate the push (JMeter may still be starting, or `startup.bsh` lacks the stock `setprop` helper).
         "503":
           description: BEANSHELL_DISABLED — the worker runs without `BEANSHELL_PORT` (default 0 = off; managed environments stamp 4446).
 

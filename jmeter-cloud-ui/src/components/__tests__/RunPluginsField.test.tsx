@@ -42,6 +42,12 @@ describe("RunPluginsField", () => {
     expect(onChange).toHaveBeenCalledWith([]);
   });
 
+  it("while the library is unavailable (null), hydrated ids render neutrally — never 'removed'", () => {
+    setup({ plugins: null, value: ["p1"], unknownIds: [] });
+    expect(screen.queryByText(/removed from library/)).toBeNull();
+    expect(screen.getByText(/p1/)).toBeInTheDocument();
+  });
+
   it("an unknown hydrated id renders a warn chip and an exclusion notice", () => {
     setup({ value: ["p1", "01GONE00000000000000000000"], unknownIds: ["01GONE00000000000000000000"] });
     expect(screen.getByText(/removed from library/)).toBeInTheDocument();

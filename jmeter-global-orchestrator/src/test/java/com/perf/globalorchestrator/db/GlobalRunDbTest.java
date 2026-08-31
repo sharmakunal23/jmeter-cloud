@@ -22,6 +22,7 @@ import com.perf.globalorchestrator.repo.CronJobRepository;
 import com.perf.globalorchestrator.repo.PluginRepository;
 import com.perf.globalorchestrator.repo.PodRepository;
 import com.perf.globalorchestrator.repo.RunRepository;
+import com.perf.globalorchestrator.repo.RunEventRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -68,6 +69,7 @@ class GlobalRunDbTest extends OracleDbTestSupport {
     @Autowired GroupCapacityRepository groupCapacity;
     @Autowired PodRepository pods;
     @Autowired RunRepository runs;
+    @Autowired RunEventRepository runEvents;
     @Autowired CronJobRepository cronJobs;
     @Autowired AiResponseRepository aiResponses;
     @Autowired PluginRepository pluginLibrary;
@@ -89,6 +91,68 @@ class GlobalRunDbTest extends OracleDbTestSupport {
         return applications.insert(new Application(id, name, null, "db contract test",
                 List.of("http://" + name + "/health"), Instant.now(), null, null, null,
                 groupId, name.toUpperCase()));
+    }
+
+    /** One ORCH_RUN_EVENT row straight through the owner pool (payload is the workerId envelope). */
+    private void insertEvent(String runId, String type, String workerId) {
+        owner.update(
+                "INSERT INTO ORCH_RUN_EVENT (EVENT_ID, RUN_ID, EVENT_TYPE, ACTOR, ACTOR_SOURCE, PAYLOAD, RESULT, OCCURRED_AT) "
+                + "VALUES (?, ?, ?, 'orchestrator', 'system', ?, 'ok', SYSTIMESTAMP)",
+                com.perf.globalorchestrator.domain.Ulid.generate(), runId, type,
+                "{\"workerId\":\"" + workerId + "\"}");
+    }
+
+    private void insertCleanMember(String runId, String workerId) {
+        runs.insertFleetMember(new RunFleetMember(runId, workerId, "na-east", MemberState.COMPLETED,
+                null, 202, "http://" + workerId + ":8080", Instant.now(), Instant.now(), Instant.now(),
+                Map.of(), null, null));
+    }
+
+    @Test
+    void post_run_events_sweep_awaits_BOTH_events_and_only_clean_members_count() {
+        app("app-postrun", "postrun");
+        Instant lookback = Instant.now().minus(Duration.ofHours(1));
+        String r1 = "run-postrun-1";
+        runs.insertRun(new Run(r1, "na-east", "blob-pr", null, "postrun", "tester",
+                RunState.COMPLETED, null, Instant.now(), Instant.now(), Instant.now(), true, null));
+        // insertRun never writes COMPLETED_AT (production stamps it on the
+        // terminal claim) — stamp it so the sweep's lookback window sees us.
+        owner.update("UPDATE ORCH_RUN SET COMPLETED_AT=SYSTIMESTAMP WHERE RUN_ID=?", r1);
+        insertCleanMember(r1, "pr-w1");
+        insertCleanMember(r1, "pr-w2");
+        // A FAILED member never uploads — it must not keep the run in the sweep.
+        runs.insertFleetMember(new RunFleetMember(r1, "pr-w3", "na-east", MemberState.FAILED,
+                "boom", 0, "http://pr-w3:8080", Instant.now(), Instant.now(), Instant.now(),
+                Map.of(), null, null));
+
+        // No events at all → awaiting.
+        assertThat(runs.runIdsAwaitingPostRunEvents(lookback)).contains(r1);
+        // Both RESULTS_SAVED but only one ARTIFACTS_CLEARED → still awaiting
+        // (LEAST of the two distinct-worker counts governs).
+        insertEvent(r1, "RESULTS_SAVED", "pr-w1");
+        insertEvent(r1, "RESULTS_SAVED", "pr-w2");
+        insertEvent(r1, "ARTIFACTS_CLEARED", "pr-w1");
+        assertThat(runs.runIdsAwaitingPostRunEvents(lookback)).contains(r1);
+        // The durable read-sets see exactly what landed.
+        assertThat(runEvents.workerIdsWithEvent(r1, "RESULTS_SAVED")).containsExactlyInAnyOrder("pr-w1", "pr-w2");
+        assertThat(runEvents.workerIdsWithEvent(r1, "ARTIFACTS_CLEARED")).containsExactly("pr-w1");
+        // Second clean member cleared too → done, FAILED member ignored.
+        insertEvent(r1, "ARTIFACTS_CLEARED", "pr-w2");
+        assertThat(runs.runIdsAwaitingPostRunEvents(lookback)).doesNotContain(r1);
+    }
+
+    @Test
+    void orphan_delete_guard_sees_run_snapshot_blob_references() {
+        app("app-blobref", "blobref");
+        String blob = "01HXBLOBREF00000000000000B";
+        runs.insertRun(new Run("run-blobref-1", "na-east", "blob-x", null, "blobref", "tester",
+                RunState.RUNNING, null, Instant.now(), Instant.now(), null, false, null,
+                null, List.of(new PluginRef("pg-1", "demo-noop", "1.0.0", blob, "demoNoopPlugin.jar"))));
+        assertThat(pluginLibrary.activeRunsReferencingBlob(blob)).isEqualTo(1);
+        assertThat(pluginLibrary.activeRunsReferencingBlob("01HXBLOBREF0000000000OTHER")).isZero();
+        // A terminal run no longer pins the bytes.
+        owner.update("UPDATE ORCH_RUN SET STATE='COMPLETED' WHERE RUN_ID=?", "run-blobref-1");
+        assertThat(pluginLibrary.activeRunsReferencingBlob(blob)).isZero();
     }
 
     @Test

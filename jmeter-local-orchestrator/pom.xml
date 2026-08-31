@@ -292,6 +292,15 @@
             <version>${awaitility.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- The exact BeanShell JMeter 5.6.3 ships (lib/bsh-2.0b6.jar): the
+             props-push test drives a REAL Sessiond so the port+1 protocol can
+             never silently regress (a bare-socket fake once hid exactly that). -->
+        <dependency>
+            <groupId>org.apache-extras.beanshell</groupId>
+            <artifactId>bsh</artifactId>
+            <version>2.0b6</version>
+            <scope>test</scope>
+        </dependency>
 
         <!-- Spring Boot test scaffolding (Step 4.1 — coexisting with Javalin
              tests). Provides @SpringBootTest, MockMvc, @MockBean, ApplicationContextRunner

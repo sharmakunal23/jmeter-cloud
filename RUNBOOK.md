@@ -82,7 +82,7 @@ same host port. Ports are configurable in `.env`.
 | `8086` | **UI** | http://localhost:8086 | `GET /healthz` |
 | `8088` | jmeter-regional-orchestrator (in each kind cluster; NodePort `30088` on the node) | — | `GET /actuator/health` |
 | `9999` | JMX, worker → its JMeter child | `localhost` only, never off-host | — |
-| `4446`/`4447` | BeanShell server, worker → its JMeter child (`BEANSHELL_PORT`; runtime property pushes via `POST /runs/{id}/properties`) | pod-internal only, never host-published; worker default **0** (off) — the K8s provisioner and the driver's dev workers stamp 4446 | — |
+| `4446`/`4447` | BeanShell Httpd (`BEANSHELL_PORT`) + eval Sessiond (`BEANSHELL_PORT`+1 — the channel runtime property pushes use, `POST /runs/{id}/properties`) | pod-internal only, never host-published; worker default **0** (off) — the K8s provisioner and the driver's dev workers stamp 4446 | — |
 
 Overrides: `HTTP_PORT` on each service, `JMX_PORT` for the JMX bridge.
 

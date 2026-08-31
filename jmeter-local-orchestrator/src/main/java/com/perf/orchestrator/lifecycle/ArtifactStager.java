@@ -273,6 +273,14 @@ public final class ArtifactStager {
                 Instant.now(clock),
                 blobId);
 
+        // The reuse anchor rides INSIDE the extracted dir so it swaps
+        // atomically with the content: a crash between the dir swap and the
+        // manifest swap otherwise leaves blob Y's files under blob X's
+        // manifest, and same-named entries would pass the intact check.
+        if (blobId != null) {
+            Files.writeString(dataDirTmp.resolve(".blobId"), blobId);
+        }
+
         // Phase 3a — drop the new manifest into a staging file alongside the
         // canonical path. No swap visible yet. A failure here aborts before
         // any of the later renames, so the previous dataDir / zip / manifest
@@ -346,6 +354,20 @@ public final class ArtifactStager {
      */
     public boolean dataFilesIntact(DataFilesManifest manifest) {
         if (!Files.isDirectory(dataDir)) return false;
+        // The in-dir anchor must agree with the manifest (see storeDataFiles):
+        // this pins content and manifest to the SAME blob even across a crash
+        // between their swaps. Legacy extractions (no marker) never reuse.
+        if (manifest.blobId() != null) {
+            try {
+                Path marker = dataDir.resolve(".blobId");
+                if (!Files.isRegularFile(marker)
+                        || !manifest.blobId().equals(Files.readString(marker).trim())) {
+                    return false;
+                }
+            } catch (IOException e) {
+                return false;
+            }
+        }
         for (String f : manifest.files()) {
             if (!Files.exists(dataDir.resolve(f))) return false;
         }

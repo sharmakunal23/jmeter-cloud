@@ -53,7 +53,19 @@ export function InfoTip({ label, children, example, id }: InfoTipProps) {
   const content = typeof children === "function" ? children(() => setOpen(false)) : children;
 
   return (
-    <span className="infoTip" ref={rootRef}>
+    <span
+      className="infoTip"
+      ref={rootRef}
+      onBlur={(e) => {
+        // Keyboard path: focus moving out (Tab onward, a dialog stacking on
+        // top) closes the tip — an open-but-hidden tip would otherwise swallow
+        // the next Escape in its capture-phase handler.
+        if (e.relatedTarget instanceof Element && rootRef.current
+            && !rootRef.current.contains(e.relatedTarget)) {
+          setOpen(false);
+        }
+      }}
+    >
       <button
         type="button"
         className="infoIcon"

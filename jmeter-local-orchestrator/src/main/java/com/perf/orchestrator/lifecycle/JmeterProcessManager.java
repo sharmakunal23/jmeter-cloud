@@ -145,7 +145,7 @@ public final class JmeterProcessManager implements JmeterLauncher {
      * <p><b>Both signal the whole process TREE, descendants first.</b> The
      * handle we hold is {@code bin/jmeter} — a shell wrapper — so signalling
      * it alone orphans the {@code java} child, which keeps the fixed ports
-     * (JMX 9999, shutdown 4445, BeanShell 4446) bound until the hygiene
+     * (JMX 9999, shutdown 4445, BeanShell 4446+4447) bound until the hygiene
      * reaper collects it; an immediate same-worker restart then dies with
      * {@code EADDRINUSE} (UX-DYNAMICS events, 2026-08-30).
      */

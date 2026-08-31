@@ -250,7 +250,7 @@ public class TestRunManager implements TestRunGate {
         // global-orchestrator passed in. With ARTIFACT_SOURCE=HTTP_UPLOAD
         // the source is a no-op (returns Optional.empty), preserving the
         // legacy direct-upload flow.
-        stageFromArtifactSource(request);
+        Boolean stagedDataFilesReused = stageFromArtifactSource(request);
 
         try {
             if (stager.getPlanMetadata().isEmpty()) {
@@ -264,6 +264,11 @@ public class TestRunManager implements TestRunGate {
 
         currentRun.beginRun(request.runId(),
                 firstNonBlank(request.region(), defaults.getTestRegion()));
+        // The provenance flags swap runs only HERE — a rejected start attempt
+        // must not wipe the previous run's artifactsCleared before the hub's
+        // sweeper observes it.
+        lastDataFilesReused = stagedDataFilesReused;
+        lastArtifactsCleared = false;
         Inflight i = new Inflight(request);
         inflight = i;
         i.runFuture = runWorker.submit(() -> runLifecycle(i));
@@ -281,10 +286,9 @@ public class TestRunManager implements TestRunGate {
      * so the controller maps them to predictable HTTP statuses without
      * leaking transport details.
      */
-    private void stageFromArtifactSource(StartTestRequest request) {
+    private Boolean stageFromArtifactSource(StartTestRequest request) {
         String runId = request.runId();
-        lastDataFilesReused = null;
-        lastArtifactsCleared = false;
+        Boolean dataFilesReused = null;
         if (request.testPlanBlobId() != null && !request.testPlanBlobId().isBlank()) {
             try {
                 java.util.Optional<java.io.InputStream> body = artifactSource.fetch(
@@ -339,7 +343,7 @@ public class TestRunManager implements TestRunGate {
                             + blobId + ": " + io.getMessage());
                 }
             }
-            lastDataFilesReused = reused;
+            dataFilesReused = reused;
         }
         // UX-DYNAMICS T3 — stage the run's library plugin jars (content-
         // addressed: cached blobs are never re-downloaded). A malformed
@@ -352,6 +356,7 @@ public class TestRunManager implements TestRunGate {
                         "Could not fetch plugin jar(s): " + io.getMessage());
             }
         }
+        return dataFilesReused;
     }
 
     /** Outcome of a runtime property push (UX-DYNAMICS T5). */
@@ -362,7 +367,10 @@ public class TestRunManager implements TestRunGate {
      * server. Only plan values read through {@code ${__P(name)}} observe the
      * update, at their next evaluation — thread counts do not change.
      */
-    public synchronized PropsPushOutcome pushProperties(java.util.Map<String, String> properties) {
+    // Deliberately NOT synchronized: the client is stateless and the socket
+    // carries 2s+2s timeouts — holding the manager monitor here would delay
+    // stop()/abort()/start() by up to ~4 s on a wedged push.
+    public PropsPushOutcome pushProperties(java.util.Map<String, String> properties) {
         if (beanShellPropsClient == null) return PropsPushOutcome.DISABLED;
         return beanShellPropsClient.sendProperties(properties)
                 ? PropsPushOutcome.SENT : PropsPushOutcome.UNREACHABLE;

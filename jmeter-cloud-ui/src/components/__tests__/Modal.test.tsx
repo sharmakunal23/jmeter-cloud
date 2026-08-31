@@ -93,6 +93,27 @@ describe("Modal", () => {
     outside.remove();
   });
 
+  it("Shift+Tab with focus on the shell itself stays inside the dialog", () => {
+    renderModal();
+    const dialog = screen.getByRole("dialog", { name: "Test dialog" });
+    (dialog as HTMLElement).focus();
+    fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(dialog);
+  });
+
+  it("a drag that starts inside the dialog and ends on the overlay does NOT close it", () => {
+    const { onClose } = renderModal();
+    const overlay = document.querySelector(".modal__overlay")!;
+    fireEvent.mouseDown(screen.getByText("Body text"));
+    fireEvent.click(overlay);
+    expect(onClose).not.toHaveBeenCalled();
+    // A true press on the overlay still closes.
+    fireEvent.mouseDown(overlay);
+    fireEvent.click(overlay);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("stacked modals: only the top-most handles Tab and Escape", () => {
     const parentClose = vi.fn();
     const childClose = vi.fn();

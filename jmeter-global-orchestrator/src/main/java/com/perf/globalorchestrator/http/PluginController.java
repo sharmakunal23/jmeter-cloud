@@ -41,6 +41,12 @@ public class PluginController {
     private static final Logger LOG = LoggerFactory.getLogger(PluginController.class);
 
     private static final Pattern NAME_PATTERN = Pattern.compile("[A-Za-z0-9][A-Za-z0-9 ._-]{0,127}");
+    /**
+     * Mirrors the worker's {@code PluginSpec.FILE_NAME_PATTERN} exactly: a
+     * fileName the worker would reject must never register, or the row is
+     * permanent poison — every run selecting it fails at fan-out.
+     */
+    private static final Pattern FILE_NAME_PATTERN = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,254}");
     private static final int VERSION_MAX = 64;
     private static final long MAX_SIZE_BYTES = 256L * 1024 * 1024;
 
@@ -88,6 +94,11 @@ public class PluginController {
         if (!lower.endsWith(".jar") && !lower.endsWith(".zip")) {
             throw new PluginValidationException("INVALID_PLUGIN_FILE",
                     "plugin blob must be a .jar (single plugin) or a .zip bundle of jars; got '" + fileName + "'");
+        }
+        if (!FILE_NAME_PATTERN.matcher(fileName).matches()) {
+            throw new PluginValidationException("INVALID_PLUGIN_FILE",
+                    "plugin file name '" + fileName + "' must match [A-Za-z0-9][A-Za-z0-9._-]{0,254}"
+                    + " (no spaces) — rename the file and re-upload; workers reject anything else at fan-out");
         }
         if (meta.sizeBytes() > MAX_SIZE_BYTES) {
             throw new PluginValidationException("PLUGIN_TOO_LARGE",
@@ -192,6 +203,15 @@ public class PluginController {
         PluginInUseException(String pluginId, int active) {
             super("plugin " + pluginId + " is referenced by " + active + " non-terminal run(s)");
         }
+    }
+
+    @ExceptionHandler(DocumentServiceClient.BlobAccessException.class)
+    public ResponseEntity<Map<String, String>> handleDocServiceDown(
+            DocumentServiceClient.BlobAccessException e) {
+        // The metadata fetch is the only doc-service call that can leak — the
+        // orphan-delete path already catches. 503, not a raw 500.
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(Map.of("code", "DOCUMENT_SERVICE_UNAVAILABLE", "message", e.getMessage()));
     }
 
     @ExceptionHandler(PluginValidationException.class)

@@ -35,7 +35,7 @@ async function fillProperty() {
 describe("UpdateRunPropertiesDialog", () => {
   beforeEach(() => upd.mockReset());
 
-  it("lists only active members, default-all — workerIds omitted from the request", async () => {
+  it("lists only active members, default-all — explicit workerIds always sent", async () => {
     upd.mockResolvedValue({
       runId: "r1", requested: 2, applied: ["rampSeconds"],
       results: [{ workerId: "w1", ok: true, statusCode: 200 }, { workerId: "w2", ok: true, statusCode: 200 }],
@@ -46,7 +46,7 @@ describe("UpdateRunPropertiesDialog", () => {
     await fillProperty();
     fireEvent.click(screen.getByRole("button", { name: /Send properties/i }));
     await waitFor(() => expect(upd).toHaveBeenCalled());
-    expect(upd.mock.calls[0][1]).toEqual({ workerIds: undefined, properties: { rampSeconds: "120" } });
+    expect(upd.mock.calls[0][1]).toEqual({ workerIds: ["w1", "w2"], properties: { rampSeconds: "120" } });
     await waitFor(() => expect(onSuccess).toHaveBeenCalledWith(2));
   });
 

@@ -239,6 +239,9 @@ export function NewRunPage() {
   useEffect(() => {
     if (blobs.status !== "ok") return;
     const ctl = new AbortController();
+    // Keys whose probe hasn't settled — released on cleanup so an aborted
+    // probe is retried by the next pass (settled ones stay claimed).
+    const pending = new Set<string>();
     const probe = (
       kind: "plan" | "data",
       blobId: string,
@@ -248,10 +251,12 @@ export function NewRunPage() {
       const key = `${kind}:${blobId}`;
       if (probedRef.current.has(key)) return;
       probedRef.current.add(key);
+      pending.add(key);
       blobsApi.metadata(blobId, ctl.signal)
-        .then((meta) => onDone({ blobId, meta }))
+        .then((meta) => { pending.delete(key); onDone({ blobId, meta }); })
         .catch((err: unknown) => {
-          if (ctl.signal.aborted) { probedRef.current.delete(key); return; }
+          pending.delete(key);
+          if (ctl.signal.aborted) return;
           if (is404(err)) { onDone({ blobId, meta: null }); onGone(); return; }
           // Transient failure — release the key; stay silent (the list
           // itself already surfaced its own error state if any).
@@ -268,7 +273,10 @@ export function NewRunPage() {
         setDataFilesBlobId((cur) => (cur === staleId ? "" : cur));
       });
     }
-    return () => ctl.abort();
+    return () => {
+      ctl.abort();
+      pending.forEach((k) => probedRef.current.delete(k));
+    };
   }, [blobs, testPlanBlobId, dataFilesBlobId]);
 
   // UX-DYNAMICS T3 — the global plugin library for the run-plugins field.
@@ -928,7 +936,7 @@ export function NewRunPage() {
             <BlobSelect
               id="dataFilesBlobId"
               value={dataFilesBlobId}
-              onChange={setDataFilesBlobId}
+              onChange={(v) => { setDataFilesBlobId(v); setDataFilesWarning(null); }}
               blobs={blobs.status === "ok" ? blobs.dataFiles : []}
               placeholder={appGateOpen ? "— optional, none —" : "— pick an application first —"}
               loading={blobs.status === "loading"}

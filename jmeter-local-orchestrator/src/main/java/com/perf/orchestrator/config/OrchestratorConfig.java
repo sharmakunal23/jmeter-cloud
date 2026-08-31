@@ -364,6 +364,18 @@ public final class OrchestratorConfig {
         // platform's managed paths stamp 4446 explicitly: the K8s provisioner,
         // the local driver's dev workers, an operator's declared-worker env.
         this.beanshellPort             = parseNonNegativeInt(env, "BEANSHELL_PORT", 0);
+        // bsh's server(port) binds TWO ports: Httpd on port, the Sessiond
+        // eval channel on port+1 — neither may land on another fixed port.
+        if (beanshellPort > 0) {
+            for (int p : new int[]{beanshellPort, beanshellPort + 1}) {
+                if (p == jmeterShutdownPort || p == jmxPort) {
+                    throw new OrchestratorConfigException(
+                            "BEANSHELL_PORT " + beanshellPort + " collides with "
+                            + "JMETER_SHUTDOWN_PORT/JMX_PORT (bsh also binds port+1 = "
+                            + (beanshellPort + 1) + ")");
+                }
+            }
+        }
         // Default drain budget: 60s. After this, the lifecycle escalates the
         // drain to abort (SIGKILL) and the run ends ABORTED.
         this.jmeterDrainTimeoutSeconds = parsePositiveInt(env,

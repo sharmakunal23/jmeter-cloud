@@ -24,6 +24,9 @@ type SubmitState =
 
 export function AddPluginDialog({ onAdded, onClose }: AddPluginDialogProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // The blob a previous attempt already uploaded for THIS file — a register
+  // retry after a network blip must not orphan a second copy.
+  const uploadedRef = useRef<{ file: File; blobId: string } | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [name, setName] = useState("");
   const [version, setVersion] = useState("");
@@ -45,23 +48,34 @@ export function AddPluginDialog({ onAdded, onClose }: AddPluginDialogProps) {
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!canSubmit || !file) return;
-    setState({ kind: "uploading", pct: 0 });
     try {
-      const blob = await blobsApi.upload(file, {
-        type: "plugin",
-        name: file.name,
-        onProgress: (sent, total) =>
-          setState({ kind: "uploading", pct: total > 0 ? Math.round((sent / total) * 100) : 0 }),
-      });
+      let blobId: string;
+      if (uploadedRef.current && uploadedRef.current.file === file) {
+        blobId = uploadedRef.current.blobId;
+      } else {
+        setState({ kind: "uploading", pct: 0 });
+        const blob = await blobsApi.upload(file, {
+          type: "plugin",
+          name: file.name,
+          onProgress: (sent, total) =>
+            setState({ kind: "uploading", pct: total > 0 ? Math.round((sent / total) * 100) : 0 }),
+        });
+        uploadedRef.current = { file, blobId: blob.blobId };
+        blobId = blob.blobId;
+      }
       setState({ kind: "registering" });
       const created = await pluginsApi.create({
         name: name.trim(),
         version: version.trim(),
-        blobId: blob.blobId,
+        blobId,
         description: description.trim() || undefined,
       });
       onAdded(created);
     } catch (err: unknown) {
+      if (err instanceof PluginApiError && err.code.startsWith("PLUGIN_") && err.existing) {
+        // On a 409 the hub deletes the orphan blob — the cached id is dead.
+        uploadedRef.current = null;
+      }
       if (err instanceof PluginApiError && err.code === "PLUGIN_NAME_TAKEN" && err.existing) {
         setState({
           kind: "error",

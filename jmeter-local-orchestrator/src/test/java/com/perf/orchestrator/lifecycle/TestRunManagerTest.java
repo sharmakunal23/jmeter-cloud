@@ -613,6 +613,38 @@ class TestRunManagerTest {
     }
 
     // -----------------------------------------------------------------------
+    // UX-DYNAMICS events — provenance flags swap only when a run actually starts
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("provenance flags vs rejected starts")
+    class ProvenanceFlagsLifecycle {
+
+        @Test
+        @DisplayName("a rejected start attempt must not wipe the finished run's artifactsCleared")
+        void rejectedStartKeepsFlags() {
+            manager.start(req("r-flags-a"));
+            // FakeLauncher exits immediately → COMPLETED → post-run cleanup
+            // (no upload configured) sets artifactsCleared.
+            Awaitility.await().atMost(Duration.ofSeconds(3))
+                    .until(() -> manager.lastArtifactsCleared());
+
+            // An uncached plugin against the empty HttpArtifactSource rejects
+            // the start with ARTIFACT_FETCH_FAILED — before any run swap.
+            StartTestRequest bad = new StartTestRequest("r-flags-b", "us-east-1", null,
+                    null, null, List.of(), List.of(), Map.of(),
+                    null, null, null, null, null, null, null, null,
+                    List.of(new PluginSpec("01ARZ3NDEKTSV4RRFFQ69G5FAV", "ghost.jar")), null);
+            assertThatThrownBy(() -> manager.start(bad))
+                    .hasMessageContaining("ARTIFACT_SOURCE");
+
+            assertThat(manager.lastArtifactsCleared())
+                    .as("the sweeper has not observed the flag yet — a failed attempt must not erase it")
+                    .isTrue();
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // UX-DYNAMICS T5 — BeanShell server posture on the launch command
     // -----------------------------------------------------------------------
 

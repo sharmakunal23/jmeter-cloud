@@ -84,10 +84,18 @@ function ModalImpl({
         const first = nodes[0];
         const last = nodes[nodes.length - 1];
         const active = document.activeElement;
-        if (e.shiftKey && (active === first || !shellRef.current.contains(active))) {
+        // The shell itself (tabIndex=-1, focused on mount when nothing inside
+        // autofocuses) is OUT of the tab band — contains() is true for the
+        // node itself, so without the identity check Shift+Tab from the shell
+        // falls through to the browser default and walks the page BEHIND the
+        // overlay. Anything outside the shell is out-of-band too.
+        const inBand = active instanceof HTMLElement
+          && active !== shellRef.current
+          && shellRef.current.contains(active);
+        if (e.shiftKey && (!inBand || active === first)) {
           e.preventDefault();
           last.focus();
-        } else if (!e.shiftKey && active === last) {
+        } else if (!e.shiftKey && (!inBand || active === last)) {
           e.preventDefault();
           first.focus();
         }
@@ -100,6 +108,13 @@ function ModalImpl({
   // What had focus before the modal opened — read at first render, i.e. before
   // React commits and runs any child's autoFocus.
   const previousFocus = useRef(document.activeElement as HTMLElement | null);
+
+  // A drag that STARTS inside the dialog (text selection in a form field) can
+  // end on the overlay: the click then fires on the overlay — the common
+  // ancestor — bypassing the shell's stopPropagation, and must not close the
+  // form. Track where the press began; default true keeps a synthetic
+  // mousedown-less click (tests, some assistive tech) closing as before.
+  const pressBeganOnOverlay = useRef(true);
 
   // Focus on mount (initialFocusRef → whatever React autoFocus already focused
   // inside the shell → the shell itself), restore on unmount. React renders no
@@ -120,7 +135,10 @@ function ModalImpl({
     <div
       className="modal__overlay"
       role="presentation"
-      onClick={() => { if (!closeDisabled) onClose(); }}
+      onMouseDown={(e) => { pressBeganOnOverlay.current = e.target === e.currentTarget; }}
+      onClick={(e) => {
+        if (!closeDisabled && e.target === e.currentTarget && pressBeganOnOverlay.current) onClose();
+      }}
     >
       <div
         ref={shellRef}

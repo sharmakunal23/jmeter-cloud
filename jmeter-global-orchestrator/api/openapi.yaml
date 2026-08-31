@@ -1418,7 +1418,10 @@ paths:
             `BLOB_NOT_FOUND`, `BLOB_NOT_PLUGIN` (blob not uploaded with
             `X-Type: plugin`), `INVALID_PLUGIN_FILE` (not `.jar`/`.zip`),
             `PLUGIN_TOO_LARGE` (over 256 MB), `BLOB_METADATA_INCOMPLETE`
-            (the blob's metadata carries no sha256 — re-upload it).
+            (the blob's metadata carries no sha256 — re-upload it). The file
+            name must match `[A-Za-z0-9][A-Za-z0-9._-]{0,254}` and end
+            `.jar`/`.zip` — the exact rule workers enforce at fan-out, so a
+            name they would reject can never register.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -1427,6 +1430,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PluginConflictResponse" }
+        "503":
+          description: "`DOCUMENT_SERVICE_UNAVAILABLE` — the blob-metadata lookup failed; retry once the document-service is reachable."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /api/v1/plugins/{pluginId}:
     delete:

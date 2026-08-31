@@ -71,8 +71,9 @@ export function UpdateRunPropertiesDialog({ run, onClose, onSuccess }: UpdateRun
     setError(null);
     try {
       const resp = await runsApi.updateProperties(run.runId, {
-        // Omitting workerIds targets every active member server-side.
-        workerIds: allSelected ? undefined : Array.from(selected),
+        // ALWAYS explicit: the server-side "omit = all active" shorthand
+        // could sweep in a scale-up joiner the operator never saw ticked.
+        workerIds: Array.from(selected),
         properties,
       });
       setResults(resp.results);

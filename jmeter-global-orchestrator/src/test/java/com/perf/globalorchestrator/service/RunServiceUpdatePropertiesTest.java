@@ -90,6 +90,23 @@ class RunServiceUpdatePropertiesTest {
     }
 
     @Test
+    @DisplayName("duplicate workerIds collapse to one push and one result row")
+    void duplicateWorkerIds_collapse() {
+        when(runs.findByRunId(RUN_ID)).thenReturn(Optional.of(
+                runningRun(member("w1", MemberState.RUNNING, Map.of()))));
+        when(client.updateTestProperties(eq(RUN_ID), any(), anyMap()))
+                .thenReturn(new LocalOrchestratorClient.UpdatePropertiesResult(200, "{}", true));
+
+        UpdateRunPropertiesResponse resp = service.updateRunProperties(RUN_ID,
+                new UpdateRunPropertiesRequest(List.of("w1", "w1"), Map.of("k", "v")),
+                Actor.ANONYMOUS_ACTOR);
+
+        assertThat(resp.requested()).isEqualTo(1);
+        assertThat(resp.results()).hasSize(1);
+        verify(client).updateTestProperties(eq(RUN_ID), any(), anyMap());
+    }
+
+    @Test
     @DisplayName("a non-RUNNING run is a 409 gate — no RPC is attempted")
     void notRunning_rejects() {
         Run done = new Run(RUN_ID, "na-east", "plan-blob", null, "checkout-svc", "tester",
