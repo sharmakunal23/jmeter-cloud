@@ -124,13 +124,29 @@ public class RunRepository {
         jdbc.update(
                 "INSERT INTO ORCH_RUN "
                 + "(RUN_ID,ORIGIN_REGION,TEST_PLAN_BLOB_ID,DATA_FILES_BLOB_ID,"
-                + " APPLICATION,INITIATED_BY,STATE,CREATED_AT,SAVE_RESULTS,METRICS_GROUP_ID,PLUGINS) "
-                + "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                + " APPLICATION,INITIATED_BY,STATE,CREATED_AT,SAVE_RESULTS,METRICS_GROUP_ID,PLUGINS,"
+                + " WORKFLOW_EXECUTION_ID,WORKFLOW_TASK_ID) "
+                + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 run.runId(), run.originRegion(), run.testPlanBlobId(),
                 run.dataFilesBlobId(), run.application(),
                 OracleBind.text(run.initiatedBy(), OracleBind.NAME_CHARS), run.state().name(),
                 OracleBind.ts(run.createdAt()), run.saveResults(), run.metricsGroupId(),
-                OracleBind.clob(pluginsJson));
+                OracleBind.clob(pluginsJson), run.workflowExecutionId(), run.workflowTaskId());
+    }
+
+    /**
+     * The run a workflow task launched, if any. An exact probe of the unique
+     * index on {@code WORKFLOW_TASK_ID}: the engine calls it before every
+     * launch, so a crash between the run's insert and the task's update is
+     * recovered by adopting the run rather than launching a second one.
+     */
+    public Optional<Run> findByWorkflowTaskId(String workflowTaskId) {
+        List<Run> rows = jdbc.query(
+                "SELECT RUN_ID,ORIGIN_REGION,TEST_PLAN_BLOB_ID,DATA_FILES_BLOB_ID,APPLICATION,INITIATED_BY,"
+                + "STATE,STATE_REASON,CREATED_AT,STARTED_AT,COMPLETED_AT,SAVE_RESULTS,METRICS_GROUP_ID,PLUGINS,"
+                + "WORKFLOW_EXECUTION_ID,WORKFLOW_TASK_ID "
+                + "FROM ORCH_RUN WHERE WORKFLOW_TASK_ID=?", runRowMapperNoMembers, workflowTaskId);
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
     public void insertFleetMember(RunFleetMember m) {
@@ -679,7 +695,10 @@ public class RunRepository {
                     rs.getBoolean("SAVE_RESULTS"),
                     null,
                     rs.getString("METRICS_GROUP_ID"),
-                    plugins);
+                    plugins,
+                    // Opt-in columns: the narrow SELECTs of the list paths omit them.
+                    hasColumn(rs, "WORKFLOW_EXECUTION_ID") ? rs.getString("WORKFLOW_EXECUTION_ID") : null,
+                    hasColumn(rs, "WORKFLOW_TASK_ID") ? rs.getString("WORKFLOW_TASK_ID") : null);
         };
     }
 
@@ -693,6 +712,6 @@ public class RunRepository {
                 base.dataFilesBlobId(), base.application(), base.initiatedBy(),
                 base.state(), base.stateReason(), base.createdAt(),
                 base.startedAt(), base.completedAt(), base.saveResults(), members, base.metricsGroupId(),
-                base.plugins());
+                base.plugins(), base.workflowExecutionId(), base.workflowTaskId());
     }
 }

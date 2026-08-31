@@ -43,10 +43,26 @@ public record Run(
          * ORCH_RUN.PLUGINS}). Scale-up joiners fan out from this list, so a
          * registry delete never changes what a running fleet stages.
          */
-        List<PluginRef> plugins) {
+        List<PluginRef> plugins,
+        /**
+         * The workflow execution and task this run was launched for, or null for
+         * an ordinary launch. The task id is unique across {@code ORCH_RUN}: one
+         * workflow task owns at most one run.
+         */
+        String workflowExecutionId,
+        String workflowTaskId) {
 
     public Run {
         plugins = plugins == null ? List.of() : List.copyOf(plugins);
+    }
+
+    /** Not launched by a workflow — the ordinary case. */
+    public Run(String runId, String originRegion, String testPlanBlobId, String dataFilesBlobId, String application,
+               String initiatedBy, RunState state, String stateReason, Instant createdAt, Instant startedAt,
+               Instant completedAt, boolean saveResults, List<RunFleetMember> fleetMembers, String metricsGroupId,
+               List<PluginRef> plugins) {
+        this(runId, originRegion, testPlanBlobId, dataFilesBlobId, application, initiatedBy, state, stateReason,
+                createdAt, startedAt, completedAt, saveResults, fleetMembers, metricsGroupId, plugins, null, null);
     }
 
     /** Pre-T3 callers (tests, legacy paths): no plugin snapshot. */
@@ -54,7 +70,7 @@ public record Run(
                String initiatedBy, RunState state, String stateReason, Instant createdAt, Instant startedAt,
                Instant completedAt, boolean saveResults, List<RunFleetMember> fleetMembers, String metricsGroupId) {
         this(runId, originRegion, testPlanBlobId, dataFilesBlobId, application, initiatedBy, state, stateReason,
-                createdAt, startedAt, completedAt, saveResults, fleetMembers, metricsGroupId, List.of());
+                createdAt, startedAt, completedAt, saveResults, fleetMembers, metricsGroupId, List.of(), null, null);
     }
 
     /** Without a recorded group (legacy rows, tests): the readers fall back to the application's group. */
@@ -62,6 +78,6 @@ public record Run(
                String initiatedBy, RunState state, String stateReason, Instant createdAt, Instant startedAt,
                Instant completedAt, boolean saveResults, List<RunFleetMember> fleetMembers) {
         this(runId, originRegion, testPlanBlobId, dataFilesBlobId, application, initiatedBy, state, stateReason,
-                createdAt, startedAt, completedAt, saveResults, fleetMembers, null, List.of());
+                createdAt, startedAt, completedAt, saveResults, fleetMembers, null, List.of(), null, null);
     }
 }

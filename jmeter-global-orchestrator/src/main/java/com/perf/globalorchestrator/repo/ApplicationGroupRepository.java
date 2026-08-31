@@ -36,9 +36,34 @@ public class ApplicationGroupRepository {
             nullableInt(rs, "MAX_RUNS_PER_POD"),
             nullableInt(rs, "POD_MAX_AGE_HOURS"),
             rs.getInt("ALWAYS_ON") == 1,
+            rs.getString("TEAM_NAME"),
+            addresses(rs.getString("NOTIFY_TO")),
+            addresses(rs.getString("NOTIFY_CC")),
+            addresses(rs.getString("NOTIFY_BCC")),
             OracleBind.instant(rs, "CREATED_AT"),
             null,
             null);
+
+    /**
+     * Comma-separated column to list. Oracle stores {@code ''} as NULL, so an
+     * empty list and "never set" are the same value coming back — which is what
+     * an inherited default means anyway.
+     */
+    private static List<String> addresses(String csv) {
+        if (csv == null || csv.isBlank()) return List.of();
+        List<String> out = new java.util.ArrayList<>();
+        for (String part : csv.split(",")) {
+            String trimmed = part.trim();
+            if (!trimmed.isEmpty()) out.add(trimmed);
+        }
+        return List.copyOf(out);
+    }
+
+    /** List to comma-separated column; an empty list binds NULL, never {@code ''}. */
+    private static String csv(List<String> addresses) {
+        if (addresses == null || addresses.isEmpty()) return null;
+        return String.join(",", addresses);
+    }
 
     private static Integer nullableInt(java.sql.ResultSet rs, String col) throws java.sql.SQLException {
         int v = rs.getInt(col);
@@ -55,11 +80,13 @@ public class ApplicationGroupRepository {
         jdbc.update(
                 "INSERT INTO ORCH_APPLICATION_GROUP "
                 + "(GROUP_ID,NAME,DESCRIPTION,GRAFANA_LIVE_URL,GRAFANA_HISTORY_URL,HOT_DAYS,"
-                + " RECYCLE_POLICY,MAX_RUNS_PER_POD,POD_MAX_AGE_HOURS,ALWAYS_ON,CREATED_AT) "
-                + "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                + " RECYCLE_POLICY,MAX_RUNS_PER_POD,POD_MAX_AGE_HOURS,ALWAYS_ON,"
+                + " TEAM_NAME,NOTIFY_TO,NOTIFY_CC,NOTIFY_BCC,CREATED_AT) "
+                + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 group.groupId(), group.name(), group.description(), group.grafanaLiveUrl(), group.grafanaHistoryUrl(),
                 group.hotDays() == null ? ApplicationGroup.DEFAULT_HOT_DAYS : group.hotDays(),
                 group.recyclePolicy().name(), group.maxRunsPerPod(), group.podMaxAgeHours(), group.alwaysOn() ? 1 : 0,
+                group.teamName(), csv(group.notifyTo()), csv(group.notifyCc()), csv(group.notifyBcc()),
                 OracleBind.ts(group.createdAt()));
         return findById(group.groupId()).orElseThrow();
     }
@@ -82,15 +109,17 @@ public class ApplicationGroupRepository {
     public ApplicationGroup update(String groupId, String name, String description,
                                    String grafanaLiveUrl, String grafanaHistoryUrl, int hotDays,
                                    RecyclePolicy recyclePolicy, Integer maxRunsPerPod, Integer podMaxAgeHours,
-                                   boolean alwaysOn) {
+                                   boolean alwaysOn, String teamName, List<String> notifyTo,
+                                   List<String> notifyCc, List<String> notifyBcc) {
         int updated = jdbc.update(
                 "UPDATE ORCH_APPLICATION_GROUP "
                 + "SET NAME=?, DESCRIPTION=?, GRAFANA_LIVE_URL=?, GRAFANA_HISTORY_URL=?, HOT_DAYS=?, "
-                + "    RECYCLE_POLICY=?, MAX_RUNS_PER_POD=?, POD_MAX_AGE_HOURS=?, ALWAYS_ON=? "
+                + "    RECYCLE_POLICY=?, MAX_RUNS_PER_POD=?, POD_MAX_AGE_HOURS=?, ALWAYS_ON=?, "
+                + "    TEAM_NAME=?, NOTIFY_TO=?, NOTIFY_CC=?, NOTIFY_BCC=? "
                 + "WHERE GROUP_ID=?",
                 name, description, grafanaLiveUrl, grafanaHistoryUrl, hotDays,
                 (recyclePolicy == null ? RecyclePolicy.REUSE : recyclePolicy).name(), maxRunsPerPod, podMaxAgeHours,
-                alwaysOn ? 1 : 0, groupId);
+                alwaysOn ? 1 : 0, teamName, csv(notifyTo), csv(notifyCc), csv(notifyBcc), groupId);
         if (updated == 0) {
             throw new EmptyResultDataAccessException("application group not found: " + groupId, 1);
         }

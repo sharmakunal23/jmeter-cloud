@@ -115,6 +115,19 @@ public class ApplicationRepository {
         }
     }
 
+    /**
+     * By name, archived rows excluded — what a workflow may act on. Kept apart
+     * from {@link #findByName} (which finds archived rows too) so a gate and
+     * the validation that cleared it can never disagree about an application
+     * someone archived in between.
+     */
+    public Optional<Application> findVisibleByName(String name) {
+        List<Application> rows = jdbc.query(
+                "SELECT * FROM ORCH_APPLICATION WHERE NAME=? AND HIDDEN_AT IS NULL",
+                rowMapper, name);
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
+    }
+
     public Optional<Application> findByName(String name) {
         try {
             return Optional.of(jdbc.queryForObject(

@@ -26,6 +26,12 @@ import java.util.List;
  * @param maxRunsPerPod     the MAX_RUNS / BOTH threshold; null otherwise
  * @param podMaxAgeHours    the MAX_AGE / BOTH threshold; null otherwise
  * @param alwaysOn          DRAIN_REGION jobs skip this group's workers
+ * @param teamName          the team that owns the group; display only
+ * @param notifyTo          default recipients a workflow's email nodes inherit
+ *                          when they name none of their own — stored
+ *                          comma-separated, exposed as a list
+ * @param notifyCc          default Cc, same rule
+ * @param notifyBcc         default Bcc, same rule
  * @param applicationCount  VISIBLE (non-archived) applications in the group —
  *                          the display count; archived rows still hold the FK
  *                          and block group deletion —
@@ -45,6 +51,10 @@ public record ApplicationGroup(
         Integer maxRunsPerPod,
         Integer podMaxAgeHours,
         boolean alwaysOn,
+        String teamName,
+        List<String> notifyTo,
+        List<String> notifyCc,
+        List<String> notifyBcc,
         Instant createdAt,
         Integer applicationCount,
         List<GroupCapacity> capacity) {
@@ -53,6 +63,19 @@ public record ApplicationGroup(
 
     public ApplicationGroup {
         recyclePolicy = recyclePolicy == null ? RecyclePolicy.REUSE : recyclePolicy;
+        notifyTo  = notifyTo  == null ? List.of() : List.copyOf(notifyTo);
+        notifyCc  = notifyCc  == null ? List.of() : List.copyOf(notifyCc);
+        notifyBcc = notifyBcc == null ? List.of() : List.copyOf(notifyBcc);
+    }
+
+    /** Pre-WORKFLOWS callers (tests, legacy paths): no team, no notification defaults. */
+    public ApplicationGroup(String groupId, String name, String description, String grafanaLiveUrl,
+                            String grafanaHistoryUrl, Integer hotDays, RecyclePolicy recyclePolicy,
+                            Integer maxRunsPerPod, Integer podMaxAgeHours, boolean alwaysOn,
+                            Instant createdAt, Integer applicationCount, List<GroupCapacity> capacity) {
+        this(groupId, name, description, grafanaLiveUrl, grafanaHistoryUrl, hotDays, recyclePolicy,
+                maxRunsPerPod, podMaxAgeHours, alwaysOn, null, List.of(), List.of(), List.of(),
+                createdAt, applicationCount, capacity);
     }
 
     /** No dashboards, the default hot window, the default policy. */
@@ -71,11 +94,13 @@ public record ApplicationGroup(
 
     public ApplicationGroup withApplicationCount(int count) {
         return new ApplicationGroup(groupId, name, description, grafanaLiveUrl, grafanaHistoryUrl, hotDays,
-                recyclePolicy, maxRunsPerPod, podMaxAgeHours, alwaysOn, createdAt, count, capacity);
+                recyclePolicy, maxRunsPerPod, podMaxAgeHours, alwaysOn, teamName, notifyTo, notifyCc,
+                notifyBcc, createdAt, count, capacity);
     }
 
     public ApplicationGroup withCapacity(List<GroupCapacity> rows) {
         return new ApplicationGroup(groupId, name, description, grafanaLiveUrl, grafanaHistoryUrl, hotDays,
-                recyclePolicy, maxRunsPerPod, podMaxAgeHours, alwaysOn, createdAt, applicationCount, rows);
+                recyclePolicy, maxRunsPerPod, podMaxAgeHours, alwaysOn, teamName, notifyTo, notifyCc,
+                notifyBcc, createdAt, applicationCount, rows);
     }
 }

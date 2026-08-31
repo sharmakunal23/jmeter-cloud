@@ -130,7 +130,8 @@ class ApplicationGroupControllerTest {
     @DisplayName("PUT updates name + description and echoes the count")
     void update_happyPath() throws Exception {
         when(repo.findById("cps")).thenReturn(Optional.of(CPS));
-        when(repo.update("cps", "Servicing MQ (Card)", "the MQ apps", null, null, 7, RecyclePolicy.REUSE, null, null, false))
+        when(repo.update("cps", "Servicing MQ (Card)", "the MQ apps", null, null, 7, RecyclePolicy.REUSE, null, null,
+                false, null, List.of(), List.of(), List.of()))
                 .thenReturn(new ApplicationGroup("cps", "Servicing MQ (Card)", "the MQ apps", CPS.createdAt(), null));
         when(repo.countVisibleApplications("cps")).thenReturn(2);
         mvc.perform(put("/api/v1/applicationGroups/cps").contentType(MediaType.APPLICATION_JSON)
@@ -189,7 +190,7 @@ class ApplicationGroupControllerTest {
         // PUT replaces wholesale.
         when(repo.findById("cps")).thenReturn(Optional.of(CPS));
         when(repo.update(eq("cps"), eq("Servicing MQ"), any(), eq("https://g.example.com/d/cps"), isNull(), eq(30),
-                eq(RecyclePolicy.REUSE), isNull(), isNull(), eq(false)))
+                eq(RecyclePolicy.REUSE), isNull(), isNull(), eq(false), isNull(), any(), any(), any()))
                 .thenReturn(new ApplicationGroup("cps", "Servicing MQ", null, "https://g.example.com/d/cps", null, 30, CPS.createdAt(), null));
         mvc.perform(put("/api/v1/applicationGroups/cps").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"Servicing MQ\",\"grafanaLiveUrl\":\"https://g.example.com/d/cps\",\"hotDays\":30}"))
@@ -221,7 +222,7 @@ class ApplicationGroupControllerTest {
                 RecyclePolicy.REUSE, null, null, true, CPS.createdAt(), null, null);
         when(repo.findById("cps")).thenReturn(Optional.of(on));
         when(repo.update(eq("cps"), eq("Servicing MQ"), any(), isNull(), isNull(), eq(7),
-                eq(RecyclePolicy.EVERY_RUN), isNull(), isNull(), eq(true)))
+                eq(RecyclePolicy.EVERY_RUN), isNull(), isNull(), eq(true), isNull(), any(), any(), any()))
                 .thenReturn(new ApplicationGroup("cps", "Servicing MQ", null, null, null, 7,
                         RecyclePolicy.EVERY_RUN, null, null, true, CPS.createdAt(), null, null));
         mvc.perform(put("/api/v1/applicationGroups/cps").contentType(MediaType.APPLICATION_JSON)

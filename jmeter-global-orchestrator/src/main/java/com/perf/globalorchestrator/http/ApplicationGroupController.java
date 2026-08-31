@@ -94,6 +94,10 @@ public class ApplicationGroupController {
         try {
             stored = repo.insert(new ApplicationGroup(groupId, name, description, grafanaLiveUrl, grafanaHistoryUrl,
                     hotDays, policy, req.maxRunsPerPod(), req.podMaxAgeHours(), Boolean.TRUE.equals(req.alwaysOn()),
+                    validateName255("teamName", req.teamName()),
+                    validateAddresses("notifyTo", req.notifyTo()),
+                    validateAddresses("notifyCc", req.notifyCc()),
+                    validateAddresses("notifyBcc", req.notifyBcc()),
                     Instant.now(), null, null));
         } catch (DuplicateKeyException e) {
             throw new GroupNameTakenException(name);
@@ -119,9 +123,20 @@ public class ApplicationGroupController {
         RecyclePolicy policy = resolveRecyclePolicy(req.recyclePolicy());
         validateRecyclePolicy(policy, req.maxRunsPerPod(), req.podMaxAgeHours());
         boolean alwaysOn = req.alwaysOn() == null ? existing.alwaysOn() : req.alwaysOn();
+        // Each address list is replaced only when sent, so a caller that
+        // predates the field cannot silently wipe a group's recipients.
+        List<String> notifyTo  = req.notifyTo()  == null ? existing.notifyTo()
+                : validateAddresses("notifyTo", req.notifyTo());
+        List<String> notifyCc  = req.notifyCc()  == null ? existing.notifyCc()
+                : validateAddresses("notifyCc", req.notifyCc());
+        List<String> notifyBcc = req.notifyBcc() == null ? existing.notifyBcc()
+                : validateAddresses("notifyBcc", req.notifyBcc());
+        String teamName = req.teamName() == null ? existing.teamName()
+                : validateName255("teamName", req.teamName());
         try {
             ApplicationGroup updated = repo.update(groupId, name, description, grafanaLiveUrl, grafanaHistoryUrl, hotDays,
-                    policy, req.maxRunsPerPod(), req.podMaxAgeHours(), alwaysOn);
+                    policy, req.maxRunsPerPod(), req.podMaxAgeHours(), alwaysOn,
+                    teamName, notifyTo, notifyCc, notifyBcc);
             return ResponseEntity.ok(hydrate(updated));
         } catch (DuplicateKeyException e) {
             throw new GroupNameTakenException(name);
@@ -280,6 +295,44 @@ public class ApplicationGroupController {
         return d;
     }
 
+    /** Optional single-line text bounded to the column's 255 chars; blank → null. */
+    static String validateName255(String field, String raw) {
+        if (raw == null) return null;
+        String v = raw.trim();
+        if (v.isEmpty()) return null;
+        if (v.length() > MAX_NAME_LEN) {
+            throw new GroupValidationException(field + " > " + MAX_NAME_LEN + " chars");
+        }
+        return v;
+    }
+
+    static final int MAX_NOTIFY_ADDRESSES = 50;
+    private static final java.util.regex.Pattern EMAIL =
+            java.util.regex.Pattern.compile("[^\\s@,;]+@[^\\s@,;]+\\.[^\\s@,;]+");
+
+    /**
+     * A notification list: trimmed, de-duplicated, ≤ 50 entries, each a
+     * syntactically valid address. A comma is the storage separator, so an
+     * address containing one is rejected rather than silently split on read.
+     */
+    static List<String> validateAddresses(String field, List<String> raw) {
+        if (raw == null) return List.of();
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+        for (String entry : raw) {
+            if (entry == null || entry.isBlank()) continue;
+            String value = entry.trim();
+            if (!EMAIL.matcher(value).matches()) {
+                throw new GroupValidationException(field + ": '" + value + "' is not a valid email address");
+            }
+            out.add(value);
+        }
+        if (out.size() > MAX_NOTIFY_ADDRESSES) {
+            throw new GroupValidationException(
+                    field + " holds at most " + MAX_NOTIFY_ADDRESSES + " addresses, got " + out.size());
+        }
+        return List.copyOf(out);
+    }
+
     // ── Request bodies ─────────────────────────────────────────────
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -288,7 +341,11 @@ public class ApplicationGroupController {
                                                 /** The pool's policy; null defaults to REUSE. */
                                                 String recyclePolicy, Integer maxRunsPerPod, Integer podMaxAgeHours,
                                                 /** null defaults to false. */
-                                                Boolean alwaysOn) {}
+                                                Boolean alwaysOn,
+                                                /** Who owns the group; display only. */
+                                                String teamName,
+                                                /** Defaults a workflow's email nodes inherit; null = none. */
+                                                List<String> notifyTo, List<String> notifyCc, List<String> notifyBcc) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record UpdateApplicationGroupRequest(String name, String description,
@@ -296,7 +353,10 @@ public class ApplicationGroupController {
                                                 /** Replaced wholesale; null = REUSE with no thresholds. */
                                                 String recyclePolicy, Integer maxRunsPerPod, Integer podMaxAgeHours,
                                                 /** null = preserve the current value. */
-                                                Boolean alwaysOn) {}
+                                                Boolean alwaysOn,
+                                                String teamName,
+                                                /** Replaced wholesale; null = keep the current list. */
+                                                List<String> notifyTo, List<String> notifyCc, List<String> notifyBcc) {}
 
     // ── Exceptions + handlers ──────────────────────────────────────
 

@@ -167,8 +167,9 @@ class GlobalRunDbTest extends OracleDbTestSupport {
     @Test
     void all_migrations_applied_and_every_object_is_valid() {
         assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_objects WHERE status <> 'VALID'", Integer.class)).isZero();
-        // 13 control-plane tables from V2 + ORCH_PLUGIN from V3 + ORCH_REGION from V4.
-        assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_tables WHERE table_name LIKE 'ORCH\\_%' ESCAPE '\\'", Integer.class)).isEqualTo(15);
+        // 13 control-plane tables from V2 + ORCH_PLUGIN (V3) + ORCH_REGION (V4)
+        // + the three workflow tables (V5).
+        assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_tables WHERE table_name LIKE 'ORCH\\_%' ESCAPE '\\'", Integer.class)).isEqualTo(18);
         // One convention for the whole schema: nothing quoted-case except Flyway's own history table.
         assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_objects WHERE object_name <> UPPER(object_name) AND object_name NOT LIKE 'flyway\\_schema\\_history%' ESCAPE '\\'", Integer.class)).isZero();
         assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_tab_columns WHERE column_name <> UPPER(column_name) AND table_name <> 'flyway_schema_history'", Integer.class)).isZero();
@@ -349,11 +350,19 @@ class GlobalRunDbTest extends OracleDbTestSupport {
         assertThat(a.metricsApplication()).isEqualTo("GRP-PCI");
         assertThat(groups.applicationCounts()).containsEntry("grp", 1);
 
-        // The policy round-trips through the group row.
-        ApplicationGroup tuned = groups.update("grp", "Group under test", null, null, null, 7, RecyclePolicy.MAX_RUNS, 5, null, true);
+        // The policy and the ownership fields round-trip through the group row.
+        // The notify lists are stored comma-separated (V5), so this is also the
+        // proof that the split/join at the repository boundary is lossless.
+        ApplicationGroup tuned = groups.update("grp", "Group under test", null, null, null, 7,
+                RecyclePolicy.MAX_RUNS, 5, null, true, "Payments Platform",
+                List.of("lead@example.com", "oncall@example.com"), List.of("manager@example.com"), List.of());
         assertThat(tuned.recyclePolicy()).isEqualTo(RecyclePolicy.MAX_RUNS);
         assertThat(tuned.maxRunsPerPod()).isEqualTo(5);
         assertThat(tuned.alwaysOn()).isTrue();
+        assertThat(tuned.teamName()).isEqualTo("Payments Platform");
+        assertThat(tuned.notifyTo()).containsExactly("lead@example.com", "oncall@example.com");
+        assertThat(tuned.notifyCc()).containsExactly("manager@example.com");
+        assertThat(tuned.notifyBcc()).isEmpty();
 
         assertThatThrownBy(() -> groups.delete("grp")).isInstanceOf(DataIntegrityViolationException.class);   // ORA-02292
 
