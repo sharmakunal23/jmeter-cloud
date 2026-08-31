@@ -20,23 +20,47 @@ import { BrandMark } from "./BrandMark";
  * (the group's pool). Capacity itself lists application groups — the pool is the group's.
  * Exactly one of the two is live at a time.
  *
- * <p>The footer is a dock-style overlay: hidden until the cursor nears the
- * bottom edge (macOS-Dock style), so it costs no vertical space; the hide
- * threshold sits well above the reveal threshold so it never flickers.
+ * <p>The footer adapts to the page: when the content plus the footer fit
+ * inside the viewport it stays pinned visible (nothing to cover, no reason
+ * to hide it); once the page scrolls it becomes a dock-style overlay —
+ * hidden until the cursor nears the bottom edge (macOS-Dock style), with the
+ * hide threshold well above the reveal threshold so it never flickers.
  */
 const FOOTER_REVEAL_PX = 24;
 const FOOTER_HIDE_PX = 96;
 
 export function Layout() {
   const { dynamicScalingEnabled } = usePlatformCapabilities();
-  const [footerVisible, setFooterVisible] = useState(false);
+  // Short page → pinned; long page → revealed only while the cursor is near
+  // the bottom. Two independent signals, footer shows when either is true.
+  const [pinned, setPinned] = useState(false);
+  const [nearBottom, setNearBottom] = useState(false);
+  const footerVisible = pinned || nearBottom;
+
+  useEffect(() => {
+    function measure() {
+      // .appShell stretches to the viewport (min-height: 100%), so a page
+      // that doesn't scroll reports scrollHeight === innerHeight — the
+      // footer then only overlays the shell's empty bottom band.
+      setPinned(document.documentElement.scrollHeight <= window.innerHeight);
+    }
+    measure();
+    window.addEventListener("resize", measure);
+    // Content height changes with every route and data load — watch the body.
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    ro?.observe(document.body);
+    return () => {
+      window.removeEventListener("resize", measure);
+      ro?.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     function onMouseMove(e: MouseEvent) {
       const fromBottom = window.innerHeight - e.clientY;
-      setFooterVisible((v) => (v ? fromBottom <= FOOTER_HIDE_PX : fromBottom <= FOOTER_REVEAL_PX));
+      setNearBottom((v) => (v ? fromBottom <= FOOTER_HIDE_PX : fromBottom <= FOOTER_REVEAL_PX));
     }
-    function onMouseLeave() { setFooterVisible(false); }
+    function onMouseLeave() { setNearBottom(false); }
     window.addEventListener("mousemove", onMouseMove);
     document.documentElement.addEventListener("mouseleave", onMouseLeave);
     return () => {
@@ -76,7 +100,7 @@ export function Layout() {
       <footer className={`appFooter${footerVisible ? " appFooter--visible" : ""}`}>
         <span className="appFooter__brand">
           <BrandMark />
-          CCB Card Performance
+          CCB Card Platform Services
         </span>
         <span className="appFooter__sep" aria-hidden="true">·</span>
         <span className="appFooter__org">JPMorganChase</span>

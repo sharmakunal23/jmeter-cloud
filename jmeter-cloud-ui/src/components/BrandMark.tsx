@@ -11,7 +11,7 @@
  * propagates to the header, the Home byline, and the footer automatically.
  *
  * <p>Decorative by default (`aria-hidden`) because every placement sits
- * next to a visible text label ("jmeter-cloud", "CCB Card Performance"),
+ * next to a visible text label ("jmeter-cloud", "CCB Card Platform Services"),
  * so announcing it again would be redundant for screen readers.
  */
 export function BrandMark({ className = "" }: { className?: string }) {

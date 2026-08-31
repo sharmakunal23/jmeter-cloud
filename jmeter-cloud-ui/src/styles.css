@@ -2776,9 +2776,16 @@ button.appDetailChip:disabled {
 .modal--confirm { max-width: 42rem; }
 .modal--form    { max-width: 56rem; }
 
-/* Tabbed modals hold a FIXED body height (scrolls internally) so toggling
-   tabs never resizes the dialog — Manage groups is the reference. */
-.groupsModal .modal__body { height: min(34rem, calc(100vh - 12rem)); }
+/* Tabbed modals hold a FIXED shell (body scrolls internally) so toggling
+   tabs never resizes the dialog — Manage groups is the reference.
+   ⚠ flex: none is load-bearing: .modal__body is `flex: 1` (basis 0), which
+   IGNORES an explicit height in the column flex layout — the body would
+   keep wrapping its content and the modal would keep resizing. */
+.groupsModal { width: min(56rem, calc(100vw - 2rem)); }
+.groupsModal .modal__body {
+  flex: none;
+  height: min(34rem, calc(100vh - 12rem));
+}
 
 .modal__titleRow {
   display: flex;
