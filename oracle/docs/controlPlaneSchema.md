@@ -8,7 +8,9 @@ queries. `V3__pluginLibrary.sql` (UX-DYNAMICS T3, 2026-08-30) adds the 14th,
 `V4__clusterRegistry.sql` (CLUSTER-CAPACITY, 2026-08-31) the 15th,
 `ORCH_REGION`, plus the FK that makes every reservation name a registered cluster;
 `V5__workflows.sql` (WORKFLOWS, 2026-08-31) the 16th to 18th — the workflow, its
-executions and their tasks. The prefix keeps the two families apart in one schema (`ORCH_RUN` is a
+executions and their tasks — with `V6__workflowExecutionArchive.sql` adding the
+execution's `HIDDEN_AT` and `V7__workflowVerdictBackfill.sql` settling the
+executions stored before an execution stopped forgiving a handled failure. The prefix keeps the two families apart in one schema (`ORCH_RUN` is a
 launch; `RUN` is the metrics dimension, `RUN.RUN_KEY = ORCH_RUN.RUN_ID`). For
 anyone adding a table or a repository.
 
