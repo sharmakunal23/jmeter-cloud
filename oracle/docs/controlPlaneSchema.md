@@ -6,7 +6,9 @@ and the one place a plain translation would have been wrong — the two claim
 queries. `V3__pluginLibrary.sql` (UX-DYNAMICS T3, 2026-08-30) adds the 14th,
 `ORCH_PLUGIN`, plus the run's `PLUGINS` snapshot column;
 `V4__clusterRegistry.sql` (CLUSTER-CAPACITY, 2026-08-31) the 15th,
-`ORCH_REGION`, plus the FK that makes every reservation name a registered cluster. The prefix keeps the two families apart in one schema (`ORCH_RUN` is a
+`ORCH_REGION`, plus the FK that makes every reservation name a registered cluster;
+`V5__workflows.sql` (WORKFLOWS, 2026-08-31) the 16th to 18th — the workflow, its
+executions and their tasks. The prefix keeps the two families apart in one schema (`ORCH_RUN` is a
 launch; `RUN` is the metrics dimension, `RUN.RUN_KEY = ORCH_RUN.RUN_ID`). For
 anyone adding a table or a repository.
 
@@ -14,9 +16,9 @@ anyone adding a table or a repository.
 
 | Table | Key | Notes |
 |---|---|---|
-| `ORCH_RUN` | `RUN_ID` | `SAVE_RESULTS NUMBER(1)`; `HIDDEN_AT` = soft delete; `APPLICATION` is the app's name; `PLUGINS CLOB IS JSON` (V3) — the launch-time plugin snapshot `[{pluginId,name,version,blobId,fileName}]`, deliberately no FK so registry deletes never break a run; indexes on `CREATED_AT`, `(APPLICATION, CREATED_AT)`, `(METRICS_GROUP_ID, STATE)`, `(STATE, CREATED_AT)` — the Postgres partial indexes have no Oracle form and the table is small |
+| `ORCH_RUN` | `RUN_ID` | `SAVE_RESULTS NUMBER(1)`; `HIDDEN_AT` = soft delete; `APPLICATION` is the app's name; `PLUGINS CLOB IS JSON` (V3) — the launch-time plugin snapshot `[{pluginId,name,version,blobId,fileName}]`, deliberately no FK so registry deletes never break a run; indexes on `CREATED_AT`, `(APPLICATION, CREATED_AT)`, `(METRICS_GROUP_ID, STATE)`, `(STATE, CREATED_AT)` — the Postgres partial indexes have no Oracle form and the table is small; `WORKFLOW_EXECUTION_ID` + `WORKFLOW_TASK_ID` (V5) with a **unique index on `WORKFLOW_TASK_ID`** — the fence that lets a load-test task launch at most one run, free because Oracle indexes no all-NULL key |
 | `ORCH_RUN_FLEET_MEMBER` | `(RUN_ID, WORKER_ID)` | FK → `ORCH_RUN` `ON DELETE CASCADE`; `PROPERTIES CLOB IS JSON`; `(WORKER_ID, STATE, CREATED_AT)` index serves the claim's `NOT EXISTS` |
-| `ORCH_APPLICATION_GROUP` | `GROUP_ID`, unique `NAME` | a team's applications **and their worker pool**; `GROUP_ID` (`[a-z][a-z0-9_]{0,29}`) = `GROUP_REGISTRY.GROUP_ID`, what workers send as `?groupId=`; `UPPER(groupId)` prefixes the group's `_METRICS` / `_METRICS_H` tables; carries the pod policy (`RECYCLE_POLICY` CHECKs + thresholds, `ALWAYS_ON NUMBER(1)`) |
+| `ORCH_APPLICATION_GROUP` | `GROUP_ID`, unique `NAME` | a team's applications **and their worker pool**; `GROUP_ID` (`[a-z][a-z0-9_]{0,29}`) = `GROUP_REGISTRY.GROUP_ID`, what workers send as `?groupId=`; `UPPER(groupId)` prefixes the group's `_METRICS` / `_METRICS_H` tables; carries the pod policy (`RECYCLE_POLICY` CHECKs + thresholds, `ALWAYS_ON NUMBER(1)`) and, since V5, who owns it — `TEAM_NAME` + the comma-separated `NOTIFY_TO`/`NOTIFY_CC`/`NOTIFY_BCC` a workflow's email nodes inherit |
 | `ORCH_APPLICATION` | `APPLICATION_ID`, unique `NAME` | `METRICS_GROUP_ID` **NOT NULL** FK → `ORCH_APPLICATION_GROUP` (no ON DELETE: a group with applications cannot be deleted; indexed) + `METRICS_APPLICATION` (the group classifier's `LABEL.APPLICATION` value); `HEALTH_ENDPOINTS`/`LAST_HEALTH_DETAILS` CLOB `IS JSON`. No pool policy here — it is the group's |
 | `ORCH_GROUP_CAPACITY` | `(GROUP_ID, REGION)` | FK → group cascade + FK → `ORCH_REGION` (V4, no action); `MAX_AVAILABLE BETWEEN 0 AND 1000` is the group's **reservation** on that cluster — every application in the group draws on it, and the SUM of reservations per region must fit the cluster's `MAX_WORKERS` (service-enforced under a `FOR UPDATE` of the `ORCH_REGION` row) |
 | `ORCH_POD` | `POD_ID` | FK → group (no action: a group with workers cannot be deleted); `SOURCE IN (DYNAMIC, STATIC)`; `(GROUP_ID, REGION, STATE, LAST_HEARTBEAT)` is the claim's candidate index **and** the FK index — without one, deleting a group takes a table lock on `ORCH_POD` |
@@ -27,6 +29,9 @@ anyone adding a table or a repository.
 | `ORCH_AI_RESPONSE` | `(KIND, CACHE_KEY, PROMPT_VERSION)` | `RESPONSE CLOB IS JSON` |
 | `ORCH_PLUGIN` (V3) | `PLUGIN_ID`, unique `NAME`, unique `SHA256` | the global JMeter plugin library — one version per plugin (upgrade = delete + re-register; rows immutable, no UPDATE grant); jar bytes live in a document-service blob (`BLOB_ID`); a delete is blocked `409` while a non-terminal run's snapshot references it |
 | `ORCH_REGION` (V4) | `REGION`, unique `LABEL`, unique `REGIONAL_URL` | a registered cluster, identified three ways and unique in all of them (id/PK, display name, endpoint — one regional serves one cluster): `MAX_WORKERS 1..20` (default 20, the hard cap — the 180 GB grant at 9 GB per worker), `LAST_VALIDATED_AT`, `LAST_PROBE_*` (the on-demand test-provisioning result). Delete is service-guarded — no capacity rows or pods may reference the region; `ORCH_POD.REGION` and `ORCH_RUN.ORIGIN_REGION` deliberately carry no FK (pods are service-guarded, runs are history) |
+| `ORCH_WORKFLOW` (V5) | `WORKFLOW_ID`, unique `(GROUP_ID, NAME)` | a group-scoped task DAG; `GRAPH CLOB IS JSON` is the React Flow document (≤ 64 nodes, hub-validated), `REVISION` is the optimistic lock a stale `PUT` loses on. FK → group, so a group holding workflows cannot be deleted |
+| `ORCH_WORKFLOW_EXECUTION` (V5) | `EXECUTION_ID` | one launch; `WORKFLOW_NAME` + `GRAPH` are **snapshots** so a rename or an edit never rewrites history (hence no FK to `ORCH_WORKFLOW`). `NEXT_TICK_AT` is both the schedule and the claim lease, and `ORCH_WORKFLOW_EXECUTION_TICK_CHK` makes a stranded `RUNNING` row — running, but nothing will ever touch it again — unrepresentable |
+| `ORCH_WORKFLOW_TASK` (V5) | `TASK_ID`, unique `(EXECUTION_ID, NODE_ID)` | one node per execution; FK → execution cascade. `RUN_ID` is `LOAD_TEST`-only (CHECK) and carries **no** FK — a run purge must not delete workflow history; its index is sparse and serves run → workflow on the run page |
 
 Naming: every identifier UPPER_SNAKE, unquoted (the metrics layout's rule);
 tables `ORCH_<NAME>`, constraints and indexes `ORCH_<TABLE>_<COLS>_{PK,FK,UQ,CHK,IDX}` —
@@ -59,6 +64,12 @@ OPEN cursor FOR SELECT <ORCH_POD columns> WHERE POD_ID IN (TABLE(held)) ORDER BY
 |---|---|---|
 | `CLAIM_IDLE_PODS(region, groupId, limit, OUT cursor)` — either filter may be NULL | the `ORCH_POD` columns the Java row mapper reads, freshest first | insert the `ORCH_RUN_FLEET_MEMBER` rows **before** committing — the row locks are the reservation until then |
 | `CLAIM_DUE_CRON_JOBS(now, limit, OUT cursor)` | the `ORCH_CRON_JOB` columns, earliest `NEXT_FIRE_AT` first | advance `NEXT_FIRE_AT` before committing — that is what makes a fire exactly-once across replicas |
+| `CLAIM_DUE_WORKFLOWS(now, limit, OUT cursor)` (V5) | the `ORCH_WORKFLOW_EXECUTION` columns, earliest `NEXT_TICK_AT` first | push `NEXT_TICK_AT` forward by the lease before committing, then advance the execution **outside** the transaction — a replica that dies mid-advance strands nothing |
+
+**`V5` owns the package.** A package cannot be extended in place, so
+`V5__workflows.sql` re-creates `ORCH_CLAIMS` whole and V2's copy is historical;
+add the next claim procedure to the newest migration that declares it, never to
+V2 (which Flyway checksums and forbids editing anyway).
 
 Both are called from a `BEGIN … END;` block with a `REF CURSOR` out parameter
 (`Types.REF_CURSOR`); the locks belong to the caller's JDBC transaction.
@@ -70,13 +81,16 @@ Both are called from a `BEGIN … END;` block with a `REF CURSOR` out parameter
 | `ORCH_AI_RESPONSE`: upsert → find → upsert again → find past the TTL → purge by run id | the CLOB round-trips by its bare label; the MERGE replaces; an expired row is a miss; `deleteForRun` removes the single-run row and the comparison it sits in |
 | 5 schedules: two due, one not due, one disabled, one platform-level future | claim returns the two due, earliest first |
 | Duplicate platform job name, `MAX_RUNS` without a threshold, pod for an unknown group, non-JSON `PROPERTIES` | ORA-00001, ORA-02290, ORA-02291, ORA-02290 |
+| V5 hand-run 2026-08-31: stranded `RUNNING` execution (no `NEXT_TICK_AT`); terminal execution still carrying one; `EMAIL` task carrying a `RUN_ID`; a second run for one workflow task | ORA-02290 ×3 (`…_TICK_CHK` twice, `…_RUN_ID_CHK`), ORA-00001 on `ORCH_RUN_WORKFLOW_TASK_UQ` — while two runs with a NULL task id coexist |
+| V5: `CLAIM_DUE_WORKFLOWS` against one due execution; `EXPLAIN PLAN` for the crash-recovery lookup and the claim's candidate scan | claims it; `INDEX UNIQUE SCAN ORCH_RUN_WORKFLOW_TASK_UQ` and `INDEX RANGE SCAN ORCH_WORKFLOW_EXECUTION_CLAIM_IDX` — no scan on either path |
 | V1 + V2 + V3 applied from an empty schema | every object `VALID`, 14 `ORCH_*` tables, no non-UPPER object or column name but Flyway's three (`flyway_schema_history`, its `_pk` and `_s_idx` — tool-imposed, like `docker-compose.yml`; don't "fix" them with `-table=`) |
 
 ## Roles
 
 `GLOBAL_ORCHESTRATOR_WRITER` — the hub's run-state pool: full DML on `ORCH_RUN`,
 `ORCH_RUN_FLEET_MEMBER`, `ORCH_POD`, `ORCH_APPLICATION_GROUP`, `ORCH_APPLICATION`,
-`ORCH_GROUP_CAPACITY`, `ORCH_CRON_JOB`, `ORCH_AI_RESPONSE`, `ORCH_REGION` (V4); `SELECT, INSERT, DELETE`
+`ORCH_GROUP_CAPACITY`, `ORCH_CRON_JOB`, `ORCH_AI_RESPONSE`, `ORCH_REGION` (V4),
+`ORCH_WORKFLOW` / `ORCH_WORKFLOW_EXECUTION` / `ORCH_WORKFLOW_TASK` (V5); `SELECT, INSERT, DELETE`
 on `ORCH_PLUGIN` (V3 — no UPDATE, rows are immutable); `SELECT, INSERT` on the
 append-only tables (plus `DELETE` where a purge path exists: `ORCH_RUN_TREND`,
 `ORCH_APPLICATION_HEALTH_HISTORY`); `EXECUTE` on `ORCH_CLAIMS` and `ORCH_ID_TABLE`.
