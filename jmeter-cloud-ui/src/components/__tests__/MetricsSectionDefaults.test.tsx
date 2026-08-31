@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-import { useSectionOpen, type MetricsSectionId } from "../metrics/MetricsSection";
+import { MetricsSection, useSectionOpen, type MetricsSectionId } from "../metrics/MetricsSection";
 
 function Probe({ id }: { id: MetricsSectionId }) {
   const [open] = useSectionOpen(id);
@@ -39,5 +39,34 @@ describe("workflow metrics sections — defaults", () => {
     render(<><Probe id="wfThroughput" /><Probe id="throughput" /></>);
     expect(screen.getByTestId("wfThroughput")).toHaveTextContent("false");
     expect(screen.getByTestId("throughput")).toHaveTextContent("true");
+  });
+});
+
+describe("MetricsSection — header controls", () => {
+  it("a section's controls are reachable only while it is open", () => {
+    // The response-time percentile picker lives in the header rather than above
+    // its chart (which made that column taller than its neighbour), so it has
+    // to disappear with the charts it steers.
+    const { rerender } = render(
+      <MetricsSection
+        id="wfThroughput" title="Throughput and response time" open onToggle={() => {}}
+        controls={<button type="button">P95</button>}
+      >
+        <p>charts</p>
+      </MetricsSection>,
+    );
+    expect(screen.getByRole("button", { name: "P95" })).toBeInTheDocument();
+    expect(screen.getByText("charts")).toBeInTheDocument();
+
+    rerender(
+      <MetricsSection
+        id="wfThroughput" title="Throughput and response time" open={false} onToggle={() => {}}
+        controls={<button type="button">P95</button>}
+      >
+        <p>charts</p>
+      </MetricsSection>,
+    );
+    expect(screen.queryByRole("button", { name: "P95" })).toBeNull();
+    expect(screen.queryByText("charts")).toBeNull();
   });
 });

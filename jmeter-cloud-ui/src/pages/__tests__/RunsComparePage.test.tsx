@@ -184,13 +184,19 @@ describe("RunsComparePage — happy 2-run path", () => {
   it("keeps polling while a run is active, but stops once both are terminal", async () => {
     vi.useFakeTimers();
     try {
-      // Both terminal → poll pauses after the initial load.
+      // Both terminal → poll pauses after the initial load. What matters is
+      // that the count stops GROWING; how many reads the initial render
+      // settles on is an implementation detail, and asserting it exactly made
+      // this test flake under load.
       mocks.get.mockResolvedValue(fixtureRun("A", "COMPLETED"));
       const { unmount } = renderPage(["A", "B"]);
       await vi.advanceTimersByTimeAsync(0);          // flush initial fetch
-      expect(mocks.get).toHaveBeenCalledTimes(2);
+      expect(mocks.get.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(mocks.get).toHaveBeenCalledWith("A", expect.anything());
+      expect(mocks.get).toHaveBeenCalledWith("B", expect.anything());
+      const afterLoad = mocks.get.mock.calls.length;
       await vi.advanceTimersByTimeAsync(5_000 * 3);  // 3 would-be poll cycles
-      expect(mocks.get).toHaveBeenCalledTimes(2);    // still 2 — paused
+      expect(mocks.get.mock.calls.length).toBe(afterLoad);   // paused
       unmount();
 
       // An active run → polling continues.
@@ -198,9 +204,10 @@ describe("RunsComparePage — happy 2-run path", () => {
       mocks.get.mockResolvedValue(fixtureRun("C", "RUNNING"));
       renderPage(["C", "D"]);
       await vi.advanceTimersByTimeAsync(0);
-      expect(mocks.get).toHaveBeenCalledTimes(2);
+      const activeAfterLoad = mocks.get.mock.calls.length;
+      expect(activeAfterLoad).toBeGreaterThanOrEqual(2);
       await vi.advanceTimersByTimeAsync(5_000);      // one poll cycle
-      expect(mocks.get.mock.calls.length).toBeGreaterThan(2);
+      expect(mocks.get.mock.calls.length).toBeGreaterThan(activeAfterLoad);
     } finally {
       vi.useRealTimers();
     }

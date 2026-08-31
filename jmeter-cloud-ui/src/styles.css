@@ -5709,13 +5709,7 @@ tr.isMuted td { opacity: 0.6; }
   font-weight: 600;
   border-top: 2px solid var(--border);
 }
-.workflowMetrics__chartWithPicker { position: relative; }
-.workflowMetrics__pickerRow {
-  display: flex;
-  gap: 0.25rem;
-  justify-content: flex-end;
-  margin-bottom: 0.3rem;
-}
+.percentilePicker { display: flex; gap: 0.2rem; }
 .btn--sm.isActive {
   background: rgba(17,122,202,0.10);
   border-color: rgba(17,122,202,0.35);

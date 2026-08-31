@@ -206,11 +206,13 @@ export function WorkflowMetricsPanel({ tasks, live }: WorkflowMetricsPanelProps)
           <MetricsSection
             id="wfThroughput" title="Throughput and response time"
             open={throughputOpen} onToggle={toggleThroughput}
-          >
-          <div className="workflowMetrics__charts">
-            <TimeseriesChart title="Throughput by application (req/s)" series={throughput} height={CHART_HEIGHT} />
-            <div className="workflowMetrics__chartWithPicker">
-              <div className="workflowMetrics__pickerRow">
+            // In the section header, not above the chart: a picker sitting on
+            // one chart made that column taller than its neighbour, so two
+            // charts of the same height stopped looking like it. MetricsSection
+            // renders controls only while the section is open, so the buttons
+            // cannot be reached when the charts they steer are collapsed.
+            controls={
+              <div className="percentilePicker" role="group" aria-label="Response time percentile">
                 {(Object.keys(PERCENTILE_LABELS) as Percentile[]).map((p) => (
                   <button
                     key={p}
@@ -223,12 +225,15 @@ export function WorkflowMetricsPanel({ tasks, live }: WorkflowMetricsPanelProps)
                   </button>
                 ))}
               </div>
-              <TimeseriesChart
-                title={`Response time by application — ${PERCENTILE_LABELS[percentile]} (ms)`}
-                series={responseTime}
-                height={CHART_HEIGHT}
-              />
-            </div>
+            }
+          >
+          <div className="workflowMetrics__charts">
+            <TimeseriesChart title="Throughput by application (req/s)" series={throughput} height={CHART_HEIGHT} />
+            <TimeseriesChart
+              title={`Response time by application — ${PERCENTILE_LABELS[percentile]} (ms)`}
+              series={responseTime}
+              height={CHART_HEIGHT}
+            />
           </div>
           </MetricsSection>
 
