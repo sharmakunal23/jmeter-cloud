@@ -284,11 +284,12 @@ describe("HomePage — health checklist", () => {
     const sixHoursOut = new Date(Date.now() + 6 * 3600_000).toISOString();
     cronJobs.list.mockResolvedValue([
       {
-        cronJobId: "01J", name: "nightly", applicationName: "checkout-svc",
-        templateBlobId: "01TPL", cronExpression: "0 2 * * *", timeZone: "America/New_York",
+        cronJobId: "01J", name: "nightly", kind: "LAUNCH_WORKFLOW",
+        groupId: "cps", workflowId: "01WF", workflowName: "checkout-svc",
+        cronExpression: "0 2 * * *", timeZone: "America/New_York",
         enabled: true, createdAt: "2026-05-12T00:00:00Z",
-        lastFiredAt: null, lastFiredRunId: null, lastFireStatus: null,
-        nextFireAt: sixHoursOut, kind: "LAUNCH_RUN", region: null,
+        lastFiredAt: null, lastFiredExecutionId: null, lastFireStatus: null,
+        nextFireAt: sixHoursOut, region: null,
       },
     ]);
     renderPage();

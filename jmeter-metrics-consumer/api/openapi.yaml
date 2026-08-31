@@ -137,7 +137,7 @@ paths:
                 $ref: '#/components/schemas/IngestResponse'
               example: { rowsInserted: 0, code: PAYLOAD_TOO_LARGE, message: "body 3500000 bytes exceeds maxBodyBytes 2097152" }
         '415':
-          description: `Content-Type` is not `application/json`. Terminal.
+          description: "`Content-Type` is not `application/json`. Terminal."
           content:
             application/json:
               schema:

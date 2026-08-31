@@ -3407,11 +3407,12 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
 .nextFireCell > span { font-size: var(--fs-sm); }
 .nextFireCell small { font-size: var(--fs-2xs); }
 
-.platformSchedules { margin-bottom: 1.5rem; }
-.platformSchedules__head { margin-bottom: 0.5rem; }
-.platformSchedules__head h2 { margin: 0; }
-.platformSchedules__empty { font-size: var(--fs-sm); }
-.platformSchedules__recipients { font-size: var(--fs-xs); }
+/* AUTOMATION-3 — the three sections of /automation share one shell. */
+.schedulesSection { margin-bottom: 2rem; }
+.schedulesSection__head { margin-bottom: 0.5rem; }
+.schedulesSection__head h2 { margin: 0; display: flex; align-items: center; gap: 0.35rem; }
+.schedulesSection__empty { font-size: var(--fs-sm); }
+.schedulesSection__recipients { font-size: var(--fs-xs); }
 
 /* ── Tab bar (Automation: Applications | Platform reports) ─────────── */
 .tabBar {

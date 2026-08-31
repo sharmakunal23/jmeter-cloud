@@ -36,27 +36,28 @@ public class CronJobRepository {
     }
 
     private static final String COLS =
-            "CRON_JOB_ID,NAME,APPLICATION_NAME,TEMPLATE_BLOB_ID,CRON_EXPRESSION,"
+            "CRON_JOB_ID,NAME,GROUP_ID,WORKFLOW_ID,CRON_EXPRESSION,"
             + "TIME_ZONE,ENABLED,CREATED_BY,CREATED_AT,LAST_FIRED_AT,"
-            + "LAST_FIRED_RUN_ID,LAST_FIRE_STATUS,NEXT_FIRE_AT,CLAIMED_AT,"
-            // kind is NOT NULL (default LAUNCH_RUN); region only for
-            // DRAIN_REGION/PROVISION_REGION; recipients/customSubject/customIntro
-            // for report kinds only.
+            + "LAST_FIRED_EXECUTION_ID,LAST_FIRE_STATUS,NEXT_FIRE_AT,CLAIMED_AT,"
+            // The kind decides which of the rest may be set, and
+            // ORCH_CRON_JOB_KIND_FIELDS_CHK enforces it: groupId+workflowId for
+            // LAUNCH_WORKFLOW, groupId+region for SCALE_OUT/SCALE_IN, and
+            // recipients/customSubject/customIntro for the report kinds only.
             + "KIND,REGION,RECIPIENTS,CUSTOM_SUBJECT,CUSTOM_INTRO";
 
     private static CronJob mapRow(ResultSet rs, int n) throws SQLException {
         return new CronJob(
                 rs.getString("CRON_JOB_ID"),
                 rs.getString("NAME"),
-                rs.getString("APPLICATION_NAME"),
-                rs.getString("TEMPLATE_BLOB_ID"),
+                rs.getString("GROUP_ID"),
+                rs.getString("WORKFLOW_ID"),
                 rs.getString("CRON_EXPRESSION"),
                 rs.getString("TIME_ZONE"),
                 rs.getBoolean("ENABLED"),
                 rs.getString("CREATED_BY"),
                 instant(rs, "CREATED_AT"),
                 instant(rs, "LAST_FIRED_AT"),
-                rs.getString("LAST_FIRED_RUN_ID"),
+                rs.getString("LAST_FIRED_EXECUTION_ID"),
                 rs.getString("LAST_FIRE_STATUS"),
                 instant(rs, "NEXT_FIRE_AT"),
                 instant(rs, "CLAIMED_AT"),
@@ -75,15 +76,17 @@ public class CronJobRepository {
         return OracleBind.ts(i);
     }
 
-    /** Insert a new schedule. Relies on the UNIQUE(applicationName,name) constraint
-     *  to surface duplicates as {@code DuplicateKeyException} (controller → 409). */
+    /** Insert a new schedule. Relies on the UNIQUE(groupId,name) constraint to
+     *  surface duplicates as {@code DuplicateKeyException} (controller → 409);
+     *  a platform report's NULL group still collides on name, because Oracle
+     *  lets only an all-NULL key repeat. */
     public CronJob insert(CronJob c) {
         jdbc.update(
                 "INSERT INTO ORCH_CRON_JOB (" + COLS + ") "
                 + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                c.cronJobId(), c.name(), c.applicationName(), c.templateBlobId(),
+                c.cronJobId(), c.name(), c.groupId(), c.workflowId(),
                 c.cronExpression(), c.timeZone(), c.enabled(), c.createdBy(),
-                ts(c.createdAt()), ts(c.lastFiredAt()), c.lastFiredRunId(),
+                ts(c.createdAt()), ts(c.lastFiredAt()), c.lastFiredExecutionId(),
                 c.lastFireStatus(), ts(c.nextFireAt()), ts(c.claimedAt()),
                 c.kind().name(), c.region(), c.recipients(),
                 c.customSubject(), c.customIntro());
@@ -97,10 +100,10 @@ public class CronJobRepository {
         return rows.stream().findFirst();
     }
 
-    /** All schedules, optionally filtered by application, newest-fire-first
+    /** All schedules, optionally filtered by group, soonest-fire-first
      *  (NULLs — disabled — last). */
-    public List<CronJob> findAll(String applicationFilter) {
-        if (applicationFilter == null || applicationFilter.isBlank()) {
+    public List<CronJob> findAll(String groupFilter) {
+        if (groupFilter == null || groupFilter.isBlank()) {
             return jdbc.query(
                     "SELECT " + COLS + " FROM ORCH_CRON_JOB "
                     + "ORDER BY NEXT_FIRE_AT ASC NULLS LAST, CREATED_AT DESC",
@@ -108,9 +111,9 @@ public class CronJobRepository {
         }
         return jdbc.query(
                 "SELECT " + COLS + " FROM ORCH_CRON_JOB "
-                + "WHERE APPLICATION_NAME=? "
+                + "WHERE GROUP_ID=? "
                 + "ORDER BY NEXT_FIRE_AT ASC NULLS LAST, CREATED_AT DESC",
-                rowMapper, applicationFilter.trim());
+                rowMapper, groupFilter.trim());
     }
 
     /**
@@ -143,31 +146,31 @@ public class CronJobRepository {
     /** Record a fire's outcome. Does NOT touch {@code nextFireAt} (the claim
      *  already advanced it; a manual fireNow leaves the schedule untouched).
      *  Clears {@code claimedAt} — the in-flight marker. */
-    public void recordFire(String cronJobId, Instant firedAt, String runId, String outcomeName) {
+    public void recordFire(String cronJobId, Instant firedAt, String executionId, String outcomeName) {
         jdbc.update(
                 "UPDATE ORCH_CRON_JOB "
-                + "SET LAST_FIRED_AT=?, LAST_FIRED_RUN_ID=?, LAST_FIRE_STATUS=?, CLAIMED_AT=NULL "
+                + "SET LAST_FIRED_AT=?, LAST_FIRED_EXECUTION_ID=?, LAST_FIRE_STATUS=?, CLAIMED_AT=NULL "
                 + "WHERE CRON_JOB_ID=?",
-                ts(firedAt), runId, outcomeName, cronJobId);
+                ts(firedAt), executionId, outcomeName, cronJobId);
     }
 
     /** Edit the mutable fields of a schedule. Recompute {@code nextFireAt} in
      *  the controller before calling. Surfaces a UNIQUE violation as
-     *  {@code DuplicateKeyException}. Phase C — kind/region are settable so an
-     *  operator can convert a schedule between LAUNCH_RUN / DRAIN_REGION /
-     *  PROVISION_REGION; the controller enforces the per-kind invariants. */
-    public void update(String cronJobId, String name, String applicationName,
-                       String templateBlobId, String cronExpression, String timeZone,
+     *  {@code DuplicateKeyException}. Every kind-dependent field is settable so
+     *  an operator can convert a schedule between kinds; the controller enforces
+     *  the per-kind invariants and the CHECK constraint is the backstop. */
+    public void update(String cronJobId, String name, String groupId,
+                       String workflowId, String cronExpression, String timeZone,
                        Instant nextFireAt, CronJobKind kind, String region, String recipients,
                        String customSubject, String customIntro) {
         jdbc.update(
                 "UPDATE ORCH_CRON_JOB "
-                + "SET NAME=?, APPLICATION_NAME=?, TEMPLATE_BLOB_ID=?, "
+                + "SET NAME=?, GROUP_ID=?, WORKFLOW_ID=?, "
                 + "CRON_EXPRESSION=?, TIME_ZONE=?, NEXT_FIRE_AT=?, "
                 + "KIND=?, REGION=?, RECIPIENTS=?, "
                 + "CUSTOM_SUBJECT=?, CUSTOM_INTRO=? "
                 + "WHERE CRON_JOB_ID=?",
-                name, applicationName, templateBlobId, cronExpression, timeZone,
+                name, groupId, workflowId, cronExpression, timeZone,
                 ts(nextFireAt), kind.name(), region, recipients,
                 customSubject, customIntro, cronJobId);
     }

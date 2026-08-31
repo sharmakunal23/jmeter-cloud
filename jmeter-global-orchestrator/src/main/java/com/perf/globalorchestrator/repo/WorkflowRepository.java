@@ -123,6 +123,18 @@ public class WorkflowRepository {
     }
 
     /** {@code groupId → workflow count} for the Workflows landing page; one statement for every group. */
+    /**
+     * {@code workflowId → name} for every workflow. One small query so a list
+     * that references workflows renders in a single round-trip instead of one
+     * lookup per row; the table is bounded by what operators draw by hand.
+     */
+    public Map<String, String> namesById() {
+        Map<String, String> out = new java.util.HashMap<>();
+        jdbc.query("SELECT WORKFLOW_ID, NAME FROM ORCH_WORKFLOW",
+                rs -> { out.put(rs.getString("WORKFLOW_ID"), rs.getString("NAME")); });
+        return out;
+    }
+
     public Map<String, Integer> countsByGroup() {
         Map<String, Integer> out = new HashMap<>();
         jdbc.query("SELECT GROUP_ID, COUNT(*) AS N FROM ORCH_WORKFLOW GROUP BY GROUP_ID",

@@ -75,11 +75,11 @@ export function HomePage() {
       // component that talks to every other one (regionals included), so the
       // browser never probes a data-plane service or a regional itself.
       const [apps, health, activeListing, regions, groups] = await Promise.all([
-        applicationsApi.list(signal),
+        applicationsApi.list(signal, { fresh: true }),
         platformHealthApi.get(signal).catch((e: unknown) => hubUnreachable(e instanceof Error ? e.message : String(e))),
         runsApi.listPage({ activeOnly: true, limit: 200 }, signal),
         regionsApi.list().catch(() => [] as RegionCapacity[]),
-        applicationGroupsApi.list(signal).catch(() => [] as ApplicationGroup[]),
+        applicationGroupsApi.list(signal, { fresh: true }).catch(() => [] as ApplicationGroup[]),
       ]);
       const capacityByRegion = aggregateCapacityByRegion(groups, activeListing.runs, regions);
       setState({
@@ -420,12 +420,13 @@ interface ScheduledJob {
   nextFireAt: string;
 }
 
-/** "Daily report" / "Drain us-east-1" / "nightly → checkout" — what fires. */
-function jobTarget(name: string, appName: string | null | undefined, kind: CronJobKind, region: string | null | undefined): string {
-  if (kind === "DRAIN_REGION")     return `Drain ${region ?? "region"} · ${appName ?? "—"}`;
-  if (kind === "PROVISION_REGION") return `Provision ${region ?? "region"} · ${appName ?? "—"}`;
-  if (isReportKind(kind))          return "Platform email report";
-  return `${name} → ${appName ?? "—"}`;
+/** "Platform email report" / "Scale in na-east · cps" / "nightly → checkout" — what fires. */
+function jobTarget(name: string, groupId: string | null | undefined, kind: CronJobKind,
+                   region: string | null | undefined, workflowName: string | null | undefined): string {
+  if (kind === "SCALE_IN")  return `Scale in ${region ?? "cluster"} · ${groupId ?? "—"}`;
+  if (kind === "SCALE_OUT") return `Scale out ${region ?? "cluster"} · ${groupId ?? "—"}`;
+  if (isReportKind(kind))   return "Platform email report";
+  return `${name} → ${workflowName ?? groupId ?? "—"}`;
 }
 
 function ScheduleChecklist() {
@@ -443,7 +444,7 @@ function ScheduleChecklist() {
             .map((j) => ({
               id: j.cronJobId,
               name: j.name,
-              target: jobTarget(j.name, j.applicationName, j.kind, j.region),
+              target: jobTarget(j.name, j.groupId, j.kind, j.region, j.workflowName),
               kind: j.kind,
               cronExpression: j.cronExpression,
               timeZone: j.timeZone,

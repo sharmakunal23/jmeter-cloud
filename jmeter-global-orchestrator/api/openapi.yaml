@@ -2187,10 +2187,12 @@ paths:
       tags: [cronJobs]
       summary: List CRON schedules
       description: |
-        All schedules, optionally filtered by `application`,
-        sorted by `nextFireAt` ascending (disabled — null `nextFireAt` — last).
+        All schedules, optionally filtered by `groupId`, sorted by `nextFireAt`
+        ascending (disabled — null `nextFireAt` — last). `workflowName` is
+        hydrated in one query, so the Automation page renders every row from
+        this single request.
       parameters:
-        - { name: application, in: query, required: false, schema: { type: string }, description: "Filter to one application's schedules." }
+        - { name: groupId, in: query, required: false, schema: { type: string }, description: "Filter to one application group's schedules." }
       responses:
         "200":
           description: ok
@@ -2202,10 +2204,11 @@ paths:
       summary: Create a CRON schedule
       description: |
         Validates: the cron expression parses (5-field unix or 6-field; also
-        `@macro`), the application is registered, the template blob is fetchable
-        from document-service, the template's own application agrees with the
-        schedule's, and `(applicationName, name)` is unique. `nextFireAt` is
-        seeded from the expression. `createdBy` is taken from `X-Actor`.
+        `@macro`), and — per `kind` — that the group is registered, the workflow
+        exists AND belongs to that group, or the group holds a reservation on the
+        named cluster. `(groupId, name)` is unique; a platform report's null
+        group still collides on name. `nextFireAt` is seeded from the
+        expression. `createdBy` is taken from `X-Actor`.
       parameters:
         - { $ref: "#/components/parameters/XActorHeader" }
       requestBody:
@@ -2221,15 +2224,15 @@ paths:
               schema: { $ref: "#/components/schemas/CronJobSummary" }
         "400":
           description: |
-            INVALID_REQUEST (name/applicationName/templateBlobId missing or
-            template/application mismatch), INVALID_CRON (bad expression /
-            timezone), UNKNOWN_APPLICATION (not registered), or
-            TEMPLATE_UNAVAILABLE (blob missing / unparseable).
+            INVALID_REQUEST (name/kind/groupId/workflowId/region missing, or a
+            workflow belonging to a different group), INVALID_CRON (bad
+            expression / timezone), UNKNOWN_APPLICATION_GROUP, UNKNOWN_WORKFLOW,
+            or REGION_NOT_CONFIGURED (the group holds no reservation there).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
         "409":
-          description: CRON_JOB_CONFLICT — a schedule with this name already exists for the application.
+          description: CRON_JOB_CONFLICT — a schedule with this name already exists in the group.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -2255,10 +2258,11 @@ paths:
       tags: [cronJobs]
       summary: Edit a schedule's definition
       description: |
-        Replaces name / applicationName / templateBlobId / cronExpression /
-        timeZone (same validation as create). `enabled` is managed by the
-        enable/disable endpoints, not here. `nextFireAt` is recomputed from the
-        new expression when the schedule is enabled.
+        Replaces name / kind / groupId / workflowId / region / cronExpression /
+        timeZone (same validation as create), so a schedule can be converted
+        between kinds. `enabled` is managed by the enable/disable endpoints, not
+        here. `nextFireAt` is recomputed from the new expression when the
+        schedule is enabled.
       requestBody:
         required: true
         content:
@@ -2308,9 +2312,12 @@ paths:
       responses:
         "202":
           description: |
-            Accepted — the fire was attempted. `outcome` is LAUNCHED (run
-            started), SKIPPED (no capacity / previous run still active), or
-            FAILED (template unavailable / launch error).
+            Accepted — the fire was attempted. `outcome` is LAUNCHED (the
+            execution started; see `executionId`), SKIPPED (this window did not
+            run and the next one may — already running, the graph no longer fits
+            the group's reservation, an alwaysOn group asked to scale in), or
+            FAILED (nothing will fix itself — a deleted workflow, or a graph the
+            validator rejects).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CronJobFireResult" }
@@ -3314,42 +3321,52 @@ components:
     # verbatim — keep the field names aligned (the UI stub's one-line swap).
     CronJobSummary:
       type: object
-      required: [cronJobId, name, cronExpression, timeZone, enabled, createdAt, kind]
+      required: [cronJobId, name, kind, cronExpression, timeZone, enabled, createdAt]
       properties:
-        cronJobId:       { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
-        name:            { type: string, description: "Operator label; unique per application (or globally for report kinds)." }
-        applicationName: { type: string, nullable: true, description: "Null for platform-wide report kinds (INFRA_READINESS / DAILY_REPORT)." }
-        templateBlobId:
+        cronJobId:  { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+        name:       { type: string, description: "Operator label; unique within the group (or platform-wide for report kinds)." }
+        kind:
+          type: string
+          description: |
+            Dispatch, one family per Automation section:
+              LAUNCH_WORKFLOW  launch the group's workflow via WorkflowService.launch;
+              SCALE_OUT        spin workers into the group's pool in that cluster, up to its reservation;
+              SCALE_IN         release every IDLE worker of the group there without replacement
+                               (skipped when the group is alwaysOn; IN_USE workers are left alone);
+              INFRA_READINESS  platform-wide: email the daily infra-readiness report;
+              DAILY_REPORT     platform-wide: email the daily perf-test report.
+          enum: [LAUNCH_WORKFLOW, SCALE_OUT, SCALE_IN, INFRA_READINESS, DAILY_REPORT]
+        groupId:
           type: string
           nullable: true
-          description: "document-service blob (X-Type=template). Required for LAUNCH_RUN; null for DRAIN_REGION / PROVISION_REGION."
-        cronExpression:  { type: string, description: "5-field unix, 6-field (with seconds), or @macro." }
-        timeZone:        { type: string, description: "IANA zone id; nextFireAt is computed in it.", default: UTC }
-        enabled:         { type: boolean }
-        createdBy:       { type: string, nullable: true, description: "X-Actor at create time." }
-        createdAt:       { type: string, format: date-time }
-        lastFiredAt:     { type: string, format: date-time, nullable: true }
-        lastFiredRunId:  { type: string, nullable: true }
+          description: "The owning application group. Null only for the platform-wide report kinds."
+        workflowId:
+          type: string
+          nullable: true
+          description: "Required for LAUNCH_WORKFLOW; null otherwise. Carries no FK — deleting a workflow leaves the schedule, whose next fire reports FAILED."
+        workflowName:
+          type: string
+          nullable: true
+          description: "Hydrated, not stored, so a list renders in one request. Null when the workflow has been deleted."
+        region:
+          type: string
+          nullable: true
+          description: "Target cluster. Required for SCALE_OUT / SCALE_IN; null otherwise."
+        cronExpression: { type: string, description: "5-field unix, 6-field (with seconds), or @macro." }
+        timeZone:       { type: string, description: "IANA zone id; nextFireAt is computed in it.", default: UTC }
+        enabled:        { type: boolean }
+        createdBy:      { type: string, nullable: true, description: "X-Actor at create time." }
+        createdAt:      { type: string, format: date-time }
+        lastFiredAt:    { type: string, format: date-time, nullable: true }
+        lastFiredExecutionId:
+          type: string
+          nullable: true
+          description: "The workflow execution the last fire started (LAUNCH_WORKFLOW only)."
         lastFireStatus:
           type: string
           nullable: true
           enum: [LAUNCHED, SKIPPED, FAILED, DISABLED]
-        nextFireAt:      { type: string, format: date-time, nullable: true, description: "Null when disabled." }
-        kind:
-          type: string
-          description: |
-            AUTOMATION Phase C/E/D — dispatch:
-              LAUNCH_RUN       fire a saved template via RunService.startRun;
-              DRAIN_REGION     drain every IDLE worker of the app's group in the region without
-                               replacement (skipped if the group is alwaysOn);
-              PROVISION_REGION spin workers into the app's group's pool in the region up to groupCapacity.maxAvailable;
-              INFRA_READINESS  platform-wide: email the daily infra-readiness report (goal #2);
-              DAILY_REPORT     platform-wide: email the daily perf-test report (goal #1).
-          enum: [LAUNCH_RUN, DRAIN_REGION, PROVISION_REGION, INFRA_READINESS, DAILY_REPORT]
-        region:
-          type: string
-          nullable: true
-          description: "Required for DRAIN_REGION / PROVISION_REGION; null otherwise."
+        nextFireAt:     { type: string, format: date-time, nullable: true, description: "Null when disabled." }
         recipients:
           type: string
           nullable: true
@@ -3357,11 +3374,11 @@ components:
         customSubject:
           type: string
           nullable: true
-          description: "AUTOMATION: optional custom email subject for report kinds; null → composer default."
+          description: "Optional custom email subject for report kinds; null → composer default."
         customIntro:
           type: string
           nullable: true
-          description: "AUTOMATION: optional intro/note rendered above the report body for report kinds."
+          description: "Optional intro/note rendered above the report body for report kinds."
 
     CronJobListResponse:
       type: object
@@ -3373,37 +3390,39 @@ components:
 
     CronJobRequest:
       type: object
-      required: [name, applicationName, cronExpression]
+      required: [name, kind, cronExpression]
       properties:
-        name:            { type: string, description: "≤ 128 chars, non-blank." }
-        applicationName: { type: string, description: "Must be a registered application." }
-        templateBlobId:
-          type: string
-          nullable: true
-          description: "Required for kind=LAUNCH_RUN; must be fetchable from document-service and its application must match."
-        cronExpression:  { type: string, description: "5-field unix, 6-field, or @macro. Validated server-side." }
-        timeZone:        { type: string, nullable: true, description: "IANA zone id; defaults to UTC.", default: UTC }
+        name: { type: string, description: "≤ 128 chars, non-blank. Unique within the group." }
         kind:
           type: string
+          description: "Required — there is no default."
+          enum: [LAUNCH_WORKFLOW, SCALE_OUT, SCALE_IN, INFRA_READINESS, DAILY_REPORT]
+        groupId:
+          type: string
           nullable: true
-          description: "AUTOMATION Phase C/E/D — null defaults to LAUNCH_RUN. INFRA_READINESS and DAILY_REPORT are platform-wide reports (no application/template/region; just a cron + recipients)."
-          enum: [LAUNCH_RUN, DRAIN_REGION, PROVISION_REGION, INFRA_READINESS, DAILY_REPORT]
+          description: "Required for every kind but the reports; must be a registered application group (else 400 UNKNOWN_APPLICATION_GROUP). Ignored and stored null for report kinds."
+        workflowId:
+          type: string
+          nullable: true
+          description: "Required for kind=LAUNCH_WORKFLOW. Must exist (else 400 UNKNOWN_WORKFLOW) and belong to `groupId` (else 400 INVALID_REQUEST) — one team's cadence must not spend another's reservation."
         region:
           type: string
           nullable: true
-          description: "Required for kind=DRAIN_REGION / PROVISION_REGION; must be a configured groupCapacity row of the application's group (else 400 REGION_NOT_CONFIGURED)."
+          description: "Required for kind=SCALE_OUT / SCALE_IN; the group must hold a reservation on that cluster (else 400 REGION_NOT_CONFIGURED)."
+        cronExpression: { type: string, description: "5-field unix, 6-field, or @macro. Validated server-side." }
+        timeZone:       { type: string, nullable: true, description: "IANA zone id; defaults to UTC.", default: UTC }
         recipients:
           type: string
           nullable: true
-          description: "Comma-separated emails for report kinds (INFRA_READINESS / DAILY_REPORT); blank uses the AUTOMATION_REPORT_RECIPIENTS env fallback."
+          description: "Comma-separated emails for report kinds; blank uses the AUTOMATION_REPORT_RECIPIENTS env fallback."
         customSubject:
           type: string
           nullable: true
-          description: "AUTOMATION — optional custom email subject for report kinds; blank → composer default."
+          description: "Optional custom email subject for report kinds; blank → composer default."
         customIntro:
           type: string
           nullable: true
-          description: "AUTOMATION — optional intro/note rendered above the report body for report kinds."
+          description: "Optional intro/note rendered above the report body for report kinds."
 
     CronJobFire:
       type: object
@@ -3414,8 +3433,14 @@ components:
         firedAt:     { type: string, format: date-time }
         outcome:
           type: string
+          description: |
+            SKIPPED means this window did not run and the next one may — an
+            already-running workflow, a graph that no longer fits the group's
+            reservation, an alwaysOn group asked to scale in. FAILED means the
+            schedule cannot work until someone changes something: a deleted
+            workflow, or a graph the validator rejects.
           enum: [LAUNCHED, SKIPPED, FAILED, DISABLED]
-        runId:       { type: string, nullable: true, description: "Set for LAUNCHED." }
+        executionId: { type: string, nullable: true, description: "The workflow execution started; set for LAUNCHED on LAUNCH_WORKFLOW." }
         errorReason: { type: string, nullable: true, description: "Diagnostic for SKIPPED / FAILED." }
 
     CronJobFireResult:
@@ -3425,8 +3450,8 @@ components:
         outcome:
           type: string
           enum: [LAUNCHED, SKIPPED, FAILED, DISABLED]
-        runId: { type: string, nullable: true }
-        error: { type: string, nullable: true }
+        executionId: { type: string, nullable: true, description: "The workflow execution started; set for LAUNCHED on LAUNCH_WORKFLOW." }
+        error:       { type: string, nullable: true, description: "Why it was SKIPPED or FAILED." }
 
     GroupCapacityEntry:
       type: object

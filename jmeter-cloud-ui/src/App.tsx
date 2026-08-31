@@ -3,8 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-
 import { Layout } from "./components/Layout";
 import { ApplicationsListPage } from "./pages/ApplicationsListPage";
 import { ApplicationDetailPage } from "./pages/ApplicationDetailPage";
-import { AutomationListPage } from "./pages/AutomationListPage";
-import { AutomationDetailPage } from "./pages/AutomationDetailPage";
+import { AutomationPage } from "./pages/AutomationPage";
 import { CapacityListPage } from "./pages/CapacityListPage";
 import { CapacityDetailPage } from "./pages/CapacityDetailPage";
 import { CapacitySection } from "./pages/CapacitySection";
@@ -114,13 +113,13 @@ export function App() {
               now lives at `/applications/:appName/runs/new`. The Templates
               detail page surfaces "Launch a Run" in the header. */}
 
-          {/* Phase IA-Automation (2026-05-13) — list-then-drill-in IA
-              matching `/capacity`, `/documents`, `/templates`. The page
-              is shipped against a stub `cronJobsApi.list()` returning
-              [] until the D6-A backend (Quartz scheduler) lands; see
-              src/api/automation.ts header for the one-line swap. */}
-          <Route path="automation"           element={<AutomationListPage />} />
-          <Route path="automation/:appName"  element={<AutomationDetailPage />} />
+          {/* AUTOMATION-3 (2026-08-31) — one page, three sections (workflow
+              automation, platform reports, platform infrastructure). The
+              per-application drill-in is gone: schedules are scoped to an
+              application GROUP, so there was nothing per-application left to
+              show. Old bookmarks land on the page rather than a 404. */}
+          <Route path="automation" element={<AutomationPage />} />
+          <Route path="automation/:appName" element={<Navigate to="/automation" replace />} />
 
           <Route path="*" element={<NotFoundPage />} />
         </Route>

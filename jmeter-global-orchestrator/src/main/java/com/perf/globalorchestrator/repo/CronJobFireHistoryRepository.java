@@ -31,24 +31,24 @@ public class CronJobFireHistoryRepository {
                 rs.getString("CRON_JOB_ID"),
                 OracleBind.instant(rs, "FIRED_AT"),
                 rs.getString("OUTCOME"),
-                rs.getString("RUN_ID"),
+                rs.getString("EXECUTION_ID"),
                 rs.getString("ERROR_REASON"));
     }
 
     public void insert(CronJobFire f) {
         jdbc.update(
                 "INSERT INTO ORCH_CRON_JOB_FIRE_HISTORY "
-                + "(FIRE_ID,CRON_JOB_ID,FIRED_AT,OUTCOME,RUN_ID,ERROR_REASON) "
+                + "(FIRE_ID,CRON_JOB_ID,FIRED_AT,OUTCOME,EXECUTION_ID,ERROR_REASON) "
                 + "VALUES (?,?,?,?,?,?)",
                 f.fireId(), f.cronJobId(),
                 OracleBind.ts(f.firedAt()),
-                f.outcome(), f.runId(), OracleBind.text(f.errorReason(), OracleBind.TEXT_CHARS));
+                f.outcome(), f.executionId(), OracleBind.text(f.errorReason(), OracleBind.TEXT_CHARS));
     }
 
     /** Newest-first fire history for one schedule, capped at {@code limit}. */
     public List<CronJobFire> findByCronJobId(String cronJobId, int limit) {
         return jdbc.query(
-                "SELECT FIRE_ID,CRON_JOB_ID,FIRED_AT,OUTCOME,RUN_ID,ERROR_REASON "
+                "SELECT FIRE_ID,CRON_JOB_ID,FIRED_AT,OUTCOME,EXECUTION_ID,ERROR_REASON "
                 + "FROM ORCH_CRON_JOB_FIRE_HISTORY "
                 + "WHERE CRON_JOB_ID=? ORDER BY FIRED_AT DESC FETCH FIRST ? ROWS ONLY",
                 rowMapper, cronJobId, limit);

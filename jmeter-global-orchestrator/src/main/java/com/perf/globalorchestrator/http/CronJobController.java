@@ -5,16 +5,20 @@ import com.perf.globalorchestrator.client.DocumentServiceClient;
 import com.perf.globalorchestrator.client.DocumentServiceClient.TemplateUnavailableException;
 import com.perf.globalorchestrator.client.TemplateBody;
 import com.perf.globalorchestrator.domain.Actor;
+import com.perf.globalorchestrator.domain.ApplicationGroup;
 import com.perf.globalorchestrator.domain.Application;
 import com.perf.globalorchestrator.domain.CronJob;
 import com.perf.globalorchestrator.domain.CronJobFire;
 import com.perf.globalorchestrator.domain.CronJobKind;
 import com.perf.globalorchestrator.domain.Ulid;
+import com.perf.globalorchestrator.domain.Workflow;
 import com.perf.globalorchestrator.observability.MdcEnrichmentFilter;
 import com.perf.globalorchestrator.repo.GroupCapacityRepository;
+import com.perf.globalorchestrator.repo.WorkflowRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.CronJobFireHistoryRepository;
 import com.perf.globalorchestrator.repo.CronJobRepository;
+import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.service.CronFireService;
 import com.perf.globalorchestrator.service.CronFireService.FireResult;
 import com.perf.globalorchestrator.service.CronSchedule;
@@ -41,21 +45,22 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * REST surface for CRON schedules. The contract (paths, field
- * names, {@code {items:[...]}} list shape) is taken verbatim from the UI stub
- * {@code jmeter-cloud-ui/src/api/automation.ts} so flipping that stub to live
- * data is the promised one-line change.
+ * REST surface for CRON schedules. The contract (paths, field names,
+ * {@code {items:[...]}} list shape) matches
+ * {@code jmeter-cloud-ui/src/api/automation.ts} field for field.
  *
  * <p>Conventions mirror {@link ApplicationController}: inner exception classes
  * + {@code @ExceptionHandler}s returning {@code {code,message}}, the
  * {@code X-Actor} header read via {@link Actor#fromHeader}, and validation that
  * fails fast with a 400.
  *
- * <p>A schedule pairs an application + a saved Template + a cron expression.
- * Create/update validate that the cron parses, the application is registered,
- * the template is fetchable from document-service, and the template's own
- * application agrees with the schedule's — so a scheduled run can never quietly
- * target a different application than the one the operator named.
+ * <p><b>A schedule names an application group, never an application</b>
+ * (AUTOMATION-3, 2026-08-31). What else it carries is decided by its
+ * {@link CronJobKind}, and {@code ORCH_CRON_JOB_KIND_FIELDS_CHK} is the
+ * database-side backstop for the validation here: a workflow must belong to the
+ * group that schedules it, and a cluster must be one the group has reserved
+ * capacity on — so a fire can never quietly act on something the operator did
+ * not name.
  */
 @RestController
 @RequestMapping("/api/v1/cronJobs")
@@ -68,22 +73,22 @@ public class CronJobController {
 
     private final CronJobRepository cronJobs;
     private final CronJobFireHistoryRepository fireHistory;
-    private final ApplicationRepository applications;
+    private final ApplicationGroupRepository groups;
+    private final WorkflowRepository workflows;
     private final GroupCapacityRepository capacities;
-    private final DocumentServiceClient documentService;
     private final CronFireService fireService;
 
     public CronJobController(CronJobRepository cronJobs,
                              CronJobFireHistoryRepository fireHistory,
-                             ApplicationRepository applications,
+                             ApplicationGroupRepository groups,
+                             WorkflowRepository workflows,
                              GroupCapacityRepository capacities,
-                             DocumentServiceClient documentService,
                              CronFireService fireService) {
         this.cronJobs = cronJobs;
         this.fireHistory = fireHistory;
-        this.applications = applications;
+        this.groups = groups;
+        this.workflows = workflows;
         this.capacities = capacities;
-        this.documentService = documentService;
         this.fireService = fireService;
     }
 
@@ -91,16 +96,20 @@ public class CronJobController {
 
     @GetMapping
     public ResponseEntity<CronJobListResponse> list(
-            @RequestParam(value = "application", required = false) String application) {
-        List<CronJobSummary> items = cronJobs.findAll(application).stream()
-                .map(CronJobSummary::from)
+            @RequestParam(value = "groupId", required = false) String groupId) {
+        // Workflow names are hydrated here so the Automation page renders every
+        // row from ONE request; a name that no longer resolves stays null and
+        // the UI says the workflow was deleted.
+        Map<String, String> workflowNames = workflows.namesById();
+        List<CronJobSummary> items = cronJobs.findAll(groupId).stream()
+                .map(job -> CronJobSummary.from(job, workflowNames.get(job.workflowId())))
                 .toList();
         return ResponseEntity.ok(new CronJobListResponse(items));
     }
 
     @GetMapping("/{cronJobId:" + Ulid.PATTERN + "}")
     public ResponseEntity<CronJobSummary> get(@PathVariable String cronJobId) {
-        return ResponseEntity.ok(CronJobSummary.from(require(cronJobId)));
+        return ResponseEntity.ok(hydrate(require(cronJobId)));
     }
 
     @GetMapping("/{cronJobId:" + Ulid.PATTERN + "}/history")
@@ -127,7 +136,7 @@ public class CronJobController {
 
         Instant now = Instant.now();
         CronJob job = new CronJob(
-                Ulid.generate(), name, r.applicationName(), r.templateBlobId(),
+                Ulid.generate(), name, r.groupId(), r.workflowId(),
                 req.cronExpression().trim(), timeZone, /* enabled */ true,
                 Actor.fromHeader(actorHeader).name(), now,
                 /* lastFiredAt */ null, /* lastFiredRunId */ null, /* lastFireStatus */ null,
@@ -137,9 +146,9 @@ public class CronJobController {
         try {
             cronJobs.insert(job);
         } catch (DuplicateKeyException e) {
-            throw new CronJobConflictException(r.applicationName(), name);
+            throw new CronJobConflictException(r.groupId(), name);
         }
-        return ResponseEntity.status(HttpStatus.CREATED).body(CronJobSummary.from(job));
+        return ResponseEntity.status(HttpStatus.CREATED).body(hydrate(job));
     }
 
     @PutMapping("/{cronJobId:" + Ulid.PATTERN + "}")
@@ -160,13 +169,13 @@ public class CronJobController {
                 ? CronSchedule.nextFireAfter(req.cronExpression(), timeZone, Instant.now())
                 : null;
         try {
-            cronJobs.update(cronJobId, name, r.applicationName(), r.templateBlobId(),
+            cronJobs.update(cronJobId, name, r.groupId(), r.workflowId(),
                     req.cronExpression().trim(), timeZone, nextFireAt, kind, r.region(), r.recipients(),
                     r.customSubject(), r.customIntro());
         } catch (DuplicateKeyException e) {
-            throw new CronJobConflictException(r.applicationName(), name);
+            throw new CronJobConflictException(r.groupId(), name);
         }
-        return ResponseEntity.ok(CronJobSummary.from(require(cronJobId)));
+        return ResponseEntity.ok(hydrate(require(cronJobId)));
     }
 
     @DeleteMapping("/{cronJobId:" + Ulid.PATTERN + "}")
@@ -183,14 +192,14 @@ public class CronJobController {
         CronJob job = require(cronJobId);
         Instant next = CronSchedule.nextFireAfter(job.cronExpression(), job.timeZone(), Instant.now());
         cronJobs.setEnabled(cronJobId, true, next);
-        return ResponseEntity.ok(CronJobSummary.from(require(cronJobId)));
+        return ResponseEntity.ok(hydrate(require(cronJobId)));
     }
 
     @PostMapping("/{cronJobId:" + Ulid.PATTERN + "}/disable")
     public ResponseEntity<CronJobSummary> disable(@PathVariable String cronJobId) {
         require(cronJobId);
         cronJobs.setEnabled(cronJobId, false, null);
-        return ResponseEntity.ok(CronJobSummary.from(require(cronJobId)));
+        return ResponseEntity.ok(hydrate(require(cronJobId)));
     }
 
     /**
@@ -207,7 +216,7 @@ public class CronJobController {
         }
         Instant after = CronSchedule.nextFireAfter(job.cronExpression(), job.timeZone(), job.nextFireAt());
         cronJobs.setNextFireAt(cronJobId, after);
-        return ResponseEntity.ok(CronJobSummary.from(require(cronJobId)));
+        return ResponseEntity.ok(hydrate(require(cronJobId)));
     }
 
     /**
@@ -224,7 +233,7 @@ public class CronJobController {
         FireResult result = fireService.fire(job, Actor.fromHeader(actorHeader));
         Map<String, Object> body = new java.util.LinkedHashMap<>();
         body.put("outcome", result.outcome().name());
-        body.put("runId", result.runId());
+        body.put("executionId", result.executionId());
         body.put("error", result.error());
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(body);
     }
@@ -247,48 +256,47 @@ public class CronJobController {
         return trimmed;
     }
 
-    /** Returns the registered {@link Application}; 400 if it isn't registered.
-     *  Returning the full Application (not just the name) lets the per-kind
-     *  region-configured check use {@code applicationId} without a second lookup. */
-    private Application validateApplicationExists(String applicationName) {
-        if (applicationName == null || applicationName.isBlank()) {
-            throw new CronJobValidationException("applicationName is required");
+    /** The group a schedule is scoped to; 400 when absent or unregistered. */
+    private ApplicationGroup validateGroupExists(String groupId) {
+        if (groupId == null || groupId.isBlank()) {
+            throw new CronJobValidationException("groupId is required for kind=" + "LAUNCH_WORKFLOW/SCALE_OUT/SCALE_IN");
         }
-        String trimmed = applicationName.trim();
-        return applications.findByName(trimmed)
-                .orElseThrow(() -> new UnknownApplicationException(trimmed));
+        String trimmed = groupId.trim();
+        return groups.findById(trimmed)
+                .orElseThrow(() -> new UnknownGroupException(trimmed));
     }
 
     private static String normaliseTimeZone(String tz) {
         return tz == null || tz.isBlank() ? "UTC" : tz.trim();
     }
 
-    /** Parse the kind, defaulting null/blank to LAUNCH_RUN for backward compat. */
+    /** Parse the kind. There is no default: every caller states what it wants. */
     private static CronJobKind resolveKind(String raw) {
-        if (raw == null || raw.isBlank()) return CronJobKind.LAUNCH_RUN;
+        if (raw == null || raw.isBlank()) {
+            throw new CronJobValidationException("kind is required");
+        }
         try {
             return CronJobKind.valueOf(raw.trim());
         } catch (IllegalArgumentException e) {
             throw new CronJobValidationException(
-                    "kind must be one of LAUNCH_RUN, DRAIN_REGION, PROVISION_REGION, "
+                    "kind must be one of LAUNCH_WORKFLOW, SCALE_OUT, SCALE_IN, "
                             + "INFRA_READINESS, DAILY_REPORT — got " + raw);
         }
     }
 
-    /** Resolved persisted fields per kind — per-app kinds carry app/template/region;
-     *  report kinds carry recipients + optional custom subject/intro and leave
-     *  app/template/region null. */
-    private record Resolved(String applicationName, String templateBlobId, String region,
+    /** The kind-dependent fields, after validation. */
+    private record Resolved(String groupId, String workflowId, String region,
                             String recipients, String customSubject, String customIntro) {}
 
     /**
      * Validate + resolve the kind-dependent fields:
      * <ul>
-     *   <li>report kinds (INFRA_READINESS / DAILY_REPORT) — platform-wide: no
-     *       application / template / region; recipients optional (env fallback
-     *       at fire time).</li>
-     *   <li>per-app kinds — application must exist + per-kind template/region
-     *       (delegated to {@link #validateKindFields}).</li>
+     *   <li>report kinds — platform-wide: no group, workflow or region;
+     *       recipients optional (env fallback at fire time).</li>
+     *   <li>LAUNCH_WORKFLOW — the group must exist and the workflow must belong
+     *       to <i>that</i> group.</li>
+     *   <li>SCALE_OUT / SCALE_IN — the group must exist and hold a reservation
+     *       on the named cluster.</li>
      * </ul>
      */
     private Resolved resolveForKind(CronJobKind kind, CronJobRequest req) {
@@ -296,9 +304,35 @@ public class CronJobController {
             return new Resolved(null, null, null, trimToNull(req.recipients()),
                     trimToNull(req.customSubject()), trimToNull(req.customIntro()));
         }
-        Application app = validateApplicationExists(req.applicationName());
-        Normalised norm = validateKindFields(kind, req.templateBlobId(), req.region(), app);
-        return new Resolved(app.name(), norm.templateBlobId(), norm.region(), null, null, null);
+        ApplicationGroup group = validateGroupExists(req.groupId());
+        if (kind.isScaling()) {
+            String region = trimToNull(req.region());
+            if (region == null) {
+                throw new CronJobValidationException("region is required for kind=" + kind);
+            }
+            // A group can only scale where it holds a reservation; without this
+            // the fire would SKIP every window with "no capacity configured"
+            // and the operator would never learn why from the create call.
+            if (capacities.find(group.groupId(), region).isEmpty()) {
+                throw new RegionNotConfiguredException(group.groupId(), region);
+            }
+            return new Resolved(group.groupId(), null, region, null, null, null);
+        }
+        // LAUNCH_WORKFLOW
+        String workflowId = trimToNull(req.workflowId());
+        if (workflowId == null) {
+            throw new CronJobValidationException("workflowId is required for kind=LAUNCH_WORKFLOW");
+        }
+        Workflow workflow = workflows.findById(workflowId)
+                .orElseThrow(() -> new UnknownWorkflowException(workflowId));
+        // Cross-group scheduling would let one team's cadence spend another
+        // team's reservation.
+        if (!workflow.groupId().equals(group.groupId())) {
+            throw new CronJobValidationException(
+                    "workflow '" + workflow.name() + "' belongs to group '" + workflow.groupId()
+                            + "' but the schedule names '" + group.groupId() + "'");
+        }
+        return new Resolved(group.groupId(), workflow.workflowId(), null, null, null, null);
     }
 
     private static String trimToNull(String s) {
@@ -307,85 +341,46 @@ public class CronJobController {
         return t.isEmpty() ? null : t;
     }
 
-    /** Normalised templateBlobId + region after the per-kind validation. */
-    private record Normalised(String templateBlobId, String region) {}
-
-    /**
-     * Per-kind cross-field validation:
-     * <ul>
-     *   <li>LAUNCH_RUN — templateBlobId required + fetchable + its own
-     *       application matches the schedule's; region is dropped (null) so a
-     *       LAUNCH row never carries a misleading region.</li>
-     *   <li>DRAIN_REGION / PROVISION_REGION — region required + must be a
-     *       configured row in applicationCapacity for this app
-     *       (REGION_NOT_CONFIGURED otherwise); templateBlobId dropped.</li>
-     * </ul>
-     */
-    private Normalised validateKindFields(CronJobKind kind, String templateBlobId,
-                                          String region, Application app) {
-        switch (kind) {
-            case LAUNCH_RUN -> {
-                if (templateBlobId == null || templateBlobId.isBlank()) {
-                    throw new CronJobValidationException(
-                            "templateBlobId is required for kind=LAUNCH_RUN");
-                }
-                TemplateBody tpl = documentService.fetchTemplate(templateBlobId.trim());
-                String tplApp = tpl.application();
-                if (tplApp != null && !tplApp.isBlank() && !tplApp.trim().equals(app.name())) {
-                    throw new CronJobValidationException(
-                            "template targets application '" + tplApp.trim()
-                                    + "' but the schedule names '" + app.name() + "'");
-                }
-                return new Normalised(templateBlobId.trim(), null);
-            }
-            case DRAIN_REGION, PROVISION_REGION -> {
-                if (region == null || region.isBlank()) {
-                    throw new CronJobValidationException(
-                            "region is required for kind=" + kind);
-                }
-                String trimmed = region.trim();
-                if (capacities.find(app.metricsGroupId(), trimmed).isEmpty()) {
-                    throw new RegionNotConfiguredException(app.name(), trimmed);
-                }
-                return new Normalised(null, trimmed);
-            }
-        }
-        // Unreachable — resolveKind validates the enum upstream.
-        throw new IllegalStateException("unhandled kind " + kind);
+    /** One schedule with its workflow name filled in. */
+    private CronJobSummary hydrate(CronJob job) {
+        String workflowName = job.workflowId() == null ? null
+                : workflows.findById(job.workflowId()).map(Workflow::name).orElse(null);
+        return CronJobSummary.from(job, workflowName);
     }
 
     // ── DTOs ───────────────────────────────────────────────────────────
 
     /** Wire response — mirrors {@code CronJobSummary} in automation.ts exactly
-     *  (no internal {@code claimedAt}). Phase C — kind + region; templateBlobId
-     *  is nullable (DRAIN_REGION / PROVISION_REGION rows don't use one). */
+     *  (no internal {@code claimedAt}). {@code workflowName} is hydrated, not
+     *  stored, so the Automation page renders a row without a second call; it
+     *  is null when the workflow has been deleted. */
     public record CronJobSummary(
             String cronJobId,
             String name,
-            String applicationName,
-            String templateBlobId,
+            CronJobKind kind,
+            String groupId,
+            String workflowId,
+            String workflowName,
+            String region,
             String cronExpression,
             String timeZone,
             boolean enabled,
             String createdBy,
             Instant createdAt,
             Instant lastFiredAt,
-            String lastFiredRunId,
+            String lastFiredExecutionId,
             String lastFireStatus,
             Instant nextFireAt,
-            CronJobKind kind,
-            String region,
             String recipients,
             String customSubject,
             String customIntro) {
 
-        static CronJobSummary from(CronJob c) {
+        static CronJobSummary from(CronJob c, String workflowName) {
             return new CronJobSummary(
-                    c.cronJobId(), c.name(), c.applicationName(), c.templateBlobId(),
-                    c.cronExpression(), c.timeZone(), c.enabled(), c.createdBy(),
-                    c.createdAt(), c.lastFiredAt(), c.lastFiredRunId(), c.lastFireStatus(),
-                    c.nextFireAt(), c.kind(), c.region(), c.recipients(),
-                    c.customSubject(), c.customIntro());
+                    c.cronJobId(), c.name(), c.kind(), c.groupId(), c.workflowId(), workflowName,
+                    c.region(), c.cronExpression(), c.timeZone(), c.enabled(), c.createdBy(),
+                    c.createdAt(), c.lastFiredAt(), c.lastFiredExecutionId(), c.lastFireStatus(),
+                    c.nextFireAt(), c.recipients(), c.customSubject(), c.customIntro());
         }
     }
 
@@ -394,13 +389,15 @@ public class CronJobController {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record CronJobRequest(
             String name,
-            String applicationName,
-            String templateBlobId,
+            /** LAUNCH_WORKFLOW | SCALE_OUT | SCALE_IN | INFRA_READINESS | DAILY_REPORT. Required. */
+            String kind,
+            /** The owning application group. Required for every kind but the reports. */
+            String groupId,
+            /** Required for kind=LAUNCH_WORKFLOW; must belong to {@code groupId}. */
+            String workflowId,
             String cronExpression,
             String timeZone,
-            /** AUTOMATION Phase C/E/D — LAUNCH_RUN (default) | DRAIN_REGION | PROVISION_REGION | INFRA_READINESS | DAILY_REPORT. */
-            String kind,
-            /** Required for DRAIN_REGION / PROVISION_REGION; ignored otherwise. */
+            /** Required for kind=SCALE_OUT / SCALE_IN; ignored otherwise. */
             String region,
             /** AUTOMATION Phase E/D — comma-separated emails for report kinds (INFRA_READINESS / DAILY_REPORT); env fallback if blank. */
             String recipients,
@@ -417,22 +414,27 @@ public class CronJobController {
     static final class CronJobValidationException extends RuntimeException {
         CronJobValidationException(String message) { super(message); }
     }
-    static final class UnknownApplicationException extends RuntimeException {
-        UnknownApplicationException(String name) {
-            super("application not registered: " + name);
+    static final class UnknownGroupException extends RuntimeException {
+        UnknownGroupException(String groupId) {
+            super("application group not registered: " + groupId);
+        }
+    }
+    static final class UnknownWorkflowException extends RuntimeException {
+        UnknownWorkflowException(String workflowId) {
+            super("workflow not found: " + workflowId);
         }
     }
     static final class CronJobConflictException extends RuntimeException {
-        CronJobConflictException(String application, String name) {
-            super(application == null
+        CronJobConflictException(String groupId, String name) {
+            super(groupId == null
                     ? "a platform schedule named '" + name + "' already exists"
-                    : "a schedule named '" + name + "' already exists for application '" + application + "'");
+                    : "a schedule named '" + name + "' already exists in group '" + groupId + "'");
         }
     }
     static final class RegionNotConfiguredException extends RuntimeException {
-        RegionNotConfiguredException(String application, String region) {
-            super("region '" + region + "' is not configured for application '" + application
-                    + "' — add a capacity row first");
+        RegionNotConfiguredException(String groupId, String region) {
+            super("group '" + groupId + "' holds no reservation on cluster '" + region
+                    + "' — reserve capacity there first");
         }
     }
     static final class NothingToSkipException extends RuntimeException {
@@ -459,10 +461,16 @@ public class CronJobController {
                 .body(Map.of("code", "INVALID_CRON", "message", e.getMessage()));
     }
 
-    @ExceptionHandler(UnknownApplicationException.class)
-    public ResponseEntity<Map<String, String>> handleUnknownApp(UnknownApplicationException e) {
+    @ExceptionHandler(UnknownGroupException.class)
+    public ResponseEntity<Map<String, String>> handleUnknownGroup(UnknownGroupException e) {
         return ResponseEntity.badRequest()
-                .body(Map.of("code", "UNKNOWN_APPLICATION", "message", e.getMessage()));
+                .body(Map.of("code", "UNKNOWN_APPLICATION_GROUP", "message", e.getMessage()));
+    }
+
+    @ExceptionHandler(UnknownWorkflowException.class)
+    public ResponseEntity<Map<String, String>> handleUnknownWorkflow(UnknownWorkflowException e) {
+        return ResponseEntity.badRequest()
+                .body(Map.of("code", "UNKNOWN_WORKFLOW", "message", e.getMessage()));
     }
 
     @ExceptionHandler(TemplateUnavailableException.class)

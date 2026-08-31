@@ -1,7 +1,13 @@
 /**
  * Automation API client — CRON schedules. Backend: the global-orchestrator's
- * `/api/v1/cronJobs` surface (AUTOMATION Phase A+B). A DB-claim scheduler fires
- * due schedules; this client drives the CRUD + lifecycle + manual-fire actions.
+ * `/api/v1/cronJobs` surface. A DB-claim scheduler fires due schedules; this
+ * client drives the CRUD + lifecycle + manual-fire actions.
+ *
+ * <p><b>Every schedule belongs to an application group, not an application</b>
+ * (AUTOMATION-3, 2026-08-31). A load test is scheduled by scheduling the
+ * *workflow* that runs it — a one-node workflow is exactly the old
+ * "fire a template" — and workers are scaled per (group, region), which is the
+ * axis the reservation grid has used since GROUP-CAPACITY.
  *
  * <p>Contract matches `jmeter-global-orchestrator/api/openapi.yaml`
  * (`CronJobSummary` / `CronJobRequest`). Mutating calls carry the operator's
@@ -13,21 +19,33 @@ import { getActor } from "../actor";
 export type CronJobFireStatus = "LAUNCHED" | "SKIPPED" | "FAILED" | "DISABLED";
 
 /**
- * What a fire does:
- *   LAUNCH_RUN       fire a saved template;
- *   DRAIN_REGION     drain every IDLE worker of the app's group in that region (cost saving; skipped when the group is always on);
- *   PROVISION_REGION spin workers up to the configured cap.
+ * What a fire does. Three families, one per Automation section:
+ *   LAUNCH_WORKFLOW              run a saved workflow in its group;
+ *   SCALE_OUT / SCALE_IN         add workers up to the group's reservation in a
+ *                                cluster / release its idle ones (SCALE_IN is a
+ *                                no-op on an alwaysOn group);
+ *   INFRA_READINESS / DAILY_REPORT  email a platform-wide report.
  */
 export type CronJobKind =
-  | "LAUNCH_RUN"
-  | "DRAIN_REGION"
-  | "PROVISION_REGION"
+  | "LAUNCH_WORKFLOW"
+  | "SCALE_OUT"
+  | "SCALE_IN"
   | "INFRA_READINESS"
   | "DAILY_REPORT";
 
-/** Platform-wide report kinds carry no application/template/region — just a cron + recipients. */
+/** Platform-wide report kinds carry no group, workflow or region — just a cron + recipients. */
 export function isReportKind(kind: CronJobKind): boolean {
   return kind === "INFRA_READINESS" || kind === "DAILY_REPORT";
+}
+
+/** Scale out/in kinds are keyed on (group, region). */
+export function isInfraKind(kind: CronJobKind): boolean {
+  return kind === "SCALE_OUT" || kind === "SCALE_IN";
+}
+
+/** The one kind that launches work; keyed on (group, workflow). */
+export function isWorkflowKind(kind: CronJobKind): boolean {
+  return kind === "LAUNCH_WORKFLOW";
 }
 
 /**
@@ -39,23 +57,25 @@ export function isReportKind(kind: CronJobKind): boolean {
 export interface CronJobSummary {
   cronJobId: string;
   name: string;
-  /** Null for platform-wide report kinds (INFRA_READINESS / DAILY_REPORT). */
-  applicationName?: string | null;
-  /** Null for DRAIN_REGION / PROVISION_REGION (only LAUNCH_RUN uses a template). */
-  templateBlobId?: string | null;
+  kind: CronJobKind;
+  /** The owning application group. Null only for the platform-wide report kinds. */
+  groupId?: string | null;
+  /** Required for LAUNCH_WORKFLOW; null otherwise. */
+  workflowId?: string | null;
+  /** Hydrated by the hub so a list needs no second call; null if the workflow was deleted. */
+  workflowName?: string | null;
+  /** Required for SCALE_OUT / SCALE_IN; null otherwise. */
+  region?: string | null;
   cronExpression: string;
   timeZone: string;
   enabled: boolean;
   createdBy?: string | null;
   createdAt: string;
   lastFiredAt?: string | null;
-  lastFiredRunId?: string | null;
+  /** The workflow execution the last fire started (LAUNCH_WORKFLOW only). */
+  lastFiredExecutionId?: string | null;
   lastFireStatus?: CronJobFireStatus | null;
   nextFireAt?: string | null;
-  /** AUTOMATION Phase C — defaults to LAUNCH_RUN for legacy rows. */
-  kind: CronJobKind;
-  /** Required for DRAIN_REGION / PROVISION_REGION; null for LAUNCH_RUN. */
-  region?: string | null;
   /** Comma-separated recipients for report kinds; null otherwise. */
   recipients?: string | null;
   /** Optional custom email subject for report kinds; null → composer default. */
@@ -64,18 +84,18 @@ export interface CronJobSummary {
   customIntro?: string | null;
 }
 
-/** Body for create + update. */
+/** Body for create + update. Which fields are required depends on `kind`. */
 export interface CronJobRequest {
   name: string;
-  applicationName: string;
-  /** Required for kind=LAUNCH_RUN. */
-  templateBlobId?: string;
+  kind: CronJobKind;
+  /** Required for every kind but the reports. */
+  groupId?: string;
+  /** Required for kind=LAUNCH_WORKFLOW. */
+  workflowId?: string;
+  /** Required for kind=SCALE_OUT / SCALE_IN. */
+  region?: string;
   cronExpression: string;
   timeZone?: string;
-  /** Defaults to LAUNCH_RUN server-side when omitted. */
-  kind?: CronJobKind;
-  /** Required for kind=DRAIN_REGION / PROVISION_REGION. */
-  region?: string;
   /** Comma-separated recipients for report kinds (INFRA_READINESS / DAILY_REPORT). */
   recipients?: string;
   /** Optional custom email subject for report kinds; blank → composer default. */
@@ -87,7 +107,8 @@ export interface CronJobRequest {
 /** Result of a manual `fireNow`. */
 export interface CronJobFireResult {
   outcome: CronJobFireStatus;
-  runId?: string | null;
+  /** The workflow execution started, when the fire launched one. */
+  executionId?: string | null;
   error?: string | null;
 }
 
@@ -97,7 +118,7 @@ export interface CronJobFire {
   cronJobId: string;
   firedAt: string;
   outcome: CronJobFireStatus;
-  runId?: string | null;
+  executionId?: string | null;
   errorReason?: string | null;
 }
 
@@ -112,7 +133,8 @@ export class CronJobApiError extends Error {
 }
 
 export interface CronJobListFilter {
-  application?: string;
+  /** Narrow to one application group. */
+  groupId?: string;
   enabled?: boolean;
 }
 
@@ -153,10 +175,10 @@ async function request<T>(
 }
 
 export const cronJobsApi = {
-  /** List schedules, optionally filtered by application. */
+  /** List schedules, optionally filtered by group. */
   list: async (filter?: CronJobListFilter, signal?: AbortSignal): Promise<CronJobSummary[]> => {
-    const qs = filter?.application
-      ? `?application=${encodeURIComponent(filter.application)}`
+    const qs = filter?.groupId
+      ? `?groupId=${encodeURIComponent(filter.groupId)}`
       : "";
     const payload = await request<{ items: CronJobSummary[] }>("GET", `/api/v1/cronJobs${qs}`, undefined, signal);
     const items = payload.items ?? [];

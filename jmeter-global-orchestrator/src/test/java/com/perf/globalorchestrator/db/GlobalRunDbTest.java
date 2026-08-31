@@ -168,8 +168,9 @@ class GlobalRunDbTest extends OracleDbTestSupport {
     void all_migrations_applied_and_every_object_is_valid() {
         assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_objects WHERE status <> 'VALID'", Integer.class)).isZero();
         // 13 control-plane tables from V2 + ORCH_PLUGIN (V3) + ORCH_REGION (V4)
-        // + the three workflow tables (V5) + ORCH_CACHE (V8).
-        assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_tables WHERE table_name LIKE 'ORCH\\_%' ESCAPE '\\'", Integer.class)).isEqualTo(19);
+        // + the three workflow tables (V5) + ORCH_CACHE (V8)
+        // + ORCH_CRON_JOB_RETIRED (V9).
+        assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_tables WHERE table_name LIKE 'ORCH\\_%' ESCAPE '\\'", Integer.class)).isEqualTo(20);
         // One convention for the whole schema: nothing quoted-case except Flyway's own history table.
         assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_objects WHERE object_name <> UPPER(object_name) AND object_name NOT LIKE 'flyway\\_schema\\_history%' ESCAPE '\\'", Integer.class)).isZero();
         assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_tab_columns WHERE column_name <> UPPER(column_name) AND table_name <> 'flyway_schema_history'", Integer.class)).isZero();
@@ -376,6 +377,65 @@ class GlobalRunDbTest extends OracleDbTestSupport {
         assertThat(west).isNotNull();
         assertThat(west.provisioned()).isEqualTo(1);
         assertThat(west.inUse()).isZero();
+    }
+
+    /**
+     * V9's field matrix, against the real constraint. The CHECK is the last line
+     * of defence behind the controller: it is what makes "a scale schedule with
+     * no cluster" or "a report scoped to a group" unrepresentable rather than
+     * merely rejected by whichever code path happens to look.
+     */
+    @Test
+    void v9_cron_job_kind_field_matrix_is_enforced_by_the_database() {
+        app("app-v9", "v9app", "v9grp");
+        ensureRegion("na-east", 20);
+        groupCapacity.upsert("v9grp", "na-east", 2);
+
+        // The three valid shapes.
+        cronJobs.insert(cronRow("v9-wf", CronJobKind.LAUNCH_WORKFLOW, "v9grp", "01WF", null));
+        cronJobs.insert(cronRow("v9-out", CronJobKind.SCALE_OUT, "v9grp", null, "na-east"));
+        cronJobs.insert(cronRow("v9-rep", CronJobKind.INFRA_READINESS, null, null, null));
+
+        // ...and the shapes that must be unrepresentable.
+        assertThatThrownBy(() -> cronJobs.insert(cronRow("x1", CronJobKind.LAUNCH_WORKFLOW, "v9grp", null, null)))
+                .as("a workflow schedule with no workflow").isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> cronJobs.insert(cronRow("x2", CronJobKind.SCALE_IN, "v9grp", null, null)))
+                .as("a scale schedule with no cluster").isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> cronJobs.insert(cronRow("x3", CronJobKind.INFRA_READINESS, "v9grp", null, null)))
+                .as("a platform report scoped to a group").isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> cronJobs.insert(cronRow("x4", CronJobKind.LAUNCH_WORKFLOW, "nosuchgrp_v9", "01WF", null)))
+                .as("a group that does not exist").isInstanceOf(DataIntegrityViolationException.class);
+
+        // Uniqueness is per group, and a platform report's NULL group still
+        // collides on name (Oracle repeats only an all-NULL key).
+        app("app-v9b", "v9appb", "v9grp2");
+        cronJobs.insert(cronRow("v9-wf", CronJobKind.LAUNCH_WORKFLOW, "v9grp2", "01WF", null));
+        assertThatThrownBy(() -> cronJobs.insert(cronRow("v9-wf", CronJobKind.LAUNCH_WORKFLOW, "v9grp", "01WF2", null)))
+                .as("duplicate (group, name)").isInstanceOf(org.springframework.dao.DuplicateKeyException.class);
+        assertThatThrownBy(() -> cronJobs.insert(cronRow("v9-rep", CronJobKind.DAILY_REPORT, null, null, null)))
+                .as("two platform reports with one name").isInstanceOf(org.springframework.dao.DuplicateKeyException.class);
+
+        // The claim reads the renamed columns — a package left stale by V9
+        // would compile with errors and silently claim nothing.
+        List<CronJob> due = new TransactionTemplate(txManager)
+                .execute(status -> cronJobs.findDueForUpdate(Instant.now().plus(Duration.ofDays(1)), 10));
+        assertThat(due).extracting(CronJob::name).contains("v9-wf", "v9-out", "v9-rep");
+        assertThat(due).filteredOn(c -> c.name().equals("v9-out"))
+                .singleElement()
+                .satisfies(c -> {
+                    assertThat(c.groupId()).isEqualTo("v9grp");
+                    assertThat(c.region()).isEqualTo("na-east");
+                    assertThat(c.workflowId()).isNull();
+                });
+    }
+
+    /** A schedule row in the V9 shape; {@code name} doubles as the id seed. */
+    private static CronJob cronRow(String name, CronJobKind kind, String groupId,
+                                   String workflowId, String region) {
+        return new CronJob(com.perf.globalorchestrator.domain.Ulid.generate(), name, groupId, workflowId,
+                "0 2 * * *", "UTC", true, "tester", Instant.now(), null, null, null,
+                Instant.now(), null, kind, region,
+                kind.isReport() ? "ops@example.test" : null, null, null);
     }
 
     private static List<String> idsOf(List<Pod> claimed) {

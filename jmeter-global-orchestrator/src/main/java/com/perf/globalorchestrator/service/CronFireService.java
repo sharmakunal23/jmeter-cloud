@@ -1,10 +1,6 @@
 package com.perf.globalorchestrator.service;
 
-import com.perf.globalorchestrator.client.DocumentServiceClient;
-import com.perf.globalorchestrator.client.DocumentServiceClient.TemplateUnavailableException;
-import com.perf.globalorchestrator.client.TemplateBody;
 import com.perf.globalorchestrator.domain.Actor;
-import com.perf.globalorchestrator.domain.Application;
 import com.perf.globalorchestrator.domain.ApplicationGroup;
 import com.perf.globalorchestrator.domain.GroupCapacity;
 import com.perf.globalorchestrator.domain.CronJob;
@@ -12,10 +8,9 @@ import com.perf.globalorchestrator.domain.CronJobFire;
 import com.perf.globalorchestrator.domain.CronJobFireOutcome;
 import com.perf.globalorchestrator.domain.Pod;
 import com.perf.globalorchestrator.domain.PodState;
-import com.perf.globalorchestrator.domain.Run;
 import com.perf.globalorchestrator.domain.Ulid;
+import com.perf.globalorchestrator.domain.WorkflowExecution;
 import com.perf.globalorchestrator.email.EmailSender;
-import com.perf.globalorchestrator.http.StartRunRequest;
 import com.perf.globalorchestrator.report.DailyReportComposer;
 import com.perf.globalorchestrator.report.InfraReadinessComposer;
 import com.perf.globalorchestrator.provision.PodRecycler;
@@ -23,11 +18,9 @@ import com.perf.globalorchestrator.provision.PodSpinService;
 import com.perf.globalorchestrator.provision.RecycleEvaluator.RecycleReason;
 import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.repo.GroupCapacityRepository;
-import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.CronJobFireHistoryRepository;
 import com.perf.globalorchestrator.repo.CronJobRepository;
 import com.perf.globalorchestrator.repo.PodRepository;
-import com.perf.globalorchestrator.repo.RunRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -40,11 +33,10 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * The fire path: claim due schedules, and launch a run from a
- * schedule's saved Template. The launch reuses {@link RunService#startRun}, so
- * a scheduled run is byte-for-byte the run a human click would have produced
- * (same capacity gates, same fan-out, same audit trail — just a
- * {@code system} actor).
+ * The fire path: claim due schedules and act on them. A scheduled launch goes
+ * through {@link WorkflowService#launch}, so it is the execution a human click
+ * would have produced — same capacity pre-flight, same one-at-a-time rule, same
+ * audit trail, just a {@code system} actor.
  *
  * <p>Split deliberately from {@link com.perf.globalorchestrator.sweep.CronJobScheduler}:
  * {@link #claimDue()} is {@code @Transactional} and the scheduler is a separate
@@ -61,11 +53,9 @@ public class CronFireService {
 
     private final CronJobRepository cronJobs;
     private final CronJobFireHistoryRepository fireHistory;
-    private final DocumentServiceClient documentService;
-    private final RunService runService;
-    private final RunRepository runs;
-    // Drain/provision dependencies.
-    private final ApplicationRepository applications;
+    /** The only launch path: a schedule starts a workflow, never a run directly. */
+    private final WorkflowService workflowService;
+    // Scaling dependencies.
     private final GroupCapacityRepository capacities;
     private final ApplicationGroupRepository groups;
     private final PodRepository pods;
@@ -81,10 +71,7 @@ public class CronFireService {
 
     public CronFireService(CronJobRepository cronJobs,
                            CronJobFireHistoryRepository fireHistory,
-                           DocumentServiceClient documentService,
-                           RunService runService,
-                           RunRepository runs,
-                           ApplicationRepository applications,
+                           WorkflowService workflowService,
                            GroupCapacityRepository capacities,
                            ApplicationGroupRepository groups,
                            PodRepository pods,
@@ -97,10 +84,7 @@ public class CronFireService {
                            @Value("${globalOrchestrator.automation.maxDueBatch:50}") int maxDueBatch) {
         this.cronJobs = cronJobs;
         this.fireHistory = fireHistory;
-        this.documentService = documentService;
-        this.runService = runService;
-        this.runs = runs;
-        this.applications = applications;
+        this.workflowService = workflowService;
         this.capacities = capacities;
         this.groups = groups;
         this.pods = pods;
@@ -147,22 +131,22 @@ public class CronFireService {
 
     /**
      * Fire a schedule and record the outcome. Dispatches on {@link CronJob#kind()}:
-     * LAUNCH_RUN launches a run from a saved template; DRAIN_REGION recycles
-     * every IDLE worker in (app, region) without replacement; PROVISION_REGION
-     * spins workers up to the configured cap. Never throws — every failure
-     * mode maps to a {@link CronJobFireOutcome} so the sweep loop is unkillable
-     * and the operator always gets a fire-history row.
+     * LAUNCH_WORKFLOW launches the group's workflow; SCALE_IN releases every
+     * IDLE worker in (group, region) without replacement; SCALE_OUT spins
+     * workers up to the group's reservation. Never throws — every failure mode
+     * maps to a {@link CronJobFireOutcome} so the sweep loop is unkillable and
+     * the operator always gets a fire-history row.
      *
      * <p>{@code actor} is {@code system:scheduler} for an automatic fire and
-     * the operator's {@code X-Actor} for a manual {@code fireNow}. Drain /
-     * provision don't create a run so they don't carry the actor into an
-     * audit trail; LAUNCH_RUN does (via {@code startRun}).
+     * the operator's {@code X-Actor} for a manual {@code fireNow}. Scaling
+     * creates no run, so it carries no actor into an audit trail;
+     * LAUNCH_WORKFLOW does, via the execution it starts.
      */
     public FireResult fire(CronJob job, Actor actor) {
         return switch (job.kind()) {
-            case LAUNCH_RUN       -> fireLaunchRun(job, actor);
-            case DRAIN_REGION     -> fireDrainRegion(job);
-            case PROVISION_REGION -> fireProvisionRegion(job);
+            case LAUNCH_WORKFLOW  -> fireLaunchWorkflow(job, actor);
+            case SCALE_IN         -> fireScaleIn(job);
+            case SCALE_OUT        -> fireScaleOut(job);
             case INFRA_READINESS  -> fireInfraReadiness(job);
             case DAILY_REPORT     -> fireDailyReport(job);
         };
@@ -238,48 +222,44 @@ public class CronFireService {
                 .toList();
     }
 
-    private FireResult fireLaunchRun(CronJob job, Actor actor) {
+    /**
+     * Launch the schedule's workflow. The engine owns every guard, so this
+     * method's whole job is translating its refusals into an outcome an
+     * operator can read.
+     *
+     * <p><b>SKIPPED is not failure.</b> "Already running" and
+     * "the graph no longer fits the group's reservation" mean this window did
+     * not run and the next one may — a schedule that reported FAILED for those
+     * would train operators to ignore the status. FAILED is reserved for a
+     * schedule that cannot work until someone changes something: a deleted
+     * workflow, or a graph the validator rejects.
+     */
+    private FireResult fireLaunchWorkflow(CronJob job, Actor actor) {
         Instant firedAt = Instant.now();
-        String runId = null;
-        CronJobFireOutcome outcome;
-        String error = null;
         try {
-            // Overlap guard — don't pile a second run on top of the previous
-            // fire's run if it's still going (SKIPPED, try again next window).
-            String prevRunId = job.lastFiredRunId();
-            if (prevRunId != null && !prevRunId.isBlank()) {
-                Optional<Run> prev = runs.findByRunId(prevRunId);
-                if (prev.isPresent() && !prev.get().state().isTerminal()) {
-                    return record(job, firedAt, null, CronJobFireOutcome.SKIPPED,
-                            "previous run " + prevRunId + " still " + prev.get().state());
-                }
-            }
-            TemplateBody tpl = documentService.fetchTemplate(job.templateBlobId());
-            Run run = runService.startRun(toStartRunRequest(tpl), false, actor);
-            runId = run.runId();
-            outcome = CronJobFireOutcome.LAUNCHED;
-        } catch (TemplateUnavailableException e) {
-            outcome = CronJobFireOutcome.FAILED;
-            error = e.getMessage();
-        } catch (RunService.InsufficientCapacityException
-                 | RunService.GroupCapacityExceededException e) {
-            // No free workers right now — operator action, not a defect.
-            outcome = CronJobFireOutcome.SKIPPED;
-            error = e.getMessage();
-        } catch (RunService.FleetSizeExceededException | IllegalArgumentException e) {
-            // Malformed template (no test plan, oversized fleet, bad region).
-            outcome = CronJobFireOutcome.FAILED;
-            error = "invalid template: " + e.getMessage();
+            WorkflowExecution execution = workflowService.launch(job.workflowId(), actor);
+            return record(job, firedAt, execution.executionId(), CronJobFireOutcome.LAUNCHED, null);
+        } catch (WorkflowService.WorkflowNotFoundException e) {
+            // ORCH_CRON_JOB.WORKFLOW_ID carries no FK on purpose, so a deleted
+            // workflow leaves the schedule standing — say so rather than
+            // letting it disappear unnoticed.
+            return record(job, firedAt, null, CronJobFireOutcome.FAILED,
+                    "workflow no longer exists: " + job.workflowId());
+        } catch (WorkflowService.WorkflowAlreadyRunningException
+                 | WorkflowService.WorkflowCapacityExceededException
+                 | WorkflowService.WorkflowDisabledException e) {
+            return record(job, firedAt, null, CronJobFireOutcome.SKIPPED, e.getMessage());
+        } catch (WorkflowService.WorkflowInvalidException e) {
+            return record(job, firedAt, null, CronJobFireOutcome.FAILED,
+                    "workflow is not launchable: " + e.getMessage());
         } catch (RuntimeException e) {
-            outcome = CronJobFireOutcome.FAILED;
-            error = e.toString();
             LOG.error("cron fire {} ({}) unexpected failure", job.cronJobId(), job.name(), e);
+            return record(job, firedAt, null, CronJobFireOutcome.FAILED, e.toString());
         }
-        return record(job, firedAt, runId, outcome, error);
     }
 
     /**
-     * Drain every IDLE worker of the app's group in the region without
+     * Release every IDLE worker of the group in the region without
      * replacement, via {@link PodRecycler#drainOne}. SKIPs when the group is
      * {@code alwaysOn} (production-like protection). IN_USE workers are left
      * alone (the recycler's existing IDLE-only race guard). The fire is a
@@ -287,21 +267,16 @@ public class CronFireService {
      * "drained 0/0" detail rather than SKIPPED, because the schedule itself
      * did fire as intended.
      */
-    private FireResult fireDrainRegion(CronJob job) {
+    private FireResult fireScaleIn(CronJob job) {
         Instant firedAt = Instant.now();
-        Application app = applications.findByName(job.applicationName()).orElse(null);
-        if (app == null) {
-            return record(job, firedAt, null, CronJobFireOutcome.FAILED,
-                    "application not registered: " + job.applicationName());
-        }
-        ApplicationGroup group = groups.findById(app.metricsGroupId()).orElse(null);
+        ApplicationGroup group = groups.findById(job.groupId()).orElse(null);
         if (group == null) {
             return record(job, firedAt, null, CronJobFireOutcome.FAILED,
-                    "group not registered: " + app.metricsGroupId());
+                    "group not registered: " + job.groupId());
         }
         if (group.alwaysOn()) {
             return record(job, firedAt, null, CronJobFireOutcome.SKIPPED,
-                    "group '" + group.groupId() + "' is alwaysOn — drain suppressed");
+                    "group '" + group.groupId() + "' is alwaysOn — scale in suppressed");
         }
         String region = job.region();
         List<Pod> snapshot = pods.findByGroupAndRegion(group.groupId(), region);
@@ -315,30 +290,25 @@ public class CronFireService {
                 if (recycler.drainOne(p, group, RecycleReason.DRAIN_AFTER_RUN)) drained++;
             } catch (RuntimeException e) {
                 // Per-pod failure shouldn't abort the batch.
-                LOG.warn("DRAIN_REGION {} ({}): drain of pod {} failed",
+                LOG.warn("SCALE_IN {} ({}): release of pod {} failed",
                         job.cronJobId(), job.name(), p.podId(), e);
             }
         }
         return record(job, firedAt, null, CronJobFireOutcome.LAUNCHED,
-                "drained " + drained + "/" + idle + " idle worker(s) in " + region);
+                "released " + drained + "/" + idle + " idle worker(s) in " + region);
     }
 
     /**
-     * Spin workers in the app's group's pool in the region up to
-     * {@code groupCapacity.maxAvailable}. SKIPs when the region has no
-     * capacity row (the operator must configure a cap before scheduling
-     * provision). A per-spin failure logs and breaks early so we don't hammer
-     * a broken provisioner — the next window will retry the remaining gap.
+     * Spin workers in the group's pool in the region up to
+     * {@code groupCapacity.maxAvailable}. SKIPs when the group holds no
+     * reservation on that cluster (the operator must reserve capacity before
+     * scheduling a scale-out). A per-spin failure logs and breaks early so we
+     * don't hammer a broken provisioner — the next window retries the gap.
      */
-    private FireResult fireProvisionRegion(CronJob job) {
+    private FireResult fireScaleOut(CronJob job) {
         Instant firedAt = Instant.now();
-        Application app = applications.findByName(job.applicationName()).orElse(null);
-        if (app == null) {
-            return record(job, firedAt, null, CronJobFireOutcome.FAILED,
-                    "application not registered: " + job.applicationName());
-        }
         String region = job.region();
-        String groupId = app.metricsGroupId();
+        String groupId = job.groupId();
         Optional<GroupCapacity> cap = capacities.find(groupId, region);
         if (cap.isEmpty()) {
             return record(job, firedAt, null, CronJobFireOutcome.SKIPPED,
@@ -354,7 +324,7 @@ public class CronFireService {
                 spinService.spin(groupId, region);
                 spun++;
             } catch (RuntimeException e) {
-                LOG.warn("PROVISION_REGION {} ({}): spin {}/{} failed; aborting batch",
+                LOG.warn("SCALE_OUT {} ({}): spin {}/{} failed; aborting batch",
                         job.cronJobId(), job.name(), i + 1, gap, e);
                 break;
             }
@@ -364,41 +334,19 @@ public class CronFireService {
                         + " (current=" + current + ", max=" + max + ")");
     }
 
-    private FireResult record(CronJob job, Instant firedAt, String runId,
+    private FireResult record(CronJob job, Instant firedAt, String executionId,
                               CronJobFireOutcome outcome, String error) {
         // Two writes: the schedule row's last-fire summary (does NOT touch
         // nextFireAt — the claim already advanced it; a manual fireNow leaves
         // the schedule's cadence untouched) + the append-only history row.
-        cronJobs.recordFire(job.cronJobId(), firedAt, runId, outcome.name());
+        cronJobs.recordFire(job.cronJobId(), firedAt, executionId, outcome.name());
         fireHistory.insert(new CronJobFire(
-                Ulid.generate(), job.cronJobId(), firedAt, outcome.name(), runId, truncate(error)));
+                Ulid.generate(), job.cronJobId(), firedAt, outcome.name(), executionId, truncate(error)));
         LOG.info("cron fire {} ({}) → {}{}{}",
                 job.cronJobId(), job.name(), outcome,
-                runId != null ? " runId=" + runId : "",
+                executionId != null ? " executionId=" + executionId : "",
                 error != null ? " (" + error + ")" : "");
-        return new FireResult(outcome, runId, error);
-    }
-
-    /** Map a saved template to a launch request — faithful to the UI launcher:
-     *  {@code fleetAllocation} wins (its per-worker {@code perNodeProperties}
-     *  snapshots already bake in the global props), no spin-on-shortfall
-     *  (a schedule never auto-provisions — that's a cost decision the operator
-     *  makes by pre-provisioning capacity), and {@code initiatedBy} is left
-     *  null so the {@code actor} drives attribution. */
-    /** Package-private for the mapping test. */
-    static StartRunRequest toStartRunRequest(TemplateBody t) {
-        return new StartRunRequest(
-                t.testPlanBlobId(),
-                t.dataFilesBlobId(),
-                t.application(),
-                0,                       // fleetSize — unused when fleetAllocation is present
-                List.of(),               // regions — legacy single-region path, unused
-                t.fleetAllocation(),
-                null,                    // initiatedBy — derived from the actor
-                Boolean.FALSE,           // spinShortfall — schedules never auto-spin
-                t.saveResults(),
-                t.pluginIds(),
-                null);                   // refreshDataFiles — never forced from a schedule
+        return new FireResult(outcome, executionId, error);
     }
 
     private static String truncate(String s) {
@@ -407,5 +355,5 @@ public class CronFireService {
     }
 
     /** Result of a single fire — surfaced by {@code fireNow}. */
-    public record FireResult(CronJobFireOutcome outcome, String runId, String error) {}
+    public record FireResult(CronJobFireOutcome outcome, String executionId, String error) {}
 }

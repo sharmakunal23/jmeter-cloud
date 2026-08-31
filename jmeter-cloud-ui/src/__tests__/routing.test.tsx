@@ -5,7 +5,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { Layout } from "../components/Layout";
 import { ApplicationsListPage } from "../pages/ApplicationsListPage";
 import { ApplicationDetailPage } from "../pages/ApplicationDetailPage";
-import { AutomationListPage } from "../pages/AutomationListPage";
+import { AutomationPage } from "../pages/AutomationPage";
 import { DocumentsListPage } from "../pages/DocumentsListPage";
 import { DocumentsDetailPage } from "../pages/DocumentsDetailPage";
 import { HomePage } from "../pages/HomePage";
@@ -34,7 +34,7 @@ function renderAt(initialPath: string) {
                     {/* Phase IA-Templates (2026-05-13) — list-then-drill-in. */}
                     <Route path="templates" element={<TemplatesListPage />} />
                     {/* Phase IA-Automation (2026-05-13) — list-then-drill-in. */}
-                    <Route path="automation" element={<AutomationListPage />} />
+                    <Route path="automation" element={<AutomationPage />} />
                     <Route path="*" element={<NotFoundPage />} />
                 </Route>
             </Routes>
@@ -63,7 +63,7 @@ describe("UI-D1 routing — new IA paths resolve", () => {
         expect(screen.getByRole("heading", { name: "Templates", level: 1 })).toBeInTheDocument();
     });
 
-    it("/automation → AutomationListPage (Phase IA-Automation list view)", () => {
+    it("/automation → AutomationPage (one page, three sections)", () => {
         renderAt("/automation");
         expect(screen.getByRole("heading", { name: "Automation", level: 1 })).toBeInTheDocument();
     });
