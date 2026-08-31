@@ -24,6 +24,31 @@ describe("foldStats — one headline across an execution's runs", () => {
     expect(folded.errorPct).toBeCloseTo(14, 6);
   });
 
+  it("sequential runs do not have their rates added — that throughput never coexisted", () => {
+    // Two 50 req/s runs, back to back, 100 s apart: the execution pushed
+    // 10,000 samples over ~200 s, which is ~50 req/s, not 100.
+    const folded = foldStats(
+      [stats({ samples: 5000, tps: 50 }), stats({ samples: 5000, tps: 50 })],
+      [{ fromSecond: 0, toSecond: 100 }, { fromSecond: 100, toSecond: 200 }],
+    )!;
+    expect(folded.tps).toBeCloseTo(10000 / 215, 4);
+    expect(folded.tps).toBeLessThan(60);
+  });
+
+  it("parallel runs still add up, because that throughput did coexist", () => {
+    const folded = foldStats(
+      [stats({ samples: 5000, tps: 50 }), stats({ samples: 5000, tps: 50 })],
+      [{ fromSecond: 0, toSecond: 100 }, { fromSecond: 0, toSecond: 100 }],
+    )!;
+    expect(folded.tps).toBeCloseTo(10000 / 115, 4);
+    expect(folded.tps).toBeGreaterThan(80);
+  });
+
+  it("without windows it falls back to the sum of per-run rates", () => {
+    expect(foldStats([stats({ samples: 10, tps: 2 }), stats({ samples: 10, tps: 3 })])!.tps)
+      .toBeCloseTo(5, 6);
+  });
+
   it("weights response times by the samples behind them", () => {
     // 100 samples at 1000ms and 900 at 100ms is 190ms, not the 550ms of a plain mean.
     const folded = foldStats([
