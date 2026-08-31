@@ -6,7 +6,6 @@ import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.GroupRegistryRepository;
 import com.perf.globalorchestrator.repo.GroupRegistryRepository.GroupRow;
 import com.perf.globalorchestrator.repo.MetricsTarget;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.Optional;
@@ -20,29 +19,33 @@ import java.util.concurrent.ConcurrentHashMap;
  * dimension row yet (nothing has landed) — the readers then answer with empty
  * series rather than an error.
  *
- * <p>The group row is cached per instance for {@code metrics.groupCacheSeconds}
- * (a repointed group takes effect after that); a resolved {@code RUN_ID} never
- * changes and is cached until the map is trimmed.
+ * <p><b>Nothing mutable is held in memory.</b> The group's registry row is read
+ * per query, because it is shared state and N replicas holding their own copies
+ * would resolve the same run to different tables. Only the resolved
+ * {@code RUN_ID} is kept, and only because that mapping is immutable.
  */
 @Service
 public class MetricsGroupResolver {
-
-    private record CachedGroup(GroupRow row, long expiresAt) { }
 
     private static final int MAX_RUN_IDS = 20_000;
 
     private final ApplicationRepository applications;
     private final GroupRegistryRepository registry;
-    private final long groupTtlMillis;
-    private final ConcurrentHashMap<String, CachedGroup> groups = new ConcurrentHashMap<>();
+
+    /**
+     * {@code prefix\0runKey → RUN_ID}. The <b>only</b> thing this service holds
+     * in memory, and it is safe to because the mapping is immutable: a run key
+     * is a ULID that is never reused, and the dimension row's numeric id never
+     * changes once the consumer has written it. Two replicas therefore cannot
+     * disagree. Bounded and cleared wholesale rather than evicted — this is a
+     * lookup table, not a working set.
+     */
     private final ConcurrentHashMap<String, Long> runIds = new ConcurrentHashMap<>();
 
     public MetricsGroupResolver(ApplicationRepository applications,
-                                GroupRegistryRepository registry,
-                                @Value("${metrics.groupCacheSeconds:300}") long groupCacheSeconds) {
+                                GroupRegistryRepository registry) {
         this.applications = applications;
         this.registry = registry;
-        this.groupTtlMillis = Math.max(1, groupCacheSeconds) * 1000L;
     }
 
     public Optional<MetricsTarget> resolve(Run run) {
@@ -75,19 +78,19 @@ public class MetricsGroupResolver {
         runIds.keySet().removeIf(k -> k.endsWith("\0" + runKey));
     }
 
+    /**
+     * The group's registry row, read every time.
+     *
+     * <p>It used to be held for five minutes per instance. That is exactly the
+     * shape a multi-replica hub cannot have: {@code GROUP_REGISTRY} is mutable
+     * shared state, so each replica would answer from its own copy and two of
+     * them could resolve the same run to different tables for minutes after an
+     * operator repointed a group. The row is a handful of columns behind an
+     * indexed key, so reading it per query costs nothing worth having a
+     * consistency bug for.
+     */
     private GroupRow group(String groupId) {
-        long now = System.currentTimeMillis();
-        CachedGroup cached = groups.get(groupId);
-        if (cached != null && cached.expiresAt > now) {
-            return cached.row;
-        }
-        GroupRow row = registry.findGroup(groupId).orElse(null);
-        if (row != null) {
-            groups.put(groupId, new CachedGroup(row, now + groupTtlMillis));
-        } else {
-            groups.remove(groupId);   // an unknown group is never cached
-        }
-        return row;
+        return registry.findGroup(groupId).orElse(null);
     }
 
     private Long runId(String prefix, String runKey) {

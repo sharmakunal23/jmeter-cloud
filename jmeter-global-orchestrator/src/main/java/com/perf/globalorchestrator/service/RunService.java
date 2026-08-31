@@ -240,11 +240,12 @@ public class RunService {
         if (accepted == started.members().size()) {
             runs.updateRunState(started.runId(), RunState.RUNNING, started.stateReason());
         } else if (accepted == 0) {
+            String reason = allRejectedReason(outcomes);
             int claimed = runs.updateRunStateClaimingTerminal(
-                    started.runId(), RunState.FAILED, "all fan-outs rejected");
+                    started.runId(), RunState.FAILED, reason);
             runs.clearSaveResults(started.runId());
             if (claimed == 1) {
-                recordRunTerminal(started.runId(), RunState.FAILED, "all fan-outs rejected");
+                recordRunTerminal(started.runId(), RunState.FAILED, reason);
             }
         } else {
             String reason = "partial fan-out: " + accepted + "/" + started.members().size() + " accepted";
@@ -255,6 +256,39 @@ public class RunService {
         }
         return runs.findByRunId(started.runId()).orElseThrow();
     }
+
+    /**
+     * Why the run failed, in the words of the workers that refused it.
+     *
+     * <p>"all fan-outs rejected" on its own is the least useful thing this
+     * service can say: every member already recorded a precise reason, and
+     * when they agree — the usual case, because the cause is normally the plan
+     * blob or the network rather than one bad pod — repeating that reason once
+     * is the whole diagnosis. An operator seeing
+     * {@code ARTIFACT_FETCH_FAILED: could not fetch testPlan blob …} knows
+     * where to look; an operator seeing "all fan-outs rejected" has to go
+     * digging through per-member state to learn anything at all.
+     */
+    private static String allRejectedReason(Map<String, FanoutOutcome> outcomes) {
+        String base = "all " + outcomes.size() + " fan-out(s) rejected";
+        Set<String> distinct = outcomes.values().stream()
+                .map(FanoutOutcome::reason)
+                .filter(r -> r != null && !r.isBlank())
+                .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+        if (distinct.isEmpty()) return base;
+        String detail = distinct.size() == 1
+                ? distinct.iterator().next()
+                // Workers disagreeing is itself the signal — name one and say so.
+                : distinct.size() + " different reasons, first: " + distinct.iterator().next();
+        String composed = base + " — " + detail;
+        // ORCH_RUN.STATE_REASON is VARCHAR2(4000 CHAR); a worker's reason is
+        // its raw error body, so clip rather than fail the state write.
+        return composed.length() <= STATE_REASON_CHARS
+                ? composed : composed.substring(0, STATE_REASON_CHARS - 1) + "…";
+    }
+
+    /** Width of {@code ORCH_RUN.STATE_REASON}. */
+    private static final int STATE_REASON_CHARS = 4000;
 
     /**
      * A launch that must provision workers first returns at once with the run

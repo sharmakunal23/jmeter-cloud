@@ -23,9 +23,17 @@ import java.util.Map;
 /**
  * Configures the cache provider. The cache lives outside the process in the
  * {@code ORCH_CACHE} table so every orchestrator instance reads the same data,
- * and the caching itself is expressed with {@code @Cacheable} /
- * {@code @CacheEvict} elsewhere — this class only wires the provider and owns
- * the cache names and their TTLs.
+ * and the caching itself is expressed with {@code @Cacheable} elsewhere — this
+ * class only wires the provider and owns the cache names and their TTLs.
+ *
+ * <p><b>Only immutable things are cached, and that is the rule.</b> Every entry
+ * below belongs to a run or a member that has already reached a terminal state,
+ * so no cached value can be wrong and none of them sits on the path of an
+ * action — starting a run, launching a workflow, reserving capacity. The
+ * per-group reservation grid used to be cached here and was removed for exactly
+ * that reason (see {@code GroupCapacityRepository}): a write-through evict
+ * inside a transaction could re-cache pre-commit rows and mislead the launch
+ * gate. <b>Do not add a cache to anything an operator's action reads.</b>
  *
  * <p>{@code globalOrchestrator.cache.provider} selects it: {@code oracle} at
  * runtime, {@code simple} in tests (an in-process {@code ConcurrentMapCacheManager},
@@ -36,10 +44,9 @@ import java.util.Map;
  *   <li>{@link #CACHE_RUN_TIMESERIES} / {@link #CACHE_RUN_ROLLUP} / {@link #CACHE_RUN_SUMMARY} — 1 h.
  *       Terminal-run metrics are immutable, so this bounds turnover (a later
  *       purge removing the rows), not memory.</li>
- *   <li>{@link #CACHE_GROUP_CAPACITY} — 10 m, but <b>evicted on every
- *       write</b>; the TTL is only a backstop for a write path someone forgot
- *       to annotate. The application <i>registry</i> is deliberately not cached
- *       at all — {@code ApplicationHealthPoller} rewrites it every 30 s.</li>
+ *   <li>The application <i>registry</i> and the capacity grid are deliberately
+ *       not cached at all — the first is rewritten every 30 s by
+ *       {@code ApplicationHealthPoller}, the second gates run launches.</li>
  *   <li>{@link #CACHE_MEMBER_LOGS} — 30 m. Log tails are the largest entries
  *       (up to 10k lines), so they turn over faster than the run defaults; the
  *       store's {@code maxValueBytes} guard is what actually bounds them.</li>
@@ -88,8 +95,6 @@ public class CacheConfig implements CachingConfigurer {
     public static final String CACHE_RUN_SUMMARY = "runSummary";
     /** Run row + fleet members for a TERMINAL run (frozen; C-2). */
     public static final String CACHE_RUN_METADATA = "runMetadata";
-    /** Per-(app, region) capacity grid (orchestrator-owned writes → evicted on update). */
-    public static final String CACHE_GROUP_CAPACITY = "groupCapacity";
     /** Per-(run, worker, stream, tail) log tail for a TERMINAL member (frozen; C-5). */
     public static final String CACHE_MEMBER_LOGS = "memberLogs";
 
@@ -98,7 +103,6 @@ public class CacheConfig implements CachingConfigurer {
     // small — and ORCH_CACHE_REAP_JOB is what reclaims the space, in bounded
     // chunks, ten minutes at a time.
     private static final Duration TERMINAL_RUN_TTL = Duration.ofHours(1);
-    private static final Duration CAPACITY_TTL = Duration.ofMinutes(10);
     private static final Duration MEMBER_LOGS_TTL = Duration.ofMinutes(30);
 
     /** The declared caches and their TTLs — the one place either is stated. */
@@ -108,7 +112,6 @@ public class CacheConfig implements CachingConfigurer {
         ttls.put(CACHE_RUN_ROLLUP, TERMINAL_RUN_TTL);
         ttls.put(CACHE_RUN_SUMMARY, TERMINAL_RUN_TTL);
         ttls.put(CACHE_RUN_METADATA, TERMINAL_RUN_TTL);
-        ttls.put(CACHE_GROUP_CAPACITY, CAPACITY_TTL);
         ttls.put(CACHE_MEMBER_LOGS, MEMBER_LOGS_TTL);
         return ttls;
     }

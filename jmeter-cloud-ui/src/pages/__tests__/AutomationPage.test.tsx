@@ -66,21 +66,34 @@ function renderPage() {
 }
 
 describe("AutomationPage — three sections, group-scoped", () => {
-  it("renders exactly the three sections, each with a one-sentence ⓘ", async () => {
+  it("offers exactly three tabs and shows one panel at a time", async () => {
     renderPage();
 
-    expect(await screen.findByRole("heading", { name: /Workflow automation/, level: 2 })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /Platform reports/, level: 2 })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /Platform infrastructure/, level: 2 })).toBeInTheDocument();
-    expect(screen.getAllByRole("heading", { level: 2 })).toHaveLength(3);
+    const strip = await screen.findByRole("tablist", { name: "Automation sections" });
+    const tabs = within(strip).getAllByRole("tab");
+    expect(tabs.map((t) => t.textContent)).toEqual([
+      "Workflow automation", "Platform reports", "Platform infrastructure",
+    ]);
+    // One panel, not three stacked sections — that is the point of the change.
+    expect(screen.getAllByRole("tabpanel")).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: /Workflow automation/, level: 2 })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /Platform reports/, level: 2 })).not.toBeInTheDocument();
+  });
 
-    // Every section explains itself behind an ⓘ, in ONE sentence — the house
-    // rule for this control; anything longer belongs in the section body.
-    for (const label of ["About Workflow automation", "About Platform reports", "About Platform infrastructure"]) {
-      const tip = screen.getByRole("button", { name: label });
+  it("each tab's section explains itself behind an ⓘ, in ONE sentence", async () => {
+    renderPage();
+    await screen.findByRole("tablist", { name: "Automation sections" });
+
+    for (const [tabName, tipLabel] of [
+      ["Workflow automation", "About Workflow automation"],
+      ["Platform reports", "About Platform reports"],
+      ["Platform infrastructure", "About Platform infrastructure"],
+    ]) {
+      fireEvent.click(screen.getByRole("tab", { name: tabName }));
+      const tip = await screen.findByRole("button", { name: tipLabel });
       const text = document.getElementById(tip.getAttribute("aria-controls") ?? "")?.textContent ?? "";
-      expect(text.trim(), label).not.toBe("");
-      expect(text.trim().split(".").filter((s) => s.trim() !== ""), label).toHaveLength(1);
+      expect(text.trim(), tipLabel).not.toBe("");
+      expect(text.trim().split(".").filter((x) => x.trim() !== ""), tipLabel).toHaveLength(1);
     }
   });
 
@@ -94,21 +107,26 @@ describe("AutomationPage — three sections, group-scoped", () => {
     ]);
 
     renderPage();
-    await screen.findByRole("heading", { name: /Workflow automation/, level: 2 });
+    await screen.findByRole("tablist", { name: "Automation sections" });
 
-    const workflowSection = screen.getByRole("region", { name: "Workflow automation" });
-    expect(within(workflowSection).getByText("nightly")).toBeInTheDocument();
-    expect(within(workflowSection).queryByText("evening")).not.toBeInTheDocument();
-    expect(within(workflowSection).queryByText("readiness")).not.toBeInTheDocument();
+    // Each tab shows only its own kind — and the counts on the tabs say so
+    // before you click.
+    expect(await screen.findByRole("tab", { name: /Workflow automation.*1/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Platform reports.*1/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Platform infrastructure.*2/ })).toBeInTheDocument();
 
-    const reportSection = screen.getByRole("region", { name: "Platform reports" });
-    expect(within(reportSection).getByText("readiness")).toBeInTheDocument();
-    expect(within(reportSection).queryByText("nightly")).not.toBeInTheDocument();
+    expect(screen.getByText("nightly")).toBeInTheDocument();
+    expect(screen.queryByText("evening")).not.toBeInTheDocument();
+    expect(screen.queryByText("readiness")).not.toBeInTheDocument();
 
-    const infraSection = screen.getByRole("region", { name: "Platform infrastructure" });
-    expect(within(infraSection).getByText("evening")).toBeInTheDocument();
-    expect(within(infraSection).getByText("morning")).toBeInTheDocument();
-    expect(within(infraSection).queryByText("nightly")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /Platform reports/ }));
+    expect(await screen.findByText("readiness")).toBeInTheDocument();
+    expect(screen.queryByText("nightly")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /Platform infrastructure/ }));
+    expect(await screen.findByText("evening")).toBeInTheDocument();
+    expect(screen.getByText("morning")).toBeInTheDocument();
+    expect(screen.queryByText("nightly")).not.toBeInTheDocument();
   });
 
   it("a workflow schedule shows its group by display name and links the workflow", async () => {
@@ -118,7 +136,7 @@ describe("AutomationPage — three sections, group-scoped", () => {
     ]);
 
     renderPage();
-    const section = await screen.findByRole("region", { name: "Workflow automation" });
+    const section = await screen.findByRole("tabpanel");
 
     // The group's NAME, not its id — the id is an implementation detail.
     expect(within(section).getByText("Servicing MQ")).toBeInTheDocument();
@@ -132,7 +150,7 @@ describe("AutomationPage — three sections, group-scoped", () => {
     ]);
 
     renderPage();
-    const section = await screen.findByRole("region", { name: "Workflow automation" });
+    const section = await screen.findByRole("tabpanel");
 
     expect(within(section).getByText("deleted")).toBeInTheDocument();
     expect(within(section).queryByRole("link", { name: /workflow/i })).not.toBeInTheDocument();
@@ -146,7 +164,7 @@ describe("AutomationPage — three sections, group-scoped", () => {
     ]);
 
     renderPage();
-    const section = await screen.findByRole("region", { name: "Workflow automation" });
+    const section = await screen.findByRole("tabpanel");
 
     expect(within(section).getByRole("link", { name: "View" }))
       .toHaveAttribute("href", "/workflows/executions/ex-9");
@@ -159,7 +177,9 @@ describe("AutomationPage — three sections, group-scoped", () => {
     ]);
 
     renderPage();
-    const section = await screen.findByRole("region", { name: "Platform infrastructure" });
+    await screen.findByRole("tablist", { name: "Automation sections" });
+    fireEvent.click(screen.getByRole("tab", { name: /Platform infrastructure/ }));
+    const section = await screen.findByRole("tabpanel");
 
     expect(within(section).getByText("Scale in")).toBeInTheDocument();
     expect(within(section).getByText("Scale out")).toBeInTheDocument();
@@ -175,7 +195,7 @@ describe("AutomationPage — three sections, group-scoped", () => {
     cron.fireNow.mockResolvedValue({ outcome: "SKIPPED", error: "workflow is already running" });
 
     renderPage();
-    const section = await screen.findByRole("region", { name: "Workflow automation" });
+    const section = await screen.findByRole("tabpanel");
 
     fireEvent.click(within(section).getByRole("button", { name: "Run now" }));
     // Nothing has fired yet — the confirm is the only place the operator sees
@@ -191,16 +211,18 @@ describe("AutomationPage — three sections, group-scoped", () => {
 
   it("the empty states point at what to do, per section", async () => {
     renderPage();
-    await screen.findByRole("heading", { name: /Workflow automation/, level: 2 });
+    await screen.findByRole("tablist", { name: "Automation sections" });
 
-    expect(screen.getByText(/No workflow schedules/)).toBeInTheDocument();
-    expect(screen.getByText(/No report schedules/)).toBeInTheDocument();
-    expect(screen.getByText(/No scaling schedules/)).toBeInTheDocument();
+    expect(await screen.findByText(/No workflow schedules/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /Platform reports/ }));
+    expect(await screen.findByText(/No report schedules/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /Platform infrastructure/ }));
+    expect(await screen.findByText(/No scaling schedules/)).toBeInTheDocument();
   });
 
   it("asks the backend once for every schedule — the page does not fetch per group", async () => {
     renderPage();
-    await screen.findByRole("heading", { name: /Workflow automation/, level: 2 });
+    await screen.findByRole("tablist", { name: "Automation sections" });
 
     expect(cron.list).toHaveBeenCalledTimes(1);
     expect(cron.list).toHaveBeenCalledWith(undefined, expect.anything());

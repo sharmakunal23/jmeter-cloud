@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 
 import { cronJobsApi, CronJobApiError, type CronJobSummary } from "../../api/automation";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { DataList, type DataListColumn } from "../DataList";
 import { InfoTip } from "../InfoTip";
 import { NextFireCell, ScheduleCell, EnableToggle } from "../ScheduleCells";
 import { ToastView, useToast } from "../Toast";
@@ -65,7 +66,10 @@ export function SchedulesSection({
   const [showCreate, setShowCreate] = useState(false);
   const [editJob, setEditJob] = useState<CronJobSummary | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
+  /** A bulk delete awaiting confirmation — deleting many at once must never be one click. */
+  const [pendingBulk, setPendingBulk] = useState<CronJobSummary[] | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const { toast, showToast, dismiss } = useToast();
 
   async function runAction(id: string, action: () => Promise<unknown>, successMsg: string) {
@@ -91,6 +95,40 @@ export function SchedulesSection({
       () => (j.enabled ? cronJobsApi.disable(j.cronJobId) : cronJobsApi.enable(j.cronJobId)),
       `"${j.name}" ${j.enabled ? "disabled" : "enabled"}.`,
     );
+  }
+
+  /**
+   * Enable or disable a selection. Each call is independent, so a partial
+   * failure leaves the rest applied and says how many landed rather than
+   * pretending the whole batch failed.
+   */
+  async function bulkSetEnabled(rows: CronJobSummary[], enabled: boolean) {
+    const todo = rows.filter((r) => r.enabled !== enabled);
+    if (todo.length === 0) return;
+    setBulkBusy(true);
+    const results = await Promise.allSettled(todo.map((r) =>
+      enabled ? cronJobsApi.enable(r.cronJobId) : cronJobsApi.disable(r.cronJobId)));
+    setBulkBusy(false);
+    const failed = results.filter((r) => r.status === "rejected").length;
+    showToast(failed === 0
+      ? { variant: "ok", text: `${todo.length} schedule(s) ${enabled ? "enabled" : "disabled"}.` }
+      : { variant: "warn", text: `${todo.length - failed} of ${todo.length} ${enabled ? "enabled" : "disabled"}`,
+          detail: `${failed} failed — see the row status.` });
+    onChanged();
+  }
+
+  async function confirmBulkDelete() {
+    const rows = pendingBulk ?? [];
+    setBulkBusy(true);
+    const results = await Promise.allSettled(rows.map((r) => cronJobsApi.delete(r.cronJobId)));
+    setBulkBusy(false);
+    setPendingBulk(null);
+    const failed = results.filter((r) => r.status === "rejected").length;
+    showToast(failed === 0
+      ? { variant: "ok", text: `${rows.length} schedule(s) deleted.` }
+      : { variant: "warn", text: `${rows.length - failed} of ${rows.length} deleted`,
+          detail: `${failed} failed.` });
+    onChanged();
   }
 
   async function confirmPending() {
@@ -132,64 +170,71 @@ export function SchedulesSection({
 
       <ToastView toast={toast} onDismiss={dismiss} />
 
-      {jobs.length === 0 ? (
-        <p className="ink-soft schedulesSection__empty">{empty}</p>
-      ) : (
-        <table className="runsTable">
-          <thead>
-            <tr>
-              <th>Name</th>
-              {columns.map((c) => <th key={c.header} className={c.className}>{c.header}</th>)}
-              <th>Schedule</th>
-              <th>Last Fired</th>
-              <th>Next Fire</th>
-              <th><span className="visuallyHidden">Actions</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            {jobs.map((j) => {
+      <DataList<CronJobSummary>
+        label={title}
+        rows={jobs}
+        rowKey={(j) => j.cronJobId}
+        itemNoun="schedules"
+        empty={empty}
+        columns={[
+          { key: "name", header: "Name", cell: (j) => <strong>{j.name}</strong> },
+          ...columns.map((c): DataListColumn<CronJobSummary> => ({
+            key: c.header, header: c.header, className: c.className, cell: c.cell,
+          })),
+          { key: "schedule", header: "Schedule",
+            cell: (j) => <ScheduleCell cron={j.cronExpression} timeZone={j.timeZone} /> },
+          { key: "lastFired", header: "Last Fired", cell: (j) => (
+            <>
+              {j.lastFiredAt ? formatRelative(j.lastFiredAt) : "—"}
+              {j.lastFireStatus && (
+                <small className="ink-soft" style={{ display: "block" }}>{j.lastFireStatus}</small>
+              )}
+            </>
+          ) },
+          { key: "nextFire", header: "Next Fire", cell: (j) => (
+            <NextFireCell nextFireAt={j.nextFireAt} timeZone={j.timeZone} enabled={j.enabled} />
+          ) },
+          { key: "actions", header: <span className="visuallyHidden">Actions</span>,
+            className: "runsTable__actions",
+            cell: (j) => {
               const busy = busyId === j.cronJobId;
               return (
-                <tr key={j.cronJobId}>
-                  <td><strong>{j.name}</strong></td>
-                  {columns.map((c) => <td key={c.header} className={c.className}>{c.cell(j)}</td>)}
-                  <td><ScheduleCell cron={j.cronExpression} timeZone={j.timeZone} /></td>
-                  <td>
-                    {j.lastFiredAt ? formatRelative(j.lastFiredAt) : "—"}
-                    {j.lastFireStatus && (
-                      <small className="ink-soft" style={{ display: "block" }}>{j.lastFireStatus}</small>
-                    )}
-                  </td>
-                  <td><NextFireCell nextFireAt={j.nextFireAt} timeZone={j.timeZone} enabled={j.enabled} /></td>
-                  <td className="runsTable__actions">
-                    <EnableToggle enabled={j.enabled} busy={busy} onToggle={() => toggleEnabled(j)} />
-                    {rowExtras?.(j, busy)}
+                <>
+                  <EnableToggle enabled={j.enabled} busy={busy} onToggle={() => toggleEnabled(j)} />
+                  {rowExtras?.(j, busy)}
+                  <button type="button" className="btn btn--ghost btn--sm" disabled={busy}
+                          onClick={() => setPending({ kind: "fire", job: j })}>
+                    {fireLabel}
+                  </button>
+                  {j.enabled && j.nextFireAt && (
                     <button type="button" className="btn btn--ghost btn--sm" disabled={busy}
-                            onClick={() => setPending({ kind: "fire", job: j })}>
-                      {fireLabel}
+                            onClick={() => setPending({ kind: "skip", job: j })}
+                            title="Skip the next scheduled fire">
+                      Skip next
                     </button>
-                    {j.enabled && j.nextFireAt && (
-                      <button type="button" className="btn btn--ghost btn--sm" disabled={busy}
-                              onClick={() => setPending({ kind: "skip", job: j })}
-                              title="Skip the next scheduled fire">
-                        Skip next
-                      </button>
-                    )}
-                    <button type="button" className="btn btn--ghost btn--sm" disabled={busy}
-                            onClick={() => setEditJob(j)}>
-                      Edit
-                    </button>
-                    <button type="button" className="btn btn--ghost btn--sm text--error" disabled={busy}
-                            onClick={() => setPending({ kind: "delete", job: j })}>
-                      Delete
-                    </button>
-                  </td>
-                </tr>
+                  )}
+                  <button type="button" className="btn btn--ghost btn--sm" disabled={busy}
+                          onClick={() => setEditJob(j)}>
+                    Edit
+                  </button>
+                  {/* Bulk delete is additional, not a replacement: deleting one
+                      row must not require selecting it first. */}
+                  <button type="button" className="btn btn--ghost btn--sm text--error" disabled={busy}
+                          onClick={() => setPending({ kind: "delete", job: j })}>
+                    Delete
+                  </button>
+                </>
               );
-            })}
-          </tbody>
-        </table>
-      )}
+            } },
+        ]}
+        bulkActions={[
+          { label: "Enable", onRun: (rows) => void bulkSetEnabled(rows, true),
+            disabled: (rows) => rows.every((r) => r.enabled) },
+          { label: "Disable", onRun: (rows) => void bulkSetEnabled(rows, false),
+            disabled: (rows) => rows.every((r) => !r.enabled) },
+          { label: "Delete", danger: true, onRun: (rows) => setPendingBulk(rows) },
+        ]}
+      />
 
       {showCreate && renderDialog({
         onClose: () => setShowCreate(false),
@@ -209,6 +254,18 @@ export function SchedulesSection({
           onChanged();
         },
       })}
+
+      {pendingBulk && (
+        <ConfirmDialog
+          title={`Delete ${pendingBulk.length} schedule(s)?`}
+          body={<>This permanently removes {pendingBulk.length} schedule(s). This can&apos;t be undone.</>}
+          confirmLabel={`Delete ${pendingBulk.length}`}
+          danger
+          busy={bulkBusy}
+          onConfirm={() => void confirmBulkDelete()}
+          onCancel={() => setPendingBulk(null)}
+        />
+      )}
 
       {pending && (
         <ConfirmDialog

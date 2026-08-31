@@ -144,10 +144,11 @@ export function ScaleUpRunModal({ run, onClose, onSuccess }: ScaleUpRunModalProp
     const ctl = new AbortController();
     (async () => {
       try {
-        const apps = await applicationsApi.list(ctl.signal);
+        // fresh: this dialog's ceiling gates an action, not a view.
+        const apps = await applicationsApi.list(ctl.signal, { fresh: true });
         const match = apps.find((a) => a.name === run.application);
         if (!match) { setMaxByRegion({}); return; }
-        const group = await applicationGroupsApi.get(match.metricsGroupId, ctl.signal);
+        const group = await applicationGroupsApi.get(match.metricsGroupId, ctl.signal, { fresh: true });
         const m: Record<string, number> = {};
         for (const c of group.capacity ?? []) m[c.region] = c.maxAvailable;
         setMaxByRegion(m);

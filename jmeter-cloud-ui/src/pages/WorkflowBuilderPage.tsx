@@ -71,8 +71,10 @@ export function WorkflowBuilderPage() {
     (async () => {
       try {
         const [apps, tpls, groups] = await Promise.all([
-          applicationsApi.list(ac.signal),
-          templatesApi.list(ac.signal).catch(() => []),
+          // fresh: these choices are saved into the graph and later launched,
+          // so a stale option becomes a workflow that cannot run.
+          applicationsApi.list(ac.signal, { fresh: true }),
+          templatesApi.list(ac.signal, { fresh: true }).catch(() => []),
           applicationGroupsApi.list(ac.signal),
         ]);
         let resolvedGroupId = groupIdParam ?? "";

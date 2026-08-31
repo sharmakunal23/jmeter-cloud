@@ -107,8 +107,6 @@ metrics:
   # every worker has published it, so the newest one is still filling for ~20 s.
   timeseries:
     settleSeconds: ${METRICS_TIMESERIES_SETTLE_SECONDS:20}
-  # How long a group's GROUP_REGISTRY row is cached per instance.
-  groupCacheSeconds: ${METRICS_GROUP_CACHE_SECONDS:300}
   # Window width (s) sent to every worker at fan-out (the worker's
   # FLUSH_WINDOW_SECONDS). 15 is the readers' finest bucket; keep it there.
   windowSeconds: ${METRICS_WINDOW_SECONDS:15}

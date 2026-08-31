@@ -70,7 +70,10 @@ describe("NewRunPage — the per-region ceiling is the group's", () => {
       capacity: [{ region: "us-east", maxAvailable: 8 }, { region: "us-west", maxAvailable: 2 }],
     });
     renderAt("checkout-svc");
-    await waitFor(() => expect(groupGet).toHaveBeenCalledWith("cps", expect.anything()));
+    // `fresh` is the contract, not an incidental argument: this ceiling gates
+    // an action, so it must never come from the navigation cache.
+    await waitFor(() => expect(groupGet)
+      .toHaveBeenCalledWith("cps", expect.anything(), { fresh: true }));
     await waitFor(() =>
       expect(screen.getByTestId("fleetForm").getAttribute("data-max")).toBe(JSON.stringify({ "us-east": 8, "us-west": 2 })));
   });

@@ -285,7 +285,9 @@ export function NewRunPage() {
   // UX-DYNAMICS T3 — the global plugin library for the run-plugins field.
   useEffect(() => {
     const ctl = new AbortController();
-    pluginsApi.list(ctl.signal)
+    // fresh on every read this form makes: a stale list here is not a stale
+    // screen, it is a launch built from something that has changed.
+    pluginsApi.list(ctl.signal, { fresh: true })
       .then((items) => setPluginLib({ status: "ok", items }))
       .catch((err: unknown) => {
         if (ctl.signal.aborted) return;
@@ -319,10 +321,10 @@ export function NewRunPage() {
     const ctl = new AbortController();
     (async () => {
       try {
-        const apps = await applicationsApi.list(ctl.signal);
+        const apps = await applicationsApi.list(ctl.signal, { fresh: true });
         const match = apps.find((a) => a.name === application);
         if (!match) { setGroupCapacityMap({}); return; }
-        const group = await applicationGroupsApi.get(match.metricsGroupId, ctl.signal);
+        const group = await applicationGroupsApi.get(match.metricsGroupId, ctl.signal, { fresh: true });
         const m: Record<string, number> = {};
         for (const c of group.capacity ?? []) m[c.region] = c.maxAvailable;
         setGroupCapacityMap(m);

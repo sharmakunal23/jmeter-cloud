@@ -175,7 +175,10 @@ describe("ScaleUpRunModal — capacity-aware ceiling (problem #1)", () => {
       fleetMembers: [member("w1"), member("w2")],
     });
     render(<ScaleUpRunModal run={run} onClose={vi.fn()} onSuccess={vi.fn()} />);
-    await waitFor(() => expect(groupGetMock).toHaveBeenCalledWith("cps", expect.anything()));
+    // `fresh` is the contract, not an incidental argument: this ceiling gates
+    // an action, so it must never come from the navigation cache.
+    await waitFor(() => expect(groupGetMock)
+      .toHaveBeenCalledWith("cps", expect.anything(), { fresh: true }));
 
     const countInput = await screen.findByLabelText(/number of workers to add to local-east-1/i);
     // Ask for 5; the cap-aware ceiling (5 − 2 = 3) clamps it to 3.

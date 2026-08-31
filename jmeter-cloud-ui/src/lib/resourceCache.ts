@@ -9,6 +9,13 @@
  * all, so walking Apps → Documents → Templates stops refetching the same list
  * on every step.
  *
+ * <p><b>Cache what a page displays, never what an action reads.</b> A stale
+ * list behind a screen is a cosmetic lag; a stale list behind the run launcher,
+ * the scale-up dialog or the workflow builder is a launch built against
+ * something that has changed. Those call sites pass `{fresh: true}` — they keep
+ * the single-flight dedupe and skip the TTL. The same rule removed the hub's
+ * capacity-grid cache, which had ended up under the run-launch gate.
+ *
  * <p>Invalidation is explicit and it is the caller's job: a mutation that
  * changes a resource must call {@link invalidate} (or {@link invalidateAll})
  * or the UI shows its own stale write for up to one TTL. The TTL is the

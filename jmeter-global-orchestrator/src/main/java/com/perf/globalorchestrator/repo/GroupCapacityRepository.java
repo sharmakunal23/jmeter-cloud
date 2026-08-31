@@ -1,10 +1,7 @@
 package com.perf.globalorchestrator.repo;
 
-import com.perf.globalorchestrator.config.CacheConfig;
 import com.perf.globalorchestrator.domain.GroupCapacity;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
@@ -27,8 +24,14 @@ import java.util.Optional;
  * invalidates both the per-group and the grouped entries, and writes are
  * infrequent enough that clearing wholesale is simpler and always correct.
  *
- * <p>{@link #find} and {@link #countActivePodsForGroupRegion} are deliberately not
- * cached; the latter reads live run state and must never be stale at run-launch.
+ * <p><b>Nothing here is cached, deliberately.</b> The reservation grid is what
+ * the run-launch gate and the workflow capacity pre-flight reason about, and it
+ * is a handful of rows behind an indexed key — caching it saved microseconds and
+ * cost correctness. It was also unsafe in a way that is easy to miss:
+ * {@code GroupReservationService.reserve} is {@code @Transactional}, so an
+ * {@code @CacheEvict} on {@link #upsert} fired <i>before</i> the transaction
+ * committed, and a concurrent reader could re-populate the entry with
+ * pre-commit rows and pin a stale reservation for a whole TTL.
  */
 @Repository
 public class GroupCapacityRepository {
@@ -45,7 +48,6 @@ public class GroupCapacityRepository {
         this.jdbc = jdbc;
     }
 
-    @Cacheable(cacheNames = CacheConfig.CACHE_GROUP_CAPACITY, key = "#groupId")
     public List<GroupCapacity> findByGroupId(String groupId) {
         return jdbc.query(
                 "SELECT * FROM ORCH_GROUP_CAPACITY "
@@ -62,7 +64,6 @@ public class GroupCapacityRepository {
     }
 
     /** Upsert — insert if missing, update maxAvailable + updatedAt if present. */
-    @CacheEvict(cacheNames = CacheConfig.CACHE_GROUP_CAPACITY, allEntries = true)
     public void upsert(String groupId, String region, int maxAvailable) {
         jdbc.update(
                 "MERGE INTO ORCH_GROUP_CAPACITY t "
@@ -75,7 +76,6 @@ public class GroupCapacityRepository {
     }
 
     /** Replace the entire capacity grid for a group. */
-    @CacheEvict(cacheNames = CacheConfig.CACHE_GROUP_CAPACITY, allEntries = true)
     public void replaceAll(String groupId, List<GroupCapacity> entries) {
         jdbc.update("DELETE FROM ORCH_GROUP_CAPACITY WHERE GROUP_ID = ?", groupId);
         for (GroupCapacity c : entries) {
@@ -89,15 +89,7 @@ public class GroupCapacityRepository {
     /**
      * Bulk fetch — returns {groupId → list-of-capacity}. Used by the group
      * list so listing N groups is O(1) DB round-trips instead of N+1.
-     *
-     * <p>The key carries a {@code #} on purpose. It shares a cache with
-     * {@link #findByGroupId(String)}, which is keyed by the raw group id, and a
-     * group id is {@code [a-z][a-z0-9_]{0,29}} — so a group legitimately named
-     * {@code all} would have collided with a plain {@code 'all'} key and one
-     * caller would have read the other's value as the wrong type. No group id
-     * can contain {@code #}.
      */
-    @Cacheable(cacheNames = CacheConfig.CACHE_GROUP_CAPACITY, key = "'#all'")
     public Map<String, List<GroupCapacity>> findAllGroupedByGroup() {
         Map<String, List<GroupCapacity>> out = new java.util.LinkedHashMap<>();
         jdbc.query(
@@ -181,7 +173,6 @@ public class GroupCapacityRepository {
         return n == null ? 0 : n;
     }
 
-    @CacheEvict(cacheNames = CacheConfig.CACHE_GROUP_CAPACITY, allEntries = true)
     public boolean delete(String groupId, String region) {
         return jdbc.update(
                 "DELETE FROM ORCH_GROUP_CAPACITY "
