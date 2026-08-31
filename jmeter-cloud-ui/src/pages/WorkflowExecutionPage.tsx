@@ -6,6 +6,7 @@ import {
 } from "../api/workflows";
 import { formatRelative } from "../lib/time";
 import { useVisiblePolling } from "../hooks/useVisiblePolling";
+import { InfoTip } from "../components/InfoTip";
 import { TabPanel, TabStrip, useTabInUrl, type TabDefinition } from "../components/TabStrip";
 import { WorkflowCanvas } from "../components/workflow/WorkflowCanvas";
 import { WorkflowMetricsPanel } from "../components/workflow/WorkflowMetricsPanel";
@@ -87,7 +88,13 @@ export function WorkflowExecutionPage() {
     <section className="workflowsPage">
       <header className="pageHeader">
         <div className="pageHeader__titleGroup">
-          <h1>{execution.workflowName}</h1>
+          <div className="formField__labelRow">
+            <h1>{execution.workflowName}</h1>
+            <InfoTip label="About this run">
+              One pass through the workflow, kept whole — the graph, charts and
+              task list here are this run's, not the workflow's current draft.
+            </InfoTip>
+          </div>
           <small className="ink-soft">
             <Link to="/workflows">Workflows</Link>
             {" · "}
@@ -168,7 +175,7 @@ export function WorkflowExecutionPage() {
               </td>
               <td><ExecutionStateChip state={t.state} /></td>
               <td className="ink-soft" style={{ fontSize: "0.85rem" }}>
-                {t.startedAt ? formatRelative(t.startedAt) : "—"}
+                {ran(t) && t.startedAt ? formatRelative(t.startedAt) : "—"}
               </td>
               <td className="ink-soft mono" style={{ fontSize: "0.85rem" }}>{duration(t)}</td>
               <td className="ink-soft" style={{ fontSize: "0.85rem" }}><TaskDetail task={t} /></td>
@@ -197,8 +204,17 @@ export function WorkflowExecutionPage() {
   );
 }
 
+/**
+ * Whether the task actually did anything. A skipped or still-pending task is
+ * stamped with the moment the engine settled it, which reads as "started 3h
+ * ago, took 0s" for work that never happened.
+ */
+function ran(task: WorkflowTask): boolean {
+  return task.state !== "SKIPPED" && task.state !== "PENDING";
+}
+
 function duration(task: WorkflowTask): string {
-  if (!task.startedAt) return "—";
+  if (!ran(task) || !task.startedAt) return "—";
   const end = task.completedAt ? new Date(task.completedAt) : new Date();
   const secs = Math.max(0, Math.round((end.getTime() - new Date(task.startedAt).getTime()) / 1000));
   if (secs < 60) return `${secs}s`;

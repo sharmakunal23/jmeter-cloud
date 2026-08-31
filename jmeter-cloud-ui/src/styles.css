@@ -5568,6 +5568,10 @@ fieldset.field { border: 1px solid var(--border); border-radius: 6px; padding: 0
 }
 .workflowBuilder__palette h2,
 .nodeEditor h2 { font-size: 0.9rem; margin: 0 0 0.5rem; }
+/* The heading carries the block's bottom margin; inside a label row the row
+   owns it, so the ⓘ centres on the text rather than on text-plus-margin. */
+.workflowBuilder__palette .formField__labelRow { margin: 0 0 0.5rem; }
+.workflowBuilder__palette .formField__labelRow h2 { margin: 0; }
 
 .paletteButton {
   display: flex;
@@ -5729,7 +5733,7 @@ tr.isMuted td { opacity: 0.6; }
   margin-bottom: 0.7rem;
   flex-wrap: wrap;
 }
-.runsToolbar__views { display: flex; gap: 0.25rem; }
+.runsToolbar__views { display: flex; gap: 0.25rem; align-items: center; }
 .runsToolbar__actions { display: flex; gap: 0.4rem; align-items: center; }
 .runsTable__check { width: 2.2rem; }
 .runsTable__check input { cursor: pointer; }

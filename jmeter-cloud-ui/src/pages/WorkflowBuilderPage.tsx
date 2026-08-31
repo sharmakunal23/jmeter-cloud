@@ -12,6 +12,7 @@ import {
 import {
   EDGE_LABELS, NODE_LABELS, autoArrange, needsArrange, newNode, nextNodeId,
 } from "../lib/workflowGraph";
+import { InfoTip } from "../components/InfoTip";
 import { WorkflowCanvas } from "../components/workflow/WorkflowCanvas";
 import { NodeEditor } from "../components/workflow/NodeEditor";
 import { CapacityPanel } from "../components/workflow/CapacityPanel";
@@ -238,17 +239,19 @@ export function WorkflowBuilderPage() {
 
       <div className="workflowBuilder__layout">
         <aside className="workflowBuilder__palette">
-          <h2>Add a task</h2>
+          <div className="formField__labelRow">
+            <h2>Add a task</h2>
+            <InfoTip label="About linking tasks">
+              Drag from the bottom of one task to the top of another to link them;
+              two links out of one task run their targets at the same time.
+            </InfoTip>
+          </div>
           {PALETTE.map((type) => (
             <button key={type} type="button" className="paletteButton" onClick={() => addNode(type)}>
               <span className={`paletteButton__swatch paletteButton__swatch--${type.toLowerCase()}`} aria-hidden="true" />
               {NODE_LABELS[type]}
             </button>
           ))}
-          <p className="ink-soft" style={{ fontSize: "0.8rem", marginTop: "0.75rem" }}>
-            Drag from the bottom of one task to the top of another to link them.
-            Two links out of one task run their targets at the same time.
-          </p>
         </aside>
 
         <div className="workflowBuilder__canvas">
@@ -311,7 +314,7 @@ export function WorkflowBuilderPage() {
               </label>
               <p className="ink-soft" style={{ fontSize: "0.82rem" }}>
                 {selectedEdge.condition === "ON_FAILURE"
-                  ? "Drawing a failure link also says you have handled the failure — the workflow finishes successfully if this is the only thing that went wrong."
+                  ? "Runs only when the task above fails — use it to alert someone or clean up. The run still ends as Failed."
                   : selectedEdge.condition === "ALWAYS"
                     ? "Runs whether the task above succeeded or failed. A task that was skipped never ran, so it does not trigger this."
                     : "Runs only when the task above succeeds."}

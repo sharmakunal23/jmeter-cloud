@@ -1,8 +1,12 @@
 import type { ExecutionState, TaskState } from "../../api/workflows";
 
 /**
- * The one place a workflow state becomes a colour, so an execution's chip, a
- * task row and a canvas node can never disagree about what "failed" looks like.
+ * The one place a workflow state becomes a colour and a word, so an execution's
+ * chip, a task row and a canvas node can never disagree about what "failed"
+ * looks like.
+ *
+ * <p>SKIPPED reads "Not executed": the state means the branch above it failed
+ * or was skipped, and "Skipped" sounded like someone chose to skip it.
  */
 const TONE: Record<string, string> = {
   RUNNING: "chip--info",
@@ -21,7 +25,7 @@ const LABEL: Record<string, string> = {
   SUCCEEDED: "Succeeded",
   FAILED: "Failed",
   CANCELLED: "Cancelled",
-  SKIPPED: "Skipped",
+  SKIPPED: "Not executed",
 };
 
 export function toneFor(state: ExecutionState | TaskState): string {

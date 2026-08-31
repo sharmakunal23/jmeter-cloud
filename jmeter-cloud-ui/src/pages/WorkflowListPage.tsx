@@ -7,6 +7,7 @@ import {
 import { formatRelative } from "../lib/time";
 import { AppListToolbar } from "../components/AppListToolbar";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { InfoTip } from "../components/InfoTip";
 import { ExecutionStateChip } from "../components/workflow/ExecutionStateChip";
 
 /**
@@ -76,7 +77,13 @@ export function WorkflowListPage() {
     <section className="workflowsPage">
       <header className="pageHeader">
         <div className="pageHeader__titleGroup">
-          <h1>{group?.name ?? groupId}</h1>
+          <div className="formField__labelRow">
+            <h1>{group?.name ?? groupId}</h1>
+            <InfoTip label="About this group's workflows">
+              Every workflow here runs against this group's applications and draws
+              its workers from the group's reserved capacity.
+            </InfoTip>
+          </div>
           <small className="ink-soft">
             <Link to="/workflows">Workflows</Link>
             {group?.teamName ? <> · owned by {group.teamName}</> : null}

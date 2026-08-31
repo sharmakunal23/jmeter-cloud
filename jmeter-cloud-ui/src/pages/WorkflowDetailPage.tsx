@@ -9,6 +9,7 @@ import { formatRelative } from "../lib/time";
 import { useClientPagination } from "../hooks/useClientPagination";
 import { useVisiblePolling } from "../hooks/useVisiblePolling";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { InfoTip } from "../components/InfoTip";
 import { Paginator } from "../components/Paginator";
 import { TabPanel, TabStrip, useTabInUrl, type TabDefinition } from "../components/TabStrip";
 import { WorkflowCanvas } from "../components/workflow/WorkflowCanvas";
@@ -187,7 +188,13 @@ export function WorkflowDetailPage() {
     <section className="workflowsPage">
       <header className="pageHeader">
         <div className="pageHeader__titleGroup">
-          <h1>{workflow.name}</h1>
+          <div className="formField__labelRow">
+            <h1>{workflow.name}</h1>
+            <InfoTip label="About this workflow">
+              Running it starts one execution that walks these tasks in order; the
+              workflow cannot be edited while a run is in progress.
+            </InfoTip>
+          </div>
           <small className="ink-soft">
             <Link to="/workflows">Workflows</Link>
             {" · "}
@@ -288,6 +295,10 @@ export function WorkflowDetailPage() {
               aria-pressed={showArchived}
               onClick={() => switchView(true)}
             >Archived{archivedCount > 0 ? ` (${archivedCount})` : ""}</button>
+            <InfoTip label="About archiving runs">
+              Archiving takes a finished run out of the history without losing it;
+              deleting is only offered on the archived list.
+            </InfoTip>
           </div>
           <div className="runsToolbar__actions">
             {selected.size > 0 && (

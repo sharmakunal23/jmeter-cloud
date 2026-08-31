@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 
 import { workflowsApi, type WorkflowGroupSummary } from "../api/workflows";
 import { AppListToolbar } from "../components/AppListToolbar";
+import { InfoTip } from "../components/InfoTip";
 import { Paginator } from "../components/Paginator";
 import { useClientPagination } from "../hooks/useClientPagination";
 
@@ -49,10 +50,13 @@ export function WorkflowGroupsPage() {
     <section className="workflowsPage">
       <header className="pageHeader">
         <div className="pageHeader__titleGroup">
-          <h1>Workflows</h1>
-          <small className="ink-soft">
-            A workflow chains health checks, load tests and notifications for one application group.
-          </small>
+          <div className="formField__labelRow">
+            <h1>Workflows</h1>
+            <InfoTip label="About workflows">
+              A workflow chains health checks, load tests and notifications for one
+              application group.
+            </InfoTip>
+          </div>
         </div>
       </header>
 
