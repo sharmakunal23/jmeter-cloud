@@ -116,6 +116,22 @@ public class WorkflowExecutionRepository {
                 3, row);
     }
 
+    /**
+     * Bring the next tick forward, never push it back. Used when something the
+     * engine was waiting for has happened — a run finished, an approval was
+     * answered — so the execution is looked at now rather than at whatever
+     * interval it had settled on.
+     *
+     * @return true when this call actually moved it; false when it was already
+     *         due sooner, or the execution is no longer running
+     */
+    public boolean nudge(String executionId, Instant at) {
+        return jdbc.update(
+                "UPDATE ORCH_WORKFLOW_EXECUTION SET NEXT_TICK_AT=? "
+                + "WHERE EXECUTION_ID=? AND STATE='RUNNING' AND NEXT_TICK_AT > ?",
+                OracleBind.ts(at), executionId, OracleBind.ts(at)) > 0;
+    }
+
     /** Move the next tick — the lease while advancing, the schedule once advanced. */
     public void leaseUntil(String executionId, Instant nextTickAt) {
         jdbc.update("UPDATE ORCH_WORKFLOW_EXECUTION SET NEXT_TICK_AT=? WHERE EXECUTION_ID=? AND STATE='RUNNING'",

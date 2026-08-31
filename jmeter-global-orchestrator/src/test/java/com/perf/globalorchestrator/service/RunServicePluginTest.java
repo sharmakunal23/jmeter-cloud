@@ -57,7 +57,10 @@ class RunServicePluginTest {
                 mock(RunTrendRepository.class),
                 plugins,
                 null,
-                "us-east-1", 1, 100, 1000L);
+                "us-east-1", 1, 100, 1000L,
+                // Terminal-run announcements are the workflow engine's wake-up;
+                // WorkflowRunCompletionListenerTest covers what they do.
+                event -> { });
         // The @Transactional self-proxy is Spring-wired; point it at the plain
         // instance so startRun's self.openRunAndClaimPods call runs inline.
         Field self = RunService.class.getDeclaredField("self");

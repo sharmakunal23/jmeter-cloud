@@ -72,7 +72,10 @@ class RunServiceUpdatePropertiesTest {
                 mock(RunTrendRepository.class),
                 mock(PluginRepository.class),
                 null,
-                "us-east-1", 1, 100, 1000L);
+                "us-east-1", 1, 100, 1000L,
+                // Terminal-run announcements are the workflow engine's wake-up;
+                // WorkflowRunCompletionListenerTest covers what they do.
+                event -> { });
     }
 
     private static RunFleetMember member(String workerId, MemberState state, Map<String, String> props) {

@@ -151,6 +151,31 @@ class WorkflowDbTest extends OracleDbTestSupport {
     }
 
     @Test
+    @DisplayName("a wake only ever brings the tick forward, and only while the execution is running")
+    void nudgeIsForwardOnlyAndRunningOnly() {
+        Workflow wf = freshWorkflow(freshGroup(), "Wakes");
+        Instant now = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+        WorkflowExecution ex = executions.insert(new WorkflowExecution(Ulid.generate(), wf.workflowId(),
+                wf.groupId(), wf.name(), sampleGraph(), ExecutionState.RUNNING, null, "tester", now, null,
+                now.plusSeconds(600), List.of()));
+
+        // A run finished: pull the tick in from ten minutes out to now.
+        assertThat(executions.nudge(ex.executionId(), now)).isTrue();
+        assertThat(executions.findById(ex.executionId()).orElseThrow().nextTickAt())
+                .isEqualTo(now);
+
+        // A later wake must not push an already-due execution back out.
+        assertThat(executions.nudge(ex.executionId(), now.plusSeconds(300))).isFalse();
+        assertThat(executions.findById(ex.executionId()).orElseThrow().nextTickAt())
+                .isEqualTo(now);
+
+        // Nothing wakes a finished execution.
+        executions.markTerminal(ex.executionId(), ExecutionState.SUCCEEDED, null, now);
+        assertThat(executions.nudge(ex.executionId(), now)).isFalse();
+        assertThat(executions.findById(ex.executionId()).orElseThrow().nextTickAt()).isNull();
+    }
+
+    @Test
     @DisplayName("a terminal execution clears its tick, and settling twice is a no-op")
     void markTerminalIsIdempotent() {
         Workflow wf = freshWorkflow(freshGroup(), "Settles");

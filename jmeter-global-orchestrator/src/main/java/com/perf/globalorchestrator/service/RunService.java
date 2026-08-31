@@ -14,6 +14,7 @@ import com.perf.globalorchestrator.domain.RunEventPayloads.RegionCount;
 import com.perf.globalorchestrator.domain.RunEventType;
 import com.perf.globalorchestrator.domain.RunFleetMember;
 import com.perf.globalorchestrator.domain.RunState;
+import com.perf.globalorchestrator.domain.RunTerminalEvent;
 import com.perf.globalorchestrator.domain.Ulid;
 import com.perf.globalorchestrator.domain.WorkflowOrigin;
 import com.perf.globalorchestrator.http.FleetAllocationEntry;
@@ -41,6 +42,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -127,6 +129,8 @@ public class RunService {
     private final String region;
     private final int maxFleetSizePerRun;
     private final long spinHealthTimeoutMs;
+    /** Announces a run's terminal state; see {@link #announceTerminal}. */
+    private final ApplicationEventPublisher events;
     private final ExecutorService fanoutPool;
 
     /**
@@ -168,7 +172,8 @@ public class RunService {
             @Value("${globalOrchestrator.region:us-east-1}") String region,
             @Value("${globalOrchestrator.fanoutThreads:8}") int fanoutThreads,
             @Value("${globalOrchestrator.maxFleetSizePerRun:100}") int maxFleetSizePerRun,
-            @Value("${globalOrchestrator.spinShortfall.healthTimeoutMs:60000}") long spinHealthTimeoutMs) {
+            @Value("${globalOrchestrator.spinShortfall.healthTimeoutMs:60000}") long spinHealthTimeoutMs,
+            ApplicationEventPublisher events) {
         this.runs = runs;
         this.auditEvents = auditEvents;
         this.audit = audit;
@@ -185,6 +190,7 @@ public class RunService {
         this.region = region;
         this.maxFleetSizePerRun = maxFleetSizePerRun;
         this.spinHealthTimeoutMs = spinHealthTimeoutMs;
+        this.events = events;
         this.fanoutPool = Executors.newFixedThreadPool(Math.max(1, fanoutThreads),
                 r -> {
                     Thread t = new Thread(r, "globalOrch-fanout");
@@ -1091,6 +1097,9 @@ public class RunService {
         recordEvent(runId, RunEventType.ABORT, actor,
                 new RunEventPayloads.Abort(reason, aborted, skipped),
                 skipped.isEmpty() ? "ok" : "partial");
+        // This path writes ABORTED directly rather than through
+        // recordRunTerminal, so it announces for itself.
+        announceTerminal(runId, RunState.ABORTED);
     }
 
     /**
@@ -2023,6 +2032,23 @@ public class RunService {
      * operator hit a button — the orchestrator observed the run end. Callers
      * must invoke this exactly on the transition into a terminal state.
      */
+    /**
+     * Announce a run's terminal state to anything waiting on it — today, the
+     * workflow engine, which pulls the owning execution's next tick forward
+     * instead of discovering the run finished on its own poll.
+     *
+     * <p>Best effort by design: a listener that fails must not fail the run, and
+     * every listener has a poll or sweep behind it.
+     */
+    private void announceTerminal(String runId, RunState state) {
+        try {
+            events.publishEvent(new RunTerminalEvent(runId, state, Instant.now()));
+        } catch (RuntimeException e) {
+            LOG.warn("run {} terminal notification failed ({}); listeners fall back to polling",
+                    runId, e.toString());
+        }
+    }
+
     private void recordRunTerminal(String runId, RunState state, String reason) {
         RunEventType type = switch (state) {
             case COMPLETED -> RunEventType.RUN_COMPLETED;
@@ -2038,6 +2064,7 @@ public class RunService {
         };
         recordEvent(runId, type, Actor.system("orchestrator"),
                 new RunEventPayloads.RunEnd(state.name(), reason), result);
+        announceTerminal(runId, state);
     }
 
     /**

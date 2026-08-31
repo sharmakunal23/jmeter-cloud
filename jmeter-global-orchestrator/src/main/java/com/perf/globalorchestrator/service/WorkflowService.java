@@ -4,13 +4,16 @@ import com.perf.globalorchestrator.domain.Actor;
 import com.perf.globalorchestrator.domain.Application;
 import com.perf.globalorchestrator.domain.ApplicationGroup;
 import com.perf.globalorchestrator.domain.ApprovalNode;
+import com.perf.globalorchestrator.domain.EdgeCondition;
 import com.perf.globalorchestrator.domain.ExecutionState;
 import com.perf.globalorchestrator.domain.GroupCapacity;
 import com.perf.globalorchestrator.domain.HealthCheckNode;
 import com.perf.globalorchestrator.domain.LoadTestNode;
+import com.perf.globalorchestrator.domain.NodeType;
 import com.perf.globalorchestrator.domain.TaskState;
 import com.perf.globalorchestrator.domain.Ulid;
 import com.perf.globalorchestrator.domain.Workflow;
+import com.perf.globalorchestrator.domain.WorkflowEdge;
 import com.perf.globalorchestrator.domain.WorkflowExecution;
 import com.perf.globalorchestrator.domain.WorkflowGraph;
 import com.perf.globalorchestrator.domain.WorkflowNode;
@@ -28,11 +31,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * The workflow surface behind the API: validate a graph, save it, launch it,
@@ -117,7 +124,7 @@ public class WorkflowService {
         }
 
         List<RegionDemand> demand = capacityDemand(groupId, graph);
-        List<String> warnings = new ArrayList<>();
+        List<String> warnings = new ArrayList<>(silencedNotifications(graph));
         for (RegionDemand d : demand) {
             if (!d.fits()) {
                 warnings.add("cluster '" + d.region() + "': this workflow can want " + d.peakWorkers()
@@ -162,6 +169,53 @@ public class WorkflowService {
             }
         }
         return errors;
+    }
+
+    /**
+     * Warn where a failure would silence a notification.
+     *
+     * <p>A task whose outgoing links are all "on success" stops everything below
+     * it the moment it fails — which is right, but it means the "email me the
+     * result" at the end of a chain quietly never runs on the day it matters
+     * most. Naming the pair at design time beats discovering it from an
+     * execution that finished green with nothing sent.
+     */
+    private List<String> silencedNotifications(WorkflowGraph graph) {
+        List<String> warnings = new ArrayList<>();
+        for (WorkflowNode node : graph.nodes()) {
+            List<WorkflowEdge> out = graph.outboundOf(node.id());
+            if (out.isEmpty()) continue;
+            // An ON_FAILURE or ALWAYS link carries a failure onward; only a node
+            // with neither dead-ends its whole subtree.
+            boolean carriesFailure = out.stream().anyMatch(
+                    e -> e.condition() == EdgeCondition.ON_FAILURE || e.condition() == EdgeCondition.ALWAYS);
+            if (carriesFailure) continue;
+
+            List<String> silenced = reachableEmails(graph, node.id());
+            if (!silenced.isEmpty()) {
+                warnings.add("if '" + node.name() + "' fails, no email is sent by "
+                        + String.join(", ", silenced.stream().map(n -> "'" + n + "'").toList())
+                        + " — add an 'on failure' link from '" + node.name() + "', or set the email's"
+                        + " join to 'any' and link it from both outcomes");
+            }
+        }
+        return warnings;
+    }
+
+    /** Email tasks downstream of {@code fromId}, by name, in graph order. */
+    private static List<String> reachableEmails(WorkflowGraph graph, String fromId) {
+        Set<String> seen = new LinkedHashSet<>();
+        Deque<String> queue = new ArrayDeque<>(List.of(fromId));
+        while (!queue.isEmpty()) {
+            for (WorkflowEdge e : graph.outboundOf(queue.poll())) {
+                if (seen.add(e.target())) queue.add(e.target());
+            }
+        }
+        List<String> emails = new ArrayList<>();
+        for (WorkflowNode n : graph.nodes()) {
+            if (n.type() == NodeType.EMAIL && seen.contains(n.id())) emails.add(n.name());
+        }
+        return emails;
     }
 
     private Map<String, Integer> reservedByRegion(String groupId) {
@@ -314,7 +368,10 @@ public class WorkflowService {
                 task.name(), approved ? TaskState.SUCCEEDED : TaskState.FAILED, task.attempt(),
                 task.applicationName(), task.runId(), task.startedAt(), now, null, result,
                 approved ? null : "rejected by " + actor.name()));
-        executions.leaseUntil(executionId, now);
+        // Bring the tick forward so the branch continues within a sweep rather
+        // than at the idle poll; forward-only, so an execution already due is
+        // left where it is.
+        executions.nudge(executionId, now);
         return requireExecution(executionId);
     }
 
