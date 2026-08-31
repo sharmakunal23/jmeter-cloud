@@ -43,13 +43,16 @@ describe("CapacityPanel", () => {
     expect(screen.getByRole("link", { name: /Reserve more/i })).toHaveAttribute("href", "/capacity/groups/cps");
   });
 
-  it("a workflow with no load tests reserves nothing, and says so", () => {
-    renderPanel({ valid: true, errors: [], warnings: [], capacity: [] });
-    expect(screen.getByText(/reserves no workers/i)).toBeInTheDocument();
+  // A card that only ever said "no load tests, so no workers" was permanent
+  // furniture in the column the task settings need; the status bar above the
+  // canvas carries the group's reservation instead.
+  it("renders nothing at all when there is no load test to weigh", () => {
+    const { container } = renderPanel({ valid: true, errors: [], warnings: [], capacity: [] });
+    expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders while the check is still in flight", () => {
-    renderPanel(null);
-    expect(screen.getByText("Checking…")).toBeInTheDocument();
+  it("renders nothing while the check is still in flight, rather than a placeholder card", () => {
+    const { container } = renderPanel(null);
+    expect(container).toBeEmptyDOMElement();
   });
 });

@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 
 import type {
   ApprovalNode, DelayNode, EmailNode, HealthCheckNode, LoadTestNode, WorkflowNode,
 } from "../../api/workflows";
 import type { Application } from "../../api/applications";
-import type { TemplateSummary } from "../../api/templates";
+import { templatesApi, type TemplateBody, type TemplateSummary } from "../../api/templates";
 import { InfoTip } from "../InfoTip";
 
 /**
@@ -21,6 +22,8 @@ export interface NodeEditorProps {
   regions: { region: string; maxAvailable: number }[];
   /** Group defaults an email task inherits when it names no recipients of its own. */
   groupNotify: { to: string[]; cc: string[]; bcc: string[] };
+  /** How many links arrive at this task — the join policy is meaningless below two. */
+  inboundCount: number;
   onChange: (next: WorkflowNode) => void;
   onDelete: () => void;
 }
@@ -55,21 +58,25 @@ export function NodeEditor(props: NodeEditorProps) {
         <input type="text" value={node.id} readOnly className="mono" />
       </label>
 
-      <label className="field">
-        <span>
-          When several links arrive
-          <InfoTip label="About join behaviour">
-            <b>All</b> waits for every incoming link to be satisfied. <b>Any</b> starts on the first one.
-          </InfoTip>
-        </span>
-        <select
-          value={node.joinPolicy ?? "ALL"}
-          onChange={(e) => onChange({ ...node, joinPolicy: e.target.value as "ALL" | "ANY" })}
-        >
-          <option value="ALL">Wait for all of them</option>
-          <option value="ANY">Start on any one</option>
-        </select>
-      </label>
+      {/* Below two inbound links there is nothing to join, so the control would
+          be a question about a situation that cannot arise. */}
+      {props.inboundCount > 1 && (
+        <label className="field">
+          <span>
+            When its {props.inboundCount} links arrive
+            <InfoTip label="About join behaviour">
+              <b>All</b> waits for every incoming link to be satisfied. <b>Any</b> starts on the first one.
+            </InfoTip>
+          </span>
+          <select
+            value={node.joinPolicy ?? "ALL"}
+            onChange={(e) => onChange({ ...node, joinPolicy: e.target.value as "ALL" | "ANY" })}
+          >
+            <option value="ALL">Wait for all of them</option>
+            <option value="ANY">Start on any one</option>
+          </select>
+        </label>
+      )}
 
       <hr className="nodeEditor__rule" />
 
@@ -160,21 +167,106 @@ function HealthCheckFields({ node, applications, onChange }:
   );
 }
 
+/**
+ * A load test is three decisions in the order they depend on each other:
+ * which application, then which of <em>its</em> templates, then how this task
+ * should differ from that template.
+ *
+ * <p>Asking for all of it at once meant a wall of empty boxes whose answers
+ * were not knowable yet — the template list in particular offered every
+ * template on the platform, nearly all of them for other applications. Picking
+ * a template now reads it and fills the workers, Save results and property
+ * defaults it was saved with, so the operator edits real values instead of
+ * inventing them.
+ */
 function LoadTestFields({ node, applications, templates, regions, onChange }:
   NodeEditorProps & { node: LoadTestNode }) {
+  // Only this application's templates: a plan written for another application
+  // hits the wrong target, so offering it is offering a mistake.
+  const appTemplates = templates.filter((t) => t.application === node.application);
+
+  const [template, setTemplate] = useState<TemplateBody | null>(null);
+  const [reading, setReading] = useState(false);
+  const [readError, setReadError] = useState<string | null>(null);
+  // A saved workflow arrives with its fleet already chosen; re-seeding it from
+  // the template on mount would silently discard what the operator saved.
+  const seeded = useRef<string | null>(node.fleetAllocation.length > 0 ? node.templateBlobId : null);
+
+  // The effect must not re-run when its own onChange lands, so what it applies
+  // reads through a ref rather than through the dependency list.
+  const apply = useRef<(body: TemplateBody) => void>(() => {});
+  apply.current = (body: TemplateBody) => {
+    const reserved = new Map(regions.map((r) => [r.region, r.maxAvailable]));
+    const fleet = (body.fleetAllocation ?? [])
+      .filter((f) => f.count > 0 && reserved.has(f.region))
+      .map((f) => ({ region: f.region, count: Math.min(f.count, reserved.get(f.region)!) }))
+      .sort((a, b) => a.region.localeCompare(b.region));
+    onChange({
+      ...node,
+      fleetAllocation: fleet,
+      saveResults: body.saveResults ?? null,
+      properties: Object.keys(node.properties ?? {}).length > 0
+        ? node.properties
+        : { ...(body.globalProperties ?? {}) },
+    });
+  };
+
+  useEffect(() => {
+    const blobId = node.templateBlobId;
+    if (!blobId) {
+      setTemplate(null);
+      setReadError(null);
+      return;
+    }
+    const ac = new AbortController();
+    setReading(true);
+    setReadError(null);
+    templatesApi.load(blobId, ac.signal)
+      .then((body) => {
+        setTemplate(body);
+        if (seeded.current !== blobId) {
+          seeded.current = blobId;
+          apply.current(body);
+        }
+      })
+      .catch((e: Error) => {
+        if (e.name === "AbortError") return;
+        // The task is still valid — the launch reads the template itself. Only
+        // the pre-filled defaults are lost, so say that rather than blocking.
+        setReadError(e.message);
+      })
+      .finally(() => setReading(false));
+    return () => ac.abort();
+  }, [node.templateBlobId]);
+
+  function setApplication(name: string) {
+    const keeps = templates.some((t) => t.blobId === node.templateBlobId && t.application === name);
+    if (keeps) {
+      onChange({ ...node, application: name });
+      return;
+    }
+    seeded.current = null;
+    onChange({ ...node, application: name, templateBlobId: "", fleetAllocation: [] });
+  }
+
   function setRegion(region: string, count: number) {
     const rest = node.fleetAllocation.filter((f) => f.region !== region);
     const next = count > 0 ? [...rest, { region, count }] : rest;
     next.sort((a, b) => a.region.localeCompare(b.region));
     onChange({ ...node, fleetAllocation: next });
   }
+
   const total = node.fleetAllocation.reduce((sum, f) => sum + f.count, 0);
+  // Workers the template wanted in a cluster this group has not reserved.
+  const unreserved = (template?.fleetAllocation ?? [])
+    .filter((f) => f.count > 0 && !regions.some((r) => r.region === f.region))
+    .map((f) => f.region);
 
   return (
     <>
       <label className="field">
         <span>Application</span>
-        <select value={node.application} onChange={(e) => onChange({ ...node, application: e.target.value })}>
+        <select value={node.application} onChange={(e) => setApplication(e.target.value)}>
           <option value="">Choose an application…</option>
           {applications.map((a) => (
             <option key={a.applicationId} value={a.name}>{a.name}</option>
@@ -182,102 +274,134 @@ function LoadTestFields({ node, applications, templates, regions, onChange }:
         </select>
       </label>
 
-      <label className="field">
-        <span>
-          Template
-          <InfoTip label="About the template">Supplies the test plan, data files and plugins. The workers below are this task's, not the template's.</InfoTip>
-        </span>
-        <select
-          value={node.templateBlobId}
-          onChange={(e) => onChange({ ...node, templateBlobId: e.target.value })}
-        >
-          <option value="">Choose a template…</option>
-          {templates.map((t) => (
-            <option key={t.blobId} value={t.blobId}>
-              {t.name}{t.application ? ` (${t.application})` : ""}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <fieldset className="field">
-        <legend>
-          Workers
-          <InfoTip label="About workers">
-            Counted against the group's reservation. Tasks that can run at the same
-            time are added together — that total is the "peak" shown beside the canvas.
-          </InfoTip>
-        </legend>
-        {regions.length === 0 ? (
-          <p className="ink-warn" style={{ fontSize: "0.82rem" }}>
-            This group has no reserved capacity yet, so a load test cannot run.
-          </p>
-        ) : (
-          regions.map((r) => {
-            const current = node.fleetAllocation.find((f) => f.region === r.region)?.count ?? 0;
-            return (
-              <div className="fieldRow fieldRow--tight" key={r.region}>
-                <span className="mono">{r.region}</span>
-                <input
-                  type="number" min={0} max={r.maxAvailable}
-                  value={current}
-                  onChange={(e) => setRegion(r.region, Math.max(0, Number(e.target.value)))}
-                />
-                <span className="ink-soft" style={{ fontSize: "0.8rem" }}>of {r.maxAvailable} reserved</span>
-              </div>
-            );
-          })
-        )}
+      {!node.application ? (
         <p className="ink-soft" style={{ fontSize: "0.82rem" }}>
-          {total === 0 ? "Allocate at least one worker." : `${total} worker${total === 1 ? "" : "s"} total.`}
+          Its templates, workers and settings follow once an application is chosen.
         </p>
-      </fieldset>
-
-      <div className="fieldRow">
-        <label className="field">
-          <span>Passes when</span>
-          <select
-            value={node.successWhen ?? "COMPLETED_ONLY"}
-            onChange={(e) => onChange({ ...node, successWhen: e.target.value as LoadTestNode["successWhen"] })}
-          >
-            <option value="COMPLETED_ONLY">The run completes</option>
-            <option value="ANY_TERMINAL">However the run ends</option>
-          </select>
-        </label>
+      ) : appTemplates.length === 0 ? (
+        <p className="ink-warn" style={{ fontSize: "0.82rem" }}>
+          No templates saved for {node.application}. Save one from a run of that
+          application, or on the <Link to="/templates">Templates</Link> page.
+        </p>
+      ) : (
         <label className="field">
           <span>
-            Give up after (minutes)
-            <InfoTip label="About the time limit">The run is aborted and this task fails if it overruns.</InfoTip>
+            Template
+            <InfoTip label="About the template">
+              Supplies the test plan, data files and plugins, and fills in the
+              settings below with the values it was saved with.
+            </InfoTip>
           </span>
-          <input
-            type="number" min={1} max={1440}
-            value={node.maxDurationMinutes ?? 120}
-            onChange={(e) => onChange({ ...node, maxDurationMinutes: Number(e.target.value) })}
-          />
+          <select
+            value={node.templateBlobId}
+            onChange={(e) => onChange({ ...node, templateBlobId: e.target.value })}
+          >
+            <option value="">Choose a template…</option>
+            {appTemplates.map((t) => (
+              <option key={t.blobId} value={t.blobId}>{t.name}</option>
+            ))}
+          </select>
         </label>
-      </div>
+      )}
 
-      <label className="field">
-        <span>
-          Save results
-        </span>
-        <select
-          value={node.saveResults == null ? "" : String(node.saveResults)}
-          onChange={(e) => onChange({
-            ...node,
-            saveResults: e.target.value === "" ? null : e.target.value === "true",
-          })}
-        >
-          <option value="">Use the template's setting</option>
-          <option value="true">Yes</option>
-          <option value="false">No</option>
-        </select>
-      </label>
+      {node.templateBlobId && reading && (
+        <p className="ink-soft" style={{ fontSize: "0.82rem" }}>Reading the template…</p>
+      )}
+      {readError && (
+        <p className="ink-warn" style={{ fontSize: "0.82rem" }}>
+          Could not read the template ({readError}). Its settings are not pre-filled;
+          the run still uses it.
+        </p>
+      )}
 
-      <PropertiesEditor
-        properties={node.properties ?? {}}
-        onChange={(properties) => onChange({ ...node, properties })}
-      />
+      {node.templateBlobId && !reading && (
+        <>
+          <hr className="nodeEditor__rule" />
+
+          <fieldset className="field">
+            <legend>
+              Workers
+              <InfoTip label="About workers">
+                Started from the template's fleet. Counted against the group's
+                reservation — tasks that can run at the same time are added together.
+              </InfoTip>
+            </legend>
+            {regions.length === 0 ? (
+              <p className="ink-warn" style={{ fontSize: "0.82rem" }}>
+                This group has no reserved capacity yet, so a load test cannot run.
+              </p>
+            ) : (
+              regions.map((r) => {
+                const current = node.fleetAllocation.find((f) => f.region === r.region)?.count ?? 0;
+                return (
+                  <div className="fieldRow fieldRow--tight" key={r.region}>
+                    <span className="mono">{r.region}</span>
+                    <input
+                      type="number" min={0} max={r.maxAvailable}
+                      value={current}
+                      onChange={(e) => setRegion(r.region, Math.max(0, Number(e.target.value)))}
+                    />
+                    <span className="ink-soft" style={{ fontSize: "0.8rem" }}>of {r.maxAvailable} reserved</span>
+                  </div>
+                );
+              })
+            )}
+            <p className={total === 0 ? "ink-warn" : "ink-soft"} style={{ fontSize: "0.82rem" }}>
+              {total === 0 ? "Allocate at least one worker." : `${total} worker${total === 1 ? "" : "s"} total.`}
+            </p>
+            {unreserved.length > 0 && (
+              <p className="ink-warn" style={{ fontSize: "0.82rem" }}>
+                The template also used {unreserved.join(", ")}, which this group has
+                not reserved — those workers were left out.
+              </p>
+            )}
+          </fieldset>
+
+          <div className="fieldRow">
+            <label className="field">
+              <span>Passes when</span>
+              <select
+                value={node.successWhen ?? "COMPLETED_ONLY"}
+                onChange={(e) => onChange({ ...node, successWhen: e.target.value as LoadTestNode["successWhen"] })}
+              >
+                <option value="COMPLETED_ONLY">The run completes</option>
+                <option value="ANY_TERMINAL">However the run ends</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>
+                Give up after (minutes)
+                <InfoTip label="About the time limit">The run is aborted and this task fails if it overruns.</InfoTip>
+              </span>
+              <input
+                type="number" min={1} max={1440}
+                value={node.maxDurationMinutes ?? 120}
+                onChange={(e) => onChange({ ...node, maxDurationMinutes: Number(e.target.value) })}
+              />
+            </label>
+          </div>
+
+          <label className="field">
+            <span>Save results</span>
+            <select
+              value={node.saveResults == null ? "" : String(node.saveResults)}
+              onChange={(e) => onChange({
+                ...node,
+                saveResults: e.target.value === "" ? null : e.target.value === "true",
+              })}
+            >
+              <option value="">Use the template's setting</option>
+              <option value="true">Yes</option>
+              <option value="false">No</option>
+            </select>
+          </label>
+
+          <PropertiesEditor
+            properties={node.properties ?? {}}
+            onChange={(properties) => onChange({ ...node, properties })}
+          />
+        </>
+      )}
     </>
   );
 }

@@ -1,24 +1,69 @@
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 
 import { NodeEditor } from "../workflow/NodeEditor";
 import type { EmailNode, LoadTestNode, WorkflowNode } from "../../api/workflows";
+import type { Application } from "../../api/applications";
+import type { TemplateBody, TemplateSummary } from "../../api/templates";
 import { newNode } from "../../lib/workflowGraph";
 
-function renderEditor(node: WorkflowNode, onChange = vi.fn()) {
+// The load-test editor reads the chosen template to pre-fill its settings.
+const mocks = vi.hoisted(() => ({ load: vi.fn() }));
+vi.mock("../../api/templates", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../api/templates")>();
+  return { ...actual, templatesApi: { ...actual.templatesApi, load: mocks.load } };
+});
+
+const APPS = [
+  { applicationId: "a1", name: "card-auth" },
+  { applicationId: "a2", name: "card-capture" },
+] as Application[];
+
+const TEMPLATES: TemplateSummary[] = [
+  { blobId: "t-auth",    name: "Auth 30m",    application: "card-auth",    uploadedAt: "", sizeBytes: 1 },
+  { blobId: "t-capture", name: "Capture 10m", application: "card-capture", uploadedAt: "", sizeBytes: 1 },
+];
+
+function body(over: Partial<TemplateBody> = {}): TemplateBody {
+  return {
+    v: 2,
+    application: "card-auth",
+    testPlanBlobId: "plan-1",
+    fleetAllocation: [{ region: "na-east", count: 2 }],
+    saveResults: true,
+    globalProperties: { threads: "50" },
+    ...over,
+  };
+}
+
+function renderEditor(node: WorkflowNode, opts: {
+  onChange?: (next: WorkflowNode) => void;
+  inboundCount?: number;
+  regions?: { region: string; maxAvailable: number }[];
+} = {}) {
+  const onChange = opts.onChange ?? vi.fn();
   render(
-    <NodeEditor
-      node={node}
-      applications={[]}
-      templates={[]}
-      regions={[{ region: "na-east", maxAvailable: 4 }]}
-      groupNotify={{ to: ["team@example.com"], cc: [], bcc: [] }}
-      onChange={onChange}
-      onDelete={vi.fn()}
-    />,
+    <MemoryRouter>
+      <NodeEditor
+        node={node}
+        applications={APPS}
+        templates={TEMPLATES}
+        regions={opts.regions ?? [{ region: "na-east", maxAvailable: 4 }]}
+        groupNotify={{ to: ["team@example.com"], cc: [], bcc: [] }}
+        inboundCount={opts.inboundCount ?? 0}
+        onChange={onChange}
+        onDelete={vi.fn()}
+      />
+    </MemoryRouter>,
   );
   return onChange;
 }
+
+beforeEach(() => {
+  mocks.load.mockReset();
+  mocks.load.mockResolvedValue(body());
+});
 
 describe("NodeEditor — email recipients", () => {
   const email = () => newNode("EMAIL", "m1", { x: 0, y: 0 }) as EmailNode;
@@ -52,26 +97,133 @@ describe("NodeEditor — email recipients", () => {
   });
 });
 
-describe("NodeEditor — load test properties", () => {
+describe("NodeEditor — the join policy only appears when there is a join", () => {
+  it("is hidden with one inbound link — there is nothing to join", () => {
+    renderEditor(newNode("DELAY", "d1", { x: 0, y: 0 }), { inboundCount: 1 });
+    expect(screen.queryByText(/links arrive/)).toBeNull();
+  });
+
+  it("appears once two links arrive, and says how many", () => {
+    renderEditor(newNode("DELAY", "d2", { x: 0, y: 0 }), { inboundCount: 2 });
+    expect(screen.getByText(/its 2 links arrive/)).toBeInTheDocument();
+  });
+});
+
+describe("NodeEditor — a load test is asked for in the order the answers depend", () => {
   const load = () => newNode("LOAD_TEST", "t1", { x: 0, y: 0 }) as LoadTestNode;
 
-  it("'Add property' is disabled once a blank row exists, rather than doing nothing", () => {
-    const onChange = renderEditor(load());
-    const add = screen.getByRole("button", { name: "+ Add property" });
-    expect(add).toBeEnabled();
+  it("asks only for the application first — no template, workers or settings yet", () => {
+    renderEditor(load());
+    expect(screen.getByText("Application")).toBeInTheDocument();
+    expect(screen.queryByText("Template")).toBeNull();
+    expect(screen.queryByText("Workers")).toBeNull();
+    expect(screen.queryByText("Save results")).toBeNull();
+    expect(screen.queryByRole("button", { name: "+ Add property" })).toBeNull();
+  });
 
+  it("offers only the chosen application's templates", () => {
+    renderEditor({ ...load(), application: "card-auth" } as WorkflowNode);
+    expect(screen.getByRole("option", { name: "Auth 30m" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Capture 10m" })).toBeNull();
+  });
+
+  it("says so when the application has no templates, rather than offering another application's", () => {
+    renderEditor({ ...load(), application: "smokeapp" } as WorkflowNode);
+    expect(screen.getByText(/No templates saved for smokeapp/)).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Auth 30m" })).toBeNull();
+  });
+
+  it("changing the application drops a template that belonged to the old one", () => {
+    const onChange = renderEditor(
+      { ...load(), application: "card-auth", templateBlobId: "t-auth" } as WorkflowNode);
+    fireEvent.change(screen.getByDisplayValue("card-auth"), { target: { value: "card-capture" } });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      application: "card-capture", templateBlobId: "", fleetAllocation: [],
+    }));
+  });
+
+  it("picking a template fills the workers and Save results it was saved with", async () => {
+    const onChange = vi.fn();
+    renderEditor(
+      { ...load(), application: "card-auth", templateBlobId: "t-auth" } as WorkflowNode,
+      { onChange });
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      fleetAllocation: [{ region: "na-east", count: 2 }],
+      saveResults: true,
+      properties: { threads: "50" },
+    }));
+  });
+
+  it("leaves out workers for a cluster the group has not reserved, and says it did", async () => {
+    mocks.load.mockResolvedValue(body({
+      fleetAllocation: [{ region: "na-east", count: 2 }, { region: "eu-west", count: 3 }],
+    }));
+    const onChange = vi.fn();
+    renderEditor(
+      { ...load(), application: "card-auth", templateBlobId: "t-auth" } as WorkflowNode,
+      { onChange });
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      fleetAllocation: [{ region: "na-east", count: 2 }],
+    }));
+    expect(await screen.findByText(/also used eu-west/)).toBeInTheDocument();
+  });
+
+  it("clamps a template that wants more workers than the group reserves", async () => {
+    mocks.load.mockResolvedValue(body({ fleetAllocation: [{ region: "na-east", count: 9 }] }));
+    const onChange = vi.fn();
+    renderEditor(
+      { ...load(), application: "card-auth", templateBlobId: "t-auth" } as WorkflowNode,
+      { onChange });
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      fleetAllocation: [{ region: "na-east", count: 4 }],
+    }));
+  });
+
+  it("does NOT re-seed a saved task — the fleet the operator saved survives a reopen", async () => {
+    const onChange = vi.fn();
+    renderEditor({
+      ...load(),
+      application: "card-auth",
+      templateBlobId: "t-auth",
+      fleetAllocation: [{ region: "na-east", count: 1 }],
+    } as WorkflowNode, { onChange });
+
+    await waitFor(() => expect(mocks.load).toHaveBeenCalled());
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByDisplayValue("1")).toBeInTheDocument();
+  });
+
+  it("an unreadable template does not block the task — it says the defaults are missing", async () => {
+    mocks.load.mockRejectedValue(new Error("404 not found"));
+    renderEditor(
+      { ...load(), application: "card-auth", templateBlobId: "t-auth" } as WorkflowNode);
+    expect(await screen.findByText(/Could not read the template/)).toBeInTheDocument();
+  });
+
+  it("'Add property' adds one blank row", async () => {
+    const onChange = renderEditor({
+      ...load(), application: "card-auth", templateBlobId: "t-auth",
+      fleetAllocation: [{ region: "na-east", count: 1 }], properties: {},
+    } as WorkflowNode);
+
+    const add = await screen.findByRole("button", { name: "+ Add property" });
+    expect(add).toBeEnabled();
     fireEvent.click(add);
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ properties: { "": "" } }));
+  });
 
-    // Re-render with the blank row committed: a second click could only be a no-op.
-    const node = { ...load(), properties: { "": "" } } as WorkflowNode;
-    render(
-      <NodeEditor
-        node={node} applications={[]} templates={[]}
-        regions={[]} groupNotify={{ to: [], cc: [], bcc: [] }}
-        onChange={vi.fn()} onDelete={vi.fn()}
-      />,
-    );
-    expect(screen.getAllByRole("button", { name: "+ Add property" }).at(-1)).toBeDisabled();
+  it("'Add property' is disabled once a blank row exists, rather than doing nothing", async () => {
+    renderEditor({
+      ...load(), application: "card-auth", templateBlobId: "t-auth",
+      fleetAllocation: [{ region: "na-east", count: 1 }], properties: { "": "" },
+    } as WorkflowNode);
+
+    expect(await screen.findByRole("button", { name: "+ Add property" })).toBeDisabled();
   });
 });

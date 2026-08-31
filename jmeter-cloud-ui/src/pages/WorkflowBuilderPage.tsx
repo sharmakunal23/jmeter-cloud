@@ -16,6 +16,7 @@ import { InfoTip } from "../components/InfoTip";
 import { WorkflowCanvas } from "../components/workflow/WorkflowCanvas";
 import { NodeEditor } from "../components/workflow/NodeEditor";
 import { CapacityPanel } from "../components/workflow/CapacityPanel";
+import { BuilderStatusBar } from "../components/workflow/BuilderStatusBar";
 
 const PALETTE: NodeType[] = ["HEALTH_CHECK", "LOAD_TEST", "EMAIL", "DELAY", "APPROVAL"];
 const VALIDATE_DEBOUNCE_MS = 400;
@@ -189,6 +190,13 @@ export function WorkflowBuilderPage() {
     return out;
   }, [validation, graph.nodes]);
 
+  /** Links arriving at each task — the join policy only means something above one. */
+  const inbound = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const e of graph.edges) counts[e.target] = (counts[e.target] ?? 0) + 1;
+    return counts;
+  }, [graph.edges]);
+
   const regions = (group?.capacity ?? []).map((c) => ({ region: c.region, maxAvailable: c.maxAvailable }));
   const canSave = name.trim().length > 0 && graph.nodes.length > 0 && !saving;
 
@@ -237,6 +245,15 @@ export function WorkflowBuilderPage() {
         </label>
       </div>
 
+      <BuilderStatusBar
+        graph={graph}
+        validation={validation}
+        selectedNode={selectedNode}
+        regions={regions}
+        name={name}
+        dirty={dirty}
+      />
+
       <div className="workflowBuilder__layout">
         <aside className="workflowBuilder__palette">
           <div className="formField__labelRow">
@@ -268,14 +285,19 @@ export function WorkflowBuilderPage() {
               ...graph,
               nodes: graph.nodes.map((n) => (positions[n.id] ? { ...n, position: positions[n.id] } : n)),
             })}
-            height={520}
+            fillViewport
           />
         </div>
 
         <aside className="workflowBuilder__side">
           {selectedNode ? (
             <NodeEditor
+              // Keyed so selecting another task resets the editor's own state
+              // (the template it has read, the raw text in an address box)
+              // rather than carrying one task's into the next.
+              key={selectedNode.id}
               node={selectedNode}
+              inboundCount={inbound[selectedNode.id] ?? 0}
               applications={applications}
               templates={templates}
               regions={regions}
@@ -321,15 +343,17 @@ export function WorkflowBuilderPage() {
               </p>
             </div>
           ) : (
-            <ValidationPanel validation={validation} graph={graph} />
+            <>
+              <ValidationPanel validation={validation} graph={graph} />
+              {/* Only when nothing is selected: while a task is being edited the
+                  settings own the column, and the status bar above the canvas is
+                  already carrying the capacity numbers. */}
+              <CapacityPanel validation={validation} groupId={groupId} />
+            </>
           )}
-          <CapacityPanel validation={validation} groupId={groupId} />
         </aside>
       </div>
 
-      {dirty && (
-        <p className="ink-soft" style={{ fontSize: "0.8rem" }}>Unsaved changes.</p>
-      )}
     </section>
   );
 }

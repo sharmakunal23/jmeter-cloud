@@ -12,6 +12,12 @@ import { WorkflowTaskNode } from "./WorkflowTaskNode";
 
 const nodeTypes = { workflowTask: WorkflowTaskNode };
 
+/* Fitting is allowed to zoom OUT as far as minZoom, but never past 1:1 going
+   in — on a full-height canvas a two-task graph would otherwise be blown up to
+   maxZoom, which reads as a mistake rather than as a diagram. */
+const FIT_OPTIONS = { padding: 0.15, maxZoom: 1 };
+const FIT_OPTIONS_ANIMATED = { ...FIT_OPTIONS, duration: 200 };
+
 const MIN_CANVAS_H = 420;
 const MAX_CANVAS_H = 900;
 
@@ -89,7 +95,7 @@ function CanvasInner({
   const nodeCount = graph.nodes.length;
   useEffect(() => {
     if (nodeCount === 0) return;
-    const t = window.setTimeout(() => fitView({ padding: 0.15, duration: 200 }), 50);
+    const t = window.setTimeout(() => fitView(FIT_OPTIONS_ANIMATED), 50);
     return () => window.clearTimeout(t);
     // Deliberately only on the first render with nodes and on count changes:
     // re-framing while someone is dragging is the most annoying thing a canvas can do.
@@ -141,7 +147,7 @@ function CanvasInner({
         minZoom={0.2}
         maxZoom={1.75}
         fitView
-        fitViewOptions={{ padding: 0.15 }}
+        fitViewOptions={FIT_OPTIONS}
       >
         <Background gap={18} size={1} />
         <Controls showInteractive={false} />

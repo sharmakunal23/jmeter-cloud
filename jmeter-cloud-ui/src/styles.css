@@ -5560,12 +5560,53 @@ fieldset.field { border: 1px solid var(--border); border-radius: 6px; padding: 0
 .workflowBuilder__meta > .field:first-child { flex: 2; }
 .workflowBuilder__meta > .field:nth-child(2) { flex: 3; }
 
+/* The canvas is what the builder is for, so the layout claims the viewport and
+   the three columns scroll inside it rather than pushing the page taller. The
+   subtraction is the chrome above: nav, page header, the name/description row
+   and the status bar. */
 .workflowBuilder__layout {
   display: grid;
-  grid-template-columns: 11rem minmax(0, 1fr) 22rem;
+  grid-template-columns: 11rem minmax(0, 1fr) 23rem;
   gap: 0.9rem;
-  align-items: start;
+  align-items: stretch;
+  height: calc(100vh - 17.5rem);
+  min-height: 30rem;
 }
+.workflowBuilder__layout > * { min-height: 0; }
+.workflowBuilder__palette,
+.workflowBuilder__side { overflow-y: auto; }
+/* Inside the builder the canvas fills its grid row; the viewport arithmetic is
+   the row's job, not the canvas's. */
+.workflowBuilder__canvas .wfCanvas--fill { height: 100%; min-height: 0; }
+
+/* ── Builder status bar: next step on the left, capacity on the right ── */
+.builderStatus {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.6rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 0.85rem;
+}
+.builderStatus__spacer { flex: 1; }
+.builderStatus__step { display: inline-flex; align-items: center; gap: 0.4rem; }
+.builderStatus__step::before {
+  content: "";
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.builderStatus__step--info { color: var(--ink-soft); }
+.builderStatus__step--warn { color: var(--warn); }
+.builderStatus__step--ok   { color: var(--ok); }
+.builderStatus__capacity { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
+.builderStatus__dirty { color: var(--ink-soft); font-size: 0.8rem; }
 .workflowBuilder__palette h2,
 .nodeEditor h2 { font-size: 0.9rem; margin: 0 0 0.5rem; }
 /* The heading carries the block's bottom margin; inside a label row the row
@@ -5603,8 +5644,6 @@ fieldset.field { border: 1px solid var(--border); border-radius: 6px; padding: 0
   border-radius: 8px;
   background: var(--surface);
   padding: 0.8rem;
-  max-height: 34rem;
-  overflow-y: auto;
 }
 .nodeEditor__head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
 .nodeEditor__rule { border: 0; border-top: 1px solid var(--border); margin: 0.7rem 0; }

@@ -7,7 +7,8 @@ import type { WorkflowValidation } from "../../api/workflows";
  *
  * <p>"Peak" is the most the graph can ever want at once — the tasks that can
  * genuinely run together, not the sum of every load test — and `tasks` names
- * them, so a number that looks too high explains itself.
+ * them, so a number that looks too high explains itself. Renders nothing until
+ * the graph has a load test.
  */
 export function CapacityPanel({
   validation, groupId,
@@ -15,24 +16,9 @@ export function CapacityPanel({
   validation: WorkflowValidation | null;
   groupId: string;
 }) {
-  if (!validation) {
-    return (
-      <div className="card">
-        <h2>Workers</h2>
-        <p className="ink-soft">Checking…</p>
-      </div>
-    );
-  }
-  if (validation.capacity.length === 0) {
-    return (
-      <div className="card">
-        <h2>Workers</h2>
-        <p className="ink-soft">
-          No load tests, so this workflow reserves no workers.
-        </p>
-      </div>
-    );
-  }
+  // Nothing to weigh yet: a card saying so would be permanent furniture in a
+  // column the task settings need. The status bar carries the reservation.
+  if (!validation || validation.capacity.length === 0) return null;
 
   return (
     <div className="card">
