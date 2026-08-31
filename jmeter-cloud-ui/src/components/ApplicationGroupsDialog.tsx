@@ -244,8 +244,10 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
               {pageItems.map((g) => (
                 <tr key={g.groupId}>
                   {editingId === g.groupId ? (
-                    <>
-                      <td>
+                    <td colSpan={4}>
+                      <div className="ink-soft" style={{ marginBottom: "0.5rem" }}>
+                        Editing <strong>{g.name}</strong> · id <span className="mono">{g.groupId}</span>
+                      </div>
                         <div className="formField">
                           <label htmlFor={`editGroupName_${g.groupId}`}>Name *</label>
                           <input
@@ -306,22 +308,22 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
                           />
                         </div>
                         <PodPolicyFields idPrefix={`edit-${g.groupId}`} value={editPolicy} onChange={setEditPolicy} disabled={saving} />
-                      </td>
-                      <td className="mono ink-soft">{g.groupId}</td>
-                      <td className="mono">{g.applicationCount ?? 0}</td>
-                      <td className="runsTable__actions">
-                        <button type="button" className="btn btn--sm btn--primary"
-                                onClick={() => void handleSave(g)}
-                                disabled={saving || editName.trim() === "" || urlError(editGrafanaLiveUrl) != null
-                                  || urlError(editGrafanaHistoryUrl) != null || hotDaysError(editHotDays) != null}>
-                          Save
-                        </button>{" "}
-                        <button type="button" className="btn btn--sm btn--ghost"
-                                onClick={() => setEditingId(null)} disabled={saving}>
-                          Cancel
-                        </button>
-                      </td>
-                    </>
+                        {/* Footer convention: actions at the BOTTOM of the edit
+                            stack — in a middle-aligned sibling cell they float
+                            beside the fields' vertical center. */}
+                        <div className="groupEditActions">
+                          <button type="button" className="btn btn--sm btn--ghost"
+                                  onClick={() => setEditingId(null)} disabled={saving}>
+                            Cancel
+                          </button>
+                          <button type="button" className="btn btn--sm btn--primary"
+                                  onClick={() => void handleSave(g)}
+                                  disabled={saving || editName.trim() === "" || urlError(editGrafanaLiveUrl) != null
+                                    || urlError(editGrafanaHistoryUrl) != null || hotDaysError(editHotDays) != null}>
+                            Save
+                          </button>
+                        </div>
+                    </td>
                   ) : (
                     <>
                       <td>

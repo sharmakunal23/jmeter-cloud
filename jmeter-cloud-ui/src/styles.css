@@ -18,6 +18,14 @@
      and the toast overlay agree — toasts float ABOVE the footer (see .toast)
      instead of overlapping it. */
   --footer-height: 3rem;
+  /* Shared modal dimensions — every dialog tier draws from these four tokens
+     so sizes stay uniform across the app. Confirms hug their content (a tall
+     empty confirm reads wrong); form dialogs share a uniform minimum height
+     and grow to the viewport cap; tabbed dialogs pin the body height. */
+  --modal-w-confirm: 46rem;
+  --modal-w-form: 62rem;
+  --modal-form-minh: min(40rem, calc(100vh - 5rem));
+  --modal-tab-body-h: min(46rem, calc(100vh - 10rem));
   --bg:        #f8fafc;
   --surface:   #ffffff;
   --border:    #e2e8f0;
@@ -2755,7 +2763,7 @@ button.appDetailChip:disabled {
 
 .modal {
   width: 100%;
-  max-width: 42rem;
+  max-width: var(--modal-w-confirm);
   max-height: calc(100vh - 3rem);
   background: var(--surface);
   display: flex;
@@ -2770,21 +2778,36 @@ button.appDetailChip:disabled {
   to   { opacity: 1; transform: translateY(0)     scale(1);    }
 }
 
-/* Two width tiers (UX-DYNAMICS): confirms and notices stay compact; form
-   dialogs get room for two-column content. The regions picker (interactive
+/* Two size tiers (UX-DYNAMICS), fed by the :root modal tokens: confirms and
+   notices stay compact and hug their content; form dialogs share one width
+   AND one minimum height so every form dialog presents the same frame
+   (content can grow it to the viewport cap). The regions picker (interactive
    map) and the chart modal keep their own sizes further down. */
-.modal--confirm { max-width: 42rem; }
-.modal--form    { max-width: 56rem; }
+.modal--confirm { max-width: var(--modal-w-confirm); }
+.modal--form {
+  max-width: var(--modal-w-form);
+  min-height: var(--modal-form-minh);
+}
 
 /* Tabbed modals hold a FIXED shell (body scrolls internally) so toggling
    tabs never resizes the dialog — Manage groups is the reference.
    ⚠ flex: none is load-bearing: .modal__body is `flex: 1` (basis 0), which
    IGNORES an explicit height in the column flex layout — the body would
    keep wrapping its content and the modal would keep resizing. */
-.groupsModal { width: min(56rem, calc(100vw - 2rem)); }
+.groupsModal { width: min(var(--modal-w-form), calc(100vw - 2rem)); }
+/* Inline group edit spans the table (colSpan) with its actions pinned at the
+   bottom of the field stack, footer-style. */
+.groupEditActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border);
+}
 .groupsModal .modal__body {
   flex: none;
-  height: min(34rem, calc(100vh - 12rem));
+  height: var(--modal-tab-body-h);
 }
 
 .modal__titleRow {
@@ -2819,6 +2842,10 @@ button.appDetailChip:disabled {
   padding: 0.85rem 1.25rem;
   border-top: 1px solid var(--border);
 }
+/* A footer INSIDE a stretched body (form dialogs put <Modal.Footer> at the
+   end of their <form className="modal__body">) pins to the bottom edge so
+   the uniform min-height leaves its slack between fields and actions. */
+.modal__body > .modal__footer { margin-top: auto; }
 /* Keep dialog footers balanced: match the Cancel / secondary (and danger)
    buttons to the primary submit so the pair stays the same height. */
 .modal__footer .btn {

@@ -20,7 +20,7 @@ export interface ModalProps {
   infoTip?: ReactNode;
   /** Optional example line inside the InfoTip (rendered monospace). */
   infoTipExample?: ReactNode;
-  /** Width tier — confirm 42rem (default) or form 56rem; regions/chart keep their special sizes. */
+  /** Size tier — confirm 46rem content-height (default) or form 62rem with a uniform min-height (the :root --modal-* tokens); regions/chart keep their special sizes. */
   width?: ModalWidth;
   onClose: () => void;
   /** Blocks Esc / overlay / × while an irreversible call is in flight. */
