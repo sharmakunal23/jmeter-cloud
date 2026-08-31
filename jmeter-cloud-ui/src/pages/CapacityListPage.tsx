@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { formatRelative } from "../lib/time";
 
 import { applicationGroupsApi, type ApplicationGroup } from "../api/applicationGroups";
 import { capacityApi, type ReconcileWorkersResult } from "../api/capacity";
 import { useVisiblePolling } from "../hooks/useVisiblePolling";
 import { AppListToolbar } from "../components/AppListToolbar";
-import { Paginator } from "../components/Paginator";
-import { useClientPagination } from "../hooks/useClientPagination";
+import { DataList } from "../components/DataList";
+import { useRowLink } from "../hooks/useRowLink";
 import { ReconcileWorkersDialog } from "../components/ReconcileWorkersDialog";
 
 /**
@@ -47,6 +47,7 @@ interface RegionTotal { provisioned: number; inUse: number; }
 interface Toast { variant: "ok" | "warn" | "err"; text: string; detail?: string; }
 
 export function CapacityListPage() {
+  const rowLink = useRowLink();
   const [state, setState] = useState<State>({ status: "loading" });
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("name");
@@ -139,9 +140,6 @@ export function CapacityListPage() {
     return sorted;
   }, [state, search, sortKey, sortDir]);
 
-  const { page, setPage, pageItems, total, pageSize, setPageSize } =
-    useClientPagination(sortedFiltered, `${search}|${sortKey}|${sortDir}`);
-
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
       setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -211,45 +209,71 @@ export function CapacityListPage() {
         loading={loading}
       />
 
-      {loading ? (
-        <SkeletonTable />
-      ) : sortedFiltered.length === 0 ? (
-        <div className="emptyState">
-          {totalRowCount === 0 ? (
-            <>
-              <p>No application groups yet.</p>
-              <p className="ink-soft">
-                Create one with "Manage groups" in <Link to="/applications">Applications</Link> — the worker pool is the group's.
-              </p>
-            </>
-          ) : (
-            <p className="ink-soft">No groups match "{search}".</p>
-          )}
-        </div>
-      ) : (
-        <table className="runsTable capacityListTable">
-          <thead>
-            <tr>
-              <SortHeader label="Group"       k="name"        cur={sortKey} dir={sortDir} onClick={toggleSort} />
-              <th>Activity</th>
-              <SortHeader label="Clusters"    k="regions"     cur={sortKey} dir={sortDir} onClick={toggleSort} numeric />
-              <SortHeader label="Ready"       k="ready"       cur={sortKey} dir={sortDir} onClick={toggleSort} numeric />
-              <SortHeader label="In Use"      k="inUse"       cur={sortKey} dir={sortDir} onClick={toggleSort} numeric />
-              <SortHeader label="Usage"       k="provisioned" cur={sortKey} dir={sortDir} onClick={toggleSort} numeric />
-              <th><span className="visuallyHidden">Utilization</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            {pageItems.map((r) => (
-              <CapacityListRow key={r.group.groupId} row={r} />
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      {!loading && sortedFiltered.length > 0 && (
-        <Paginator page={page} pageSize={pageSize} total={total} label="groups" onChange={setPage} onPageSizeChange={setPageSize} />
-      )}
+      <DataList<RowAggregate>
+        label="Application groups"
+        loading={loading}
+        rows={sortedFiltered}
+        rowKey={(r) => r.group.groupId}
+        itemNoun="groups"
+        resetKey={`${search}|${sortKey}|${sortDir}`}
+        empty={totalRowCount === 0 ? (
+          <>
+            <strong>No application groups yet.</strong>
+            <div>Create one with &quot;Manage groups&quot; in <Link to="/applications">Applications</Link> —
+                 the worker pool is the group&apos;s.</div>
+          </>
+        ) : <>No groups match &quot;{search}&quot;.</>}
+        rowProps={(r) => {
+          const ratio = r.maxAvailable > 0 ? (r.ready + r.inUse) / r.maxAvailable : 0;
+          const variant = ratio >= 1 ? "err" : ratio >= 0.8 ? "warn" : "ok";
+          const base = rowLink(`/capacity/groups/${encodeURIComponent(r.group.groupId)}`,
+                               `Open capacity for ${r.group.name}`);
+          // The row is tinted by how full the pool is — the one signal an
+          // operator scans this page for.
+          return { ...base, className: `${base.className} capacityListRow--${variant}` };
+        }}
+        columns={[
+          { key: "name", header: "Group",
+            onSort: () => toggleSort("name"),
+            sortDirection: sortKey === "name" ? sortDir : null,
+            cell: (r) => (
+              <Link to={`/capacity/groups/${encodeURIComponent(r.group.groupId)}`}
+                    className="capacityListRow__name"
+                    onClick={(e) => e.stopPropagation()}>
+                {r.group.name}
+              </Link>
+            ) },
+          { key: "activity", header: "Activity",
+            cell: (r) => <ActivityChip lastActivity={r.mostRecentActivity} hasWorkers={r.provisioned > 0} /> },
+          { key: "regions", header: "Clusters", className: "dataList__num",
+            onSort: () => toggleSort("regions"),
+            sortDirection: sortKey === "regions" ? sortDir : null,
+            cell: (r) => <span className="mono">{r.regions}</span> },
+          { key: "ready", header: "Ready", className: "dataList__num",
+            onSort: () => toggleSort("ready"),
+            sortDirection: sortKey === "ready" ? sortDir : null,
+            cell: (r) => <span className="mono">{r.ready}</span> },
+          { key: "inUse", header: "In Use", className: "dataList__num",
+            onSort: () => toggleSort("inUse"),
+            sortDirection: sortKey === "inUse" ? sortDir : null,
+            cell: (r) => <span className="mono">{r.inUse}</span> },
+          { key: "provisioned", header: "Usage", className: "dataList__num",
+            onSort: () => toggleSort("provisioned"),
+            sortDirection: sortKey === "provisioned" ? sortDir : null,
+            cell: (r) => (
+              <span className="mono">{r.provisioned}<span className="ink-soft">/{r.maxAvailable}</span></span>
+            ) },
+          { key: "util", header: <span className="visuallyHidden">Utilization</span>, cell: (r) => {
+            const ratio = r.maxAvailable > 0 ? (r.ready + r.inUse) / r.maxAvailable : 0;
+            const variant = ratio >= 1 ? "err" : ratio >= 0.8 ? "warn" : "ok";
+            return (
+              <div className={`capacityBar capacityBar--${variant}`} aria-hidden="true">
+                <span style={{ width: `${Math.min(100, Math.round(ratio * 100))}%` }} />
+              </div>
+            );
+          } },
+        ]}
+      />
 
       {reconcileOpen && (
         <ReconcileWorkersDialog
@@ -298,54 +322,6 @@ function summariseReconcile(result: ReconcileWorkersResult): Toast {
 
 // ── Row ──────────────────────────────────────────────────────────
 
-function CapacityListRow({ row }: { row: RowAggregate }) {
-  const navigate = useNavigate();
-  const ratio = row.maxAvailable > 0 ? (row.ready + row.inUse) / row.maxAvailable : 0;
-  const variant: "ok" | "warn" | "err" =
-    ratio >= 1 ? "err" : ratio >= 0.8 ? "warn" : "ok";
-  const href = `/capacity/groups/${encodeURIComponent(row.group.groupId)}`;
-  function open() { navigate(href); }
-  function onKey(e: React.KeyboardEvent<HTMLTableRowElement>) {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      open();
-    }
-  }
-  return (
-    <tr
-      className={`capacityListRow capacityListRow--${variant} capacityListRow--clickable`}
-      onClick={open}
-      onKeyDown={onKey}
-      tabIndex={0}
-      role="link"
-      aria-label={`Open capacity for ${row.group.name}`}
-    >
-      <td>
-        <Link
-          to={href}
-          className="capacityListRow__name"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {row.group.name}
-        </Link>
-      </td>
-      <td>
-        <ActivityChip lastActivity={row.mostRecentActivity} hasWorkers={row.provisioned > 0} />
-      </td>
-      <td className="mono num">{row.regions}</td>
-      <td className="mono num">{row.ready}</td>
-      <td className="mono num">{row.inUse}</td>
-      <td className="mono num">
-        {row.provisioned}<span className="ink-soft">/{row.maxAvailable}</span>
-      </td>
-      <td>
-        <div className={`capacityBar capacityBar--${variant}`} aria-hidden="true">
-          <span style={{ width: `${Math.min(100, Math.round(ratio * 100))}%` }} />
-        </div>
-      </td>
-    </tr>
-  );
-}
 
 function ActivityChip({ lastActivity, hasWorkers }: { lastActivity?: Date; hasWorkers: boolean }) {
   if (!hasWorkers) return <span className="ink-soft" style={{ fontSize: "0.78rem" }}>no workers</span>;
@@ -368,67 +344,9 @@ function ActivityChip({ lastActivity, hasWorkers }: { lastActivity?: Date; hasWo
 
 // ── Sortable header ──────────────────────────────────────────────
 
-function SortHeader({
-  label, k, cur, dir, onClick, numeric = false,
-}: {
-  label: string;
-  k: SortKey;
-  cur: SortKey;
-  dir: SortDir;
-  onClick: (k: SortKey) => void;
-  numeric?: boolean;
-}) {
-  const active = k === cur;
-  const arrow = active ? (dir === "asc" ? "▲" : "▼") : "";
-  return (
-    <th className={numeric ? "num" : ""}>
-      <button
-        type="button"
-        className={`sortHeader ${active ? "sortHeader--active" : ""}`}
-        onClick={() => onClick(k)}
-        title={`Sort by ${label}`}
-      >
-        {label} <span className="sortHeader__arrow" aria-hidden="true">{arrow}</span>
-      </button>
-    </th>
-  );
-}
 
 // ── Loading skeleton ────────────────────────────────────────────
 
-function SkeletonTable() {
-  // 6 placeholder rows is enough to hint at the eventual shape without
-  // shifting too tall on small viewports.
-  const rows = Array.from({ length: 6 });
-  return (
-    <table className="runsTable capacityListTable" aria-busy="true">
-      <thead>
-        <tr>
-          <th>Group</th>
-          <th>Activity</th>
-          <th className="num">Clusters</th>
-          <th className="num">Ready</th>
-          <th className="num">In Use</th>
-          <th className="num">Usage</th>
-          <th><span className="visuallyHidden">Utilization</span></th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((_, i) => (
-          <tr key={i} className="capacityListRow capacityListRow--skeleton">
-            <td><span className="skeleton skeleton--text" style={{ width: "8rem" }} /></td>
-            <td><span className="skeleton skeleton--chip" /></td>
-            <td className="num"><span className="skeleton skeleton--text" style={{ width: "1.5rem" }} /></td>
-            <td className="num"><span className="skeleton skeleton--text" style={{ width: "1.5rem" }} /></td>
-            <td className="num"><span className="skeleton skeleton--text" style={{ width: "1.5rem" }} /></td>
-            <td className="num"><span className="skeleton skeleton--text" style={{ width: "2.5rem" }} /></td>
-            <td><span className="skeleton skeleton--bar" /></td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
 
 // ── Helpers ──────────────────────────────────────────────────────
 

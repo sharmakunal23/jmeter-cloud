@@ -5,8 +5,7 @@ import { formatRelative } from "../lib/time";
 import { applicationsApi, type Application } from "../api/applications";
 import { templatesApi, type TemplateSummary } from "../api/templates";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { Paginator } from "../components/Paginator";
-import { useClientPagination } from "../hooks/useClientPagination";
+import { DataList } from "../components/DataList";
 
 /**
  * Phase IA-Templates (2026-05-13) — per-application templates drill-in.
@@ -74,9 +73,6 @@ export function TemplatesDetailPage() {
     return () => ctl.abort();
   }, [refreshTemplates]);
 
-  const allTemplates = templates.status === "ok" ? templates.templates : [];
-  const { page, setPage, pageItems, total, pageSize, setPageSize } = useClientPagination(allTemplates, appNameParam);
-
   async function confirmDelete() {
     if (!pendingDelete) return;
     setDeleteBusy(true);
@@ -131,29 +127,41 @@ export function TemplatesDetailPage() {
         </div>
       </header>
 
-      {templates.status === "loading" && <p className="ink-soft">Loading templates…</p>}
       {templates.status === "error" && <p className="text--error">{templates.message}</p>}
 
-      {templates.status === "ok" && templates.templates.length === 0 && (
-        <div className="emptyState">
-          <p>No templates saved for <span className="mono">{app.name}</span> yet.</p>
-          <p className="ink-soft">
-            Open <strong>Launch a Run</strong>, fill the form, and click{" "}
-            <strong>Save Template</strong> in the launcher header.
-          </p>
-        </div>
-      )}
-
-      {templates.status === "ok" && templates.templates.length > 0 && (
-        <>
-          <TemplateListView
-            templates={pageItems}
-            app={app}
-            onDelete={(t) => setPendingDelete(t)}
-          />
-          <Paginator page={page} pageSize={pageSize} total={total} label="templates" onChange={setPage} onPageSizeChange={setPageSize} />
-        </>
-      )}
+      <DataList<TemplateSummary>
+        label="Templates"
+        loading={templates.status === "loading"}
+        rows={templates.status === "ok" ? templates.templates : []}
+        rowKey={(t) => t.blobId}
+        itemNoun="templates"
+        empty={<>
+          <strong>No templates saved for <span className="mono">{app.name}</span> yet.</strong>
+          <div>Open <strong>Launch a Run</strong>, fill the form, and click{" "}
+               <strong>Save Template</strong> in the launcher header.</div>
+        </>}
+        columns={[
+          { key: "name", header: "Name", cell: (t) => <strong>{t.name}</strong> },
+          { key: "description", header: "Description", className: "appListTable__desc",
+            cell: (t) => t.description ?? <span className="ink-soft">—</span> },
+          { key: "saved", header: "Saved", cell: (t) => formatRelative(t.uploadedAt) },
+          { key: "size", header: "Size", className: "dataList__num",
+            cell: (t) => <span className="mono">{formatBytes(t.sizeBytes)}</span> },
+          { key: "actions", header: <span className="visuallyHidden">Actions</span>,
+            className: "runsTable__actions", cell: (t) => (
+              <>
+                <Link className="btn btn--ghost btn--sm"
+                      to={`/applications/${encodeURIComponent(app.name)}/runs/new?template=${encodeURIComponent(t.blobId)}`}>
+                  Use →
+                </Link>
+                <button type="button" className="btn btn--ghost btn--sm text--error"
+                        onClick={() => setPendingDelete(t)}>
+                  Delete
+                </button>
+              </>
+            ) },
+        ]}
+      />
 
       {pendingDelete && (
         <DeleteTemplateDialog
@@ -168,50 +176,6 @@ export function TemplatesDetailPage() {
   );
 }
 
-// ── List view (table) ────────────────────────────────────────────
-
-function TemplateListView({
-  templates, app, onDelete,
-}: { templates: TemplateSummary[]; app: Application; onDelete: (t: TemplateSummary) => void }) {
-  return (
-    <table className="runsTable">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Description</th>
-          <th>Saved</th>
-          <th>Size</th>
-          <th><span className="visuallyHidden">Actions</span></th>
-        </tr>
-      </thead>
-      <tbody>
-        {templates.map((t) => {
-          const useUrl = `/applications/${encodeURIComponent(app.name)}/runs/new?template=${encodeURIComponent(t.blobId)}`;
-          return (
-            <tr key={t.blobId}>
-              <td><strong>{t.name}</strong></td>
-              <td className="appListTable__desc">
-                {t.description ?? <span className="ink-soft">—</span>}
-              </td>
-              <td>{formatRelative(t.uploadedAt)}</td>
-              <td className="mono">{formatBytes(t.sizeBytes)}</td>
-              <td>
-                <Link to={useUrl} className="btn btn--ghost">Use →</Link>
-                <button
-                  type="button"
-                  className="btn btn--ghost text--error"
-                  onClick={() => onDelete(t)}
-                >
-                  Delete
-                </button>
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
-}
 
 // ── Delete confirmation modal ────────────────────────────────────
 
