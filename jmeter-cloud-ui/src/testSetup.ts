@@ -30,6 +30,20 @@ if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
   });
 }
 
+// jsdom ships no ResizeObserver, which React Flow subscribes to on mount — so
+// without this nothing containing a workflow canvas can be rendered in a test
+// at all. Observing nothing is the honest answer in a layout engine with no
+// layout: jsdom reports every element as 0x0, so a real implementation would
+// only ever report that.
+if (typeof globalThis.ResizeObserver !== "function") {
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  Object.defineProperty(globalThis, "ResizeObserver", { writable: true, value: ResizeObserverStub });
+}
+
 // jsdom implements no canvas rendering at all: `getContext("2d")` returns null
 // (logging "Not implemented"), and `Path2D` is undefined. uPlot takes the
 // context once at construction and dereferences it in the redraw it schedules

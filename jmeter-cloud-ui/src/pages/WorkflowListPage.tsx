@@ -24,7 +24,10 @@ export function WorkflowListPage() {
   const { groupId = "" } = useParams();
   // Handed over by the detail page's delete, so the outcome is reported where
   // the operator lands rather than on a page that no longer exists.
-  const deleted = (useLocation().state as DeletedWorkflow | null)?.deletedWorkflow ?? null;
+  const location = useLocation();
+  const deleted = (location.state as DeletedWorkflow | null)?.deletedWorkflow ?? null;
+  /** Where the builder's "Exit" returns to — this list, filtered as it is. */
+  const here = `${location.pathname}${location.search}`;
   const [group, setGroup] = useState<WorkflowGroupSummary | null>(null);
   const [rows, setRows] = useState<Workflow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -90,7 +93,11 @@ export function WorkflowListPage() {
           </small>
         </div>
         <div className="pageHeader__actions">
-          <Link className="btn btn--primary" to={`/workflows/groups/${encodeURIComponent(groupId)}/new`}>
+          <Link
+            className="btn btn--primary"
+            to={`/workflows/groups/${encodeURIComponent(groupId)}/new`}
+            state={{ from: here }}
+          >
             + New workflow
           </Link>
         </div>
@@ -173,7 +180,11 @@ export function WorkflowListPage() {
                   {w.updatedBy ? <> by {w.updatedBy}</> : null}
                 </td>
                 <td className="runsTable__actions">
-                  <Link className="btn btn--ghost btn--sm" to={`/workflows/${w.workflowId}/edit`}>Edit</Link>
+                  <Link
+                    className="btn btn--ghost btn--sm"
+                    to={`/workflows/${w.workflowId}/edit`}
+                    state={{ from: here }}
+                  >Edit</Link>
                   <button type="button" className="btn btn--ghost btn--sm" onClick={() => setPendingDelete(w)}>
                     Delete
                   </button>

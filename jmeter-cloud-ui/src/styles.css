@@ -3205,12 +3205,14 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
    visually hidden, so aria-describedby stays valid). */
 .infoTip { position: relative; display: inline-flex; }
 .infoTip__pop {
-  position: absolute;
-  top: calc(100% + 0.35rem);
-  left: 0;
+  /* Fixed, not absolute: an absolutely-positioned tip is clipped by every
+     scrolling ancestor, and this icon lives inside scrolling panels, tables and
+     dialogs. The component supplies the viewport coordinates. */
+  position: fixed;
   z-index: 110;
   min-width: 16rem;
   max-width: 26rem;
+  overflow-y: auto;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 6px;

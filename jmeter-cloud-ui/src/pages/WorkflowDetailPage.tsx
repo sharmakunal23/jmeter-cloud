@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import {
   clustersOf, workflowsApi,
@@ -32,6 +32,7 @@ const POLL_MS = 10_000;
 export function WorkflowDetailPage() {
   const { workflowId = "" } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [history, setHistory] = useState<WorkflowExecution[]>([]);
@@ -213,7 +214,13 @@ export function WorkflowDetailPage() {
               Edit
             </span>
           ) : (
-            <Link className="btn btn--ghost" to={`/workflows/${workflow.workflowId}/edit`}>Edit</Link>
+            <Link
+              className="btn btn--ghost"
+              to={`/workflows/${workflow.workflowId}/edit`}
+              // Where the builder's "Exit edit" comes back to: this page, on
+              // the tab it was left on.
+              state={{ from: `${location.pathname}${location.search}` }}
+            >Edit</Link>
           )}
           <button
             type="button"

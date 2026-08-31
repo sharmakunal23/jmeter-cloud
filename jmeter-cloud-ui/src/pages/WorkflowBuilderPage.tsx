@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import type { Connection } from "@xyflow/react";
 
 import { applicationsApi, type Application } from "../api/applications";
@@ -12,6 +12,7 @@ import {
 import {
   EDGE_LABELS, NODE_LABELS, autoArrange, needsArrange, newNode, nextNodeId,
 } from "../lib/workflowGraph";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { InfoTip } from "../components/InfoTip";
 import { WorkflowCanvas } from "../components/workflow/WorkflowCanvas";
 import { NodeEditor } from "../components/workflow/NodeEditor";
@@ -32,7 +33,15 @@ const EMPTY_GRAPH: WorkflowGraph = { v: 1, nodes: [], edges: [] };
 export function WorkflowBuilderPage() {
   const { workflowId, groupId: groupIdParam } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const editing = Boolean(workflowId);
+  /**
+   * Where leaving goes. The page that sent the operator here says so in
+   * navigation state, which brings back the tab and filters they had; a deep
+   * link or a reload carries no state, so fall back to the surface that owns
+   * this workflow.
+   */
+  const cameFrom = (location.state as { from?: string } | null)?.from ?? null;
 
   const [groupId, setGroupId] = useState(groupIdParam ?? "");
   const [name, setName] = useState("");
@@ -51,6 +60,10 @@ export function WorkflowBuilderPage() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [confirmExit, setConfirmExit] = useState(false);
+
+  const exitTo = cameFrom
+    ?? (workflowId ? `/workflows/${workflowId}` : `/workflows/groups/${encodeURIComponent(groupId)}`);
 
   // ── Load ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -163,7 +176,9 @@ export function WorkflowBuilderPage() {
         ? await workflowsApi.update(workflowId!, { ...body, revision })
         : await workflowsApi.create(body);
       setDirty(false);
-      navigate(`/workflows/${saved.workflowId}`);
+      // Editing returns to wherever the operator opened the editor from, the
+      // same as exiting; a NEW workflow goes to the thing that now exists.
+      navigate(editing ? exitTo : `/workflows/${saved.workflowId}`);
     } catch (e) {
       const v = validationOf(e);
       if (v) setValidation(v);
@@ -171,6 +186,12 @@ export function WorkflowBuilderPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function exit() {
+    // Nothing typed yet means nothing to lose; asking would be a speed bump.
+    if (dirty) setConfirmExit(true);
+    else navigate(exitTo);
   }
 
   // ── Derived ──────────────────────────────────────────────────────
@@ -211,6 +232,9 @@ export function WorkflowBuilderPage() {
           </small>
         </div>
         <div className="pageHeader__actions">
+          <button type="button" className="btn btn--ghost" onClick={exit}>
+            {editing ? "Exit edit" : "Cancel"}
+          </button>
           <button
             type="button" className="btn btn--ghost"
             onClick={() => mutate(autoArrange(graph))}
@@ -354,6 +378,22 @@ export function WorkflowBuilderPage() {
         </aside>
       </div>
 
+      {confirmExit && (
+        <ConfirmDialog
+          title={editing ? "Exit without saving?" : "Discard this workflow?"}
+          confirmLabel={editing ? "Exit without saving" : "Discard"}
+          cancelLabel="Keep editing"
+          danger
+          onCancel={() => setConfirmExit(false)}
+          onConfirm={() => navigate(exitTo)}
+        >
+          <p>
+            {editing
+              ? "The changes on this canvas have not been saved. The workflow keeps the version it already had."
+              : "This workflow has not been saved, so nothing is kept."}
+          </p>
+        </ConfirmDialog>
+      )}
     </section>
   );
 }
