@@ -183,8 +183,57 @@ describe("useVisiblePolling — gate: document.visibilityState", () => {
     act(() => { setVisibility("visible"); });
     expect(result.current).toEqual({ isPaused: false, pauseReason: null });
 
-    act(() => { vi.advanceTimersByTime(1000); });
+    // Coming back refetches AT ONCE. Waiting a full period would show the
+    // pre-hide snapshot for up to `delayMs` — the stale-on-return problem the
+    // whole gate exists to avoid.
     expect(cb).toHaveBeenCalledTimes(2);
+
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(cb).toHaveBeenCalledTimes(3);
+  });
+
+  it("does NOT refetch on resume when the last fetch is younger than the throttle — an alt-tab flurry is one request", () => {
+    const cb = vi.fn();
+    renderHook(() => useVisiblePolling(cb, 5000));
+
+    act(() => { vi.advanceTimersByTime(5000); });
+    expect(cb).toHaveBeenCalledTimes(1);
+
+    // Away and back with no time passing: the data is as fresh as it was.
+    act(() => { setVisibility("hidden"); });
+    act(() => { setVisibility("visible"); });
+    act(() => { setVisibility("hidden"); });
+    act(() => { setVisibility("visible"); });
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshOnResume: false keeps the old wait-a-full-period behaviour", () => {
+    const cb = vi.fn();
+    renderHook(() => useVisiblePolling(cb, 1000, { refreshOnResume: false }));
+
+    act(() => { setVisibility("hidden"); });
+    act(() => { vi.advanceTimersByTime(5_000); });
+    act(() => { setVisibility("visible"); });
+    expect(cb).not.toHaveBeenCalled();
+
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refetch on resume when the caller has stopped the poll (delayMs null)", () => {
+    const cb = vi.fn();
+    const { rerender } = renderHook(
+      ({ delay }: { delay: number | null }) => useVisiblePolling(cb, delay),
+      { initialProps: { delay: 1000 as number | null } },
+    );
+
+    act(() => { setVisibility("hidden"); });
+    act(() => { vi.advanceTimersByTime(10_000); });
+    // The run went terminal while the tab was in the background.
+    rerender({ delay: null });
+    act(() => { setVisibility("visible"); });
+
+    expect(cb).not.toHaveBeenCalled();
   });
 
   it("starts paused when the page is hidden at mount", () => {
@@ -232,8 +281,11 @@ describe("useVisiblePolling — gate: IntersectionObserver", () => {
 
     act(() => { fireIntersection(true); });
     expect(result.current).toEqual({ isPaused: false, pauseReason: null });
-    act(() => { vi.advanceTimersByTime(500); });
+    // Scrolling a panel back into view refetches it immediately, same rule as
+    // returning to the tab.
     expect(cb).toHaveBeenCalledTimes(2);
+    act(() => { vi.advanceTimersByTime(500); });
+    expect(cb).toHaveBeenCalledTimes(3);
   });
 
   it("disconnects the observer on unmount — no leak if 100 panels mount/unmount in a session", () => {
@@ -299,5 +351,59 @@ describe("useVisiblePolling — cleanup", () => {
     setVisibility("visible");
     act(() => { vi.advanceTimersByTime(5_000); });
     expect(cb).not.toHaveBeenCalled();
+  });
+});
+
+describe("useVisiblePolling — error backoff", () => {
+  it("doubles the interval on a rejected callback and resets on the first success", async () => {
+    let fail = true;
+    const cb = vi.fn(() => (fail ? Promise.reject(new Error("down")) : Promise.resolve("ok")));
+    renderHook(() => useVisiblePolling(cb, 1000));
+
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(cb).toHaveBeenCalledTimes(1);            // failed → next wait is 2000
+
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(cb).toHaveBeenCalledTimes(1);            // still waiting
+
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(cb).toHaveBeenCalledTimes(2);            // failed again → next wait is 4000
+
+    fail = false;
+    await act(async () => { vi.advanceTimersByTime(4000); });
+    expect(cb).toHaveBeenCalledTimes(3);            // succeeded → back to 1000
+
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(cb).toHaveBeenCalledTimes(4);
+  });
+
+  it("never backs off past maxBackoffFactor — a dead backend still gets a heartbeat", async () => {
+    const cb = vi.fn(() => Promise.reject(new Error("down")));
+    renderHook(() => useVisiblePolling(cb, 1000, { maxBackoffFactor: 2 }));
+
+    await act(async () => { vi.advanceTimersByTime(1000); });   // 1st, factor → 2
+    await act(async () => { vi.advanceTimersByTime(2000); });   // 2nd, factor capped at 2
+    await act(async () => { vi.advanceTimersByTime(2000); });   // 3rd at the cap, not 4000
+    expect(cb).toHaveBeenCalledTimes(3);
+  });
+
+  it("a callback that returns nothing never backs off — backoff is opt-in by returning a promise", () => {
+    const cb = vi.fn(() => { /* fire-and-forget, like `() => { void load(); }` */ });
+    renderHook(() => useVisiblePolling(cb, 1000));
+
+    act(() => { vi.advanceTimersByTime(3000); });
+    expect(cb).toHaveBeenCalledTimes(3);
+  });
+
+  it("a callback that throws synchronously backs off like a rejection, and does not escape the timer", () => {
+    const cb = vi.fn(() => { throw new Error("boom"); });
+    renderHook(() => useVisiblePolling(cb, 1000));
+
+    expect(() => act(() => { vi.advanceTimersByTime(1000); })).not.toThrow();
+    expect(cb).toHaveBeenCalledTimes(1);
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(cb).toHaveBeenCalledTimes(1);            // now waiting 2000
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(cb).toHaveBeenCalledTimes(2);
   });
 });

@@ -13,6 +13,8 @@
  * those to render specific 409 toasts ("cannot drain — held by run X").
  */
 
+import { APPLICATION_GROUPS_CACHE, invalidate } from "../lib/resourceCache";
+
 export type PodState = "READY" | "IN_USE" | "LOST" | "UNKNOWN" | "RECYCLING";
 
 export interface PodBlockedBy {
@@ -131,6 +133,9 @@ async function request<T>(
     body: body !== undefined ? JSON.stringify(body) : undefined,
   };
   const resp = await fetch(path, init);
+  // Any write here changes what a group's capacity grid or pod counts say, and
+  // groups are cached — invalidate centrally so no new verb can forget to.
+  if (method !== "GET" && resp.ok) invalidate(APPLICATION_GROUPS_CACHE);
   if (resp.status === 204) return undefined as unknown as T;
   const text = await resp.text();
   let parsed: unknown = undefined;
@@ -167,7 +172,31 @@ export function boundGroupOf(err: CapacityApiError): string | null {
   return typeof g === "string" ? g : null;
 }
 
+/** One (group, region) row of the Capacity list, from the aggregate endpoint. */
+export interface GroupCapacitySummaryRow {
+  groupId: string;
+  region: string;
+  maxAvailable: number;
+  provisioned: number;
+  ready: number;
+  inUse: number;
+  lastActivityAt?: string | null;
+}
+
 export const capacityApi = {
+  /**
+   * Every (group, region)'s reservation and pod counts in ONE request.
+   *
+   * <p>Use this for any list or overview. {@link capacityApi.listPods} reaches
+   * the region's Kubernetes API for per-pod container status, so calling it
+   * once per row made a list page poll that API `groups × regions` times a
+   * tick; this answers from the hub's own tables. It carries no per-pod
+   * detail — the drill-in page still uses `listPods`, where that is the point.
+   */
+  summary: (signal?: AbortSignal) =>
+    request<GroupCapacitySummaryRow[]>("GET", "/api/v1/applicationGroups/capacitySummary",
+      undefined, signal),
+
   /** PUT /capacity/{region} — direct UPDATE of maxAvailable, no sponsor gate. */
   setMax: (groupId: string, region: string, maxAvailable: number, signal?: AbortSignal) =>
     request<ApplicationGroupCapacityRow>("PUT", base(groupId, region), { maxAvailable }, signal),

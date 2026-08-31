@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { useInterval } from "../hooks/useInterval";
+import { useVisiblePolling } from "../hooks/useVisiblePolling";
 import { Paginator } from "./Paginator";
 import { formatRelative } from "../lib/time";
 import { runsApi, type RunEvent, type RunEventType, type RunEventsListing } from "../api/runs";
@@ -51,7 +51,7 @@ export function RunEventsTimeline({
   useEffect(() => {
     fetchPage(page);
   }, [fetchPage, page]);
-  useInterval(() => fetchPage(page), isTerminal ? null : POLL_MS);
+  useVisiblePolling(() => fetchPage(page), isTerminal ? null : POLL_MS, { name: "runEvents" });
 
   if (error) {
     return <p className="ink-soft">Couldn't load audit events: {error}</p>;

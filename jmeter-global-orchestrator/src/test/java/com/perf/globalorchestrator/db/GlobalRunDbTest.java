@@ -302,6 +302,82 @@ class GlobalRunDbTest extends OracleDbTestSupport {
         assertThat(groups.countPods("pool")).isEqualTo(3);
     }
 
+    /**
+     * A group may legitimately be called {@code all} — the id pattern allows it.
+     * {@code findByGroupId} is keyed by the raw id and {@code findAllGroupedByGroup}
+     * by a constant in the SAME cache, so a plain {@code 'all'} constant made the
+     * two share one entry and the second caller read the first's value as the
+     * wrong type. The bulk key carries a {@code #}, which no group id can.
+     */
+    @Test
+    void a_group_named_all_does_not_collide_with_the_bulk_capacity_cache_key() {
+        ensureRegion("na-east", 20);
+        app("app-allgrp", "allgrp", "all");
+        groupCapacity.upsert("all", "na-east", 4);
+
+        // Populate both cache entries, in both orders relative to each other.
+        Map<String, List<GroupCapacity>> bulk = groupCapacity.findAllGroupedByGroup();
+        List<GroupCapacity> one = groupCapacity.findByGroupId("all");
+
+        assertThat(one).extracting(GroupCapacity::region).containsExactly("na-east");
+        assertThat(bulk).containsKey("all");
+
+        // ...and again, now served from cache — a collision surfaces here as a
+        // ClassCastException rather than a wrong value.
+        assertThat(groupCapacity.findAllGroupedByGroup().get("all"))
+                .extracting(GroupCapacity::maxAvailable).containsExactly(4);
+        assertThat(groupCapacity.findByGroupId("all"))
+                .extracting(GroupCapacity::maxAvailable).containsExactly(4);
+    }
+
+    /**
+     * The Capacity list's aggregate must count IN_USE exactly as the per-region
+     * drill-in does, or the two pages disagree about the same worker. Both halves
+     * of the drill-in's test are checked here: the member must be non-terminal
+     * <b>and</b> its run must be. A member left RUNNING on a FAILED run (a launch
+     * that dies after fan-out) would otherwise pin its pod as busy for good.
+     */
+    @Test
+    void groupRegionPods_counts_inUse_exactly_as_the_per_region_snapshot_does() {
+        Application a = app("app-summary", "summary-app", "summ");
+        Instant now = Instant.now();
+        for (int i = 1; i <= 3; i++) {
+            pods.declareStatic("summ-w" + i, "na-east", "http://summ-w" + i + ":8080", "summ");
+        }
+        pods.declareStatic("summ-west-w1", "na-west", "http://summ-west-w1:8080", "summ");
+
+        // w1 → a live run (busy). w2 → a member left RUNNING on a FAILED run
+        // (the run is over; the pod is free). w3 → never used.
+        runs.insertRun(new Run("01J0SUMMLIVEAAAAAAAAAAAAAA", "na-east", "b", null, a.name(), "t",
+                RunState.RUNNING, null, now, now, null, false, null, "summ"));
+        runs.insertFleetMember(new RunFleetMember("01J0SUMMLIVEAAAAAAAAAAAAAA", "summ-w1", "na-east",
+                MemberState.RUNNING, null, null, "http://summ-w1:8080", now, null, null));
+        runs.insertRun(new Run("01J0SUMMDEADAAAAAAAAAAAAAA", "na-east", "b", null, a.name(), "t",
+                RunState.FAILED, null, now, now, now, false, null, "summ"));
+        runs.insertFleetMember(new RunFleetMember("01J0SUMMDEADAAAAAAAAAAAAAA", "summ-w2", "na-east",
+                MemberState.RUNNING, null, null, "http://summ-w2:8080", now, null, null));
+
+        Map<String, PodRepository.GroupRegionPods> byRegion = new java.util.LinkedHashMap<>();
+        for (PodRepository.GroupRegionPods r : pods.groupRegionPods()) {
+            if ("summ".equals(r.groupId())) byRegion.put(r.region(), r);
+        }
+
+        PodRepository.GroupRegionPods east = byRegion.get("na-east");
+        assertThat(east).isNotNull();
+        assertThat(east.provisioned()).isEqualTo(3);
+        assertThat(east.inUse()).isEqualTo(1);                 // only the live run's worker
+        assertThat(east.lastActivityAt()).isNotNull();         // declareStatic seeds the heartbeat
+        // ...which is exactly what the drill-in's per-pod test says.
+        assertThat(pods.findActiveRunBindingFor("summ-w1")).isPresent();
+        assertThat(pods.findActiveRunBindingFor("summ-w2")).isEmpty();
+        assertThat(pods.findActiveRunBindingFor("summ-w3")).isEmpty();
+
+        PodRepository.GroupRegionPods west = byRegion.get("na-west");
+        assertThat(west).isNotNull();
+        assertThat(west.provisioned()).isEqualTo(1);
+        assertThat(west.inUse()).isZero();
+    }
+
     private static List<String> idsOf(List<Pod> claimed) {
         List<String> ids = new ArrayList<>();
         for (Pod p : claimed) ids.add(p.podId());

@@ -144,7 +144,23 @@ paths:
         `.jtl.gz`, else `.bin`); a name that already has an extension is used
         as-is. The default stays inline, which curl scripts and the
         local-orchestrator's blob fetch depend on.
+
+        **A blob is immutable** — there is no update verb, so one `blobId`
+        always answers with the same bytes. The response therefore carries a
+        strong `ETag` (the content's own sha256) and
+        `Cache-Control: private, max-age=31536000, immutable`, and an
+        `If-None-Match` that matches answers `304` without reading the bytes.
+        `private` because a blob may hold a test plan or data file with
+        sensitive content and the UI's nginx sits in front: the copy belongs in
+        one browser, never a shared cache.
       parameters:
+        - name: If-None-Match
+          in: header
+          required: false
+          schema: { type: string }
+          description: |
+            A previously-returned `ETag` (or `*`, or a comma-separated list).
+            A match answers `304` with no body.
         - name: download
           in: query
           required: false
@@ -167,9 +183,24 @@ paths:
                 Set to `attachment; filename="<name.ext>"` only when
                 `?download=true` is supplied; absent on the default
                 inline response.
+            ETag:
+              schema: { type: string }
+              description: Strong validator — the content's sha256, quoted.
+            Cache-Control:
+              schema: { type: string }
+              description: '`private, max-age=31536000, immutable` — a blob never changes.'
           content:
             application/octet-stream:
               schema: { type: string, format: binary }
+        "304":
+          description: |
+            The caller's `If-None-Match` matches; the bytes are unchanged and no
+            body is sent. `ETag` and `Cache-Control` are repeated.
+          headers:
+            ETag:
+              schema: { type: string }
+            Cache-Control:
+              schema: { type: string }
         "404":
           description: blobId is unknown or malformed.
           content:

@@ -3,9 +3,11 @@ package com.perf.globalorchestrator.http;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.perf.globalorchestrator.domain.ApplicationGroup;
 import com.perf.globalorchestrator.domain.GroupCapacity;
+import com.perf.globalorchestrator.domain.GroupCapacitySummary;
 import com.perf.globalorchestrator.domain.RecyclePolicy;
 import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.repo.GroupCapacityRepository;
+import com.perf.globalorchestrator.repo.PodRepository;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -22,6 +24,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -54,10 +58,13 @@ public class ApplicationGroupController {
 
     private final ApplicationGroupRepository repo;
     private final GroupCapacityRepository capacityRepo;
+    private final PodRepository pods;
 
-    public ApplicationGroupController(ApplicationGroupRepository repo, GroupCapacityRepository capacityRepo) {
+    public ApplicationGroupController(ApplicationGroupRepository repo, GroupCapacityRepository capacityRepo,
+                                      PodRepository pods) {
         this.repo = repo;
         this.capacityRepo = capacityRepo;
+        this.pods = pods;
     }
 
     @GetMapping
@@ -68,6 +75,48 @@ public class ApplicationGroupController {
                 .map(g -> g.withApplicationCount(counts.getOrDefault(g.groupId(), 0))
                         .withCapacity(capacity.getOrDefault(g.groupId(), List.of())))
                 .toList());
+    }
+
+    /**
+     * Every group's reservation and live pod counts in one response — the
+     * Capacity list's whole table.
+     *
+     * <p>The per-region {@code /capacity/{region}/pods} call asks the region's
+     * Kubernetes API for container status, so a list page reading it once per
+     * row polled that API {@code groups × regions} times per tick. This answers
+     * from {@code ORCH_GROUP_CAPACITY} and {@code ORCH_POD} alone: two queries,
+     * no substrate call, one request. It therefore carries no per-pod detail
+     * and no {@code containerRunning} — the drill-in page still uses the
+     * per-region call, which is where that evidence belongs.
+     *
+     * <p>A reserved (group, region) with no pods yet is present with zero
+     * counts; a pod in a region the group no longer reserves is not, because
+     * the reservation grid is what the page lists.
+     */
+    @GetMapping("/capacitySummary")
+    public ResponseEntity<List<GroupCapacitySummary>> capacitySummary() {
+        Map<String, PodRepository.GroupRegionPods> podsByKey = new LinkedHashMap<>();
+        for (PodRepository.GroupRegionPods p : pods.groupRegionPods()) {
+            podsByKey.put(p.groupId() + "\u0000" + p.region(), p);
+        }
+        List<GroupCapacitySummary> out = new ArrayList<>();
+        capacityRepo.findAllGroupedByGroup().forEach((groupId, rows) -> {
+            for (GroupCapacity c : rows) {
+                PodRepository.GroupRegionPods p = podsByKey.get(groupId + "\u0000" + c.region());
+                long provisioned = p == null ? 0L : p.provisioned();
+                long inUse = p == null ? 0L : p.inUse();
+                out.add(new GroupCapacitySummary(
+                        groupId, c.region(), c.maxAvailable(),
+                        provisioned,
+                        // The per-region snapshot reports ready as
+                        // "everything not bound to a run"; match it exactly so
+                        // the list and the drill-in never disagree.
+                        provisioned - inUse,
+                        inUse,
+                        p == null ? null : p.lastActivityAt()));
+            }
+        });
+        return ResponseEntity.ok(out);
     }
 
     @GetMapping("/{groupId:" + GROUP_ID_PATH + "}")

@@ -9,6 +9,8 @@
  * to hydrate the launcher form.
  */
 
+import { TEMPLATES_CACHE, cached, invalidate } from "../lib/resourceCache";
+
 import type { FleetAllocationEntry } from "./runs";
 import type { BlobMetadata } from "./blobs";
 
@@ -65,20 +67,25 @@ export class TemplateApiError extends Error {
 }
 
 export const templatesApi = {
-  /** List all templates, sorted newest-first by document-service. */
-  list: async (signal?: AbortSignal): Promise<TemplateSummary[]> => {
-    const resp = await fetch("/api/v1/blob?type=template&limit=200", { signal });
-    if (!resp.ok) throw new TemplateApiError(resp.status, await resp.text());
-    const payload = (await resp.json()) as { items: BlobMetadata[] };
-    return payload.items.map((b) => ({
-      blobId: b.blobId,
-      name: b.name ?? "(untitled template)",
-      application: b.application ?? "",
-      description: b.description ?? null,
-      uploadedAt: b.uploadedAt,
-      sizeBytes: b.sizeBytes,
-    }));
-  },
+  /**
+   * All templates, newest-first. Cached: the templates page, the launcher and
+   * the schedule dialog each read this whole list on mount, and it only moves
+   * when someone saves or deletes one — both of which invalidate below.
+   */
+  list: (signal?: AbortSignal, opts?: { fresh?: boolean }): Promise<TemplateSummary[]> =>
+    cached(`${TEMPLATES_CACHE}:list`, async () => {
+      const resp = await fetch("/api/v1/blob?type=template&limit=200");
+      if (!resp.ok) throw new TemplateApiError(resp.status, await resp.text());
+      const payload = (await resp.json()) as { items: BlobMetadata[] };
+      return payload.items.map((b) => ({
+        blobId: b.blobId,
+        name: b.name ?? "(untitled template)",
+        application: b.application ?? "",
+        description: b.description ?? null,
+        uploadedAt: b.uploadedAt,
+        sizeBytes: b.sizeBytes,
+      }));
+    }, { signal, force: opts?.fresh }),
 
   /** Save a new template. Returns the persisted blob's ID. */
   save: async (
@@ -101,6 +108,7 @@ export const templatesApi = {
     });
     if (!resp.ok) throw new TemplateApiError(resp.status, await resp.text());
     const meta = (await resp.json()) as BlobMetadata;
+    invalidate(TEMPLATES_CACHE);
     return meta.blobId;
   },
 
@@ -120,5 +128,6 @@ export const templatesApi = {
     if (!resp.ok && resp.status !== 204) {
       throw new TemplateApiError(resp.status, await resp.text());
     }
+    invalidate(TEMPLATES_CACHE);
   },
 };

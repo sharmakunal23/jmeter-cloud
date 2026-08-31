@@ -174,12 +174,36 @@ public class BlobController {
         return trimmed;
     }
 
+    /**
+     * One blob's bytes. <b>A blob is immutable</b> — there is no update verb, so
+     * a given {@code blobId} always answers with the same bytes, and the
+     * response is cacheable for a year with a strong {@code ETag} (the content's
+     * own sha256). A repeat read of a test plan, data file or plugin jar
+     * therefore costs the browser nothing and this service nothing.
+     *
+     * <p>{@code private}, not {@code public}: a blob may hold a test plan or a
+     * data file with sensitive content, and the UI's nginx sits in front — the
+     * copy belongs in the one browser that fetched it, never in a shared cache.
+     *
+     * <p>{@code If-None-Match} short-circuits to 304 before the store is opened,
+     * so a conditional hit reads no bytes at all.
+     */
     @GetMapping("/blob/{blobId:" + Ulid.PATTERN + "}")
     public ResponseEntity<InputStreamResource> getBlob(
             @PathVariable String blobId,
-            @RequestParam(value = "download", required = false, defaultValue = "false") boolean download
+            @RequestParam(value = "download", required = false, defaultValue = "false") boolean download,
+            @RequestHeader(value = HttpHeaders.IF_NONE_MATCH, required = false) String ifNoneMatch
     ) throws IOException {
         BlobMetadata meta = store.stat(blobId);   // throws BlobNotFoundException
+        String etag = "\"" + meta.sha256() + "\"";
+
+        if (matchesEtag(ifNoneMatch, etag)) {
+            return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
+                    .header(HttpHeaders.ETAG, etag)
+                    .header(HttpHeaders.CACHE_CONTROL, IMMUTABLE_BLOB_CACHE_CONTROL)
+                    .build();
+        }
+
         InputStream stream = store.open(blobId);
         MediaType type = meta.contentType() != null
                 ? MediaType.parseMediaType(meta.contentType())
@@ -187,6 +211,8 @@ public class BlobController {
         ResponseEntity.BodyBuilder rb = ResponseEntity.ok()
                 .contentType(type)
                 .contentLength(meta.sizeBytes())
+                .header(HttpHeaders.ETAG, etag)
+                .header(HttpHeaders.CACHE_CONTROL, IMMUTABLE_BLOB_CACHE_CONTROL)
                 .header("X-blobId", meta.blobId())
                 .header("X-sha256", meta.sha256());
         if (download) {
@@ -195,6 +221,25 @@ public class BlobController {
             rb.header("Content-Disposition", "attachment; filename=\"" + filename + "\"");
         }
         return rb.body(new InputStreamResource(stream));
+    }
+
+    /** A year, and `immutable` so a reload does not even revalidate. */
+    static final String IMMUTABLE_BLOB_CACHE_CONTROL = "private, max-age=31536000, immutable";
+
+    /**
+     * RFC 9110 {@code If-None-Match}: a comma-separated list, or {@code *}.
+     * A {@code W/} weak prefix is stripped — weak comparison is the right one
+     * for a GET, and it is what a proxy that re-encoded the body would send back.
+     */
+    static boolean matchesEtag(String ifNoneMatch, String etag) {
+        if (ifNoneMatch == null || ifNoneMatch.isBlank()) return false;
+        if (ifNoneMatch.trim().equals("*")) return true;
+        for (String candidate : ifNoneMatch.split(",")) {
+            String trimmed = candidate.trim();
+            if (trimmed.startsWith("W/")) trimmed = trimmed.substring(2);
+            if (trimmed.equals(etag)) return true;
+        }
+        return false;
     }
 
     /**

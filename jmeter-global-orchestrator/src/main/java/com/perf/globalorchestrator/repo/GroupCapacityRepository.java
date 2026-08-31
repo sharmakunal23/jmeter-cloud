@@ -89,8 +89,15 @@ public class GroupCapacityRepository {
     /**
      * Bulk fetch — returns {groupId → list-of-capacity}. Used by the group
      * list so listing N groups is O(1) DB round-trips instead of N+1.
+     *
+     * <p>The key carries a {@code #} on purpose. It shares a cache with
+     * {@link #findByGroupId(String)}, which is keyed by the raw group id, and a
+     * group id is {@code [a-z][a-z0-9_]{0,29}} — so a group legitimately named
+     * {@code all} would have collided with a plain {@code 'all'} key and one
+     * caller would have read the other's value as the wrong type. No group id
+     * can contain {@code #}.
      */
-    @Cacheable(cacheNames = CacheConfig.CACHE_GROUP_CAPACITY, key = "'all'")
+    @Cacheable(cacheNames = CacheConfig.CACHE_GROUP_CAPACITY, key = "'#all'")
     public Map<String, List<GroupCapacity>> findAllGroupedByGroup() {
         Map<String, List<GroupCapacity>> out = new java.util.LinkedHashMap<>();
         jdbc.query(

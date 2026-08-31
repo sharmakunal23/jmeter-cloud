@@ -80,7 +80,7 @@ export function CapacityDetailPage() {
     try {
       let group: ApplicationGroup;
       try {
-        group = await applicationGroupsApi.get(groupId, signal);
+        group = await applicationGroupsApi.get(groupId, signal, { fresh: true });
       } catch (err) {
         if (signal?.aborted) return;
         if (isNotFound(err)) { setState({ status: "notFound" }); return; }

@@ -742,6 +742,15 @@ paths:
       responses:
         "200":
           description: Per-label rollup.
+          headers:
+            Cache-Control:
+              schema: { type: string }
+              description: |
+                `private, max-age=300` once the run is terminal — its numbers can
+                no longer change, so the browser may keep them; `no-store` while
+                it is live. `private` because these are the operator's data and
+                the UI's nginx sits in front. The window is far shorter than the
+                server-side hour: a purge cannot reach into a browser cache.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/RunMetricsRollup" }
@@ -773,6 +782,15 @@ paths:
       responses:
         "200":
           description: The run's headline stats over the range.
+          headers:
+            Cache-Control:
+              schema: { type: string }
+              description: |
+                `private, max-age=300` once the run is terminal — its numbers can
+                no longer change, so the browser may keep them; `no-store` while
+                it is live. `private` because these are the operator's data and
+                the UI's nginx sits in front. The window is far shorter than the
+                server-side hour: a purge cannot reach into a browser cache.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/RunSummary" }
@@ -894,6 +912,15 @@ paths:
       responses:
         "200":
           description: Per-second timeseries for the run.
+          headers:
+            Cache-Control:
+              schema: { type: string }
+              description: |
+                `private, max-age=300` once the run is terminal — its numbers can
+                no longer change, so the browser may keep them; `no-store` while
+                it is live. `private` because these are the operator's data and
+                the UI's nginx sits in front. The window is far shorter than the
+                server-side hour: a purge cannot reach into a browser cache.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/MetricsTimeseries" }
@@ -1159,6 +1186,30 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
+  /api/v1/applicationGroups/capacitySummary:
+    get:
+      tags: [capacity]
+      summary: Reservation + pod counts for every (group, region)
+      description: |
+        The Capacity list's whole table in one response — use this for any list
+        or overview.
+
+        `/capacity/{region}/pods` reaches that region's Kubernetes API for
+        per-pod container status, so reading it once per row made a list page
+        poll the substrate `groups x regions` times per refresh. This answers
+        from `ORCH_GROUP_CAPACITY` and `ORCH_POD` alone and touches no cluster,
+        so it carries no per-pod detail and no `containerRunning` — the
+        per-region call remains the one to use for a drill-in.
+
+        A reserved (group, region) with no pods yet appears with zero counts.
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/GroupCapacitySummary" }
   /api/v1/applicationGroups/{groupId}:
     parameters:
       - { name: groupId, in: path, required: true, schema: { type: string, pattern: "^[a-z][a-z0-9_]{0,29}$" } }
@@ -4233,6 +4284,23 @@ components:
         lostPods:   { type: integer, format: int64, description: "Pods marked LOST by the sweeper (heartbeat stale)." }
 
     # ── Phase 3 capacity-rework response schemas ──────────────────────────
+    GroupCapacitySummary:
+      type: object
+      description: >-
+        One (group, region) row of the Capacity list: the group's reservation on
+        that cluster plus its live pod counts, all from the hub's own tables.
+      properties:
+        groupId:      { type: string, example: cps }
+        region:       { type: string, example: na-east }
+        maxAvailable: { type: integer, description: "The group's reservation on this cluster.", example: 4 }
+        provisioned:  { type: integer, description: "Pods registered to this (group, region).", example: 3 }
+        ready:        { type: integer, description: "provisioned - inUse, matching the per-region snapshot.", example: 2 }
+        inUse:        { type: integer, description: "Pods bound to a live run fleet member.", example: 1 }
+        lastActivityAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Newest heartbeat across the pool; null when it is empty.
     CapacitySnapshot:
       type: object
       required: [groupId, region, maxAvailable, provisioned, ready, inUse, spinnable, pods]

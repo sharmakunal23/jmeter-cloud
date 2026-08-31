@@ -31,6 +31,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.CacheControl;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -47,6 +48,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * REST surface for run management. camelCase routes per the platform-wide
@@ -347,7 +349,7 @@ public class RunController {
         body.put("state", run.state().name());
         body.put("byLabel", metrics.rollupByLabel(runId, run.state(), parseWindowSeconds(window),
                 parseLabelPrefix(labelPrefix), parseLabelLimit(labelLimit)));
-        return ResponseEntity.ok(body);
+        return browserCacheable(run).body(body);
     }
 
     /**
@@ -360,7 +362,7 @@ public class RunController {
             @PathVariable String runId,
             @RequestParam(name = "window", defaultValue = "all") String window) {
         Run run = runs.getRun(runId);
-        return ResponseEntity.ok(metrics.summary(runId, run.state(), parseWindowSeconds(window)));
+        return browserCacheable(run).body(metrics.summary(runId, run.state(), parseWindowSeconds(window)));
     }
 
     /**
@@ -386,9 +388,34 @@ public class RunController {
         if (granularity != null && granularity != 15 && granularity != 30 && granularity != 60) {
             throw new IllegalArgumentException("granularity must be 15, 30 or 60 seconds; got " + granularity);
         }
-        return ResponseEntity.ok(metrics.timeseries(runId, run.state(), byRegion, byApplication, byLabel,
-                parseLabelPrefix(labelPrefix), parseLabelLimit(labelLimit), granularity, windowSeconds));
+        return browserCacheable(run).body(
+                metrics.timeseries(runId, run.state(), byRegion, byApplication, byLabel,
+                        parseLabelPrefix(labelPrefix), parseLabelLimit(labelLimit), granularity, windowSeconds));
     }
+
+    /**
+     * Lets the browser keep a <b>terminal</b> run's metrics for
+     * {@link #TERMINAL_RUN_BROWSER_CACHE_SECONDS}, so switching between the
+     * run-detail tabs or coming back to a finished run costs no request at all.
+     * A live run is never cached — its numbers change every window.
+     *
+     * <p>{@code private}: a run's metrics are the operator's, and the UI's
+     * nginx sits in front — this copy belongs in one browser, not a shared
+     * proxy. The window is deliberately much shorter than the server-side
+     * hour, because a purge destroys a terminal run's rows and nothing can
+     * reach into a browser cache to say so; five minutes bounds how long a
+     * purged run can still render for the person who purged it.
+     */
+    static ResponseEntity.BodyBuilder browserCacheable(Run run) {
+        if (run.state() == null || !run.state().isTerminal()) {
+            return ResponseEntity.ok().cacheControl(CacheControl.noStore());
+        }
+        return ResponseEntity.ok().cacheControl(
+                CacheControl.maxAge(TERMINAL_RUN_BROWSER_CACHE_SECONDS, TimeUnit.SECONDS).cachePrivate());
+    }
+
+    /** How long a browser may keep a finished run's metrics. See {@link #browserCacheable}. */
+    static final long TERMINAL_RUN_BROWSER_CACHE_SECONDS = 300;
 
     /**
      * {@code labelLimit}: absent = the 10 busiest labels, {@code all} = every

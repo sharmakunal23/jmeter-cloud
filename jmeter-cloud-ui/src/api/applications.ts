@@ -7,6 +7,9 @@
  */
 
 import { getActor } from "../actor";
+import {
+  APPLICATIONS_CACHE, APPLICATION_GROUPS_CACHE, cached, invalidate,
+} from "../lib/resourceCache";
 
 export type HealthStatus = "HEALTHY" | "DEGRADED" | "UNHEALTHY" | "UNKNOWN";
 
@@ -114,9 +117,29 @@ export function displayName(name: string): string {
   return i === -1 ? name : name.slice(0, i);
 }
 
+/**
+ * Every application mutation clears the group cache too: a group carries the
+ * `applicationCount` that "Manage groups" shows and gates its Delete button on,
+ * and create / delete / purge — and an update that moves an app between groups
+ * — all move it. Without this the dialog offers Delete on a group that still
+ * has applications, and the server's 409 is the only thing that stops it.
+ */
+function invalidateApplications(): void {
+  invalidate(APPLICATIONS_CACHE);
+  invalidate(APPLICATION_GROUPS_CACHE);
+}
+
 export const applicationsApi = {
-  list: (signal?: AbortSignal) =>
-    requestJson<Application[]>("GET", "/api/v1/applications", undefined, signal),
+  /**
+   * The registry, deduplicated and briefly cached — seven surfaces read this
+   * list to resolve ONE application, so an uncached read means seven copies of
+   * the whole registry per navigation. Pass `{fresh: true}` from a poller that
+   * must see a change the moment it lands; every mutation below invalidates.
+   */
+  list: (signal?: AbortSignal, opts?: { fresh?: boolean }) =>
+    cached(`${APPLICATIONS_CACHE}:list`,
+      () => requestJson<Application[]>("GET", "/api/v1/applications"),
+      { signal, force: opts?.fresh }),
 
   /** Archived view — only soft-deleted (hidden) apps, the hard-delete/purge surface. */
   listHidden: (signal?: AbortSignal) =>
@@ -126,16 +149,24 @@ export const applicationsApi = {
     requestJson<Application>("GET", `/api/v1/applications/${encodeURIComponent(applicationId)}`,
       undefined, signal),
 
-  create: (body: CreateApplicationRequest, signal?: AbortSignal) =>
-    requestJson<Application>("POST", "/api/v1/applications", body, signal),
+  create: async (body: CreateApplicationRequest, signal?: AbortSignal) => {
+    const created = await requestJson<Application>("POST", "/api/v1/applications", body, signal);
+    invalidateApplications();
+    return created;
+  },
 
-  update: (applicationId: string, body: UpdateApplicationRequest, signal?: AbortSignal) =>
-    requestJson<Application>("PUT", `/api/v1/applications/${encodeURIComponent(applicationId)}`,
-      body, signal),
+  update: async (applicationId: string, body: UpdateApplicationRequest, signal?: AbortSignal) => {
+    const updated = await requestJson<Application>(
+      "PUT", `/api/v1/applications/${encodeURIComponent(applicationId)}`, body, signal);
+    invalidateApplications();
+    return updated;
+  },
 
-  delete: (applicationId: string, signal?: AbortSignal) =>
-    requestJson<void>("DELETE", `/api/v1/applications/${encodeURIComponent(applicationId)}`,
-      undefined, signal),
+  delete: async (applicationId: string, signal?: AbortSignal) => {
+    await requestJson<void>("DELETE", `/api/v1/applications/${encodeURIComponent(applicationId)}`,
+      undefined, signal);
+    invalidateApplications();
+  },
 
   /**
    * HARD-DELETE / purge — PERMANENTLY deletes a HIDDEN application and its whole
@@ -147,14 +178,16 @@ export const applicationsApi = {
    *   {@code APPLICATION_NOT_FOUND} (404) — unknown id;
    *   {@code APPLICATION_NOT_PURGEABLE} (409) — exists but not hidden first.
    */
-  purge: (applicationId: string, reason?: string, signal?: AbortSignal) => {
+  purge: async (applicationId: string, reason?: string, signal?: AbortSignal) => {
     const trimmed = reason?.trim();
     const body = trimmed ? { reason: trimmed } : undefined;
-    return requestJson<PurgeApplicationResult>(
+    const result = await requestJson<PurgeApplicationResult>(
       "POST",
       `/api/v1/applications/${encodeURIComponent(applicationId)}/purge`,
       body,
       signal,
     );
+    invalidateApplications();
+    return result;
   },
 };

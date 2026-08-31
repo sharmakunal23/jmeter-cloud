@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { useInterval } from "../hooks/useInterval";
+import { useVisiblePolling } from "../hooks/useVisiblePolling";
 import { runsApi, type Run, type RunState } from "../api/runs";
 import { RegionBadgeList } from "../components/RegionBadge";
 import { TwoRunMetricsPanel, TWO_RUN_PALETTE } from "../components/TwoRunMetricsPanel";
@@ -107,7 +107,7 @@ export function RunsComparePage({ runIds, appName }: { runIds: string[]; appName
   const bothTerminal =
     entries.length === REQUIRED_RUN_COUNT &&
     entries.every((e) => e.status === "ok" && TERMINAL_STATES.has(e.run.state));
-  useInterval(fetchAll, hasValidPair && !bothTerminal ? POLL_INTERVAL_MS : null);
+  useVisiblePolling(fetchAll, hasValidPair && !bothTerminal ? POLL_INTERVAL_MS : null, { name: "runsCompare" });
 
   if (!hasValidPair) {
     return (

@@ -247,6 +247,49 @@ public class PodRepository {
     }
 
     /**
+     * Pod counts for every (group, region) at once — what the Capacity list
+     * shows, without a single call to a region's Kubernetes API.
+     *
+     * <p>One pass over {@code ORCH_POD}, which is bounded by the fleet (tens of
+     * rows), so the aggregate is cheaper than the N round-trips it replaces
+     * even before the substrate calls are counted. {@code IN_USE} is
+     * "bound to a live fleet member of a live run", the same test
+     * {@link #findActiveRunBindingFor} applies per pod for
+     * {@code CapacityController.listPods} — expressed once as a semi-join
+     * rather than once per row. <b>Both halves of that test are load-bearing.</b>
+     * A member row can outlive its run in a non-terminal state (a launch that
+     * fails after fan-out); without the run-state half such a row would pin its
+     * pod as IN_USE for good, and the list would report a worker busy that the
+     * drill-in — and the claim path — call free.
+     */
+    public List<GroupRegionPods> groupRegionPods() {
+        return jdbc.query(
+                "SELECT p.GROUP_ID, p.REGION, "
+                + "       COUNT(*) AS TOTAL_PODS, "
+                + "       SUM(CASE WHEN EXISTS ("
+                + "                   SELECT 1 FROM ORCH_RUN_FLEET_MEMBER m "
+                + "                   JOIN ORCH_RUN r ON m.RUN_ID = r.RUN_ID "
+                + "                   WHERE m.WORKER_ID = p.POD_ID "
+                + "                     AND m.STATE IN ('PENDING','REQUESTED','ACCEPTED','RUNNING','DRAINING') "
+                + "                     AND r.STATE NOT IN ('COMPLETED','FAILED','ABORTED')) "
+                + "                THEN 1 ELSE 0 END) AS IN_USE_PODS, "
+                + "       MAX(p.LAST_HEARTBEAT) AS LAST_ACTIVITY_AT "
+                + "FROM ORCH_POD p "
+                + "GROUP BY p.GROUP_ID, p.REGION "
+                + "ORDER BY p.GROUP_ID, p.REGION",
+                (rs, n) -> new GroupRegionPods(
+                        rs.getString("GROUP_ID"),
+                        rs.getString("REGION"),
+                        rs.getLong("TOTAL_PODS"),
+                        rs.getLong("IN_USE_PODS"),
+                        OracleBind.instant(rs, "LAST_ACTIVITY_AT")));
+    }
+
+    /** Row of {@link #groupRegionPods()}. */
+    public record GroupRegionPods(String groupId, String region, long provisioned,
+                                  long inUse, java.time.Instant lastActivityAt) {}
+
+    /**
      * Track F: per-region capacity rollup. {@code idlePods} excludes
      * pods already claimed by an active {@code runFleetMember} so the
      * UI sees true availability, not raw registration count.

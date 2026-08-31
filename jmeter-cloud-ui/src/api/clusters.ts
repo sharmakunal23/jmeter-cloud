@@ -4,6 +4,8 @@
  * user-facing word here is "cluster".
  */
 
+import { APPLICATION_GROUPS_CACHE, invalidate } from "../lib/resourceCache";
+
 export interface ClusterCheck {
   name: string;
   ok: boolean;
@@ -84,6 +86,10 @@ export class ClusterApiError extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(path, init);
+  // Registering, editing or removing a cluster changes what every group may
+  // reserve, and groups are cached — clear them on any write.
+  const method = init?.method ?? "GET";
+  if (method !== "GET" && resp.ok) invalidate(APPLICATION_GROUPS_CACHE);
   if (resp.status === 204) return undefined as T;
   const text = await resp.text();
   let body: Record<string, unknown> = {};

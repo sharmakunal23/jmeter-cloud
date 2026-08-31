@@ -25,8 +25,11 @@ import { deriveStatus, type SubmitChipState } from "../components/RunSummaryChip
 // VizPanelToolbar removed from the launcher; Hide Controls is now
 // hosted by FleetAllocationFormView. The view-mode toggle (Flow/Form)
 // is also gone — both render together as a hybrid view.
-import { useInterval } from "../hooks/useInterval";
+import { useVisiblePolling } from "../hooks/useVisiblePolling";
 import { useKeyboardToggle } from "../hooks/useKeyboardToggle";
+
+/** Regional headroom refresh while the launcher is open and visible. */
+const REGION_POLL_MS = 15_000;
 
 /**
  * New-run launcher form. Track F (Step 27) replaced the single
@@ -291,7 +294,11 @@ export function NewRunPage() {
     return () => ctl.abort();
   }, []);
 
-  // Initial regions load + 5 s refresh while the page is open.
+  // Regional headroom moves while the operator fills this form in — another
+  // run launching or finishing changes it — so it is polled, not loaded once.
+  // 15 s rather than 5: this is a form, and the allocation widget clamps
+  // against the server's answer at submit time anyway. Nothing is fetched
+  // while the tab is in the background, and coming back refetches at once.
   async function refreshRegions() {
     try {
       const data = await regionsApi.list();
@@ -301,7 +308,7 @@ export function NewRunPage() {
     }
   }
   useEffect(() => { void refreshRegions(); }, []);
-  useInterval(() => { void refreshRegions(); }, 5000);
+  useVisiblePolling(() => refreshRegions(), REGION_POLL_MS, { name: "newRunRegions" });
 
   // Fetch the URL-bound application → its group → the group's capacity grid
   // once on mount (and whenever the URL app changes). The cap-aware +/-

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { formatRelative } from "../lib/time";
 
-import { useInterval } from "../hooks/useInterval";
+import { useVisiblePolling } from "../hooks/useVisiblePolling";
 import { runsApi, type Run } from "../api/runs";
 import { RegionBadgeList } from "../components/RegionBadge";
 import { DeleteRunsConfirmDialog } from "../components/DeleteRunsConfirmDialog";
@@ -94,8 +94,10 @@ function RunsTable({ searchParams, setSearchParams }: RunsTableProps) {
     return () => ctl.abort();
   }, [fetchOnce]);
 
-  // 5-s polling — paused once the page navigates away (cleanup runs in useInterval).
-  useInterval(fetchOnce, POLL_INTERVAL_MS);
+  // 5-s polling, and only while this tab is the one being looked at; coming
+  // back to it refetches at once rather than showing the last snapshot for
+  // another 5 s.
+  useVisiblePolling(fetchOnce, POLL_INTERVAL_MS, { name: "runsList" });
 
   // ── Toolbar handlers ───────────────────────────────────────────────
 

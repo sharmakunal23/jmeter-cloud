@@ -61,16 +61,15 @@ export function CapacityListPage() {
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
-      const groups = await applicationGroupsApi.list(signal);
-      const fetches = groups.flatMap((group) =>
-        (group.capacity ?? []).map((c) =>
-          capacityApi
-            .listPods(group.groupId, c.region, signal)
-            .catch(() => null)
-            .then((snap) => ({ groupId: group.groupId, region: c.region, snap, max: c.maxAvailable })),
-        ),
-      );
-      const fetched = await Promise.all(fetches);
+      // TWO requests for the whole page, whatever the fleet size. This used to
+      // be 1 + groups×regions, and each of those reached the region's
+      // Kubernetes API for per-pod container status the list never showed.
+      // `fresh` on the groups read: the reservation grid is on a 10 s poll, so
+      // the TTL would hold a just-saved change back for a tick or two.
+      const [groups, summary] = await Promise.all([
+        applicationGroupsApi.list(signal, { fresh: true }),
+        capacityApi.summary(signal),
+      ]);
 
       const rowsByGroup = new Map<string, RowAggregate>();
       const regionTotals: Record<string, RegionTotal> = {};
@@ -79,27 +78,24 @@ export function CapacityListPage() {
           group, regions: 0, maxAvailable: 0, provisioned: 0, ready: 0, inUse: 0,
         });
       }
-      for (const { groupId, region, snap, max } of fetched) {
-        const row = rowsByGroup.get(groupId);
+      for (const s of summary) {
+        const row = rowsByGroup.get(s.groupId);
         if (!row) continue;
-        row.regions += 1;
-        row.maxAvailable += max;
-        if (snap) {
-          row.provisioned += snap.provisioned;
-          row.ready       += snap.ready;
-          row.inUse       += snap.inUse;
-          for (const p of snap.pods) {
-            if (!p.lastHeartbeat) continue;
-            const t = new Date(p.lastHeartbeat);
-            if (!row.mostRecentActivity || t > row.mostRecentActivity) {
-              row.mostRecentActivity = t;
-            }
+        row.regions      += 1;
+        row.maxAvailable += s.maxAvailable;
+        row.provisioned  += s.provisioned;
+        row.ready        += s.ready;
+        row.inUse        += s.inUse;
+        if (s.lastActivityAt) {
+          const t = new Date(s.lastActivityAt);
+          if (!row.mostRecentActivity || t > row.mostRecentActivity) {
+            row.mostRecentActivity = t;
           }
-          const tot = regionTotals[region] ?? { provisioned: 0, inUse: 0 };
-          tot.provisioned += snap.provisioned;
-          tot.inUse       += snap.inUse;
-          regionTotals[region] = tot;
         }
+        const tot = regionTotals[s.region] ?? { provisioned: 0, inUse: 0 };
+        tot.provisioned += s.provisioned;
+        tot.inUse       += s.inUse;
+        regionTotals[s.region] = tot;
       }
 
       setState({

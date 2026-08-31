@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { useInterval } from "../hooks/useInterval";
+import { useVisiblePolling } from "../hooks/useVisiblePolling";
 import { runsApi, type Run, type RunFleetMember, type RunState, type MemberState } from "../api/runs";
 import { RegionBadgeList } from "../components/RegionBadge";
 import { MetricsTabPanel } from "../components/MetricsTabPanel";
@@ -143,7 +143,7 @@ export function RunDetailPage() {
 
   const isTerminal =
     state.status === "ok" && isTerminalState(state.run.state);
-  useInterval(fetchOnce, isTerminal ? null : POLL_INTERVAL_MS);
+  useVisiblePolling(fetchOnce, isTerminal ? null : POLL_INTERVAL_MS, { name: `runDetail:${runId}` });
 
   // Console + Logs exist only while the run is live; if the active tab just
   // vanished (the run finished mid-session), land on Metrics.

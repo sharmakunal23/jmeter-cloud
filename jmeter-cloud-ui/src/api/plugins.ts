@@ -7,6 +7,8 @@
  * itself (`orphanBlobDeleted`) — the UI never deletes blobs.
  */
 
+import { PLUGINS_CACHE, cached, invalidate } from "../lib/resourceCache";
+
 import { getActor } from "../actor";
 
 export interface PluginSummary {
@@ -80,11 +82,19 @@ async function request<T>(
 }
 
 export const pluginsApi = {
-  list: (signal?: AbortSignal) =>
-    request<PluginSummary[]>("GET", "/api/v1/plugins", undefined, signal),
-  create: (req: CreatePluginRequest, signal?: AbortSignal) =>
-    request<PluginSummary>("POST", "/api/v1/plugins", req, signal),
+  /** The library. Cached — the plugins page and the run launcher both read it on mount. */
+  list: (signal?: AbortSignal, opts?: { fresh?: boolean }) =>
+    cached(`${PLUGINS_CACHE}:list`,
+      () => request<PluginSummary[]>("GET", "/api/v1/plugins"),
+      { signal, force: opts?.fresh }),
+  create: async (req: CreatePluginRequest, signal?: AbortSignal) => {
+    const created = await request<PluginSummary>("POST", "/api/v1/plugins", req, signal);
+    invalidate(PLUGINS_CACHE);
+    return created;
+  },
   /** Idempotent — an unknown id is already 204 on the hub. */
-  delete: (pluginId: string, signal?: AbortSignal) =>
-    request<void>("DELETE", `/api/v1/plugins/${encodeURIComponent(pluginId)}`, undefined, signal),
+  delete: async (pluginId: string, signal?: AbortSignal) => {
+    await request<void>("DELETE", `/api/v1/plugins/${encodeURIComponent(pluginId)}`, undefined, signal);
+    invalidate(PLUGINS_CACHE);
+  },
 };

@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 
 import { CapacityListPage } from "../CapacityListPage";
 import type { ApplicationGroup } from "../../api/applicationGroups";
-import type { CapacitySnapshot } from "../../api/capacity";
+import type { GroupCapacitySummaryRow } from "../../api/capacity";
 
 vi.mock("../../api/applicationGroups", async () => {
   const actual = await vi.importActual<typeof import("../../api/applicationGroups")>("../../api/applicationGroups");
@@ -19,6 +19,7 @@ vi.mock("../../api/capacity", async () => {
     ...actual,
     capacityApi: {
       setMax: vi.fn(),
+      summary: vi.fn(),
       listPods: vi.fn(),
       spinPod: vi.fn(),
       restartPod: vi.fn(),
@@ -32,12 +33,14 @@ import { applicationGroupsApi } from "../../api/applicationGroups";
 import { capacityApi } from "../../api/capacity";
 const apps = applicationGroupsApi as unknown as { list: ReturnType<typeof vi.fn> };
 const cap = capacityApi as unknown as {
+  summary: ReturnType<typeof vi.fn>;
   listPods: ReturnType<typeof vi.fn>;
   reconcileWorkers: ReturnType<typeof vi.fn>;
 };
 
 beforeEach(() => {
   apps.list.mockReset();
+  cap.summary.mockReset();
   cap.listPods.mockReset();
   cap.reconcileWorkers.mockReset();
 });
@@ -63,29 +66,42 @@ function appB(): ApplicationGroup {
     applicationCount: 1,
   };
 }
-function snap(groupId: string, region: string, partial: Partial<CapacitySnapshot> = {}): CapacitySnapshot {
+function row(groupId: string, region: string,
+             partial: Partial<GroupCapacitySummaryRow> = {}): GroupCapacitySummaryRow {
   return {
     groupId, region,
-    maxAvailable: 1, provisioned: 0, ready: 0, inUse: 0, spinnable: 1, pods: [],
+    maxAvailable: 1, provisioned: 0, ready: 0, inUse: 0, lastActivityAt: null,
     ...partial,
   };
 }
 
+/** Every (group, region) the two fixtures reserve, at the given counts. */
+function summaryFor(groups: ApplicationGroup[],
+                    counts: (groupId: string, region: string) => Partial<GroupCapacitySummaryRow> = () => ({}),
+): GroupCapacitySummaryRow[] {
+  return groups.flatMap((g) =>
+    (g.capacity ?? []).map((c) => row(g.groupId, c.region, {
+      maxAvailable: c.maxAvailable, ...counts(g.groupId, c.region),
+    })));
+}
+
 describe("CapacityListPage — one row per application group", () => {
-  it("renders one row per group with aggregated counters across regions, fetched per (group, region)", async () => {
+  it("renders one row per group from ONE aggregate call — never a request per (group, region)", async () => {
     apps.list.mockResolvedValue([appA(), appB()]);
-    cap.listPods.mockImplementation((appId: string, region: string) =>
-      Promise.resolve(snap(appId, region, {
-        provisioned: 1, ready: 1, inUse: 0,
-      })),
-    );
+    cap.summary.mockResolvedValue(summaryFor([appA(), appB()], () => ({
+      provisioned: 1, ready: 1, inUse: 0,
+    })));
 
     render(<MemoryRouter><CapacityListPage /></MemoryRouter>);
 
     expect(await screen.findByRole("link", { name: "alpha" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "beta"  })).toBeInTheDocument();
-    expect(cap.listPods).toHaveBeenCalledWith("alpha", "us-east", expect.anything());
-    expect(cap.listPods).toHaveBeenCalledWith("beta", "us-east", expect.anything());
+
+    // The whole point of the aggregate: two groups across three (group, region)
+    // pairs cost ONE request, and listPods — which reaches the region's
+    // Kubernetes API — is not called at all from a list page.
+    expect(cap.summary).toHaveBeenCalledTimes(1);
+    expect(cap.listPods).not.toHaveBeenCalled();
 
     // alpha has 2 regions; beta has 1.
     const alphaRow = screen.getByRole("link", { name: "alpha" }).closest("tr")!;
@@ -98,7 +114,7 @@ describe("CapacityListPage — one row per application group", () => {
 
   it("filters groups by name substring", async () => {
     apps.list.mockResolvedValue([appA(), appB()]);
-    cap.listPods.mockResolvedValue(snap("01", "us-east"));
+    cap.summary.mockResolvedValue(summaryFor([appA(), appB()]));
 
     render(<MemoryRouter><CapacityListPage /></MemoryRouter>);
     await screen.findByRole("link", { name: "alpha" });
@@ -115,12 +131,10 @@ describe("CapacityListPage — one row per application group", () => {
   it("sorts when a sortable header is clicked (Provisioned)", async () => {
     apps.list.mockResolvedValue([appA(), appB()]);
     // alpha: 2 regions × 2 provisioned each = 4; beta: 1 × 5 = 5. So beta > alpha by Provisioned.
-    cap.listPods.mockImplementation((groupId: string, region: string) =>
-      Promise.resolve(snap(groupId, region, {
-        provisioned: groupId === "alpha" ? 2 : 5,
-        ready:       groupId === "alpha" ? 2 : 5,
-      })),
-    );
+    cap.summary.mockResolvedValue(summaryFor([appA(), appB()], (groupId) => ({
+      provisioned: groupId === "alpha" ? 2 : 5,
+      ready:       groupId === "alpha" ? 2 : 5,
+    })));
 
     render(<MemoryRouter><CapacityListPage /></MemoryRouter>);
     await screen.findByRole("link", { name: "alpha" });
@@ -139,7 +153,7 @@ describe("CapacityListPage — one row per application group", () => {
 
   it("Phase 5c — Health column dropped from the Capacity list", async () => {
     apps.list.mockResolvedValue([appA()]);
-    cap.listPods.mockResolvedValue(snap("alpha", "us-east"));
+    cap.summary.mockResolvedValue(summaryFor([appA()]));
 
     render(<MemoryRouter><CapacityListPage /></MemoryRouter>);
     await screen.findByRole("link", { name: "alpha" });
@@ -152,7 +166,7 @@ describe("CapacityListPage — one row per application group", () => {
 
   it("Phase 5c — entire row is clickable as role=link with keyboard support", async () => {
     apps.list.mockResolvedValue([appA()]);
-    cap.listPods.mockResolvedValue(snap("alpha", "us-east"));
+    cap.summary.mockResolvedValue(summaryFor([appA()]));
 
     render(<MemoryRouter><CapacityListPage /></MemoryRouter>);
     await screen.findByRole("link", { name: "alpha" });
@@ -165,9 +179,9 @@ describe("CapacityListPage — one row per application group", () => {
 
   it("Phase 5c — recent-activity chip shows 'no workers' when none provisioned", async () => {
     apps.list.mockResolvedValue([appA()]);
-    cap.listPods.mockResolvedValue(snap("alpha", "us-east", {
-      provisioned: 0, ready: 0, inUse: 0, pods: [],
-    }));
+    cap.summary.mockResolvedValue(summaryFor([appA()], () => ({
+      provisioned: 0, ready: 0, inUse: 0,
+    })));
 
     render(<MemoryRouter><CapacityListPage /></MemoryRouter>);
     await screen.findByRole("link", { name: "alpha" });
@@ -177,7 +191,7 @@ describe("CapacityListPage — one row per application group", () => {
 
   it("Phase 5c — '/' keyboard shortcut focuses the search box", async () => {
     apps.list.mockResolvedValue([appA()]);
-    cap.listPods.mockResolvedValue(snap("alpha", "us-east"));
+    cap.summary.mockResolvedValue(summaryFor([appA()]));
 
     render(<MemoryRouter><CapacityListPage /></MemoryRouter>);
     await screen.findByRole("link", { name: "alpha" });
@@ -193,11 +207,9 @@ describe("CapacityListPage — one row per application group", () => {
 
   it("renders the per-region totals chip strip aggregated across groups", async () => {
     apps.list.mockResolvedValue([appA(), appB()]);
-    cap.listPods.mockImplementation((groupId: string, region: string) =>
-      Promise.resolve(snap(groupId, region, {
-        provisioned: region === "us-east" ? 1 : 0,
-      })),
-    );
+    cap.summary.mockResolvedValue(summaryFor([appA(), appB()], (_g, region) => ({
+      provisioned: region === "us-east" ? 1 : 0,
+    })));
 
     render(<MemoryRouter><CapacityListPage /></MemoryRouter>);
     await screen.findByRole("link", { name: "alpha" });
@@ -213,7 +225,7 @@ describe("CapacityListPage — one row per application group", () => {
 
   it("Reconcile workers — header button opens dialog; confirm calls reconcileWorkers + toasts the summary", async () => {
     apps.list.mockResolvedValue([appA()]);
-    cap.listPods.mockResolvedValue(snap("alpha", "us-east"));
+    cap.summary.mockResolvedValue(summaryFor([appA()]));
     cap.reconcileWorkers.mockResolvedValue({
       adopted: [], started: [], orphansDeleted: ["alpha-worker-1"], errors: [],
     });
@@ -234,7 +246,7 @@ describe("CapacityListPage — one row per application group", () => {
 
   it("Reconcile workers — Cancel closes the dialog without calling the API", async () => {
     apps.list.mockResolvedValue([appA()]);
-    cap.listPods.mockResolvedValue(snap("alpha", "us-east"));
+    cap.summary.mockResolvedValue(summaryFor([appA()]));
 
     render(<MemoryRouter><CapacityListPage /></MemoryRouter>);
     await screen.findByRole("link", { name: "alpha" });

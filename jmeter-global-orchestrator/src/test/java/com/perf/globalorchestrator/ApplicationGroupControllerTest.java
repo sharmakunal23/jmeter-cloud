@@ -39,6 +39,7 @@ class ApplicationGroupControllerTest {
 
     private ApplicationGroupRepository repo;
     private GroupCapacityRepository capacity;
+    private com.perf.globalorchestrator.repo.PodRepository pods;
     private MockMvc mvc;
 
     private static final ApplicationGroup CPS =
@@ -48,7 +49,68 @@ class ApplicationGroupControllerTest {
     void setUp() {
         repo = mock(ApplicationGroupRepository.class);
         capacity = mock(GroupCapacityRepository.class);
-        mvc = MockMvcBuilders.standaloneSetup(new ApplicationGroupController(repo, capacity)).build();
+        pods = mock(com.perf.globalorchestrator.repo.PodRepository.class);
+        mvc = MockMvcBuilders.standaloneSetup(new ApplicationGroupController(repo, capacity, pods)).build();
+    }
+
+    @Test
+    @DisplayName("capacitySummary joins the reservation grid to the pod counts — one response, no substrate call")
+    void capacitySummary_joinsReservationsToPodCounts() throws Exception {
+        when(capacity.findAllGroupedByGroup()).thenReturn(Map.of("cps", List.of(
+                new com.perf.globalorchestrator.domain.GroupCapacity("cps", "na-east", 4, null, null),
+                new com.perf.globalorchestrator.domain.GroupCapacity("cps", "na-west", 2, null, null))));
+        when(pods.groupRegionPods()).thenReturn(List.of(
+                new com.perf.globalorchestrator.repo.PodRepository.GroupRegionPods(
+                        "cps", "na-east", 3, 1, Instant.parse("2026-08-31T10:00:00Z"))));
+
+        mvc.perform(get("/api/v1/applicationGroups/capacitySummary"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].groupId").value("cps"))
+                .andExpect(jsonPath("$[0].region").value("na-east"))
+                .andExpect(jsonPath("$[0].maxAvailable").value(4))
+                .andExpect(jsonPath("$[0].provisioned").value(3))
+                .andExpect(jsonPath("$[0].inUse").value(1))
+                // ready is provisioned - inUse, the same arithmetic the
+                // per-region snapshot uses, so the two never disagree.
+                .andExpect(jsonPath("$[0].ready").value(2))
+                // A reserved region with no pods yet is present, at zero —
+                // dropping it would lose a row the operator reserved.
+                .andExpect(jsonPath("$[1].region").value("na-west"))
+                .andExpect(jsonPath("$[1].maxAvailable").value(2))
+                .andExpect(jsonPath("$[1].provisioned").value(0))
+                .andExpect(jsonPath("$[1].ready").value(0))
+                .andExpect(jsonPath("$[1].inUse").value(0))
+                .andExpect(jsonPath("$[1].lastActivityAt").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("capacitySummary ignores pods in a region the group no longer reserves")
+    void capacitySummary_listsTheReservationGrid() throws Exception {
+        when(capacity.findAllGroupedByGroup()).thenReturn(Map.of("cps", List.of(
+                new com.perf.globalorchestrator.domain.GroupCapacity("cps", "na-east", 4, null, null))));
+        when(pods.groupRegionPods()).thenReturn(List.of(
+                new com.perf.globalorchestrator.repo.PodRepository.GroupRegionPods("cps", "na-east", 1, 0, null),
+                new com.perf.globalorchestrator.repo.PodRepository.GroupRegionPods("cps", "retired", 9, 9, null)));
+
+        mvc.perform(get("/api/v1/applicationGroups/capacitySummary"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].region").value("na-east"));
+    }
+
+    @Test
+    @DisplayName("the literal capacitySummary path is not swallowed by the {groupId} route")
+    void capacitySummary_doesNotCollideWithTheGroupIdRoute() throws Exception {
+        when(capacity.findAllGroupedByGroup()).thenReturn(Map.of());
+        when(pods.groupRegionPods()).thenReturn(List.of());
+
+        mvc.perform(get("/api/v1/applicationGroups/capacitySummary"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+        // The group-id route never saw it — a capital letter cannot match
+        // [a-z][a-z0-9_]{0,29}, but pin it so a loosened pattern is caught here.
+        verify(repo, never()).findById("capacitySummary");
     }
 
     @Test

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   GlobalOrchestratorError,
@@ -10,6 +10,7 @@ import {
   type RunFleetMember,
   type ScaleUpRunResponse,
 } from "../api/runs";
+import { useVisiblePolling } from "../hooks/useVisiblePolling";
 import { regionsApi, type RegionCapacity } from "../api/regions";
 import { applicationsApi } from "../api/applications";
 import { applicationGroupsApi } from "../api/applicationGroups";
@@ -17,6 +18,9 @@ import { FleetAllocationFormView } from "./FleetAllocationFormView";
 import { GlobalPropertiesEditor } from "./GlobalPropertiesEditor";
 import { Modal } from "./Modal";
 import { RunStartProgress, type Stage } from "./RunStartProgress";
+
+/** Regional headroom refresh while the scale-up dialog is open and visible. */
+const REGION_POLL_MS = 15_000;
 
 /**
  * Modal for adding workers to a RUNNING run.
@@ -154,32 +158,35 @@ export function ScaleUpRunModal({ run, onClose, onSuccess }: ScaleUpRunModalProp
     return () => ctl.abort();
   }, [run.application]);
 
-  // Poll regions every 5s — operator sees concurrent runs eating into
-  // headroom while they're picking. Stops on unmount.
-  const pollHandle = useRef<number | null>(null);
+  // Poll regions while the dialog is open AND the tab is being looked at —
+  // the operator sees concurrent runs eating into headroom while they pick.
+  // Through useVisiblePolling like every other poll in the app, so a
+  // backgrounded tab with this dialog open costs nothing.
+  // Re-armed on every mount, not just initialised once: StrictMode mounts,
+  // unmounts and remounts in dev, so a ref that is only ever set to false by
+  // the cleanup stays false for the second mount and the dialog never renders
+  // a region again.
+  const mounted = useRef(true);
   useEffect(() => {
-    let cancelled = false;
-    async function refresh() {
-      try {
-        const data = await regionsApi.list();
-        if (!cancelled) setRegions({ status: "ok", regions: data });
-      } catch (err) {
-        if (!cancelled) {
-          setRegions({
-            status: "error",
-            regions: [],
-            message: err instanceof Error ? err.message : String(err),
-          });
-        }
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const refreshRegions = useCallback(async () => {
+    try {
+      const data = await regionsApi.list();
+      if (mounted.current) setRegions({ status: "ok", regions: data });
+    } catch (err) {
+      if (mounted.current) {
+        setRegions({
+          status: "error",
+          regions: [],
+          message: err instanceof Error ? err.message : String(err),
+        });
       }
     }
-    void refresh();
-    pollHandle.current = window.setInterval(() => { void refresh(); }, 5_000);
-    return () => {
-      cancelled = true;
-      if (pollHandle.current != null) window.clearInterval(pollHandle.current);
-    };
   }, []);
+  useEffect(() => { void refreshRegions(); }, [refreshRegions]);
+  useVisiblePolling(() => refreshRegions(), REGION_POLL_MS, { name: "scaleUpRegions" });
 
   // This run's currently-active workers per region — subtracted from the
   // per-region max so the ceiling is the REMAINING headroom (problem fix:

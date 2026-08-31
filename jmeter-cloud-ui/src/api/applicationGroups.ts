@@ -9,6 +9,7 @@
  */
 
 import { requestJson } from "./applications";
+import { APPLICATION_GROUPS_CACHE, cached, invalidate } from "../lib/resourceCache";
 
 /** Per-(group, region) worker budget. */
 export interface ApplicationGroupCapacityEntry {
@@ -99,27 +100,45 @@ export interface UpdateApplicationGroupRequest extends ApplicationGroupPolicy {
 export const GROUP_ID_PATTERN = /^[a-z][a-z0-9_]{0,29}$/;
 
 export const applicationGroupsApi = {
-  list: (signal?: AbortSignal) =>
-    requestJson<ApplicationGroup[]>("GET", "/api/v1/applicationGroups", undefined, signal),
+  list: (signal?: AbortSignal, opts?: { fresh?: boolean }) =>
+    cached(`${APPLICATION_GROUPS_CACHE}:list`,
+      () => requestJson<ApplicationGroup[]>("GET", "/api/v1/applicationGroups"),
+      { signal, force: opts?.fresh }),
 
-  get: (groupId: string, signal?: AbortSignal) =>
-    requestJson<ApplicationGroup>("GET", `/api/v1/applicationGroups/${encodeURIComponent(groupId)}`,
-      undefined, signal),
+  /**
+   * One group. Cached because the run launcher, the run detail page and the
+   * capacity drill-in all resolve the same group on every mount — but a
+   * reservation write goes through `capacityApi`, which invalidates this
+   * namespace, so the grid a caller reads back is never its own stale copy.
+   */
+  get: (groupId: string, signal?: AbortSignal, opts?: { fresh?: boolean }) =>
+    cached(`${APPLICATION_GROUPS_CACHE}:get:${groupId}`,
+      () => requestJson<ApplicationGroup>(
+        "GET", `/api/v1/applicationGroups/${encodeURIComponent(groupId)}`),
+      { signal, force: opts?.fresh }),
 
-  create: (body: CreateApplicationGroupRequest, signal?: AbortSignal) =>
-    requestJson<ApplicationGroup>("POST", "/api/v1/applicationGroups", body, signal),
+  create: async (body: CreateApplicationGroupRequest, signal?: AbortSignal) => {
+    const created = await requestJson<ApplicationGroup>("POST", "/api/v1/applicationGroups", body, signal);
+    invalidate(APPLICATION_GROUPS_CACHE);
+    return created;
+  },
 
-  update: (groupId: string, body: UpdateApplicationGroupRequest, signal?: AbortSignal) =>
-    requestJson<ApplicationGroup>("PUT", `/api/v1/applicationGroups/${encodeURIComponent(groupId)}`,
-      body, signal),
+  update: async (groupId: string, body: UpdateApplicationGroupRequest, signal?: AbortSignal) => {
+    const updated = await requestJson<ApplicationGroup>(
+      "PUT", `/api/v1/applicationGroups/${encodeURIComponent(groupId)}`, body, signal);
+    invalidate(APPLICATION_GROUPS_CACHE);
+    return updated;
+  },
 
   /**
    * 409 `APPLICATION_GROUP_HAS_APPLICATIONS` while any application is in the group,
    * 409 `APPLICATION_GROUP_HAS_WORKERS` while it still has workers or capacity rows.
    */
-  delete: (groupId: string, signal?: AbortSignal) =>
-    requestJson<void>("DELETE", `/api/v1/applicationGroups/${encodeURIComponent(groupId)}`,
-      undefined, signal),
+  delete: async (groupId: string, signal?: AbortSignal) => {
+    await requestJson<void>("DELETE", `/api/v1/applicationGroups/${encodeURIComponent(groupId)}`,
+      undefined, signal);
+    invalidate(APPLICATION_GROUPS_CACHE);
+  },
 };
 
 /** Stable ordering by group name then application name, shared by the Apps page and the Home checklist. */
