@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { InfoTip } from "./InfoTip";
 
 import {
   applicationsApi,
@@ -218,7 +219,14 @@ export function CreateApplicationDialog({
     >
       <form onSubmit={handleSubmit} className="modal__body createApp" noValidate>
           <div className="formField">
-            <label htmlFor="appName">Name *</label>
+            <div className="formField__labelRow">
+              <label htmlFor="appName">Name *</label>
+              <InfoTip label="About application name">
+                The cross-table key for runs, documents and templates —
+                renaming would orphan history, so the name locks after
+                creation.
+              </InfoTip>
+            </div>
             <input
               id="appName"
               type="text"
@@ -233,8 +241,8 @@ export function CreateApplicationDialog({
             />
             <small>
               {isEdit
-                ? "Locked — name is the cross-table key for runs + blobs; renaming would orphan history."
-                : <>Used as the cross-table key. Lowercase, digits, <code>-</code>, <code>_</code>; max 64 chars.</>}
+                ? "Locked."
+                : <>Lowercase, digits, <code>-</code>, <code>_</code>; max 64 chars.</>}
             </small>
             {nameError && name && (
               <p className="text--error" role="alert" style={{ fontSize: "0.78rem" }}>
@@ -268,7 +276,15 @@ export function CreateApplicationDialog({
           </div>
 
           <div className="formField">
-            <label htmlFor="appMetricsGroup">Application group *</label>
+            <div className="formField__labelRow">
+              <label htmlFor="appMetricsGroup">Application group *</label>
+              <InfoTip label="About application group">
+                The team this app belongs to: its workers send the group's id
+                as <span className="mono">?groupId=</span> with every metrics
+                batch, its runs draw on the group's worker pool, and its
+                dashboards are the group's.
+              </InfoTip>
+            </div>
             <select
               id="appMetricsGroup"
               className="formSelect"
@@ -283,11 +299,6 @@ export function CreateApplicationDialog({
                 <option key={g.groupId} value={g.groupId}>{g.name} ({g.groupId})</option>
               ))}
             </select>
-            <small>
-              The team this app belongs to: its workers send the group's id as <code>?groupId=</code>
-              with every metrics batch, its runs draw on the group's worker pool, and its dashboards
-              are the group's.
-            </small>
             {groups !== null && groups.length === 0 && (
               <p className="text--error" role="alert" style={{ fontSize: "0.78rem" }}>
                 No groups yet — create one with "Manage groups" on the Applications page before registering an application.
@@ -297,7 +308,14 @@ export function CreateApplicationDialog({
 
           {metricsGroupId && (
             <div className="formField">
-              <label htmlFor="appMetricsApplication">Metrics application</label>
+              <div className="formField__labelRow">
+                <label htmlFor="appMetricsApplication">Metrics application</label>
+                <InfoTip label="About metrics application">
+                  How the group's label classifier names this app
+                  (<span className="mono">LABEL.APPLICATION</span>) in the
+                  metrics tables and dashboards.
+                </InfoTip>
+              </div>
               <input
                 id="appMetricsApplication"
                 type="text"
@@ -308,8 +326,7 @@ export function CreateApplicationDialog({
                 aria-invalid={metricsApplicationError != null}
               />
               <small>
-                How the group's label classifier names this app (<code>LABEL.APPLICATION</code>);
-                blank = <code>{trimmedName ? trimmedName.toUpperCase() : "the upper-cased name"}</code>.
+                Blank = <code>{trimmedName ? trimmedName.toUpperCase() : "the upper-cased name"}</code>.
               </small>
               {metricsApplicationError && (
                 <p className="text--error" role="alert" style={{ fontSize: "0.78rem" }}>
@@ -321,16 +338,17 @@ export function CreateApplicationDialog({
 
 
           <fieldset className="createApp__endpoints">
-            <legend>Health-check endpoints</legend>
-            <small className="ink-soft">
-              Optional. Max {MAX_HEALTH_ENDPOINTS} URLs. Each gets a GET every minute; aggregate
-              status (HEALTHY / DEGRADED / UNHEALTHY) shows on the application card.
-            </small>
-            {healthEndpoints.length === 0 && (
-              <p className="ink-soft" style={{ fontSize: "0.82rem", margin: "0.4rem 0" }}>
-                No endpoints configured — application status will stay UNKNOWN.
-              </p>
-            )}
+            <legend>
+              <span className="formField__labelRow">
+                Health-check endpoints
+                <InfoTip label="About health-check endpoints">
+                  Each URL gets a GET every minute and the aggregate
+                  HEALTHY / DEGRADED / UNHEALTHY shows on the application card
+                  — with none configured, the status stays UNKNOWN.
+                </InfoTip>
+              </span>
+            </legend>
+            <small className="ink-soft">Optional. Max {MAX_HEALTH_ENDPOINTS} URLs.</small>
             {healthEndpoints.map((url, idx) => (
               <div key={idx} className="createApp__endpointRow">
                 <input

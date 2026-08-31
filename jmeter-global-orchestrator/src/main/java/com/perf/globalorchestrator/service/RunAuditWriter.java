@@ -9,7 +9,11 @@ import com.perf.globalorchestrator.domain.Ulid;
 import com.perf.globalorchestrator.repo.RunEventRepository;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.util.HexFormat;
 import java.util.Map;
 
 /**
@@ -48,12 +52,32 @@ public class RunAuditWriter {
     }
 
     /**
+     * A deterministic 64-hex eventId from a semantic key (e.g.
+     * {@code resultsSaved:<runId>:<workerId>}) — every replica computes the
+     * same id, so the PK dedups the fact across instances. Hashed because
+     * {@code ORCH_RUN_EVENT.EVENT_ID} is {@code VARCHAR2(64 CHAR)} and the raw
+     * key overflows it (a DNS-1123 worker name alone can be 63 chars); the
+     * pre-hash raw-key insert died ORA-12899 on every tick, silently.
+     */
+    public static String deterministicId(String semanticKey) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(semanticKey.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
+    }
+
+    /**
      * Same as
      * {@link #record(String, RunEventType, Actor, Object, String)} but with a
-     * caller-supplied <b>deterministic</b> eventId. Use for singleton-per-fact
-     * system events (e.g. one {@code RESULTS_SAVED} per (run, worker)): every
-     * replica computes the same id, so the PK's {@code ON CONFLICT DO NOTHING}
-     * dedups across instances, not just same-id retries.
+     * caller-supplied <b>deterministic</b> eventId — build it with
+     * {@link #deterministicId} so it always fits the column. Use for
+     * singleton-per-fact system events (e.g. one {@code RESULTS_SAVED} per
+     * (run, worker)): every replica computes the same id, so the PK's
+     * {@code ON CONFLICT DO NOTHING} dedups across instances, not just
+     * same-id retries.
      */
     public void record(String eventId, String runId, RunEventType type, Actor actor,
                        Object payloadRecord, String result) {

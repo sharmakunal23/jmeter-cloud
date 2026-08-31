@@ -691,6 +691,20 @@ function MetadataTab({ run }: { run: Run }) {
       <dd className="mono">{run.testPlanBlobId}</dd>
       <dt>Data files blob</dt>
       <dd className="mono">{run.dataFilesBlobId ?? "—"}</dd>
+      <dt>Plugins</dt>
+      <dd>
+        {run.plugins && run.plugins.length > 0 ? (
+          run.plugins.map((p) => (
+            <span key={p.pluginId} className="chip" title={p.fileName}>
+              {p.name}@{p.version}
+            </span>
+          ))
+        ) : "—"}
+      </dd>
+      <dt>Properties</dt>
+      <dd><MemberPropertiesSummary members={run.fleetMembers} /></dd>
+      <dt>Save results</dt>
+      <dd>{run.saveResults ? "yes — workers upload their JTLs on completion" : "no"}</dd>
       <dt>Initiated by</dt>
       <dd>{run.initiatedBy}</dd>
       <dt>Created</dt>
@@ -700,6 +714,39 @@ function MetadataTab({ run }: { run: Run }) {
       <dt>Completed</dt>
       <dd>{format(run.completedAt)}</dd>
     </dl>
+  );
+}
+
+/**
+ * The fleet's JMeter `-J` properties, per worker — kept truthful mid-run
+ * because runtime pushes merge into each member's persisted snapshot. When
+ * every member carries the same map, it collapses to one line.
+ */
+function MemberPropertiesSummary({ members }: { members: RunFleetMember[] }) {
+  const withProps = members.filter((m) => m.properties && Object.keys(m.properties).length > 0);
+  if (withProps.length === 0) return <>—</>;
+  const fmt = (props: Record<string, string>) =>
+    Object.entries(props).map(([k, v]) => `${k}=${v}`).join(" · ");
+  const first = JSON.stringify(withProps[0].properties);
+  const allEqual = withProps.length === members.length
+    && withProps.every((m) => JSON.stringify(m.properties) === first);
+  if (allEqual) {
+    return (
+      <span>
+        all {members.length} worker{members.length === 1 ? "" : "s"}:{" "}
+        <span className="mono">{fmt(withProps[0].properties!)}</span>
+      </span>
+    );
+  }
+  return (
+    <ul className="defList__memberProps">
+      {withProps.map((m) => (
+        <li key={m.workerId}>
+          <span className="mono">{m.workerId}</span>
+          <small className="mono ink-soft"> — {fmt(m.properties!)}</small>
+        </li>
+      ))}
+    </ul>
   );
 }
 

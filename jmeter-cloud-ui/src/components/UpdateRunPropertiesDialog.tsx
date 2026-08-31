@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 import {
   GlobalOrchestratorError,
@@ -32,12 +32,24 @@ export function UpdateRunPropertiesDialog({ run, onClose, onSuccess }: UpdateRun
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(targets.map((t) => t.workerId)),
   );
+
+  // A background poll can drain/fail a member while the dialog is open —
+  // prune the selection to the live target set so a stale id can never ride
+  // into the request (or trick the all-selected shorthand below).
+  useEffect(() => {
+    setSelected((prev) => {
+      const live = new Set(targets.map((t) => t.workerId));
+      const next = new Set([...prev].filter((id) => live.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [targets]);
   const [properties, setProperties] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<UpdateRunPropertiesResult["results"] | null>(null);
 
-  const allSelected = targets.length > 0 && selected.size === targets.length;
+  // Membership, not size — a same-size set of different workers is not "all".
+  const allSelected = targets.length > 0 && targets.every((t) => selected.has(t.workerId));
   const canSend = !submitting && selected.size > 0 && Object.keys(properties).length > 0;
 
   function toggle(workerId: string) {

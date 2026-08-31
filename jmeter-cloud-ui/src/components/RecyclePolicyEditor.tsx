@@ -1,5 +1,7 @@
 import type { RecyclePolicy } from "../api/applicationGroups";
 
+import { InfoTip } from "./InfoTip";
+
 /**
  * The worker pool's lifecycle policy — a group setting (the pool is the
  * group's), edited inside the application-groups dialog. Three operator-facing
@@ -82,21 +84,23 @@ export function PodPolicyFields({ idPrefix, value, onChange, disabled = false }:
         ))}
       </fieldset>
       <div className="formField">
-        <label htmlFor={`${idPrefix}AlwaysOn`} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <input
-            id={`${idPrefix}AlwaysOn`}
-            type="checkbox"
-            checked={value.alwaysOn}
-            onChange={(e) => onChange({ ...value, alwaysOn: e.target.checked })}
-            disabled={disabled}
-            style={{ width: "auto" }}
-          />
-          Always on (production-like)
-        </label>
-        <small>
-          When checked, scheduled <strong>drain-region</strong> automation jobs skip this group's
-          workers — they are never auto-drained for overnight cost saving. Provision + launch jobs are unaffected.
-        </small>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <label htmlFor={`${idPrefix}AlwaysOn`} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <input
+              id={`${idPrefix}AlwaysOn`}
+              type="checkbox"
+              checked={value.alwaysOn}
+              onChange={(e) => onChange({ ...value, alwaysOn: e.target.checked })}
+              disabled={disabled}
+              style={{ width: "auto" }}
+            />
+            Always on (production-like)
+          </label>
+          <InfoTip label="About always on">
+            Scheduled drain-region automation jobs skip this group's workers (never
+            auto-drained for overnight cost saving) — provision + launch jobs are unaffected.
+          </InfoTip>
+        </div>
       </div>
     </div>
   );

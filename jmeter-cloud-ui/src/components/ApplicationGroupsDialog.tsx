@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { InfoTip } from "./InfoTip";
 import { isDashboardUrl } from "../lib/grafanaLink";
 
 import {
@@ -335,7 +336,17 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
           <fieldset className="createApp__endpoints">
             <legend>Add a group</legend>
             <div className="formField">
-              <label htmlFor="groupIdInput">Id *</label>
+              <div className="formField__labelRow">
+                <label htmlFor="groupIdInput">Id *</label>
+                <InfoTip
+                  label="About group id"
+                  example={<>group id <span className="mono">cps</span> → tables <span className="mono">CPS_METRICS</span></>}
+                >
+                  Names the group's metrics tables and is what its workers send
+                  as <span className="mono">?groupId=</span> with every metrics
+                  batch.
+                </InfoTip>
+              </div>
               <input
                 id="groupIdInput"
                 type="text"
@@ -345,7 +356,7 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
                 maxLength={30}
                 aria-invalid={idError != null && groupId !== ""}
               />
-              <small>Lowercase, letter first, max 30. Names the group's tables (<code>{trimmedId ? trimmedId.toUpperCase() : "CPS"}_METRICS</code>) and is sent by workers as <code>?groupId=</code>; can't be changed later.</small>
+              <small>Lowercase, letter first, max 30; can't be changed later.</small>
               {idError && groupId && (
                 <p className="text--error" role="alert" style={{ fontSize: "0.78rem" }}>{idError}</p>
               )}
@@ -373,7 +384,14 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
               />
             </div>
             <div className="formField">
-              <label htmlFor="groupGrafanaLiveInput">Grafana live dashboard URL</label>
+              <div className="formField__labelRow">
+                <label htmlFor="groupGrafanaLiveInput">Grafana live dashboard URL</label>
+                <InfoTip label="About the live dashboard URL">
+                  The group's hosted dashboard over its metrics tables — the run
+                  page's "Open in Grafana" opens it with the run's time range
+                  and application pre-selected.
+                </InfoTip>
+              </div>
               <input
                 id="groupGrafanaLiveInput"
                 type="url"
@@ -383,7 +401,6 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
                 maxLength={2000}
                 aria-invalid={urlError(grafanaLiveUrl) != null}
               />
-              <small>The group's dashboard over <code>{trimmedId ? trimmedId.toUpperCase() : "CPS"}_METRICS</code>; the run page's "Open in Grafana" adds the run's time range and <code>var-application</code>.</small>
             </div>
             <div className="formField">
               <label htmlFor="groupGrafanaHistoryInput">Grafana history dashboard URL</label>
@@ -398,7 +415,13 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
               />
             </div>
             <div className="formField">
-              <label htmlFor="groupHotDaysInput">Hot days</label>
+              <div className="formField__labelRow">
+                <label htmlFor="groupHotDaysInput">Hot days</label>
+                <InfoTip label="About hot days">
+                  Days the live dashboard covers (the group's hot retention) —
+                  runs older than this open the history dashboard instead.
+                </InfoTip>
+              </div>
               <input
                 id="groupHotDaysInput"
                 type="number"
@@ -409,7 +432,6 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
                 aria-invalid={hotDaysError(hotDays) != null}
                 style={{ width: "6rem" }}
               />
-              <small>Days the live dashboard covers (the group's hot retention); older runs open the history dashboard.</small>
             </div>
             <PodPolicyFields idPrefix="new" value={policy} onChange={setPolicy} disabled={creating} />
             {createUrlError && grafanaLiveUrl + grafanaHistoryUrl !== "" && (

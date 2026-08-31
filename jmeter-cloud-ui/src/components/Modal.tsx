@@ -36,6 +36,12 @@ export interface ModalProps {
 const FOCUSABLE =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+// Open modals, bottom → top. Only the TOP-most one responds to Esc/Tab —
+// dialogs stack (a child confirm over its parent form), every instance
+// listens on window, and without this gate the parent's trap can fight the
+// child's (Tab/Esc reaching the dialog behind the overlay).
+const modalStack: symbol[] = [];
+
 function ModalImpl({
   title, infoTip, infoTipExample, width = "confirm", onClose, closeDisabled = false,
   className, footer, initialFocusRef, children,
@@ -49,16 +55,32 @@ function ModalImpl({
   const closeDisabledRef = useRef(closeDisabled);
   useEffect(() => { closeDisabledRef.current = closeDisabled; });
 
-  // Esc closes; Tab loops inside the shell.
+  const stackId = useRef(Symbol("modal"));
+  useEffect(() => {
+    const id = stackId.current;
+    modalStack.push(id);
+    return () => {
+      const i = modalStack.indexOf(id);
+      if (i >= 0) modalStack.splice(i, 1);
+    };
+  }, []);
+
+  // Esc closes; Tab loops inside the shell. Top-most modal only.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (modalStack[modalStack.length - 1] !== stackId.current) return;
       if (e.key === "Escape" && !closeDisabledRef.current) {
         closeRef.current();
         return;
       }
       if (e.key === "Tab" && shellRef.current) {
         const nodes = shellRef.current.querySelectorAll<HTMLElement>(FOCUSABLE);
-        if (nodes.length === 0) return;
+        if (nodes.length === 0) {
+          // Nothing focusable: hold focus on the shell so Tab can't escape.
+          e.preventDefault();
+          shellRef.current.focus();
+          return;
+        }
         const first = nodes[0];
         const last = nodes[nodes.length - 1];
         const active = document.activeElement;

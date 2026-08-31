@@ -121,6 +121,35 @@ class PluginControllerTest {
     }
 
     @Test
+    @DisplayName("metadata without a sha256 is 400 BLOB_METADATA_INCOMPLETE, not a 500")
+    void register_noSha256() throws Exception {
+        when(documents.fetchBlobMetadata(BLOB))
+                .thenReturn(Optional.of(new BlobMetadataView(BLOB, 4096, null, "legacy.jar", "plugin")));
+        mvc.perform(post("/api/v1/plugins").contentType(MediaType.APPLICATION_JSON)
+                        .content(body("legacy", "1.0")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("BLOB_METADATA_INCOMPLETE"));
+        verify(repo, never()).insert(any());
+    }
+
+    @Test
+    @DisplayName("a blob staged by a non-terminal run's snapshot is NEVER deleted on 409")
+    void register_conflict_neverDeletesRunReferencedBlob() throws Exception {
+        blobIs("plugin", "jpgc-casutg.jar", 4096);
+        when(repo.findByName("jpgc-casutg")).thenReturn(Optional.of(EXISTING));
+        when(repo.existsByBlobId(BLOB)).thenReturn(false);
+        // A RUNNING run's ORCH_RUN.PLUGINS snapshot stages from this blob —
+        // scale-up joiners re-fetch it by blobId, so the bytes must survive.
+        when(repo.activeRunsReferencingBlob(BLOB)).thenReturn(1);
+        mvc.perform(post("/api/v1/plugins").contentType(MediaType.APPLICATION_JSON)
+                        .content(body("jpgc-casutg", "9.9")))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PLUGIN_NAME_TAKEN"))
+                .andExpect(jsonPath("$.orphanBlobDeleted").value(false));
+        verify(documents, never()).deleteBlob(BLOB);
+    }
+
+    @Test
     @DisplayName("a blob not uploaded with X-Type: plugin is 400 BLOB_NOT_PLUGIN")
     void register_blobNotPlugin() throws Exception {
         blobIs("other", "thing.jar", 4096);

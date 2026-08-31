@@ -132,13 +132,13 @@ public class RunEventRepository {
      * Reads {@code JSON_VALUE(payload, '$.workerId')} — the {@code ResultsSaved}
      * record's first component.
      */
-    public java.util.Set<String> resultsSavedWorkerIds(String runId) {
+    public java.util.Set<String> workerIdsWithEvent(String runId, String eventType) {
         return new java.util.HashSet<>(jdbc.queryForList(
                 "SELECT DISTINCT JSON_VALUE(PAYLOAD, '$.workerId') "
                 + "FROM ORCH_RUN_EVENT "
-                + "WHERE RUN_ID=? AND EVENT_TYPE='RESULTS_SAVED' "
+                + "WHERE RUN_ID=? AND EVENT_TYPE=? "
                 + "  AND JSON_VALUE(PAYLOAD, '$.workerId') IS NOT NULL",
-                String.class, runId));
+                String.class, runId, eventType));
     }
 
     /** Total event count for a run — drives the {@code X-Total-Count} header. */

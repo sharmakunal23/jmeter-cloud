@@ -78,6 +78,20 @@ export interface Run {
   startedAt?: string | null;
   completedAt?: string | null;
   fleetMembers: RunFleetMember[];
+  /**
+   * UX-DYNAMICS T3 — the launch-time plugin snapshot. A later registry
+   * delete never changes this list; scale-up joiners stage exactly it.
+   */
+  plugins?: RunPluginRef[];
+}
+
+/** One entry of the run's launch-time plugin snapshot (`ORCH_RUN.PLUGINS`). */
+export interface RunPluginRef {
+  pluginId: string;
+  name: string;
+  version: string;
+  blobId: string;
+  fileName: string;
 }
 
 /** AUDIT-TRAIL — kind of event on the run's audit timeline. */
@@ -90,7 +104,20 @@ export type RunEventType =
   | "STOP"
   // UX-DYNAMICS T5 — runtime property push (POST /runs/{id}/properties).
   | "PROPERTIES_UPDATED"
+  // Operator soft-delete (DELETE /runs/{id}) — the run is hidden, not erased.
+  | "DELETE"
   // Platform-detected lifecycle events (actorSource = system).
+  // Artifact provenance at fan-out: workers reused their staged data files /
+  // downloaded them fresh (payload carries the per-worker split).
+  | "DATA_FILES_REUSED"
+  | "DATA_FILES_UPLOADED"
+  // Launch-only provenance: the plan reached the fleet / the run's library
+  // plugins were staged (the latter only when the run selected plugins).
+  | "TEST_PLAN_UPLOADED"
+  | "PLUGINS_UPLOADED"
+  // A worker removed its preserved run artifacts after a successful results
+  // upload — follows RESULTS_SAVED, one per worker.
+  | "ARTIFACTS_CLEARED"
   | "RESULTS_SAVED"
   | "RUN_COMPLETED"
   | "RUN_FAILED"

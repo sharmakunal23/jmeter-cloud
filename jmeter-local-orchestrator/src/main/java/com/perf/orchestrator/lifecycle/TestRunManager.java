@@ -71,6 +71,20 @@ public class TestRunManager implements TestRunGate {
     /** Null when {@code BEANSHELL_PORT=0} — runtime property pushes disabled. */
     private final BeanShellPropsClient beanShellPropsClient;
     /**
+     * UX-DYNAMICS events — whether the LAST start's dataFiles came from the
+     * staged cache (true) or a fresh download (false); null when the run
+     * carried no dataFiles. Read into the 202 body right after {@code start()}
+     * (staging is synchronous on the request thread, so this is race-free).
+     */
+    private volatile Boolean lastDataFilesReused;
+    /**
+     * UX-DYNAMICS events — true once the current/last run's preserved
+     * artifacts were removed by the post-run cleanup (clean landing + upload
+     * OK). Surfaced on the status snapshot so the hub's sweeper can record
+     * ARTIFACTS_CLEARED right after RESULTS_SAVED.
+     */
+    private volatile boolean lastArtifactsCleared;
+    /**
      * Re-pointed at each per-run log file
      * ({@code logs/{runId}/jmeter.log}) before launch and cleared on
      * post-run cleanup. Optional: when constructed without one (tests),
@@ -269,6 +283,8 @@ public class TestRunManager implements TestRunGate {
      */
     private void stageFromArtifactSource(StartTestRequest request) {
         String runId = request.runId();
+        lastDataFilesReused = null;
+        lastArtifactsCleared = false;
         if (request.testPlanBlobId() != null && !request.testPlanBlobId().isBlank()) {
             try {
                 java.util.Optional<java.io.InputStream> body = artifactSource.fetch(
@@ -323,6 +339,7 @@ public class TestRunManager implements TestRunGate {
                             + blobId + ": " + io.getMessage());
                 }
             }
+            lastDataFilesReused = reused;
         }
         // UX-DYNAMICS T3 — stage the run's library plugin jars (content-
         // addressed: cached blobs are never re-downloaded). A malformed
@@ -349,6 +366,16 @@ public class TestRunManager implements TestRunGate {
         if (beanShellPropsClient == null) return PropsPushOutcome.DISABLED;
         return beanShellPropsClient.sendProperties(properties)
                 ? PropsPushOutcome.SENT : PropsPushOutcome.UNREACHABLE;
+    }
+
+    /** Tri-state for the 202 body: reused / downloaded / null = the run had no dataFiles. */
+    public Boolean lastDataFilesReused() {
+        return lastDataFilesReused;
+    }
+
+    /** True once the current/last run's preserved artifacts were cleaned post-run. */
+    public boolean lastArtifactsCleared() {
+        return lastArtifactsCleared;
     }
 
     /** Graceful stop — SIGTERM, drain, then COMPLETED/ABORTED. Idempotent. */
@@ -618,6 +645,7 @@ public class TestRunManager implements TestRunGate {
                                 && !"UPLOADING".equals(uploadState);
                 if (perRun != null && cleanLandingState && uploadOk) {
                     cleanRunDirs(perRun);
+                    lastArtifactsCleared = true;
                 } else {
                     LOG.info("Skipping post-run cleanup for run {} (state={}, uploadState={}) — " +
                             "preserving artifacts for diagnosis or upload replay.",

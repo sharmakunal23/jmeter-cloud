@@ -58,6 +58,10 @@ public final class TestController {
         body.put("runId",     snap.runId());
         body.put("state",     snap.state().name());
         body.put("startedAt", snap.startedAt() == null ? null : snap.startedAt().toString());
+        // UX-DYNAMICS events — artifact provenance for the hub's run timeline
+        // (absent when the run carries no dataFiles).
+        Boolean dataFilesReused = runManager.lastDataFilesReused();
+        if (dataFilesReused != null) body.put("dataFilesReused", dataFilesReused);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(body);
     }
 
@@ -67,7 +71,11 @@ public final class TestController {
         if (snap.isEmpty()) {
             return notFound("NO_TEST_EXISTS", "No test has been started.");
         }
-        return ResponseEntity.ok(snapshotJson(snap.get()));
+        Map<String, Object> body = snapshotJson(snap.get());
+        // UX-DYNAMICS events — lets the hub's sweeper record ARTIFACTS_CLEARED
+        // right after RESULTS_SAVED (the cleanup runs seconds after upload).
+        body.put("artifactsCleared", runManager.lastArtifactsCleared());
+        return ResponseEntity.ok(body);
     }
 
     @DeleteMapping("/api/v1/test")

@@ -271,6 +271,8 @@ paths:
       responses:
         "200":
           description: Pushed — `applied` lists the keys sent; `runId` names the run.
+        "400":
+          description: The map is empty, exceeds 50 entries, or an entry violates the property name/value rules.
         "404":
           description: NO_ACTIVE_RUN — no test is running.
         "502":
@@ -806,6 +808,12 @@ components:
         runId:     { type: string }
         state:     { $ref: "#/components/schemas/TestState" }
         startedAt: { type: string, format: date-time }
+        dataFilesReused:
+          type: boolean
+          description: |
+            Artifact provenance for the hub's run timeline: true = the staged
+            copy of `dataFilesBlobId` was reused (download skipped), false =
+            downloaded fresh. Absent when the run carries no data files.
 
     TestStateResponse:
       type: object
@@ -824,6 +832,12 @@ components:
         jmeterPid:        { type: integer, nullable: true, example: 12345 }
         jmeterAlive:      { type: boolean }
         exitCode:         { type: integer, nullable: true }
+        artifactsCleared:
+          type: boolean
+          description: |
+            True once the run's preserved artifacts (results/ + logs/) were
+            removed by the post-run cleanup — clean landing + upload OK. The
+            hub's sweeper turns this into an ARTIFACTS_CLEARED audit event.
         uploadState:      { $ref: "#/components/schemas/UploadState" }
         uploadTarget:
           type: string

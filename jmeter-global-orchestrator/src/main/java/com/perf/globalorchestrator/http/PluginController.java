@@ -93,6 +93,12 @@ public class PluginController {
             throw new PluginValidationException("PLUGIN_TOO_LARGE",
                     "plugin is " + meta.sizeBytes() + " bytes; the cap is " + MAX_SIZE_BYTES);
         }
+        // The dedup key and a NOT NULL column — without this gate a legacy
+        // blob missing its digest would surface as an ORA-01400 500.
+        if (meta.sha256() == null || meta.sha256().isBlank()) {
+            throw new PluginValidationException("BLOB_METADATA_INCOMPLETE",
+                    "blob " + blobId + " carries no sha256 in document-service metadata — re-upload it");
+        }
 
         // One version per plugin: pre-check both unique keys, then insert
         // catching the race — DuplicateKeyException alone cannot say which
@@ -143,11 +149,14 @@ public class PluginController {
     /**
      * Builds the 409, deleting the caller's now-orphan upload best-effort —
      * but never when a registry row references that blob (the content-duplicate
-     * path can be handed a registered plugin's own blobId).
+     * path can be handed a registered plugin's own blobId), and never when a
+     * non-terminal run's snapshot stages from it (scale-up joiners re-fetch by
+     * blobId, so deleting those bytes would break them).
      */
     private PluginConflictException conflict(String code, String message, Plugin existing, String uploadedBlobId) {
         boolean orphanDeleted = false;
-        if (!plugins.existsByBlobId(uploadedBlobId)) {
+        if (!plugins.existsByBlobId(uploadedBlobId)
+                && plugins.activeRunsReferencingBlob(uploadedBlobId) == 0) {
             try {
                 documents.deleteBlob(uploadedBlobId);
                 orphanDeleted = true;

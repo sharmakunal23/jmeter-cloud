@@ -116,6 +116,13 @@ const EVENT_TYPE_LABELS: Record<RunEventType, string> = {
   DRAIN_WORKER: "Drain worker",
   ABORT: "Abort",
   STOP: "Stop",
+  PROPERTIES_UPDATED: "Properties updated",
+  DELETE: "Run hidden",
+  DATA_FILES_REUSED: "Data files reused",
+  DATA_FILES_UPLOADED: "Data files uploaded",
+  TEST_PLAN_UPLOADED: "Test plan uploaded",
+  PLUGINS_UPLOADED: "Plugins uploaded",
+  ARTIFACTS_CLEARED: "Artifacts cleared",
   RUN_COMPLETED: "Run completed",
   RUN_FAILED: "Run failed",
   RUN_ABORTED: "Run aborted",
@@ -187,6 +194,42 @@ function payloadSummary(e: RunEvent): string {
       return reason ? `${count} ${noun} · ${reason}` : `${count} ${noun}`;
     }
     case "RESULTS_SAVED": {
+      return typeof p.workerId === "string" && p.workerId ? p.workerId : "(worker)";
+    }
+    case "PROPERTIES_UPDATED": {
+      const keys = p.properties && typeof p.properties === "object"
+        ? Object.keys(p.properties as Record<string, unknown>) : [];
+      const workers = arr(p.workerIds).length;
+      const ok = num(p.ok);
+      const failed = num(p.failed) ?? 0;
+      const head = keys.length > 0 ? keys.join(", ") : "properties";
+      const tail = failed > 0 && ok != null ? `${ok} ok, ${failed} failed`
+        : `${workers} worker${workers === 1 ? "" : "s"}`;
+      return `${head} → ${tail}`;
+    }
+    case "DELETE": {
+      return typeof p.reason === "string" && p.reason ? p.reason : "";
+    }
+    case "DATA_FILES_REUSED":
+    case "DATA_FILES_UPLOADED": {
+      const reused = arr(p.reused).length;
+      const downloaded = arr(p.downloaded).length;
+      const parts: string[] = [];
+      if (reused > 0) parts.push(`reused on ${reused}`);
+      if (downloaded > 0) parts.push(`downloaded on ${downloaded}`);
+      if (p.refreshRequested === true) parts.push("refresh forced");
+      return parts.join(" · ");
+    }
+    case "TEST_PLAN_UPLOADED": {
+      const workers = arr(p.workers).length;
+      const blob = typeof p.testPlanBlobId === "string" ? p.testPlanBlobId.slice(0, 8) + "…" : "";
+      return `${workers} worker${workers === 1 ? "" : "s"}${blob ? ` · ${blob}` : ""}`;
+    }
+    case "PLUGINS_UPLOADED": {
+      const plugins = arr(p.plugins).filter((x): x is string => typeof x === "string");
+      return plugins.length > 0 ? plugins.join(", ") : "plugins";
+    }
+    case "ARTIFACTS_CLEARED": {
       return typeof p.workerId === "string" && p.workerId ? p.workerId : "(worker)";
     }
     default:

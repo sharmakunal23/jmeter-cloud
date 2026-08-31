@@ -93,6 +93,31 @@ describe("Modal", () => {
     outside.remove();
   });
 
+  it("stacked modals: only the top-most handles Tab and Escape", () => {
+    const parentClose = vi.fn();
+    const childClose = vi.fn();
+    render(
+      <>
+        <Modal title="Parent" onClose={parentClose} footer={<button type="button">P-ok</button>}>
+          <p>parent body</p>
+        </Modal>
+        <Modal title="Child" onClose={childClose} footer={<button type="button">C-ok</button>}>
+          <p>child body</p>
+        </Modal>
+      </>,
+    );
+    // Tab at the child's last focusable loops to the child's first —
+    // never into the parent behind the overlay.
+    const childDialog = screen.getByRole("dialog", { name: "Child" });
+    screen.getByRole("button", { name: "C-ok" }).focus();
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(childDialog.contains(document.activeElement)).toBe(true);
+    // Escape reaches only the child.
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(childClose).toHaveBeenCalledTimes(1);
+    expect(parentClose).not.toHaveBeenCalled();
+  });
+
   it("has no axe violations", async () => {
     const { container } = renderModal({ infoTip: "What this dialog does." });
     expect(await axe(container)).toHaveNoViolations();

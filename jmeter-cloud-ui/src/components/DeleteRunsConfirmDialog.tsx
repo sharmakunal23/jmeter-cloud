@@ -147,11 +147,6 @@ export function DeleteRunsConfirmDialog({ selected, onDeleted, onClose }: Delete
               disabled={busy}
             />
           </div>
-          <small className="ink-soft">
-            Hidden runs drop out of your lists but are retained — their data,
-            fleet members, audit trail, and saved results are kept (this is a
-            soft delete, not a permanent erase).
-          </small>
         </>
       )}
 

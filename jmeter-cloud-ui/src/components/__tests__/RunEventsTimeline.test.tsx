@@ -187,3 +187,42 @@ describe("RunEventsTimeline", () => {
     );
   });
 });
+
+/** UX-DYNAMICS events — the six new timeline rows render humane labels + lean details. */
+describe("RunEventsTimeline — UX-DYNAMICS event types", () => {
+  function dynamicsFixture(): RunEvent[] {
+    const base = { runId: "01RUNAAAAAAAAAAAAAAAAAAAAA", result: "ok", occurredAt: new Date().toISOString() };
+    return [
+      { ...base, eventId: "01EVTPROPS0000000000000001", eventType: "PROPERTIES_UPDATED", actor: "kunal", actorSource: "headerActor",
+        payload: { workerIds: ["w-1", "w-2"], properties: { rampSeconds: "60" }, ok: 2, failed: 0 } },
+      { ...base, eventId: "01EVTDFREUSE00000000000001", eventType: "DATA_FILES_REUSED", actor: "orchestrator", actorSource: "system",
+        payload: { dataFilesBlobId: "01BLOBAAAAAAAAAAAAAAAAAAAA", refreshRequested: false, reused: ["w-1"], downloaded: ["w-2"] } },
+      { ...base, eventId: "01EVTDFUP0000000000000001A", eventType: "DATA_FILES_UPLOADED", actor: "orchestrator", actorSource: "system",
+        payload: { dataFilesBlobId: "01BLOBAAAAAAAAAAAAAAAAAAAA", refreshRequested: true, reused: [], downloaded: ["w-1", "w-2"] } },
+      { ...base, eventId: "01EVTPLANUP00000000000001A", eventType: "TEST_PLAN_UPLOADED", actor: "orchestrator", actorSource: "system",
+        payload: { testPlanBlobId: "01PLANBLOBAAAAAAAAAAAAAAAA", workers: ["w-1", "w-2"] } },
+      { ...base, eventId: "01EVTPLUGUP00000000000001A", eventType: "PLUGINS_UPLOADED", actor: "orchestrator", actorSource: "system",
+        payload: { plugins: ["jpgc-casutg@3.1", "demo-noop@1.0.0"], workers: ["w-1", "w-2"] } },
+      { ...base, eventId: "01EVTARTCLR00000000000001A", eventType: "ARTIFACTS_CLEARED", actor: "orchestrator", actorSource: "system",
+        payload: { workerId: "smokeapp-na-east-worker-1" } },
+    ];
+  }
+
+  it("renders labels and payload details for every new type", async () => {
+    eventsMock.mockResolvedValue(listing(dynamicsFixture()));
+    render(<RunEventsTimeline runId="01RUNAAAAAAAAAAAAAAAAAAAAA" isTerminal />);
+    await waitFor(() => expect(screen.getByText("Properties updated")).toBeInTheDocument());
+    expect(screen.getByText("Data files reused")).toBeInTheDocument();
+    expect(screen.getByText("Data files uploaded")).toBeInTheDocument();
+    expect(screen.getByText("Test plan uploaded")).toBeInTheDocument();
+    expect(screen.getByText("Plugins uploaded")).toBeInTheDocument();
+    expect(screen.getByText("Artifacts cleared")).toBeInTheDocument();
+
+    // Details are lean, payload-derived one-liners.
+    expect(screen.getByText("rampSeconds → 2 workers")).toBeInTheDocument();
+    expect(screen.getByText("reused on 1 · downloaded on 1")).toBeInTheDocument();
+    expect(screen.getByText("downloaded on 2 · refresh forced")).toBeInTheDocument();
+    expect(screen.getByText("2 workers · 01PLANBL…")).toBeInTheDocument();
+    expect(screen.getByText("jpgc-casutg@3.1, demo-noop@1.0.0")).toBeInTheDocument();
+  });
+});

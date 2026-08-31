@@ -163,7 +163,7 @@ export function CreateReportScheduleDialog({ editing, onCreated, onClose }: Crea
             rows={2}
             maxLength={1000}
           />
-          <small>Shown above the report. Use <strong>Preview email</strong> to see exactly what recipients get.</small>
+          <small>Shown above the report.</small>
         </div>
 
         {serverError && <div className="formError" role="alert">{serverError}</div>}

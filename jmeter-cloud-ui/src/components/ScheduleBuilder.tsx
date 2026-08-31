@@ -207,12 +207,17 @@ export function ScheduleBuilder({ value, onChange, idPrefix = "sched", defaultTi
       )}
 
       <div className="formField">
-        <label htmlFor={ids.tz}>Time zone</label>
+        <div className="formField__labelRow">
+          <label htmlFor={ids.tz}>Time zone</label>
+          <InfoTip label="About time zone">
+            Defaults to your timezone — fire times below are shown in it, so
+            there is no UTC math to do in your head.
+          </InfoTip>
+        </div>
         <select id={ids.tz} value={timeZone} onChange={(e) => setTimeZone(e.target.value)}>
           {zones.map((z) => <option key={z} value={z}>{zoneLabel(z)}</option>)}
           {!zones.includes(timeZone) && <option value={timeZone}>{zoneLabel(timeZone)}</option>}
         </select>
-        <small>Defaults to your timezone — fire times below are shown in it (no UTC math).</small>
       </div>
 
       <div className="schedulePreview" aria-live="polite">

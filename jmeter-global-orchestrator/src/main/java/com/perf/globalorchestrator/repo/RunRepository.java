@@ -173,15 +173,17 @@ public class RunRepository {
      * Save Results reconciliation — run IDs that COMPLETED with {@code
      * saveResults} on, completed at or after {@code completedAfter}, and still
      * have a <em>clean-exit</em> fleet member (COMPLETED / DRAINED — the states
-     * that upload; FAILED / ABORTED never do) <em>without</em> a {@code
-     * RESULTS_SAVED} audit event. The background sweeper drives {@link
+     * that upload; FAILED / ABORTED never do) <em>without</em> its {@code
+     * RESULTS_SAVED} or {@code ARTIFACTS_CLEARED} audit event ({@code LEAST}
+     * of the two per-event counts — a member count above either means work
+     * remains). The background sweeper drives {@link
      * RunService#refreshAndGet} on each so the per-worker JTL upload (which
      * finishes AFTER the run goes terminal, once no UI is polling) is observed
      * and recorded. Bounded by {@code completedAfter} so a run whose upload
      * never lands (e.g. a worker died post-completion) stops being polled
      * instead of being chased forever, and the 200-row fetch caps a tick.
      */
-    public List<String> runIdsAwaitingResultsSaved(Instant completedAfter) {
+    public List<String> runIdsAwaitingPostRunEvents(Instant completedAfter) {
         return jdbc.queryForList(
                 "SELECT r.RUN_ID FROM ORCH_RUN r "
                 + "WHERE r.STATE='COMPLETED' AND r.SAVE_RESULTS=1 "
@@ -189,9 +191,13 @@ public class RunRepository {
                 + "  AND (SELECT count(*) FROM ORCH_RUN_FLEET_MEMBER m "
                 + "         WHERE m.RUN_ID=r.RUN_ID AND m.POD_BASE_URL IS NOT NULL "
                 + "           AND m.STATE IN ('COMPLETED','DRAINED')) "
-                + "      > (SELECT count(DISTINCT JSON_VALUE(e.PAYLOAD, '$.workerId')) "
-                + "           FROM ORCH_RUN_EVENT e "
-                + "           WHERE e.RUN_ID=r.RUN_ID AND e.EVENT_TYPE='RESULTS_SAVED') "
+                + "      > LEAST("
+                + "          (SELECT count(DISTINCT JSON_VALUE(e.PAYLOAD, '$.workerId')) "
+                + "             FROM ORCH_RUN_EVENT e "
+                + "             WHERE e.RUN_ID=r.RUN_ID AND e.EVENT_TYPE='RESULTS_SAVED'), "
+                + "          (SELECT count(DISTINCT JSON_VALUE(e.PAYLOAD, '$.workerId')) "
+                + "             FROM ORCH_RUN_EVENT e "
+                + "             WHERE e.RUN_ID=r.RUN_ID AND e.EVENT_TYPE='ARTIFACTS_CLEARED')) "
                 + "ORDER BY r.COMPLETED_AT "
                 + "FETCH FIRST 200 ROWS ONLY",
                 String.class, OracleBind.ts(completedAfter));

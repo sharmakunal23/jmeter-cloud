@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { InfoTip } from "../components/InfoTip";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { runsApi, GlobalOrchestratorError, type FleetAllocationEntry,
@@ -177,6 +178,8 @@ export function NewRunPage() {
       })
       .catch((err: unknown) => {
         if (ctl.signal.aborted) return;
+        // Arm even on failure — a later app switch must still clear stale ids.
+        blobsClearedOnAppChangeRef.current = true;
         setBlobs({ status: "error", message: err instanceof Error ? err.message : String(err) });
       });
     return () => ctl.abort();
@@ -914,8 +917,13 @@ export function NewRunPage() {
         </div>
 
         <div className="formField">
-          <label htmlFor="dataFilesBlobId">Data files</label>
-          <small className="ink-soft">Multiple files? Bundle them into a single .zip.</small>
+          <div className="formField__labelRow">
+            <label htmlFor="dataFilesBlobId">Data files</label>
+            <InfoTip label="About data files">
+              Optional CSV / config inputs the plan reads — multiple files ship
+              as one <span className="mono">.zip</span> bundle.
+            </InfoTip>
+          </div>
           <div className="blobPickerRow">
             <BlobSelect
               id="dataFilesBlobId"
@@ -944,21 +952,23 @@ export function NewRunPage() {
               }}
             />
           </div>
-          <label htmlFor="refreshDataFiles" className="checkboxRow" style={{ marginTop: "0.35rem" }}>
-            <input
-              id="refreshDataFiles"
-              type="checkbox"
-              checked={refreshDataFiles}
-              onChange={(e) => setRefreshDataFiles(e.target.checked)}
-              disabled={!dataFilesBlobId}
-            />
-            <span>Update data files on workers</span>
-          </label>
-          <small>
-            Off (default) — workers reuse the copy they already downloaded when
-            the file is unchanged, for a faster start. On — force a fresh
-            download on every worker.
-          </small>
+          <div className="formField__labelRow" style={{ marginTop: "0.35rem" }}>
+            <label htmlFor="refreshDataFiles" className="checkboxRow">
+              <input
+                id="refreshDataFiles"
+                type="checkbox"
+                checked={refreshDataFiles}
+                onChange={(e) => setRefreshDataFiles(e.target.checked)}
+                disabled={!dataFilesBlobId}
+              />
+              <span>Update data files on workers</span>
+            </label>
+            <InfoTip label="About update data files">
+              Off (default) — workers reuse the copy they already downloaded
+              when the file is unchanged, for a faster start; on — force a
+              fresh download on every worker.
+            </InfoTip>
+          </div>
           {dataFilesWarning && (
             <p className="text--error" role="alert">{dataFilesWarning}</p>
           )}

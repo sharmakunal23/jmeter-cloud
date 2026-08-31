@@ -70,6 +70,17 @@ class TestControllerTest {
         }
 
         @Test
+        void reports_dataFiles_provenance_when_known() throws Exception {
+            when(runManager.start(any(StartTestRequest.class))).thenReturn(preparingSnapshot("prov"));
+            when(runManager.lastDataFilesReused()).thenReturn(Boolean.TRUE);
+            mvc.perform(post("/api/v1/test")
+                            .contentType("application/json")
+                            .content("{\"runId\":\"prov\"}"))
+                    .andExpect(status().isAccepted())
+                    .andExpect(jsonPath("$.dataFilesReused").value(true));
+        }
+
+        @Test
         @DisplayName("returns 412 NO_TEST_PLAN when the manager rejects with that code — status mapped from StartRejection.status()")
         void returns_412_when_no_plan() throws Exception {
             when(runManager.start(any(StartTestRequest.class)))

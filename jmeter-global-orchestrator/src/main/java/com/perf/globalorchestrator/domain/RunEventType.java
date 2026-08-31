@@ -32,6 +32,31 @@ public enum RunEventType {
      * split.
      */
     PROPERTIES_UPDATED,
+    /**
+     * Artifact provenance (system actor, recorded per fan-out — launch and
+     * scale-up alike): at least one worker reused its staged dataFiles copy.
+     * Payload: the blobId + the reused/downloaded splits.
+     */
+    DATA_FILES_REUSED,
+    /** Same shape as {@link #DATA_FILES_REUSED} — every worker downloaded fresh. */
+    DATA_FILES_UPLOADED,
+    /**
+     * The original launch fan-out delivered the test plan to its accepted
+     * workers (system actor; once per run — scale-up joiners re-fetch the
+     * same blob and are not re-announced). Payload: the blobId + workers.
+     */
+    TEST_PLAN_UPLOADED,
+    /**
+     * The original launch fan-out staged the run's library plugins (system
+     * actor; only when the run selected plugins). Payload: name@version list
+     * + workers.
+     */
+    PLUGINS_UPLOADED,
+    /**
+     * A worker removed its preserved run artifacts after a successful results
+     * upload (system actor; follows {@link #RESULTS_SAVED}, one per worker).
+     */
+    ARTIFACTS_CLEARED,
     /** A run was stopped (future endpoint). */
     STOP,
     /**

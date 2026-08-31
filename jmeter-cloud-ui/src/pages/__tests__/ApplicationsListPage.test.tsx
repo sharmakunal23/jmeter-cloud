@@ -186,8 +186,8 @@ describe("ApplicationsListPage — Create dialog", () => {
     fireEvent.click(screen.getByRole("button", { name: /Register your first application/i }));
     fireEvent.change(screen.getByLabelText(/Name \*/i), { target: { value: "brand-new" } });
     // A name and a group are enough to submit — capacity is the group's, not collected here.
-    await waitFor(() => expect(screen.getByLabelText(/Application group/i)).not.toBeDisabled());
-    fireEvent.change(screen.getByLabelText(/Application group/i), { target: { value: "cps" } });
+    await waitFor(() => expect(screen.getByLabelText("Application group *")).not.toBeDisabled());
+    fireEvent.change(screen.getByLabelText("Application group *"), { target: { value: "cps" } });
     fireEvent.click(screen.getByRole("button", { name: /^Register$/i }));
     await waitFor(() => expect(apps.create).toHaveBeenCalledWith(expect.objectContaining({
       name: "brand-new", metricsGroupId: "cps",

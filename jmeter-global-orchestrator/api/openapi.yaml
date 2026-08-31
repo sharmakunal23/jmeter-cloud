@@ -1417,7 +1417,8 @@ paths:
             Codes `INVALID_PLUGIN_NAME`, `INVALID_PLUGIN_VERSION`,
             `BLOB_NOT_FOUND`, `BLOB_NOT_PLUGIN` (blob not uploaded with
             `X-Type: plugin`), `INVALID_PLUGIN_FILE` (not `.jar`/`.zip`),
-            `PLUGIN_TOO_LARGE` (over 256 MB).
+            `PLUGIN_TOO_LARGE` (over 256 MB), `BLOB_METADATA_INCOMPLETE`
+            (the blob's metadata carries no sha256 — re-upload it).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -2994,7 +2995,7 @@ components:
         runId:       { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
         eventType:
           type: string
-          enum: [RUN_START, SCALE_UP, SCALE_DOWN, DRAIN_WORKER, ABORT, STOP, DELETE, RUN_COMPLETED, RUN_FAILED, RUN_ABORTED, WORKERS_RECYCLED, RESULTS_SAVED]
+          enum: [RUN_START, SCALE_UP, SCALE_DOWN, DRAIN_WORKER, ABORT, STOP, DELETE, PROPERTIES_UPDATED, DATA_FILES_REUSED, DATA_FILES_UPLOADED, TEST_PLAN_UPLOADED, PLUGINS_UPLOADED, ARTIFACTS_CLEARED, RUN_COMPLETED, RUN_FAILED, RUN_ABORTED, WORKERS_RECYCLED, RESULTS_SAVED]
           description: |
             What happened. DRAIN_WORKER is a single-explicit-workerId drain;
             multi-worker / region drains are SCALE_DOWN. ABORT is an
@@ -3003,8 +3004,11 @@ components:
             emits ABORT (not a system RUN_ABORTED). DELETE is an operator
             soft-delete (`DELETE /runs/{id}`) — the run is hidden, not erased,
             so the event is retained. RUN_COMPLETED / RUN_FAILED /
-            RUN_ABORTED + WORKERS_RECYCLED + RESULTS_SAVED are platform-detected
-            (actorSource=system), not operator actions.
+            RUN_ABORTED, WORKERS_RECYCLED, RESULTS_SAVED, ARTIFACTS_CLEARED and
+            the fan-out provenance events (DATA_FILES_REUSED /
+            DATA_FILES_UPLOADED per fan-out; TEST_PLAN_UPLOADED and
+            PLUGINS_UPLOADED once, on the original launch) are
+            platform-detected (actorSource=system), not operator actions.
         actor:       { type: string, description: "Who performed the action (X-Actor header; default `anonymous`)." }
         actorSource:
           type: string
@@ -3022,7 +3026,12 @@ components:
             `ABORT` → `{ reason, aborted: [workerId], skipped: [{target,reason}] }`;
             `DELETE` → `{ reason }`;
             `RUN_COMPLETED` / `RUN_FAILED` / `RUN_ABORTED` → `{ finalState, reason }`;
-            `RESULTS_SAVED` → `{ workerId, target }`.
+            `RESULTS_SAVED` → `{ workerId, target }`;
+            `PROPERTIES_UPDATED` → `{ workerIds, properties, ok, failed }`;
+            `DATA_FILES_REUSED` / `DATA_FILES_UPLOADED` → `{ dataFilesBlobId, refreshRequested, reused: [workerId], downloaded: [workerId] }`;
+            `TEST_PLAN_UPLOADED` → `{ testPlanBlobId, workers: [workerId] }`;
+            `PLUGINS_UPLOADED` → `{ plugins: ["name@version"], workers: [workerId] }`;
+            `ARTIFACTS_CLEARED` → `{ workerId }`.
         result:
           type: string
           description: "`ok` / `partial` (best-effort partial grant or some drains skipped) / `failed` / `aborted` (run terminal outcome) / `rejected:CODE` (the action was refused; CODE is the same ErrorResponse.code the caller saw)."

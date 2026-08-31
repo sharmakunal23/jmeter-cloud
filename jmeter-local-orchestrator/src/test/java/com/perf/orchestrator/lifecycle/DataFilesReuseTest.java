@@ -132,11 +132,13 @@ class DataFilesReuseTest {
 
         startAndAwait("r1", null);
         assertThat(source.dataFetches).as("first run downloads").hasValue(1);
+        assertThat(manager.lastDataFilesReused()).as("202 provenance: downloaded").isFalse();
         assertThat(stager.getDataFilesManifest()).isPresent()
                 .get().extracting(DataFilesManifest::blobId).isEqualTo(BLOB);
 
         startAndAwait("r2", null);
         assertThat(source.dataFetches).as("same blob, intact copy — download skipped").hasValue(1);
+        assertThat(manager.lastDataFilesReused()).as("202 provenance: reused").isTrue();
 
         Files.delete(baseDir.resolve("dataFiles").resolve("users.csv"));
         startAndAwait("r3", null);
@@ -144,6 +146,7 @@ class DataFilesReuseTest {
 
         startAndAwait("r4", Boolean.TRUE);
         assertThat(source.dataFetches).as("refreshDataFiles bypasses the intact cache").hasValue(3);
+        assertThat(manager.lastDataFilesReused()).as("202 provenance: forced download").isFalse();
     }
 
     private void startAndAwait(String runId, Boolean refresh) {

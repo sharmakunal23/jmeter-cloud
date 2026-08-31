@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { InfoTip } from "./InfoTip";
+
 /**
  * Fleet-wide JMeter property defaults.
  *
@@ -137,8 +139,10 @@ export function GlobalPropertiesEditor({
           rest of the app. */}
       <header className="globalProps__head">
         <div className="globalProps__headText">
-          <h3 className="globalProps__title">{title}</h3>
-          <small className="ink-soft">{hint}</small>
+          <div className="formField__labelRow">
+            <h3 className="globalProps__title">{title}</h3>
+            <InfoTip label={`About ${title.toLowerCase()}`}>{hint}</InfoTip>
+          </div>
         </div>
         <button
           type="button"

@@ -136,10 +136,19 @@ public class RunService {
      * the worker's {@code uploadState} repeatedly. Keyed {@code runId|workerId}.
      * This guards <em>intra-process</em> concurrency (e.g. two browser tabs, or
      * a UI poll racing the reconciliation sweeper). Cross-restart dedup is
-     * handled durably by {@link RunEventRepository#resultsSavedWorkerIds}, read
+     * handled durably by {@link RunEventRepository#workerIdsWithEvent}, read
      * at the top of {@code refreshAndGet} — so a restart no longer re-emits.
      */
     private final java.util.Set<String> resultsSavedEmitted =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * UX-DYNAMICS events — intra-process dedup for {@code ARTIFACTS_CLEARED},
+     * keyed {@code runId|workerId}. Cross-restart/replica dedup needs no
+     * durable read-set: the deterministic eventId makes a re-emit an
+     * ON-CONFLICT no-op.
+     */
+    private final java.util.Set<String> artifactsClearedEmitted =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     public RunService(
@@ -1382,19 +1391,26 @@ public class RunService {
         // never re-emits one a prior poll wrote (the in-memory set below only
         // dedups within a single process lifetime).
         Set<String> resultsSaved = run.saveResults()
-                ? auditEvents.resultsSavedWorkerIds(runId)
+                ? auditEvents.workerIdsWithEvent(runId, RunEventType.RESULTS_SAVED.name())
+                : Set.of();
+        Set<String> artifactsCleared = run.saveResults()
+                ? auditEvents.workerIdsWithEvent(runId, RunEventType.ARTIFACTS_CLEARED.name())
                 : Set.of();
         // Terminal + saveResults: the only work left is observing each worker's
-        // post-completion upload. Once every clean-exit worker (COMPLETED /
-        // DRAINED — the states that upload; FAILED / ABORTED never do) is
-        // recorded there is nothing to poll — re-engage the terminal fast-path
-        // so the sweeper (and any lingering UI poll) stops hitting the idle pods.
+        // post-completion upload + cleanup. Once every clean-exit worker
+        // (COMPLETED / DRAINED — the states that upload; FAILED / ABORTED never
+        // do) has BOTH its RESULTS_SAVED and ARTIFACTS_CLEARED durably recorded
+        // there is nothing to poll — re-engage the terminal fast-path so the
+        // sweeper (and any lingering UI poll) stops hitting the idle pods.
+        // Requiring both closes the upload→cleanup gap: a poll can observe
+        // UPLOADED before the worker finishes clearing its artifacts.
         if (terminal && run.saveResults()
                 && run.fleetMembers().stream()
                         .filter(m -> m.podBaseUrl() != null
                                 && (m.state() == MemberState.COMPLETED
                                         || m.state() == MemberState.DRAINED))
-                        .allMatch(m -> resultsSaved.contains(m.workerId()))) {
+                        .allMatch(m -> resultsSaved.contains(m.workerId())
+                                && artifactsCleared.contains(m.workerId()))) {
             return run;
         }
         // One status call per routed region for every member still worth
@@ -1427,6 +1443,7 @@ public class RunService {
                 }
                 if (run.saveResults()) {
                     maybeRecordResultsSaved(runId, m.workerId(), snap, resultsSaved);
+                    maybeRecordArtifactsCleared(runId, m.workerId(), snap, artifactsCleared);
                 }
             });
         }
@@ -1474,9 +1491,10 @@ public class RunService {
     /**
      * Save Results reconciliation — driven by {@code ResultsSavedSweeper}.
      * Finds COMPLETED, {@code saveResults} runs (completed within {@code
-     * lookback}) that still have a worker missing its {@code RESULTS_SAVED}
-     * audit event, and runs {@link #refreshAndGet} on each so the post-completion
-     * upload is observed and recorded even when no UI is polling.
+     * lookback}) that still have a worker missing its {@code RESULTS_SAVED} or
+     * {@code ARTIFACTS_CLEARED} audit event, and runs {@link #refreshAndGet} on
+     * each so the post-completion upload + cleanup are observed and recorded
+     * even when no UI is polling.
      *
      * <p>This closes the gap that the per-worker JTL upload finishes AFTER the
      * run goes terminal — at which point the run-detail page stops polling
@@ -1487,7 +1505,7 @@ public class RunService {
      * @return the number of runs reconciled this pass (for logging / metrics)
      */
     public int reconcileResultsSaved(Duration lookback) {
-        List<String> runIds = runs.runIdsAwaitingResultsSaved(Instant.now().minus(lookback));
+        List<String> runIds = runs.runIdsAwaitingPostRunEvents(Instant.now().minus(lookback));
         for (String id : runIds) {
             try {
                 refreshAndGet(id);
@@ -1563,7 +1581,26 @@ public class RunService {
     /** MID-TEST-SCALING Phase A — return shape of {@link #openMembersInExistingRun}. */
     private record ScaleUpTransactionResult(List<RunFleetMember> members, String stateReason) {}
 
-    private record FanoutOutcome(MemberState state, int statusCode, String reason) {}
+    record FanoutOutcome(MemberState state, int statusCode, String reason,
+                                 Boolean dataFilesReused) {
+        FanoutOutcome(MemberState state, int statusCode, String reason) {
+            this(state, statusCode, reason, null);
+        }
+    }
+
+    /** Reads the worker 202's optional {@code dataFilesReused} flag; null when absent/unparsable. */
+    private static final com.fasterxml.jackson.databind.ObjectMapper PROVENANCE_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
+    static Boolean parseDataFilesReused(String body) {
+        if (body == null || body.isBlank()) return null;
+        try {
+            com.fasterxml.jackson.databind.JsonNode n = PROVENANCE_MAPPER.readTree(body).get("dataFilesReused");
+            return n == null || !n.isBoolean() ? null : n.booleanValue();
+        } catch (Exception e) {
+            return null;
+        }
+    }
 
     /**
      * The application's metrics group at launch, stamped on the run row: the
@@ -1648,7 +1685,11 @@ public class RunService {
             futures.put(m.workerId(), fanoutPool.submit(() -> {
                 StartTestResult r = localClient.startTest(runId, WorkerRef.of(m), body);
                 if (r.accepted() || r.ok()) {
-                    return new FanoutOutcome(MemberState.ACCEPTED, r.statusCode(), null);
+                    // UX-DYNAMICS events — the worker's 202 reports whether its
+                    // staged dataFiles were reused; folded into one provenance
+                    // event per fan-out below.
+                    return new FanoutOutcome(MemberState.ACCEPTED, r.statusCode(), null,
+                            parseDataFilesReused(r.body()));
                 }
                 String reason = r.body() == null ? "no body" : truncate(r.body(), 240);
                 // The worker refused because it is
@@ -1676,7 +1717,68 @@ public class RunService {
                 runs.updateMemberState(runId, workerId, MemberState.FAILED, e.toString(), 0);
             }
         });
+        recordDataFilesProvenance(runId, dataFilesBlobId, refreshDataFiles, outcomes);
+        recordLaunchArtifacts(runId, members, testPlanBlobId, plugins, outcomes);
         return outcomes;
+    }
+
+    /** Audit payload for {@link RunEventType#TEST_PLAN_UPLOADED}. */
+    record TestPlanUploadedPayload(String testPlanBlobId, List<String> workers) {}
+
+    /** Audit payload for {@link RunEventType#PLUGINS_UPLOADED}. */
+    record PluginsUploadedPayload(List<String> plugins, List<String> workers) {}
+
+    /**
+     * Once per ORIGINAL launch fan-out (members with a null joinedAtSecond):
+     * the plan reached its accepted workers, and — when the run selected
+     * library plugins — so did they. Joiner fan-outs (scale-up) re-fetch the
+     * same blobs and are deliberately not re-announced.
+     */
+    void recordLaunchArtifacts(String runId, List<RunFleetMember> members,
+                                       String testPlanBlobId, List<PluginRef> plugins,
+                                       Map<String, FanoutOutcome> outcomes) {
+        boolean originalLaunch = members.stream().anyMatch(m -> m.joinedAtSecond() == null);
+        if (!originalLaunch) return;
+        List<String> accepted = outcomes.entrySet().stream()
+                .filter(e -> e.getValue().state() == MemberState.ACCEPTED)
+                .map(Map.Entry::getKey)
+                .toList();
+        if (accepted.isEmpty()) return;
+        recordEvent(runId, RunEventType.TEST_PLAN_UPLOADED, Actor.system("orchestrator"),
+                new TestPlanUploadedPayload(testPlanBlobId, accepted), "ok");
+        if (plugins != null && !plugins.isEmpty()) {
+            List<String> names = plugins.stream().map(p -> p.name() + "@" + p.version()).toList();
+            recordEvent(runId, RunEventType.PLUGINS_UPLOADED, Actor.system("orchestrator"),
+                    new PluginsUploadedPayload(names, accepted), "ok");
+        }
+    }
+
+    /** Audit payload for {@link RunEventType#DATA_FILES_REUSED} / {@code DATA_FILES_UPLOADED}. */
+    record DataFilesProvenancePayload(String dataFilesBlobId, boolean refreshRequested,
+                                      List<String> reused, List<String> downloaded) {}
+
+    /**
+     * One system event per fan-out (launch and scale-up alike) saying
+     * where the run's data files came from on each accepted worker. Skipped
+     * when the run carries no dataFiles or no worker reported provenance
+     * (older workers omit the flag — tolerant by design).
+     */
+    void recordDataFilesProvenance(String runId, String dataFilesBlobId,
+                                           boolean refreshRequested,
+                                           Map<String, FanoutOutcome> outcomes) {
+        if (dataFilesBlobId == null || dataFilesBlobId.isBlank()) return;
+        List<String> reused = new java.util.ArrayList<>();
+        List<String> downloaded = new java.util.ArrayList<>();
+        outcomes.forEach((workerId, o) -> {
+            if (o.dataFilesReused() == null) return;
+            (o.dataFilesReused() ? reused : downloaded).add(workerId);
+        });
+        if (reused.isEmpty() && downloaded.isEmpty()) return;
+        recordEvent(runId,
+                reused.isEmpty() ? RunEventType.DATA_FILES_UPLOADED : RunEventType.DATA_FILES_REUSED,
+                Actor.system("orchestrator"),
+                new DataFilesProvenancePayload(dataFilesBlobId, refreshRequested, reused, downloaded),
+                "ok");
     }
 
     /**
@@ -1990,14 +2092,50 @@ public class RunService {
             // the runEvent PK's ON CONFLICT DO NOTHING dedups across instances
             // too, closing the check-then-insert race between two concurrent
             // sweepers that both read the durable set before either wrote.
-            audit.record("resultsSaved:" + runId + ":" + workerId,
+            audit.record(RunAuditWriter.deterministicId("resultsSaved:" + runId + ":" + workerId),
                     runId, RunEventType.RESULTS_SAVED, Actor.system("orchestrator"),
                     new RunEventPayloads.ResultsSaved(workerId, target == null ? null : target.toString()),
                     "ok");
         } catch (RuntimeException e) {
-            // Best-effort audit — never let it disrupt status polling. Allow a
-            // retry on the next poll by clearing the dedup marker.
+            // Best-effort audit — log loudly (a silent swallow here hid an
+            // ORA-12899 for days) and retry on the next poll.
+            LOG.warn("RESULTS_SAVED audit for run {} worker {} failed (will retry): {}",
+                    runId, workerId, e.toString());
             resultsSavedEmitted.remove(runId + "|" + workerId);
+        }
+    }
+
+    /** Audit payload for {@link RunEventType#ARTIFACTS_CLEARED}. */
+    record ArtifactsClearedPayload(String workerId) {}
+
+    /**
+     * UX-DYNAMICS events — follows {@code RESULTS_SAVED}: the worker's
+     * post-upload cleanup removed its preserved run artifacts (the status
+     * snapshot's {@code artifactsCleared} flag). Same dedup discipline as
+     * results-saved: in-memory set + a deterministic eventId so replicas and
+     * restarts collapse onto one row.
+     */
+    @SuppressWarnings("unchecked")
+    private void maybeRecordArtifactsCleared(String runId, String workerId, Object snapObj,
+                                             Set<String> alreadyCleared) {
+        if (alreadyCleared.contains(workerId)) return; // durable dedup (survives restart)
+        if (!(snapObj instanceof Map)) return;
+        Map<String, Object> snap = (Map<String, Object>) snapObj;
+        Object snapRunId = snap.get("runId");
+        if (snapRunId != null && !runId.equals(snapRunId.toString())) return; // a later run on this worker
+        // The status parsers stringify scalars, so the flag arrives as the
+        // String "true", never Boolean.TRUE.
+        if (!"true".equals(String.valueOf(snap.get("artifactsCleared")))) return;
+        if (!artifactsClearedEmitted.add(runId + "|" + workerId)) return;
+        try {
+            audit.record(RunAuditWriter.deterministicId("artifactsCleared:" + runId + ":" + workerId),
+                    runId, RunEventType.ARTIFACTS_CLEARED, Actor.system("orchestrator"),
+                    new ArtifactsClearedPayload(workerId), "ok");
+        } catch (RuntimeException e) {
+            // Best-effort audit — log loudly and retry on the next poll.
+            LOG.warn("ARTIFACTS_CLEARED audit for run {} worker {} failed (will retry): {}",
+                    runId, workerId, e.toString());
+            artifactsClearedEmitted.remove(runId + "|" + workerId);
         }
     }
 

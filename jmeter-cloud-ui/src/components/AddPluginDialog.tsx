@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { InfoTip } from "./InfoTip";
 
 import { blobsApi } from "../api/blobs";
 import { PluginApiError, pluginsApi, type PluginSummary } from "../api/plugins";
@@ -114,7 +115,13 @@ export function AddPluginDialog({ onAdded, onClose }: AddPluginDialogProps) {
         </div>
 
         <div className="formField">
-          <label htmlFor="pluginName">Name *</label>
+          <div className="formField__labelRow">
+            <label htmlFor="pluginName">Name *</label>
+            <InfoTip label="About plugin name">
+              One version per name across the whole library — a duplicate
+              upload is rejected with the existing version.
+            </InfoTip>
+          </div>
           <input
             id="pluginName"
             type="text"
@@ -125,7 +132,6 @@ export function AddPluginDialog({ onAdded, onClose }: AddPluginDialogProps) {
             required
             disabled={busy}
           />
-          <small>One version per name across the whole library — a duplicate is rejected.</small>
         </div>
 
         <div className="formField">

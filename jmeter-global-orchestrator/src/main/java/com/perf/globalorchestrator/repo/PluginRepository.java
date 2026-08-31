@@ -98,6 +98,20 @@ public class PluginRepository {
      * live rows before the JSON probe touches a CLOB; the quoted {@code "id"}
      * is the SQL/JSON path variable, not a database identifier.
      */
+    /**
+     * Non-terminal runs whose launch snapshot stages from {@code blobId} —
+     * the orphan-delete guard: scale-up joiners re-fetch plugin bytes by the
+     * snapshot's blobId, so those bytes must outlive any registry state.
+     */
+    public int activeRunsReferencingBlob(String blobId) {
+        Integer n = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM ORCH_RUN "
+                + "WHERE STATE IN ('PREPARING','STARTING','RUNNING','DRAINING') "
+                + "AND JSON_EXISTS(PLUGINS, '$[*]?(@.blobId == $id)' PASSING ? AS \"id\")",
+                Integer.class, blobId);
+        return n == null ? 0 : n;
+    }
+
     public int countActiveRunsReferencing(String pluginId) {
         Integer n = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM ORCH_RUN "

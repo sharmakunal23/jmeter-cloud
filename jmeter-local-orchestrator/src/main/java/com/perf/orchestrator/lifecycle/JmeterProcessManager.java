@@ -141,6 +141,13 @@ public final class JmeterProcessManager implements JmeterLauncher {
      * <p>{@link #sigterm()} maps to {@link Process#destroy()} (SIGTERM on Unix);
      * {@link #sigkill()} maps to {@link Process#destroyForcibly()}. Both are
      * idempotent — issuing them against an already-exited process is a no-op.
+     *
+     * <p><b>Both signal the whole process TREE, descendants first.</b> The
+     * handle we hold is {@code bin/jmeter} — a shell wrapper — so signalling
+     * it alone orphans the {@code java} child, which keeps the fixed ports
+     * (JMX 9999, shutdown 4445, BeanShell 4446) bound until the hygiene
+     * reaper collects it; an immediate same-worker restart then dies with
+     * {@code EADDRINUSE} (UX-DYNAMICS events, 2026-08-30).
      */
     static final class RealJmeterProcess implements JmeterProcess {
         private final Process process;
@@ -156,11 +163,13 @@ public final class JmeterProcessManager implements JmeterLauncher {
 
         @Override
         public void sigterm() {
+            process.descendants().forEach(ProcessHandle::destroy);
             if (process.isAlive()) process.destroy();
         }
 
         @Override
         public void sigkill() {
+            process.descendants().forEach(ProcessHandle::destroyForcibly);
             if (process.isAlive()) process.destroyForcibly();
         }
 

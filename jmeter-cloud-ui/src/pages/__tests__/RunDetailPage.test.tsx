@@ -246,3 +246,37 @@ describe("RunDetailPage — Update properties gate (UX-DYNAMICS T5)", () => {
     expect(screen.queryByRole("button", { name: /^Update properties$/ })).toBeNull();
   });
 });
+
+/** UX-DYNAMICS events — the Metadata tab's dynamics rows. */
+describe("RunDetailPage — metadata dynamics", () => {
+  beforeEach(() => {
+    api.get.mockReset();
+    api.status.mockReset();
+    appsApi.list.mockReset?.();
+    groupsApi.get.mockReset?.();
+  });
+
+  const liveMember = {
+    runId: "01J000RUN", workerId: "w-1", region: "na-east",
+    state: "RUNNING", stateReason: null, fanoutStatusCode: 202, podBaseUrl: "http://w:8080",
+    createdAt: "2026-08-28T18:00:00Z", startedAt: "2026-08-28T18:00:05Z", completedAt: null,
+    properties: { rampSeconds: "60" }, runsServed: 1,
+  };
+
+  it("Metadata shows the plugin snapshot, the fleet properties, and save-results", async () => {
+    const r = {
+      ...run("RUNNING", null, [liveMember]),
+      plugins: [{ pluginId: "p1", name: "demo-noop", version: "1.0.0", blobId: "b1", fileName: "demoNoopPlugin.jar" }],
+      saveResults: true,
+    };
+    api.get.mockResolvedValue(r);
+    api.status.mockResolvedValue({ runId: "01J000RUN", state: "RUNNING", stateReason: null, members: [liveMember] });
+    renderPage();
+    await waitFor(() => expect(screen.getByRole("tab", { name: /Metadata/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: /Metadata/i }));
+    expect(screen.getByText("demo-noop@1.0.0")).toBeInTheDocument();
+    expect(screen.getByText(/rampSeconds=60/)).toBeInTheDocument();
+    expect(screen.getByText(/yes — workers upload their JTLs/)).toBeInTheDocument();
+  });
+
+});

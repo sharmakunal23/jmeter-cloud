@@ -134,15 +134,6 @@ export function ScaleUpRunModal({ run, onClose, onSuccess }: ScaleUpRunModalProp
   const addedRun = useRef<Run | null>(null);
   const lastOpts = useRef<{ bestEffort?: boolean; spinShortfall?: boolean }>({});
 
-  // ESC closes the FORM only (the progress overlay locks ESC itself).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && progressStages === null) onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, progressStages]);
-
   // Fetch the run's application → its group → the group's capacity grid (per-region maxAvailable).
   useEffect(() => {
     if (!run.application) { setMaxByRegion(null); return; }

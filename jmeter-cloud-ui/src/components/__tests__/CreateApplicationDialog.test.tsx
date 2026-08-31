@@ -57,9 +57,9 @@ describe("CreateApplicationDialog — submit path", () => {
     const onCreated = vi.fn();
     const onClose = vi.fn();
     render(<MemoryRouter><CreateApplicationDialog onCreated={onCreated} onClose={onClose} /></MemoryRouter>);
-    await waitFor(() => expect(screen.getByLabelText(/Application group/i)).not.toBeDisabled());
+    await waitFor(() => expect(screen.getByLabelText("Application group *")).not.toBeDisabled());
     fireEvent.change(screen.getByLabelText(/Name \*/i), { target: { value: "payment-api" } });
-    fireEvent.change(screen.getByLabelText(/Application group/i), { target: { value: "cps" } });
+    fireEvent.change(screen.getByLabelText("Application group *"), { target: { value: "cps" } });
     fireEvent.change(screen.getByLabelText(/Seal ID/i), { target: { value: "PAY-001" } });
     fireEvent.change(screen.getByLabelText(/Description/i),
                      { target: { value: "payment processor" } });
@@ -81,9 +81,9 @@ describe("CreateApplicationDialog — submit path", () => {
   it("trims whitespace + omits blank optional fields from the request", async () => {
     apiMocks.create.mockResolvedValue(fixtureApp());
     render(<MemoryRouter><CreateApplicationDialog onCreated={vi.fn()} onClose={vi.fn()} /></MemoryRouter>);
-    await waitFor(() => expect(screen.getByLabelText(/Application group/i)).not.toBeDisabled());
+    await waitFor(() => expect(screen.getByLabelText("Application group *")).not.toBeDisabled());
     fireEvent.change(screen.getByLabelText(/Name \*/i), { target: { value: "  checkout-svc  " } });
-    fireEvent.change(screen.getByLabelText(/Application group/i), { target: { value: "cps" } });
+    fireEvent.change(screen.getByLabelText("Application group *"), { target: { value: "cps" } });
     fireEvent.click(screen.getByRole("button", { name: /^Register$/i }));
     await waitFor(() => expect(apiMocks.create).toHaveBeenCalled());
     const body = apiMocks.create.mock.calls[0][0];
@@ -110,9 +110,9 @@ describe("CreateApplicationDialog — validation", () => {
 
   it("name 'a' + a group is valid — no capacity grid blocking submit", async () => {
     render(<MemoryRouter><CreateApplicationDialog onCreated={vi.fn()} onClose={vi.fn()} /></MemoryRouter>);
-    await waitFor(() => expect(screen.getByLabelText(/Application group/i)).not.toBeDisabled());
+    await waitFor(() => expect(screen.getByLabelText("Application group *")).not.toBeDisabled());
     fireEvent.change(screen.getByLabelText(/Name \*/i), { target: { value: "a" } });
-    fireEvent.change(screen.getByLabelText(/Application group/i), { target: { value: "cps" } });
+    fireEvent.change(screen.getByLabelText("Application group *"), { target: { value: "cps" } });
     expect(screen.getByRole("button", { name: /^Register$/i })).not.toBeDisabled();
   });
 
@@ -245,9 +245,9 @@ describe("CreateApplicationDialog — application group", () => {
     render(<MemoryRouter><CreateApplicationDialog onCreated={vi.fn()} onClose={vi.fn()} /></MemoryRouter>);
     await waitFor(() => expect(screen.getByRole("option", { name: "Servicing MQ (cps)" })).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText(/Name \*/i), { target: { value: "cps-pci" } });
-    fireEvent.change(screen.getByLabelText(/Application group/i), { target: { value: "cps" } });
+    fireEvent.change(screen.getByLabelText("Application group *"), { target: { value: "cps" } });
     // The classifier value appears only once a group is chosen.
-    fireEvent.change(screen.getByLabelText(/Metrics application/i), { target: { value: "CPS-PCI" } });
+    fireEvent.change(screen.getByLabelText("Metrics application"), { target: { value: "CPS-PCI" } });
     fireEvent.click(screen.getByRole("button", { name: /^Register$/i }));
     await waitFor(() => expect(apiMocks.create).toHaveBeenCalled());
     const body = apiMocks.create.mock.calls[0][0];
@@ -262,7 +262,7 @@ describe("CreateApplicationDialog — application group", () => {
     expect(screen.queryByRole("option", { name: /Ungrouped/ })).toBeNull();
     fireEvent.change(screen.getByLabelText(/Name \*/i), { target: { value: "checkout-svc" } });
     expect(screen.getByRole("button", { name: /^Register$/i })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText(/Application group/i), { target: { value: "cps" } });
+    fireEvent.change(screen.getByLabelText("Application group *"), { target: { value: "cps" } });
     expect(screen.getByRole("button", { name: /^Register$/i })).not.toBeDisabled();
   });
 
@@ -272,7 +272,7 @@ describe("CreateApplicationDialog — application group", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/Manage groups/);
     fireEvent.change(screen.getByLabelText(/Name \*/i), { target: { value: "checkout-svc" } });
     expect(screen.getByRole("button", { name: /^Register$/i })).toBeDisabled();
-    expect(screen.getByLabelText(/Application group/i)).toBeDisabled();
+    expect(screen.getByLabelText("Application group *")).toBeDisabled();
   });
 
   it("edit mode pre-selects the app's group and rejects a malformed classifier value", async () => {
@@ -280,9 +280,9 @@ describe("CreateApplicationDialog — application group", () => {
     const app = { ...fixtureApp("cps-pci"), metricsGroupId: "cps", metricsApplication: "CPS-PCI" };
     render(<MemoryRouter><CreateApplicationDialog mode="edit" initial={app} onCreated={vi.fn()} onClose={vi.fn()} /></MemoryRouter>);
     await waitFor(() => expect(screen.getByRole("option", { name: "Servicing MQ (cps)" })).toBeInTheDocument());
-    expect((screen.getByLabelText(/Application group/i) as HTMLSelectElement).value).toBe("cps");
-    expect((screen.getByLabelText(/Metrics application/i) as HTMLInputElement).value).toBe("CPS-PCI");
-    fireEvent.change(screen.getByLabelText(/Metrics application/i), { target: { value: "has space" } });
+    expect((screen.getByLabelText("Application group *") as HTMLSelectElement).value).toBe("cps");
+    expect((screen.getByLabelText("Metrics application") as HTMLInputElement).value).toBe("CPS-PCI");
+    fireEvent.change(screen.getByLabelText("Metrics application"), { target: { value: "has space" } });
     expect(screen.getByRole("button", { name: /Save changes/i })).toBeDisabled();
     expect(screen.getByRole("alert")).toHaveTextContent(/letters \/ digits/);
   });

@@ -3106,6 +3106,16 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
   font-size: 0.82rem;
 }
 
+/* Metadata tab — per-worker property listing (UX-DYNAMICS events). */
+.defList__memberProps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
 /* Update-properties dialog (UX-DYNAMICS T5) — worker picker + results list. */
 .updateProps__workers {
   border: 1px solid var(--border);

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { InfoTip } from "./InfoTip";
 
 import {
   CapacityApiError,
@@ -263,7 +264,13 @@ function DeclareWorkerForm({
       onSubmit={(e) => { e.preventDefault(); if (canSubmit) void submit(false); }}
     >
       <div className="formField">
-        <label htmlFor="declareWorkerName">Worker name</label>
+        <div className="formField__labelRow">
+          <label htmlFor="declareWorkerName">Worker name</label>
+          <InfoTip label="About worker name">
+            Must match the pod name exactly — it is also the id the worker
+            stamps on its metrics.
+          </InfoTip>
+        </div>
         <input
           id="declareWorkerName"
           className="mono"
@@ -272,13 +279,15 @@ function DeclareWorkerForm({
           placeholder="payments-na-east-worker-1"
           autoFocus
         />
-        <small>
-          Must match the pod name exactly — it is also the id the worker stamps on its
-          metrics.
-        </small>
       </div>
       <div className="formField">
-        <label htmlFor="declareWorkerAddress">Address</label>
+        <div className="formField__labelRow">
+          <label htmlFor="declareWorkerAddress">Address</label>
+          <InfoTip label="About worker address">
+            The address this platform can reach the worker at — not necessarily
+            the one the worker sees itself as.
+          </InfoTip>
+        </div>
         <input
           id="declareWorkerAddress"
           className="mono"
@@ -286,10 +295,6 @@ function DeclareWorkerForm({
           onChange={(e) => { setBaseUrl(e.target.value); setOfferForce(false); }}
           placeholder="http://payments-na-east-worker-1.workers:8080"
         />
-        <small>
-          The address this platform can reach the worker at — not necessarily the one
-          the worker sees itself as.
-        </small>
       </div>
 
       {error && <div className="formError" role="alert">{error}</div>}
