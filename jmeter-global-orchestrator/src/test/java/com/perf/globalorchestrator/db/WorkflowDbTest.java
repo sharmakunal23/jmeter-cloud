@@ -301,9 +301,60 @@ class WorkflowDbTest extends OracleDbTestSupport {
                     sampleGraph(), ExecutionState.RUNNING, null, "tester", now.plusMillis(i), null,
                     now.plusSeconds(3600), List.of()));
         }
-        assertThat(executions.findByWorkflow(wf.workflowId(), 3)).hasSize(3);
+        assertThat(executions.findByWorkflow(wf.workflowId(), 3, false)).hasSize(3);
         assertThat(executions.findByGroup(wf.groupId(), 2)).hasSize(2);
         assertThat(executions.countRunning(wf.workflowId())).isEqualTo(5);
+    }
+
+    @Test
+    @DisplayName("archive hides a finished run from the history, restore brings it back, and delete needs the archive first")
+    void archiveLifecycle() {
+        Workflow wf = freshWorkflow(freshGroup(), "Archives");
+        Instant now = Instant.now();
+        WorkflowExecution done = executions.insert(new WorkflowExecution(Ulid.generate(), wf.workflowId(),
+                wf.groupId(), wf.name(), sampleGraph(), ExecutionState.RUNNING, null, "tester", now, null,
+                now, List.of()));
+        executions.markTerminal(done.executionId(), ExecutionState.SUCCEEDED, null, now);
+        WorkflowExecution live = executions.insert(new WorkflowExecution(Ulid.generate(), wf.workflowId(),
+                wf.groupId(), wf.name(), sampleGraph(), ExecutionState.RUNNING, null, "tester", now, null,
+                now.plusSeconds(600), List.of()));
+
+        // A run still going is skipped, never archived out from under the engine.
+        assertThat(executions.archive(wf.workflowId(), List.of(done.executionId(), live.executionId()), now))
+                .isEqualTo(1);
+        assertThat(executions.findByWorkflow(wf.workflowId(), 10, false))
+                .extracting(WorkflowExecution::executionId).containsExactly(live.executionId());
+        assertThat(executions.findByWorkflow(wf.workflowId(), 10, true))
+                .extracting(WorkflowExecution::executionId).containsExactly(done.executionId());
+        assertThat(executions.countArchived(wf.workflowId())).isEqualTo(1);
+
+        // Deleting is only ever the second step: a live row is not archived, so
+        // nothing about it is deletable.
+        assertThat(executions.deleteArchived(wf.workflowId(), List.of(live.executionId()))).isZero();
+        assertThat(executions.findById(live.executionId())).isPresent();
+
+        assertThat(executions.restore(wf.workflowId(), List.of(done.executionId()))).isEqualTo(1);
+        assertThat(executions.findByWorkflow(wf.workflowId(), 10, false)).hasSize(2);
+
+        assertThat(executions.archive(wf.workflowId(), List.of(done.executionId()), now)).isEqualTo(1);
+        assertThat(executions.deleteArchived(wf.workflowId(), List.of(done.executionId()))).isEqualTo(1);
+        assertThat(executions.findById(done.executionId())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("deleting a workflow's executions takes their tasks with them")
+    void deleteForWorkflowCascadesTasks() {
+        Workflow wf = freshWorkflow(freshGroup(), "Purges");
+        Instant now = Instant.now();
+        WorkflowExecution ex = executions.insert(new WorkflowExecution(Ulid.generate(), wf.workflowId(),
+                wf.groupId(), wf.name(), sampleGraph(), ExecutionState.RUNNING, null, "tester", now, null,
+                now, List.of()));
+        tasks.insertAll(List.of(new WorkflowTask(Ulid.generate(), ex.executionId(), "d1", NodeType.DELAY,
+                "Settle", TaskState.PENDING, 0, null, null, null, null, null, null, null)));
+
+        assertThat(executions.deleteForWorkflow(wf.workflowId())).isEqualTo(1);
+        assertThat(executions.findById(ex.executionId())).isEmpty();
+        assertThat(tasks.findByExecution(ex.executionId())).isEmpty();
     }
 
     @Test

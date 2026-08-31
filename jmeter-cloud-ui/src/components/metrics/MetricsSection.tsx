@@ -6,7 +6,11 @@ import { useEffect, useState, type ReactNode } from "react";
  * open sections are the only ones reading the database. Open/closed state is
  * remembered per section in the browser.
  */
-export type MetricsSectionId = "keyMetrics" | "throughput" | "errors" | "perLabel" | "aggregateReport";
+export type MetricsSectionId =
+  | "keyMetrics" | "throughput" | "errors" | "perLabel" | "aggregateReport"
+  // The workflow execution's board. Separate ids so collapsing a section there
+  // does not collapse the same-named one on a run's Metrics tab.
+  | "wfKeyMetrics" | "wfSummary" | "wfThroughput" | "wfErrors";
 
 const STORAGE_KEY = "jmeterCloud.metrics.sections";
 
@@ -16,6 +20,12 @@ const DEFAULT_OPEN: Record<MetricsSectionId, boolean> = {
   errors: true,
   perLabel: false,
   aggregateReport: false,
+  // The numbers and the throughput picture are what an operator opens the tab
+  // for; the error charts are where they go once something looks wrong.
+  wfKeyMetrics: true,
+  wfSummary: true,
+  wfThroughput: true,
+  wfErrors: false,
 };
 
 function readOpen(id: MetricsSectionId): boolean {

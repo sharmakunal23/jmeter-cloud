@@ -8,6 +8,7 @@ import {
 import { formatRelative } from "../lib/time";
 import { useClientPagination } from "../hooks/useClientPagination";
 import { useVisiblePolling } from "../hooks/useVisiblePolling";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Paginator } from "../components/Paginator";
 import { TabPanel, TabStrip, useTabInUrl, type TabDefinition } from "../components/TabStrip";
 import { WorkflowCanvas } from "../components/workflow/WorkflowCanvas";
@@ -15,7 +16,7 @@ import { CapacityPanel } from "../components/workflow/CapacityPanel";
 import { ExecutionStateChip } from "../components/workflow/ExecutionStateChip";
 
 type Tab = "flow" | "runs";
-const HISTORY_LIMIT = 50;
+const HISTORY_LIMIT = 200;
 const RUNS_PER_PAGE = 10;
 /** While something is running the header's state changes without the operator acting. */
 const POLL_MS = 10_000;
@@ -37,23 +38,33 @@ export function WorkflowDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [refusedClusters, setRefusedClusters] = useState<RegionDemand[]>([]);
   const [launching, setLaunching] = useState(false);
+  /** Which side of the archive line the Recent runs tab is showing. */
+  const [showArchived, setShowArchived] = useState(false);
+  const [archivedCount, setArchivedCount] = useState(0);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [confirmPurge, setConfirmPurge] = useState(false);
+  const [confirmDeleteWorkflow, setConfirmDeleteWorkflow] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
       const wf = await workflowsApi.get(workflowId, signal);
       setWorkflow(wf);
-      const [runs, check] = await Promise.all([
-        workflowsApi.history(workflowId, HISTORY_LIMIT, signal),
+      const [runs, check, archived] = await Promise.all([
+        workflowsApi.history(workflowId, HISTORY_LIMIT, showArchived, signal),
         workflowsApi.validate(wf.groupId, wf.graph, signal).catch(() => null),
+        workflowsApi.archivedCount(workflowId, signal).catch(() => ({ archived: 0 })),
       ]);
       setHistory(runs);
       setValidation(check);
+      setArchivedCount(archived.archived);
       setError(null);
     } catch (e) {
       if ((e as Error)?.name === "AbortError") return;
       setError((e as Error).message);
     }
-  }, [workflowId]);
+  }, [workflowId, showArchived]);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -86,7 +97,53 @@ export function WorkflowDetailPage() {
   }
 
   const { page, pageItems, setPage, pageSize, total } =
-    useClientPagination(history, workflowId, RUNS_PER_PAGE);
+    useClientPagination(history, `${workflowId}:${showArchived}`, RUNS_PER_PAGE);
+
+  // Selection is per view: switching sides clears it, so an Archive click can
+  // never act on rows the operator is no longer looking at.
+  function switchView(archived: boolean) {
+    setShowArchived(archived);
+    setSelected(new Set());
+    setNotice(null);
+  }
+  function toggleOne(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  }
+  const selectableOnPage = pageItems.filter((e) => showArchived || e.state !== "RUNNING");
+  const allOnPageSelected = selectableOnPage.length > 0
+    && selectableOnPage.every((e) => selected.has(e.executionId));
+
+  async function act(run: () => Promise<string>) {
+    setBusy(true);
+    try {
+      setNotice(await run());
+      setSelected(new Set());
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+      setConfirmPurge(false);
+    }
+  }
+
+  async function deleteWorkflow(cancelRunning: boolean) {
+    setBusy(true);
+    try {
+      const result = await workflowsApi.remove(workflowId, cancelRunning);
+      navigate(`/workflows/groups/${encodeURIComponent(workflow!.groupId)}`, {
+        state: { deleted: result },
+      });
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+      setConfirmDeleteWorkflow(false);
+    }
+  }
 
   if (error && !workflow) {
     return <section className="workflowsPage"><div className="banner banner--error">{error}</div></section>;
@@ -132,6 +189,12 @@ export function WorkflowDetailPage() {
           ) : (
             <Link className="btn btn--ghost" to={`/workflows/${workflow.workflowId}/edit`}>Edit</Link>
           )}
+          <button
+            type="button"
+            className="btn btn--ghost"
+            disabled={busy}
+            onClick={() => setConfirmDeleteWorkflow(true)}
+          >Delete</button>
           <button
             type="button"
             className="btn btn--primary"
@@ -192,15 +255,77 @@ export function WorkflowDetailPage() {
       </TabPanel>
 
       <TabPanel id="runs" idPrefix="workflow" active={tab === "runs"}>
+        <div className="runsToolbar">
+          <div className="runsToolbar__views">
+            <button
+              type="button"
+              className={`btn btn--ghost btn--sm${showArchived ? "" : " isActive"}`}
+              aria-pressed={!showArchived}
+              onClick={() => switchView(false)}
+            >History</button>
+            <button
+              type="button"
+              className={`btn btn--ghost btn--sm${showArchived ? " isActive" : ""}`}
+              aria-pressed={showArchived}
+              onClick={() => switchView(true)}
+            >Archived{archivedCount > 0 ? ` (${archivedCount})` : ""}</button>
+          </div>
+          <div className="runsToolbar__actions">
+            {selected.size > 0 && (
+              <span className="ink-soft" style={{ fontSize: "0.85rem" }}>{selected.size} selected</span>
+            )}
+            {showArchived ? (
+              <>
+                <button
+                  type="button" className="btn btn--ghost btn--sm"
+                  disabled={busy || selected.size === 0}
+                  onClick={() => void act(async () => {
+                    const r = await workflowsApi.restoreRuns(workflowId, [...selected]);
+                    return `${r.restored} run(s) put back on the history.`;
+                  })}
+                >Restore</button>
+                <button
+                  type="button" className="btn btn--ghost btn--sm"
+                  disabled={busy || selected.size === 0}
+                  onClick={() => setConfirmPurge(true)}
+                >Delete permanently</button>
+              </>
+            ) : (
+              <button
+                type="button" className="btn btn--ghost btn--sm"
+                disabled={busy || selected.size === 0}
+                title="Archiving takes finished runs off this list; a run still going is skipped"
+                onClick={() => void act(async () => {
+                  const r = await workflowsApi.archiveRuns(workflowId, [...selected]);
+                  return `${r.archived} run(s) archived.`;
+                })}
+              >Archive</button>
+            )}
+          </div>
+        </div>
+
+        {notice && <div className="banner banner--info">{notice}</div>}
+
         {history.length === 0 ? (
           <div className="emptyState emptyState--compact">
-            <p className="ink-soft">Not run yet.</p>
+            <p className="ink-soft">{showArchived ? "Nothing archived." : "Not run yet."}</p>
           </div>
         ) : (
           <>
             <table className="runsTable">
               <thead>
                 <tr>
+                  <th scope="col" className="runsTable__check">
+                    <input
+                      type="checkbox"
+                      aria-label={allOnPageSelected ? "Clear selection" : "Select every run on this page"}
+                      checked={allOnPageSelected}
+                      disabled={selectableOnPage.length === 0}
+                      onChange={() => setSelected(allOnPageSelected
+                        ? new Set()
+                        : new Set(selectableOnPage.map((e) => e.executionId)))}
+                    />
+                  </th>
                   <th scope="col">Started</th>
                   <th scope="col">State</th>
                   <th scope="col">Took</th>
@@ -211,6 +336,17 @@ export function WorkflowDetailPage() {
               <tbody>
                 {pageItems.map((e) => (
                   <tr key={e.executionId}>
+                    <td className="runsTable__check">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select the run started ${formatRelative(e.startedAt)}`}
+                        checked={selected.has(e.executionId)}
+                        // A run still going cannot be archived, so it cannot be
+                        // selected for it either.
+                        disabled={!showArchived && e.state === "RUNNING"}
+                        onChange={() => toggleOne(e.executionId)}
+                      />
+                    </td>
                     <td>
                       <Link to={`/workflows/executions/${e.executionId}`} className="runsTable__link">
                         {formatRelative(e.startedAt)}
@@ -230,6 +366,51 @@ export function WorkflowDetailPage() {
           </>
         )}
       </TabPanel>
+      {confirmPurge && (
+        <ConfirmDialog
+          title={`Delete ${selected.size} archived run${selected.size === 1 ? "" : "s"}?`}
+          confirmLabel="Delete permanently"
+          danger
+          busy={busy}
+          onCancel={() => setConfirmPurge(false)}
+          onConfirm={() => void act(async () => {
+            const r = await workflowsApi.deleteRuns(workflowId, [...selected]);
+            return `${r.deleted} archived run(s) deleted.`;
+          })}
+        >
+          <p>
+            This cannot be undone. The load tests' own runs are not affected —
+            they stay listed under their application with their metrics.
+          </p>
+        </ConfirmDialog>
+      )}
+
+      {confirmDeleteWorkflow && (
+        <ConfirmDialog
+          title={`Delete "${workflow.name}"?`}
+          confirmLabel={running ? "Cancel the run and delete" : "Delete workflow"}
+          danger
+          busy={busy}
+          onCancel={() => setConfirmDeleteWorkflow(false)}
+          onConfirm={() => void deleteWorkflow(Boolean(running))}
+        >
+          <p>
+            The workflow and its {history.length + archivedCount} run record
+            {history.length + archivedCount === 1 ? "" : "s"} are deleted.
+          </p>
+          {running && (
+            <p className="ink-warn">
+              A run is in progress. Deleting will cancel it first — any load test
+              that already started keeps running, and you can stop it from its
+              own run page.
+            </p>
+          )}
+          <p className="ink-soft">
+            The load tests' own runs are not deleted; they stay under their
+            application with their metrics.
+          </p>
+        </ConfirmDialog>
+      )}
     </section>
   );
 }

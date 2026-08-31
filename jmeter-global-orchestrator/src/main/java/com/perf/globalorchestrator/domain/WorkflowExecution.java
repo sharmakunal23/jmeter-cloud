@@ -26,14 +26,25 @@ public record WorkflowExecution(
         Instant startedAt,
         Instant completedAt,
         Instant nextTickAt,
+        /** Archived when set — off the default history, still readable by id. */
+        Instant hiddenAt,
         List<WorkflowTask> tasks) {
 
     public WorkflowExecution {
         tasks = tasks == null ? List.of() : List.copyOf(tasks);
     }
 
+    /** Pre-archive callers (tests, the engine's own construction). */
+    public WorkflowExecution(String executionId, String workflowId, String groupId, String workflowName,
+                             WorkflowGraph graph, ExecutionState state, String stateReason, String triggeredBy,
+                             Instant startedAt, Instant completedAt, Instant nextTickAt,
+                             List<WorkflowTask> tasks) {
+        this(executionId, workflowId, groupId, workflowName, graph, state, stateReason, triggeredBy,
+                startedAt, completedAt, nextTickAt, null, tasks);
+    }
+
     public WorkflowExecution withTasks(List<WorkflowTask> rows) {
         return new WorkflowExecution(executionId, workflowId, groupId, workflowName, graph, state,
-                stateReason, triggeredBy, startedAt, completedAt, nextTickAt, rows);
+                stateReason, triggeredBy, startedAt, completedAt, nextTickAt, hiddenAt, rows);
     }
 }

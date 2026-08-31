@@ -29,7 +29,7 @@ public class WorkflowExecutionRepository {
 
     private static final String COLS =
             "EXECUTION_ID,WORKFLOW_ID,GROUP_ID,WORKFLOW_NAME,GRAPH,STATE,STATE_REASON,"
-            + "TRIGGERED_BY,STARTED_AT,COMPLETED_AT,NEXT_TICK_AT";
+            + "TRIGGERED_BY,STARTED_AT,COMPLETED_AT,NEXT_TICK_AT,HIDDEN_AT";
 
     private final JdbcTemplate jdbc;
     private final ObjectMapper json;
@@ -54,7 +54,21 @@ public class WorkflowExecutionRepository {
                 OracleBind.instant(rs, "STARTED_AT"),
                 OracleBind.instant(rs, "COMPLETED_AT"),
                 OracleBind.instant(rs, "NEXT_TICK_AT"),
+                // ORCH_CLAIMS.CLAIM_DUE_WORKFLOWS returns the columns the engine
+                // needs and not this one — and never has to: the table's
+                // HIDDEN_CHK makes an archived RUNNING row impossible, so a row
+                // the claim can see is always unarchived.
+                hasColumn(rs, "HIDDEN_AT") ? OracleBind.instant(rs, "HIDDEN_AT") : null,
                 List.of());
+    }
+
+    /** True iff the result set carries this column; see the claim cursor above. */
+    private static boolean hasColumn(ResultSet rs, String name) throws SQLException {
+        java.sql.ResultSetMetaData md = rs.getMetaData();
+        for (int i = 1; i <= md.getColumnCount(); i++) {
+            if (name.equalsIgnoreCase(md.getColumnLabel(i))) return true;
+        }
+        return false;
     }
 
     private static WorkflowGraph readGraph(String raw, ObjectMapper json) {
@@ -73,11 +87,11 @@ public class WorkflowExecutionRepository {
         } catch (Exception ex) {
             throw new IllegalStateException("workflow graph is not serialisable", ex);
         }
-        jdbc.update("INSERT INTO ORCH_WORKFLOW_EXECUTION (" + COLS + ") VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        jdbc.update("INSERT INTO ORCH_WORKFLOW_EXECUTION (" + COLS + ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 e.executionId(), e.workflowId(), e.groupId(), e.workflowName(), OracleBind.clob(graph),
                 e.state().name(), OracleBind.text(e.stateReason(), OracleBind.TEXT_CHARS),
                 OracleBind.text(e.triggeredBy(), OracleBind.NAME_CHARS), OracleBind.ts(e.startedAt()),
-                OracleBind.ts(e.completedAt()), OracleBind.ts(e.nextTickAt()));
+                OracleBind.ts(e.completedAt()), OracleBind.ts(e.nextTickAt()), OracleBind.ts(e.hiddenAt()));
         return findById(e.executionId()).orElseThrow();
     }
 
@@ -90,11 +104,76 @@ public class WorkflowExecutionRepository {
         }
     }
 
-    /** Newest first, bounded — the workflow's history tab. */
-    public List<WorkflowExecution> findByWorkflow(String workflowId, int limit) {
+    /**
+     * Newest first, bounded — the workflow's history tab. {@code archived}
+     * picks which side of the archive line to read; the two are never mixed,
+     * because a list that quietly contains archived rows is how an operator
+     * archives something twice.
+     */
+    public List<WorkflowExecution> findByWorkflow(String workflowId, int limit, boolean archived) {
         return jdbc.query(
                 "SELECT " + COLS + " FROM ORCH_WORKFLOW_EXECUTION WHERE WORKFLOW_ID=? "
+                + (archived ? "AND HIDDEN_AT IS NOT NULL " : "AND HIDDEN_AT IS NULL ")
                 + "ORDER BY STARTED_AT DESC FETCH FIRST ? ROWS ONLY", row, workflowId, limit);
+    }
+
+    /** Archived rows still count, so a workflow's tab can offer the archive at all. */
+    public int countArchived(String workflowId) {
+        Integer n = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM ORCH_WORKFLOW_EXECUTION WHERE WORKFLOW_ID=? AND HIDDEN_AT IS NOT NULL",
+                Integer.class, workflowId);
+        return n == null ? 0 : n;
+    }
+
+    /**
+     * Archive the finished executions among {@code executionIds}, restricted to
+     * one workflow so a caller cannot reach across workflows with a guessed id.
+     *
+     * @return how many rows this call actually archived
+     */
+    public int archive(String workflowId, List<String> executionIds, Instant at) {
+        if (executionIds.isEmpty()) return 0;
+        String placeholders = String.join(",", java.util.Collections.nCopies(executionIds.size(), "?"));
+        Object[] args = new Object[executionIds.size() + 2];
+        args[0] = OracleBind.ts(at);
+        args[1] = workflowId;
+        for (int i = 0; i < executionIds.size(); i++) args[i + 2] = executionIds.get(i);
+        return jdbc.update(
+                "UPDATE ORCH_WORKFLOW_EXECUTION SET HIDDEN_AT=? "
+                + "WHERE WORKFLOW_ID=? AND STATE <> 'RUNNING' AND HIDDEN_AT IS NULL "
+                + "AND EXECUTION_ID IN (" + placeholders + ")", args);
+    }
+
+    /** Put archived executions back on the history. */
+    public int restore(String workflowId, List<String> executionIds) {
+        if (executionIds.isEmpty()) return 0;
+        String placeholders = String.join(",", java.util.Collections.nCopies(executionIds.size(), "?"));
+        Object[] args = new Object[executionIds.size() + 1];
+        args[0] = workflowId;
+        for (int i = 0; i < executionIds.size(); i++) args[i + 1] = executionIds.get(i);
+        return jdbc.update(
+                "UPDATE ORCH_WORKFLOW_EXECUTION SET HIDDEN_AT=NULL "
+                + "WHERE WORKFLOW_ID=? AND EXECUTION_ID IN (" + placeholders + ")", args);
+    }
+
+    /**
+     * Delete archived executions for good; their tasks go with them by the FK's
+     * cascade. Only archived rows are eligible — archiving first is what makes
+     * this deliberate rather than a mis-click.
+     *
+     * <p>The runs a load test launched are NOT touched: a run is its own
+     * history and outlives the workflow that started it.
+     */
+    public int deleteArchived(String workflowId, List<String> executionIds) {
+        if (executionIds.isEmpty()) return 0;
+        String placeholders = String.join(",", java.util.Collections.nCopies(executionIds.size(), "?"));
+        Object[] args = new Object[executionIds.size() + 1];
+        args[0] = workflowId;
+        for (int i = 0; i < executionIds.size(); i++) args[i + 1] = executionIds.get(i);
+        return jdbc.update(
+                "DELETE FROM ORCH_WORKFLOW_EXECUTION "
+                + "WHERE WORKFLOW_ID=? AND HIDDEN_AT IS NOT NULL AND EXECUTION_ID IN ("
+                + placeholders + ")", args);
     }
 
     /** Newest first across a group — the group landing's activity strip. */
@@ -151,6 +230,18 @@ public class WorkflowExecutionRepository {
                 + "WHERE EXECUTION_ID=? AND STATE='RUNNING'",
                 state.name(), OracleBind.text(reason, OracleBind.TEXT_CHARS),
                 OracleBind.ts(completedAt), executionId);
+    }
+
+    /** The non-terminal executions themselves, for a delete that cancels them first. */
+    public List<WorkflowExecution> findRunning(String workflowId) {
+        return jdbc.query(
+                "SELECT " + COLS + " FROM ORCH_WORKFLOW_EXECUTION WHERE WORKFLOW_ID=? AND STATE='RUNNING'",
+                row, workflowId);
+    }
+
+    /** Every execution of a workflow, archived or not; tasks cascade with them. */
+    public int deleteForWorkflow(String workflowId) {
+        return jdbc.update("DELETE FROM ORCH_WORKFLOW_EXECUTION WHERE WORKFLOW_ID=?", workflowId);
     }
 
     /** Non-terminal executions of a workflow — the guard that stops a delete pulling the rug. */

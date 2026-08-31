@@ -211,7 +211,7 @@ class WorkflowControllerTest {
     @DisplayName("GET carries the last execution, which is how the UI knows to disable Run and Edit")
     void getCarriesTheLastExecution() throws Exception {
         when(service.requireWorkflow("wf1")).thenReturn(WF);
-        when(executions.findByWorkflow("wf1", 1)).thenReturn(List.of(
+        when(executions.findByWorkflow("wf1", 1, false)).thenReturn(List.of(
                 new WorkflowExecution("ex9", "wf1", "cps", "Nightly", GRAPH,
                         ExecutionState.RUNNING, null, "alice", NOW, null, NOW, List.of())));
 
@@ -224,12 +224,42 @@ class WorkflowControllerTest {
     @Test
     @DisplayName("deleting a workflow with a running execution is 409, not a silent orphan")
     void deleteRefusedWhileRunning() throws Exception {
-        doThrow(new WorkflowService.WorkflowBusyException("wf1", 1)).when(service).delete("wf1");
+        when(service.delete(eq("wf1"), eq(false), any()))
+                .thenThrow(new WorkflowService.WorkflowBusyException("wf1", 1));
 
         mvc.perform(delete("/api/v1/workflows/wf1"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("WORKFLOW_RUNNING"))
                 .andExpect(jsonPath("$.runningExecutions").value(1));
+    }
+
+    @Test
+    @DisplayName("deleting with cancelRunning stops the run first and says what it took with it")
+    void deleteCancelsTheRunWhenAsked() throws Exception {
+        when(service.delete(eq("wf1"), eq(true), any()))
+                .thenReturn(new WorkflowService.DeleteResult(1, 4));
+
+        mvc.perform(delete("/api/v1/workflows/wf1?cancelRunning=true").header("X-Actor", "kunal"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cancelledExecutions").value(1))
+                .andExpect(jsonPath("$.deletedExecutions").value(4));
+    }
+
+    @Test
+    @DisplayName("archiving runs is a bulk action, and an empty list is a 400 rather than a silent no-op")
+    void archiveRuns() throws Exception {
+        when(service.archiveExecutions(eq("wf1"), any())).thenReturn(2);
+
+        mvc.perform(post("/api/v1/workflows/wf1/executions/archive")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"executionIds\":[\"a\",\"b\"]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.archived").value(2));
+
+        mvc.perform(post("/api/v1/workflows/wf1/executions/archive")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"executionIds\":[]}"))
+                .andExpect(status().isBadRequest());
     }
 
     @Test
@@ -246,11 +276,11 @@ class WorkflowControllerTest {
     @DisplayName("history is bounded even when a caller asks for more")
     void historyIsBounded() throws Exception {
         when(service.requireWorkflow("wf1")).thenReturn(WF);
-        when(executions.findByWorkflow(eq("wf1"), anyInt())).thenReturn(List.of());
+        when(executions.findByWorkflow(eq("wf1"), anyInt(), eq(false))).thenReturn(List.of());
 
         mvc.perform(get("/api/v1/workflows/wf1/executions").param("limit", "99999"))
                 .andExpect(status().isOk());
-        org.mockito.Mockito.verify(executions).findByWorkflow("wf1", 200);
+        org.mockito.Mockito.verify(executions).findByWorkflow("wf1", 200, false);
     }
 
     private static boolean anyBoolean() {

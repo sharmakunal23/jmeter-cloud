@@ -143,6 +143,12 @@ export interface WorkflowTask {
   errorReason?: string | null;
 }
 
+/** What a workflow delete actually did. */
+export interface DeleteWorkflowResult {
+  cancelledExecutions: number;
+  deletedExecutions: number;
+}
+
 export interface WorkflowExecution {
   executionId: string;
   workflowId: string;
@@ -156,6 +162,8 @@ export interface WorkflowExecution {
   startedAt: string;
   completedAt?: string | null;
   nextTickAt?: string | null;
+  /** Archived when set — off the default history, still readable by id. */
+  hiddenAt?: string | null;
   tasks: WorkflowTask[];
 }
 
@@ -252,8 +260,13 @@ export const workflowsApi = {
     return request<Workflow>("PUT", `/api/v1/workflows/${workflowId}`, req);
   },
 
-  remove(workflowId: string): Promise<void> {
-    return request<void>("DELETE", `/api/v1/workflows/${workflowId}`);
+  /**
+   * Delete the workflow and its runs. `cancelRunning` stops an execution in
+   * progress first — without it, one still going refuses the delete.
+   */
+  remove(workflowId: string, cancelRunning = false): Promise<DeleteWorkflowResult> {
+    return request<DeleteWorkflowResult>(
+      "DELETE", `/api/v1/workflows/${workflowId}?cancelRunning=${cancelRunning}`);
   },
 
   /** 409 WORKFLOW_CAPACITY_EXCEEDED when the graph's peak exceeds the group's reservation. */
@@ -261,9 +274,33 @@ export const workflowsApi = {
     return request<WorkflowExecution>("POST", `/api/v1/workflows/${workflowId}/executions`);
   },
 
-  history(workflowId: string, limit = 25, signal?: AbortSignal): Promise<WorkflowExecution[]> {
+  /** `archived` reads the archive instead of the history; the two are never mixed. */
+  history(workflowId: string, limit = 25, archived = false, signal?: AbortSignal): Promise<WorkflowExecution[]> {
     return request<WorkflowExecution[]>(
-      "GET", `/api/v1/workflows/${workflowId}/executions?limit=${limit}`, undefined, signal);
+      "GET", `/api/v1/workflows/${workflowId}/executions?limit=${limit}&archived=${archived}`,
+      undefined, signal);
+  },
+
+  archivedCount(workflowId: string, signal?: AbortSignal): Promise<{ archived: number }> {
+    return request<{ archived: number }>(
+      "GET", `/api/v1/workflows/${workflowId}/executions/archivedCount`, undefined, signal);
+  },
+
+  /** Archive finished runs; one still going is skipped rather than refused. */
+  archiveRuns(workflowId: string, executionIds: string[]): Promise<{ archived: number }> {
+    return request<{ archived: number }>(
+      "POST", `/api/v1/workflows/${workflowId}/executions/archive`, { executionIds });
+  },
+
+  restoreRuns(workflowId: string, executionIds: string[]): Promise<{ restored: number }> {
+    return request<{ restored: number }>(
+      "POST", `/api/v1/workflows/${workflowId}/executions/restore`, { executionIds });
+  },
+
+  /** Permanent, and only for runs already archived. */
+  deleteRuns(workflowId: string, executionIds: string[]): Promise<{ deleted: number }> {
+    return request<{ deleted: number }>(
+      "POST", `/api/v1/workflows/${workflowId}/executions/delete`, { executionIds });
   },
 
   execution(executionId: string, signal?: AbortSignal): Promise<WorkflowExecution> {

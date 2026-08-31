@@ -108,11 +108,6 @@ export function WorkflowExecutionPage() {
       </header>
 
       {error && <div className="banner banner--error" role="alert">{error}</div>}
-      {execution.stateReason && (
-        <div className={`banner ${execution.state === "FAILED" ? "banner--error" : "banner--info"}`}>
-          {execution.stateReason}
-        </div>
-      )}
 
       {waiting.map((t) => (
         <div className="banner banner--warn" key={t.taskId}>
@@ -146,6 +141,14 @@ export function WorkflowExecutionPage() {
       </TabPanel>
 
       <TabPanel id="tasks" idPrefix="execution" active={tab === "tasks"}>
+      {/* The outcome names the tasks it is about, so it lives with them rather
+          than riding above every tab. The header's state chip is what carries
+          the execution's result everywhere else. */}
+      {execution.stateReason && (
+        <div className={`banner ${execution.state === "FAILED" ? "banner--error" : "banner--info"}`}>
+          {execution.stateReason}
+        </div>
+      )}
       <table className="runsTable">
         <thead>
           <tr>

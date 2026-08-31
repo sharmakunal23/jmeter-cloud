@@ -13,6 +13,7 @@ import {
 import { usePanelQuery } from "../../hooks/usePanelQuery";
 import { useRefreshTick } from "../../hooks/useRefreshTick";
 import { statsFor } from "../metrics/KeyMetrics";
+import { MetricsSection, useSectionOpen } from "../metrics/MetricsSection";
 import { TimeseriesChart, type TimeseriesSeries } from "../charts/TimeseriesChart";
 
 /**
@@ -30,6 +31,11 @@ import { TimeseriesChart, type TimeseriesSeries } from "../charts/TimeseriesChar
 const REFRESH_MS = 15_000;
 const CHART_HEIGHT = 260;
 const GRANULARITIES: MetricsGranularity[] = [15, 30, 60];
+/** Shown while the summaries are still loading, so the stat row keeps its shape. */
+const EMPTY_STATS: RunSummaryStats = {
+  samples: 0, errors: 0, tps: 0, errorPct: 0, avgMs: 0,
+  p90Ms: 0, p95Ms: 0, p99Ms: 0, maxMs: 0, maxActiveThreads: 0,
+};
 
 export interface WorkflowMetricsPanelProps {
   tasks: WorkflowTask[];
@@ -37,16 +43,31 @@ export interface WorkflowMetricsPanelProps {
   live: boolean;
 }
 
-interface RunMetrics {
-  task: WorkflowTask;
-  application: string;
-  summary: RunSummary;
-  series: MetricsTimeseries;
+interface RunSummaryRow { task: WorkflowTask; application: string; summary: RunSummary }
+interface RunSeriesRow { task: WorkflowTask; application: string; series: MetricsTimeseries }
+
+/**
+ * Read every run in parallel, dropping the ones whose metrics have not landed
+ * yet — one run without rows must not blank the whole board.
+ */
+async function collect<T extends object>(
+  loadTests: WorkflowTask[],
+  read: (task: WorkflowTask) => Promise<T>,
+): Promise<T[]> {
+  const results: Array<T | null> = await Promise.all(
+    loadTests.map((t) => read(t).catch(() => null)),
+  );
+  return results.filter((r): r is T => r !== null);
 }
 
 export function WorkflowMetricsPanel({ tasks, live }: WorkflowMetricsPanelProps) {
   const [granularity, setGranularity] = useState<MetricsGranularity>(60);
   const [percentile, setPercentile] = useState<Percentile>("avg");
+
+  const [keyOpen, toggleKey] = useSectionOpen("wfKeyMetrics");
+  const [summaryOpen, toggleSummary] = useSectionOpen("wfSummary");
+  const [throughputOpen, toggleThroughput] = useSectionOpen("wfThroughput");
+  const [errorsOpen, toggleErrors] = useSectionOpen("wfErrors");
 
   const loadTests = useMemo(
     () => tasks.filter((t) => t.type === "LOAD_TEST" && t.runId),
@@ -55,30 +76,34 @@ export function WorkflowMetricsPanel({ tasks, live }: WorkflowMetricsPanelProps)
   const runKey = loadTests.map((t) => t.runId).join(",");
   const { tick, isPaused } = useRefreshTick(live ? REFRESH_MS : null, "workflowMetrics");
 
-  const query = usePanelQuery<RunMetrics[]>(
-    async (signal) => {
-      // One summary + one timeseries per run, in parallel. A run whose metrics
-      // have not landed yet is dropped rather than failing the whole board.
-      const results = await Promise.all(loadTests.map(async (task) => {
-        try {
-          const [summary, series] = await Promise.all([
-            runsApi.summary(task.runId!, signal),
-            runsApi.timeseries(task.runId!, signal, { granularity, window: "all" }),
-          ]);
-          return { task, application: task.applicationName ?? task.name, summary, series };
-        } catch {
-          return null;
-        }
-      }));
-      return results.filter((r): r is RunMetrics => r !== null);
-    },
-    [runKey, granularity],
+  // Two reads, each following what is open: a collapsed section fetches
+  // nothing, so a board with only the numbers showing never pulls a timeseries.
+  const needsSummary = keyOpen || summaryOpen;
+  const needsSeries = throughputOpen || errorsOpen;
+
+  const summaries = usePanelQuery<RunSummaryRow[]>(
+    async (signal) => collect(loadTests, (task) =>
+      runsApi.summary(task.runId!, signal).then((summary) => ({
+        task, application: task.applicationName ?? task.name, summary,
+      }))),
+    [runKey],
     tick,
-    loadTests.length > 0,
+    needsSummary && loadTests.length > 0,
   );
 
-  const rows = useMemo(() => query.data ?? [], [query.data]);
-  const folded = useMemo(() => foldStats(rows.map((r) => r.summary.total)), [rows]);
+  const seriesRows = usePanelQuery<RunSeriesRow[]>(
+    async (signal) => collect(loadTests, (task) =>
+      runsApi.timeseries(task.runId!, signal, { granularity, window: "all" }).then((series) => ({
+        task, application: task.applicationName ?? task.name, series,
+      }))),
+    [runKey, granularity],
+    tick,
+    needsSeries && loadTests.length > 0,
+  );
+
+  const summaryRows = useMemo(() => summaries.data ?? [], [summaries.data]);
+  const chartRows = useMemo(() => seriesRows.data ?? [], [seriesRows.data]);
+  const folded = useMemo(() => foldStats(summaryRows.map((r) => r.summary.total)), [summaryRows]);
 
   if (loadTests.length === 0) {
     return (
@@ -88,9 +113,9 @@ export function WorkflowMetricsPanel({ tasks, live }: WorkflowMetricsPanelProps)
     );
   }
 
-  const seriesPerApplication = (pick: (r: RunMetrics) => ReadonlyArray<{ sec: number; v: number }>)
+  const seriesPerApplication = (pick: (r: RunSeriesRow) => ReadonlyArray<{ sec: number; v: number }>)
     : TimeseriesSeries[] =>
-    rows
+    chartRows
       .map((r, i) => ({ label: r.application, color: colorForKey(r.application, i), data: pick(r) }))
       .filter((s) => s.data.length > 0);
 
@@ -101,20 +126,22 @@ export function WorkflowMetricsPanel({ tasks, live }: WorkflowMetricsPanelProps)
   // Error codes are the execution's, not each application's: five 4xx lines and
   // five 5xx lines is ten lines nobody reads.
   const codeSeries: TimeseriesSeries[] = [
-    { label: "4xx", color: "#f59e0b", data: sumByBucket(rows.map((r) => r.series.series.statusCodes["4xx"] ?? [])) },
-    { label: "5xx", color: "#dc2626", data: sumByBucket(rows.map((r) => r.series.series.statusCodes["5xx"] ?? [])) },
+    { label: "4xx", color: "#f59e0b", data: sumByBucket(chartRows.map((r) => r.series.series.statusCodes["4xx"] ?? [])) },
+    { label: "5xx", color: "#dc2626", data: sumByBucket(chartRows.map((r) => r.series.series.statusCodes["5xx"] ?? [])) },
   ].filter((s) => s.data.length > 0);
-  const overallErrorPct: TimeseriesSeries[] = rows.length > 1
-    ? [{ label: "all applications", color: "#64748b", data: errorPctByBucket(rows.map((r) => r.series.series)) }]
+  const overallErrorPct: TimeseriesSeries[] = chartRows.length > 1
+    ? [{ label: "all applications", color: "#64748b", data: errorPctByBucket(chartRows.map((r) => r.series.series)) }]
     : [];
 
-  const loading = query.status.kind === "loading" && rows.length === 0;
+  const rowCount = Math.max(summaryRows.length, chartRows.length, loadTests.length);
+  const loading = (needsSummary && summaries.status.kind === "loading" && summaryRows.length === 0)
+    || (needsSeries && seriesRows.status.kind === "loading" && chartRows.length === 0);
 
   return (
     <div className="workflowMetrics">
       <div className="workflowMetrics__toolbar">
         <span className="ink-soft" style={{ fontSize: "0.85rem" }}>
-          {rows.length} run{rows.length === 1 ? "" : "s"}, split by application
+          {loadTests.length} run{loadTests.length === 1 ? "" : "s"}, split by application
           {live && (isPaused ? " · paused (tab hidden)" : " · live")}
         </span>
         <span className="workflowMetrics__controls">
@@ -132,26 +159,31 @@ export function WorkflowMetricsPanel({ tasks, live }: WorkflowMetricsPanelProps)
 
       {loading ? (
         <p className="ink-soft">Loading metrics…</p>
-      ) : folded === null ? (
+      ) : folded === null && chartRows.length === 0 ? (
         <p className="ink-soft">No samples yet.</p>
       ) : (
         <>
-          <h3 className="metricsHeading">Key metrics</h3>
-          <dl className="statRow" aria-label="Key metrics across every application">
-            {statsFor(folded).map((st) => (
-              <div key={st.label} className={`statCard ${st.tone ? `statCard--${st.tone}` : ""}`} title={st.title}>
-                <dt className="statCard__label">{st.label}</dt>
-                <dd className="statCard__value">{st.value}</dd>
-              </div>
-            ))}
-          </dl>
+          <MetricsSection
+            id="wfKeyMetrics" title="Key metrics" open={keyOpen} onToggle={toggleKey}
+            meta={`${rowCount} application${rowCount === 1 ? "" : "s"}`}
+          >
+            <dl className="statRow" aria-label="Key metrics across every application">
+              {statsFor(folded ?? EMPTY_STATS).map((st) => (
+                <div key={st.label} className={`statCard ${st.tone ? `statCard--${st.tone}` : ""}`} title={st.title}>
+                  <dt className="statCard__label">{st.label}</dt>
+                  <dd className="statCard__value">{st.value}</dd>
+                </div>
+              ))}
+            </dl>
+          </MetricsSection>
 
-          <h3 className="metricsHeading">Summary by application</h3>
+          <MetricsSection
+            id="wfSummary" title="Summary by application" open={summaryOpen} onToggle={toggleSummary}
+          >
           <table className="miniTable workflowMetrics__summary">
             <thead>
               <tr>
                 <th scope="col">Application</th>
-                <th scope="col" className="num">Samples</th>
                 <th scope="col" className="num">TPS</th>
                 <th scope="col" className="num">Avg</th>
                 <th scope="col" className="num">P90</th>
@@ -161,11 +193,20 @@ export function WorkflowMetricsPanel({ tasks, live }: WorkflowMetricsPanelProps)
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => <SummaryRow key={r.task.taskId} label={r.application} s={r.summary.total} />)}
-              {rows.length > 1 && <SummaryRow label="All applications" s={folded} total />}
+              {summaryRows.map((r) => (
+                <SummaryRow key={r.task.taskId} label={r.application} s={r.summary.total} />
+              ))}
+              {summaryRows.length > 1 && folded && (
+                <SummaryRow label="All applications" s={folded} total />
+              )}
             </tbody>
           </table>
+          </MetricsSection>
 
+          <MetricsSection
+            id="wfThroughput" title="Throughput and response time"
+            open={throughputOpen} onToggle={toggleThroughput}
+          >
           <div className="workflowMetrics__charts">
             <TimeseriesChart title="Throughput by application (req/s)" series={throughput} height={CHART_HEIGHT} />
             <div className="workflowMetrics__chartWithPicker">
@@ -188,6 +229,11 @@ export function WorkflowMetricsPanel({ tasks, live }: WorkflowMetricsPanelProps)
                 height={CHART_HEIGHT}
               />
             </div>
+          </div>
+          </MetricsSection>
+
+          <MetricsSection id="wfErrors" title="Errors" open={errorsOpen} onToggle={toggleErrors}>
+          <div className="workflowMetrics__charts">
             <TimeseriesChart
               title="Error % by application"
               series={[...errorRate, ...overallErrorPct]}
@@ -195,6 +241,7 @@ export function WorkflowMetricsPanel({ tasks, live }: WorkflowMetricsPanelProps)
             />
             <TimeseriesChart title="Error codes across the execution (per second)" series={codeSeries} height={CHART_HEIGHT} />
           </div>
+          </MetricsSection>
         </>
       )}
     </div>
@@ -205,8 +252,7 @@ function SummaryRow({ label, s, total }: { label: string; s: RunSummaryStats; to
   return (
     <tr className={total ? "isTotal" : undefined}>
       <td>{label}</td>
-      <td className="num mono">{s.samples.toLocaleString()}</td>
-      <td className="num mono">{s.tps.toFixed(2)}</td>
+      <td className="num mono" title={`${s.samples.toLocaleString()} samples`}>{s.tps.toFixed(2)}</td>
       <td className="num mono">{Math.round(s.avgMs)}ms</td>
       <td className="num mono">{Math.round(s.p90Ms)}ms</td>
       <td className="num mono">{Math.round(s.p95Ms)}ms</td>

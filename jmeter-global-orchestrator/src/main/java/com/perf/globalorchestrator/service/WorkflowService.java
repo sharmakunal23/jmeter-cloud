@@ -270,13 +270,53 @@ public class WorkflowService {
     }
 
     /** Refused while an execution is still running — deleting the definition mid-flight strands the engine. */
-    public void delete(String workflowId) {
+    @Transactional
+    public DeleteResult delete(String workflowId, boolean cancelRunning, Actor actor) {
         Workflow existing = requireWorkflow(workflowId);
         int running = executions.countRunning(workflowId);
-        if (running > 0) {
+        if (running > 0 && !cancelRunning) {
             throw new WorkflowBusyException(workflowId, running);
         }
+        int cancelled = 0;
+        if (running > 0) {
+            Instant now = Instant.now();
+            String why = "workflow deleted by " + actor.name();
+            for (WorkflowExecution e : executions.findRunning(workflowId)) {
+                tasks.cancelUnfinished(e.executionId(), now, why);
+                executions.markTerminal(e.executionId(), ExecutionState.CANCELLED, why, now);
+                cancelled++;
+            }
+        }
+        int removed = executions.deleteForWorkflow(workflowId);
         workflows.delete(existing.workflowId());
+        LOG.info("workflow {} ({}) deleted by {} — {} execution(s) removed, {} cancelled first",
+                workflowId, existing.name(), actor.name(), removed, cancelled);
+        return new DeleteResult(cancelled, removed);
+    }
+
+    /** What a delete actually did, so the UI can say it rather than guess. */
+    public record DeleteResult(int cancelledExecutions, int deletedExecutions) {}
+
+    // ── Archiving a workflow's runs ────────────────────────────────
+
+    /** Finished runs only; one still going is skipped rather than refused. */
+    @Transactional
+    public int archiveExecutions(String workflowId, List<String> executionIds) {
+        requireWorkflow(workflowId);
+        return executions.archive(workflowId, executionIds, Instant.now());
+    }
+
+    @Transactional
+    public int restoreExecutions(String workflowId, List<String> executionIds) {
+        requireWorkflow(workflowId);
+        return executions.restore(workflowId, executionIds);
+    }
+
+    /** Permanent, and only for rows already archived — that is what makes it deliberate. */
+    @Transactional
+    public int deleteExecutions(String workflowId, List<String> executionIds) {
+        requireWorkflow(workflowId);
+        return executions.deleteArchived(workflowId, executionIds);
     }
 
     /**

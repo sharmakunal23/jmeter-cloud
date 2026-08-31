@@ -100,7 +100,6 @@ export function WorkflowGroupsPage() {
                   <Link to={`/workflows/groups/${encodeURIComponent(g.groupId)}`} className="runsTable__link">
                     {g.name}
                   </Link>
-                  <div className="ink-soft mono" style={{ fontSize: "0.8rem" }}>{g.groupId}</div>
                 </td>
                 <td>{g.teamName ?? <span className="ink-soft">—</span>}</td>
                 <td className="num mono">{g.workflowCount}</td>

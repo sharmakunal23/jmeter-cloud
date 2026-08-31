@@ -84,7 +84,7 @@ public class WorkflowController {
     public ResponseEntity<Workflow> get(@PathVariable String workflowId) {
         Workflow workflow = service.requireWorkflow(workflowId);
         return ResponseEntity.ok(workflow.withLastExecution(
-                executions.findByWorkflow(workflowId, 1).stream()
+                executions.findByWorkflow(workflowId, 1, false).stream()
                         .findFirst()
                         .map(e -> new WorkflowExecutionSummary(
                                 e.executionId(), e.state(), e.startedAt(), e.completedAt()))
@@ -121,11 +121,18 @@ public class WorkflowController {
                 req.graph(), req.enabled() == null || req.enabled(), Actor.fromHeader(actorHeader)));
     }
 
-    /** Idempotent; refused while an execution is running. */
+    /**
+     * Delete a workflow and its executions. A run in progress refuses the
+     * delete unless {@code cancelRunning=true}, which stops it first — an
+     * operator who wants the workflow gone will cancel it by hand and delete
+     * anyway, so the two steps are one.
+     */
     @DeleteMapping("/{workflowId}")
-    public ResponseEntity<Void> delete(@PathVariable String workflowId) {
-        service.delete(workflowId);
-        return ResponseEntity.noContent().build();
+    public ResponseEntity<WorkflowService.DeleteResult> delete(
+            @PathVariable String workflowId,
+            @RequestParam(defaultValue = "false") boolean cancelRunning,
+            @RequestHeader(value = "X-Actor", required = false) String actorHeader) {
+        return ResponseEntity.ok(service.delete(workflowId, cancelRunning, Actor.fromHeader(actorHeader)));
     }
 
     /** Start it. The capacity pre-flight refuses the whole execution before any task runs. */
@@ -137,13 +144,53 @@ public class WorkflowController {
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(execution);
     }
 
-    /** Newest first. Task rows are omitted — the execution's own endpoint carries those. */
+    /**
+     * Newest first. Task rows are omitted — the execution's own endpoint carries
+     * those. {@code archived=true} reads the archive instead; the two lists are
+     * never mixed, so an operator always knows which side they are acting on.
+     */
     @GetMapping("/{workflowId}/executions")
     public ResponseEntity<List<WorkflowExecution>> history(@PathVariable String workflowId,
-                                                            @RequestParam(required = false) Integer limit) {
+                                                            @RequestParam(required = false) Integer limit,
+                                                            @RequestParam(defaultValue = "false") boolean archived) {
         service.requireWorkflow(workflowId);
         int rows = limit == null ? DEFAULT_HISTORY : Math.clamp(limit, 1, MAX_HISTORY);
-        return ResponseEntity.ok(executions.findByWorkflow(workflowId, rows));
+        return ResponseEntity.ok(executions.findByWorkflow(workflowId, rows, archived));
+    }
+
+    /** How many runs sit in the archive — the tab offers the archive only when there is one. */
+    @GetMapping("/{workflowId}/executions/archivedCount")
+    public ResponseEntity<Map<String, Integer>> archivedCount(@PathVariable String workflowId) {
+        service.requireWorkflow(workflowId);
+        return ResponseEntity.ok(Map.of("archived", executions.countArchived(workflowId)));
+    }
+
+    /** Archive finished runs. A run still going is skipped, not refused. */
+    @PostMapping("/{workflowId}/executions/archive")
+    public ResponseEntity<Map<String, Integer>> archiveExecutions(
+            @PathVariable String workflowId, @RequestBody ExecutionIdsRequest req) {
+        return ResponseEntity.ok(Map.of("archived",
+                service.archiveExecutions(workflowId, req.safeIds())));
+    }
+
+    /** Put archived runs back on the history. */
+    @PostMapping("/{workflowId}/executions/restore")
+    public ResponseEntity<Map<String, Integer>> restoreExecutions(
+            @PathVariable String workflowId, @RequestBody ExecutionIdsRequest req) {
+        return ResponseEntity.ok(Map.of("restored",
+                service.restoreExecutions(workflowId, req.safeIds())));
+    }
+
+    /**
+     * Delete archived runs permanently. Only archived rows are eligible, so
+     * deleting is always the second, deliberate step; the load tests' own runs
+     * are untouched and stay listed under their application.
+     */
+    @PostMapping("/{workflowId}/executions/delete")
+    public ResponseEntity<Map<String, Integer>> deleteExecutions(
+            @PathVariable String workflowId, @RequestBody ExecutionIdsRequest req) {
+        return ResponseEntity.ok(Map.of("deleted",
+                service.deleteExecutions(workflowId, req.safeIds())));
     }
 
     private static String name(String raw) {
@@ -172,6 +219,22 @@ public class WorkflowController {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record ValidateWorkflowRequest(String groupId, WorkflowGraph graph) {}
+
+    /** The runs a bulk archive / restore / delete acts on. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ExecutionIdsRequest(List<String> executionIds) {
+        /** Never null, and capped so one request cannot ask for an unbounded IN-list. */
+        public List<String> safeIds() {
+            if (executionIds == null || executionIds.isEmpty()) {
+                throw new IllegalArgumentException("executionIds is required");
+            }
+            if (executionIds.size() > MAX_HISTORY) {
+                throw new IllegalArgumentException(
+                        "at most " + MAX_HISTORY + " runs per request, got " + executionIds.size());
+            }
+            return List.copyOf(executionIds);
+        }
+    }
 
     /** A duplicate name inside one group. */
     @org.springframework.web.bind.annotation.ExceptionHandler(DuplicateKeyException.class)

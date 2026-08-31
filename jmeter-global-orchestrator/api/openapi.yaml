@@ -2586,14 +2586,33 @@ paths:
         "404": { description: "No such workflow." }
     delete:
       tags: [workflows]
-      summary: Delete a workflow
+      summary: Delete a workflow and its runs
       description: |
-        Idempotent. Refused while an execution is running — deleting the
-        definition mid-flight would strand the engine. Past executions survive
-        the delete: they snapshot the name and graph they ran.
+        Deletes the workflow and every execution recording it — nothing lists an
+        execution except through its workflow, so leaving them would leave rows
+        no surface can reach. The load tests' own runs are NOT deleted: a run is
+        its own history, listed under its application.
+
+        A run in progress refuses the delete unless `cancelRunning=true`, which
+        stops it first. An operator who wants the workflow gone will cancel by
+        hand and delete anyway, so the two steps are offered as one.
+      parameters:
+        - name: cancelRunning
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+        - $ref: "#/components/parameters/XActorHeader"
       responses:
-        "204": { description: "Gone." }
-        "409": { description: "`WORKFLOW_RUNNING` — cancel the executions first." }
+        "200":
+          description: Deleted; the body says what it took with it.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cancelledExecutions: { type: integer }
+                  deletedExecutions:   { type: integer }
+        "409": { description: "`WORKFLOW_RUNNING` — pass `cancelRunning=true` to stop it and delete." }
 
   /api/v1/workflows/{workflowId}/executions:
     parameters:
@@ -2634,12 +2653,20 @@ paths:
     get:
       tags: [workflows]
       summary: Execution history
-      description: Newest first, capped at 200. Task rows are omitted — the execution's own endpoint carries those.
+      description: |
+        Newest first, capped at 200. Task rows are omitted — the execution's own
+        endpoint carries those. `archived=true` reads the archive instead; the
+        two lists are never mixed, so a caller always knows which side it is
+        acting on.
       parameters:
         - name: limit
           in: query
           required: false
           schema: { type: integer, minimum: 1, maximum: 200, default: 25 }
+        - name: archived
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
       responses:
         "200":
           description: Past and current executions.
@@ -2648,6 +2675,103 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/WorkflowExecution" }
+
+  /api/v1/workflows/{workflowId}/executions/archive:
+    parameters:
+      - name: workflowId
+        in: path
+        required: true
+        schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+    post:
+      tags: [workflows]
+      summary: Archive finished runs
+      description: |
+        Takes finished runs off the history without deleting anything. A run
+        still going is skipped rather than refused — archiving one the engine is
+        still advancing would hide it while it kept running, which the schema
+        forbids outright.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ExecutionIdsRequest" }
+      responses:
+        "200":
+          description: How many were archived.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { archived: { type: integer } }
+        "400": { description: "`executionIds` is required and holds at most 200 ids." }
+
+  /api/v1/workflows/{workflowId}/executions/restore:
+    parameters:
+      - name: workflowId
+        in: path
+        required: true
+        schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+    post:
+      tags: [workflows]
+      summary: Put archived runs back on the history
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ExecutionIdsRequest" }
+      responses:
+        "200":
+          description: How many were restored.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { restored: { type: integer } }
+
+  /api/v1/workflows/{workflowId}/executions/delete:
+    parameters:
+      - name: workflowId
+        in: path
+        required: true
+        schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+    post:
+      tags: [workflows]
+      summary: Delete archived runs permanently
+      description: |
+        Only rows already archived are eligible, which is what makes deleting
+        the second, deliberate step; ids that are not archived are simply not
+        deleted. The load tests' own runs are untouched.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ExecutionIdsRequest" }
+      responses:
+        "200":
+          description: How many were deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { deleted: { type: integer } }
+
+  /api/v1/workflows/{workflowId}/executions/archivedCount:
+    parameters:
+      - name: workflowId
+        in: path
+        required: true
+        schema: { type: string, pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" }
+    get:
+      tags: [workflows]
+      summary: How many runs are archived
+      responses:
+        "200":
+          description: The archive's size, so a client can offer it only when there is one.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { archived: { type: integer } }
 
   /api/v1/workflowExecutions/{executionId}:
     parameters:
@@ -2997,6 +3121,11 @@ components:
           format: date-time
           nullable: true
           description: "When the engine will next advance it; non-null exactly while RUNNING."
+        hiddenAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: "Archived when set — off the default history, still readable by id, and the only rows a delete accepts."
         tasks:
           type: array
           items: { $ref: "#/components/schemas/WorkflowTask" }
@@ -3029,6 +3158,16 @@ components:
           description: "When this task next wants attention — a delay's due time, an approval's deadline, a health check's next attempt, a load test's watchdog."
         result:      { type: object, nullable: true, description: "Per-type detail the UI renders." }
         errorReason: { type: string, nullable: true }
+
+    ExecutionIdsRequest:
+      type: object
+      required: [executionIds]
+      properties:
+        executionIds:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: { type: string }
 
     WorkflowGroupSummary:
       type: object
