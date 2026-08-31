@@ -21,8 +21,8 @@ import { useVisiblePolling } from "../hooks/useVisiblePolling";
 
 /**
  * Per-group capacity drill-in — the worker pool is the application group's
- * (GROUP-CAPACITY, 2026-08-30). Reached via /capacity/{groupId} (clicking a
- * row on `<CapacityListPage>`). The pool's lifecycle policy is edited with
+ * (GROUP-CAPACITY, 2026-08-30). Reached via /capacity/groups/{groupId}
+ * (clicking a row on the Capacity › Reservations tab). The pool's lifecycle policy is edited with
  * the group itself ("Manage groups" on Applications).
  *
  * <p>Per region: chips (Ready / In Use / Provisioned / Max), a count

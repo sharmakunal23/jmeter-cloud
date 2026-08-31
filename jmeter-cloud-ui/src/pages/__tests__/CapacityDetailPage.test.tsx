@@ -76,9 +76,9 @@ function snap(partial: Partial<CapacitySnapshot> = {}): CapacitySnapshot {
 
 function renderAt(groupId: string) {
   return render(
-    <MemoryRouter initialEntries={[`/capacity/${encodeURIComponent(groupId)}`]}>
+    <MemoryRouter initialEntries={[`/capacity/groups/${encodeURIComponent(groupId)}`]}>
       <Routes>
-        <Route path="/capacity/:groupId" element={<CapacityDetailPage />} />
+        <Route path="/capacity/groups/:groupId" element={<CapacityDetailPage />} />
         <Route path="/capacity" element={<div>capacity-list-stub</div>} />
       </Routes>
     </MemoryRouter>,

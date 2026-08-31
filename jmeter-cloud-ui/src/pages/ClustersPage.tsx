@@ -11,7 +11,7 @@ import { useVisiblePolling } from "../hooks/useVisiblePolling";
 import { formatRelative } from "../lib/time";
 
 /**
- * The cluster registry (CLUSTER-CAPACITY): one row per registered data
+ * Capacity › Clusters — the cluster registry (CLUSTER-CAPACITY): one row per registered data
  * center, off the single `GET /api/v1/regions/status` read — registration
  * facts, live reachability, the groups' reservations against the ceiling,
  * and the last test-provisioning verdict. "+ Add cluster" runs the hub's
@@ -100,9 +100,10 @@ export function ClustersPage() {
 
   return (
     <section>
+      {/* No <h1> here — the Capacity section shell owns it; this row carries
+          the tab's own status line and actions. */}
       <header className="pageHeader">
         <div className="pageHeader__titleGroup">
-          <h1>Clusters</h1>
           <small className="ink-soft" aria-live="polite">
             {state.status === "ok"
               ? isPaused ? "Polling paused (tab hidden)" : `Refreshed ${formatRelative(state.refreshedAt.toISOString())}`

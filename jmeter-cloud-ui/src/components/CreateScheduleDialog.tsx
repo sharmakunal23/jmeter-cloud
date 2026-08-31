@@ -194,7 +194,7 @@ export function CreateScheduleDialog({ application, groupId, regions, editing, o
               <p className="ink-soft" style={{ fontSize: "0.82rem" }}>
                 No regions configured for <span className="mono">{application}</span>'s group. Add capacity on the{" "}
                 {groupId
-                  ? <Link to={`/capacity/${encodeURIComponent(groupId)}`}>group's Capacity page</Link>
+                  ? <Link to={`/capacity/groups/${encodeURIComponent(groupId)}`}>group's Capacity page</Link>
                   : <Link to="/capacity">Capacity tab</Link>} first.
               </p>
             ) : (

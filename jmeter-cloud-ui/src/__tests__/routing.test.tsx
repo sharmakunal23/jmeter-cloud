@@ -105,12 +105,12 @@ describe("UI-D1 routing — legacy URLs 404 (no redirect)", () => {
 });
 
 describe("UI-D1 routing — top nav", () => {
-    it("renders the 7 primary tabs in standardized order", () => {
+    it("renders the 6 primary tabs in standardized order", () => {
         renderAt("/");
         const nav = screen.getByRole("navigation", { name: "primary" });
         expect(nav).toBeInTheDocument();
-        // Clusters joined the nav with CLUSTER-CAPACITY (runtime cluster registry).
-        const order = ["Applications", "Capacity", "Clusters", "Documents", "Plugins", "Templates", "Automation"];
+        // Clusters left the nav 2026-08-31 — it is a tab under Capacity now.
+        const order = ["Applications", "Capacity", "Documents", "Plugins", "Templates", "Automation"];
         for (const label of order) {
             expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
         }
@@ -125,11 +125,29 @@ describe("UI-D1 routing — top nav", () => {
         expect(nav.querySelector('a[href="/"]')).toBeNull();
     });
 
+    it("each tab carries a decorative icon that leaves the link's name intact", () => {
+        renderAt("/");
+        const nav = screen.getByRole("navigation", { name: "primary" });
+        for (const link of Array.from(nav.querySelectorAll("a[href]"))) {
+            const svg = link.querySelector("svg.icon");
+            expect(svg).not.toBeNull();
+            expect(svg!.getAttribute("aria-hidden")).toBe("true");
+        }
+        // Decorative glyphs must not leak into the accessible name.
+        expect(screen.getByRole("link", { name: "Capacity" })).toHaveAttribute("href", "/capacity");
+    });
+
     it("legacy Runs / New run / Blobs tabs are gone", () => {
         renderAt("/");
         const nav = screen.getByRole("navigation", { name: "primary" });
         expect(nav.querySelector('a[href="/runs"]')).toBeNull();
         expect(nav.querySelector('a[href="/runs/new"]')).toBeNull();
         expect(nav.querySelector('a[href="/blobs"]')).toBeNull();
+    });
+
+    it("Clusters is no longer a top-level tab (it moved under Capacity)", () => {
+        renderAt("/");
+        const nav = screen.getByRole("navigation", { name: "primary" });
+        expect(nav.querySelector('a[href="/clusters"]')).toBeNull();
     });
 });

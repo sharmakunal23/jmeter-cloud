@@ -40,7 +40,7 @@ function cluster(region: string, over: Partial<ClusterStatus> = {}): ClusterStat
 
 function renderPage() {
   return render(
-    <MemoryRouter initialEntries={["/clusters"]}>
+    <MemoryRouter initialEntries={["/capacity/clusters"]}>
       <ClustersPage />
     </MemoryRouter>,
   );

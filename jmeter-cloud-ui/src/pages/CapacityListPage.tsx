@@ -11,7 +11,7 @@ import { useClientPagination } from "../hooks/useClientPagination";
 import { ReconcileWorkersDialog } from "../components/ReconcileWorkersDialog";
 
 /**
- * Capacity list — one row per application group, since the worker pool is
+ * Capacity › Reservations — one row per application group, since the worker pool is
  * the group's (GROUP-CAPACITY, 2026-08-30): every application in a group
  * draws on the same per-region budget. Per row: regions, ready, in use,
  * `{provisioned}/{max}` with a utilization bar, and a recent-activity chip
@@ -167,9 +167,10 @@ export function CapacityListPage() {
 
   return (
     <section className="capacityPage">
+      {/* No <h1> here — the Capacity section shell owns it; this row carries
+          the tab's own status line and actions. */}
       <header className="pageHeader">
         <div className="pageHeader__titleGroup">
-          <h1>Capacity</h1>
           <small className="ink-soft" aria-live="polite">
             {loading
               ? "Loading…"
@@ -306,7 +307,7 @@ function CapacityListRow({ row }: { row: RowAggregate }) {
   const ratio = row.maxAvailable > 0 ? (row.ready + row.inUse) / row.maxAvailable : 0;
   const variant: "ok" | "warn" | "err" =
     ratio >= 1 ? "err" : ratio >= 0.8 ? "warn" : "ok";
-  const href = `/capacity/${encodeURIComponent(row.group.groupId)}`;
+  const href = `/capacity/groups/${encodeURIComponent(row.group.groupId)}`;
   function open() { navigate(href); }
   function onKey(e: React.KeyboardEvent<HTMLTableRowElement>) {
     if (e.key === "Enter" || e.key === " ") {

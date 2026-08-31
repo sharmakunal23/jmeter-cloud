@@ -3,18 +3,31 @@ import { Link, NavLink, Outlet } from "react-router-dom";
 
 import { ActorControl } from "./ActorControl";
 import { BrandMark } from "./BrandMark";
+import {
+  ApplicationsIcon,
+  AutomationIcon,
+  CapacityIcon,
+  DocumentsIcon,
+  PluginsIcon,
+  TemplatesIcon,
+} from "./Icons";
 
 /**
  * Top-level chrome — header + nav + Outlet for the active route.
  *
  * <p>The nav was reshaped from {@code Runs / New run / Blobs} to
  * {@code Home / Applications / Documents / Templates / Automation}.
- * The legacy URLs were hard-removed (no redirects); a hit on one
- * lands on {@code <NotFoundPage>} which surfaces the new equivalent.
+ * Those legacy URLs ({@code /runs}, {@code /blobs}) were hard-removed with
+ * no redirect; a hit on one lands on {@code <NotFoundPage>}, which surfaces
+ * the new equivalent. Later moves within the current IA do redirect.
  *
- * <p>CLUSTER-CAPACITY — the Capacity and Clusters tabs are always visible:
- * spun and declared workers coexist per pool, so there is no deployment
- * posture to gate on.
+ * <p>Every tab carries an icon so the bar is scannable by shape before the
+ * label is read; the glyphs are decorative and inherit the link's colour.
+ *
+ * <p>CLUSTER-CAPACITY — Capacity is always visible (spun and declared
+ * workers coexist per pool, so there is no deployment posture to gate on)
+ * and the cluster registry moved under it as a tab: reservations and the
+ * clusters they draw on are one surface, not two.
  *
  * <p>The footer adapts to the page: when the content plus the footer fit
  * inside the viewport it stays pinned visible (nothing to cover, no reason
@@ -76,13 +89,12 @@ export function Layout() {
               Home affordance. NavLinks below match React Router's active
               detection so the brand stays "selected-looking" via styling
               but isn't a duplicate tab. */}
-          <NavLink to="/applications">Applications</NavLink>
-          <NavLink to="/capacity">Capacity</NavLink>
-          <NavLink to="/clusters">Clusters</NavLink>
-          <NavLink to="/documents">Documents</NavLink>
-          <NavLink to="/plugins">Plugins</NavLink>
-          <NavLink to="/templates">Templates</NavLink>
-          <NavLink to="/automation">Automation</NavLink>
+          <NavLink to="/applications"><ApplicationsIcon />Applications</NavLink>
+          <NavLink to="/capacity"><CapacityIcon />Capacity</NavLink>
+          <NavLink to="/documents"><DocumentsIcon />Documents</NavLink>
+          <NavLink to="/plugins"><PluginsIcon />Plugins</NavLink>
+          <NavLink to="/templates"><TemplatesIcon />Templates</NavLink>
+          <NavLink to="/automation"><AutomationIcon />Automation</NavLink>
         </nav>
         <div className="appHeader__spacer" />
         <ActorControl />

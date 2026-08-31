@@ -1,4 +1,4 @@
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
 
 import { Layout } from "./components/Layout";
 import { ApplicationsListPage } from "./pages/ApplicationsListPage";
@@ -7,6 +7,7 @@ import { AutomationListPage } from "./pages/AutomationListPage";
 import { AutomationDetailPage } from "./pages/AutomationDetailPage";
 import { CapacityListPage } from "./pages/CapacityListPage";
 import { CapacityDetailPage } from "./pages/CapacityDetailPage";
+import { CapacitySection } from "./pages/CapacitySection";
 import { ClustersPage } from "./pages/ClustersPage";
 import { DocumentsListPage } from "./pages/DocumentsListPage";
 import { DocumentsDetailPage } from "./pages/DocumentsDetailPage";
@@ -50,15 +51,27 @@ export function App() {
           <Route path="applications/:appName/runs/new" element={<NewRunPage />} />
           <Route path="applications/:appName/runs/:runId" element={<RunDetailPage />} />
 
-          {/* Capacity — one row per application group (the worker pool is the
-              group's; GROUP-CAPACITY 2026-08-30), drill-in per group. Always
-              visible since CLUSTER-CAPACITY: spun and declared workers
-              coexist, so there is no posture to gate on. */}
-          <Route path="capacity" element={<CapacityListPage />} />
-          <Route path="capacity/:groupId" element={<CapacityDetailPage />} />
+          {/* Capacity — one section, two tabs (2026-08-31): Reservations, one
+              row per application group (the worker pool is the group's;
+              GROUP-CAPACITY 2026-08-30), and Clusters, the runtime cluster
+              registry those reservations draw on (CLUSTER-CAPACITY). Always
+              visible: spun and declared workers coexist, so there is no
+              posture to gate on. */}
+          <Route path="capacity" element={<CapacitySection />}>
+            <Route index element={<CapacityListPage />} />
+            <Route path="clusters" element={<ClustersPage />} />
+          </Route>
+          {/* The group drill-in is a detail page, not a third tab, so it sits
+              outside the tabbed shell. `groups/` keeps it out of the tab
+              namespace — a groupId of "clusters" is legal
+              ([a-z][a-z0-9_]{0,29}) and would otherwise shadow the tab. */}
+          <Route path="capacity/groups/:groupId" element={<CapacityDetailPage />} />
 
-          {/* Clusters — the runtime cluster registry (CLUSTER-CAPACITY). */}
-          <Route path="clusters" element={<ClustersPage />} />
+          {/* Old locations, kept as redirects so operator bookmarks survive
+              the reshuffle: /clusters is now a Capacity tab, and the group
+              drill-in gained its `groups/` segment. */}
+          <Route path="clusters" element={<Navigate to="/capacity/clusters" replace />} />
+          <Route path="capacity/:groupId" element={<LegacyGroupCapacityRedirect />} />
 
           {/* Phase IA-Documents (2026-05-12) — list-then-drill-in IA
               matching `/capacity`. /documents shows apps with per-app
@@ -98,4 +111,10 @@ export function App() {
       </Routes>
     </BrowserRouter>
   );
+}
+
+/** `/capacity/{groupId}` → `/capacity/groups/{groupId}` (2026-08-31 move). */
+function LegacyGroupCapacityRedirect() {
+  const { groupId } = useParams();
+  return <Navigate to={`/capacity/groups/${encodeURIComponent(groupId ?? "")}`} replace />;
 }

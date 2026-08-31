@@ -213,6 +213,9 @@ h4 { font-size: var(--fs-sm); }
 }
 
 .appNav a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
   padding: 0.25rem 0.5rem;
   border-radius: 4px;
   color: var(--ink-soft);
@@ -221,6 +224,62 @@ h4 { font-size: var(--fs-sm); }
 .appNav a.active {
   color: var(--primary-d);
   background: rgba(17, 122, 202, 0.08);
+}
+
+/* Icon glyphs (src/components/Icons.tsx) — sized in `em` so they track the
+   label they sit beside, and drawn in `currentColor` so hover/active states
+   carry them for free. `flex-shrink: 0` keeps the glyph square when a nav
+   bar wraps. */
+.icon {
+  width: 1.05em;
+  height: 1.05em;
+  flex-shrink: 0;
+}
+
+/* A tab's glyph is quieter than its label until the tab is active — the
+   text is what you read, the shape is what you scan for. */
+.appNav a .icon,
+.sectionTabs__tab .icon { opacity: 0.7; }
+.appNav a:hover .icon,
+.appNav a.active .icon,
+.sectionTabs__tab:hover .icon,
+.sectionTabs__tab.active .icon { opacity: 1; }
+
+/* ── Section tabs — one section, several views (Capacity: Reservations /
+   Clusters). Same underline language as the run-detail tab bar, so a tab
+   strip reads the same wherever it appears. ─────────────────────────── */
+
+.sectionTabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1rem;
+}
+
+.sectionTabs__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.5rem 0.9rem;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  color: var(--ink-soft);
+  font-size: 0.95rem;
+  text-decoration: none;
+}
+
+.sectionTabs__tab:hover { color: var(--ink); }
+
+.sectionTabs__tab.active {
+  color: var(--primary-d);
+  border-bottom-color: var(--brand);
+  font-weight: 600;
+}
+
+.sectionTabs__tab:focus-visible {
+  outline: 2px solid rgba(17, 122, 202, 0.55);
+  outline-offset: -2px;
+  border-radius: 4px 4px 0 0;
 }
 
 .appHeader__spacer { flex: 1; }
@@ -2919,6 +2978,11 @@ button.appDetailChip:disabled {
 }
 
 .pageHeader h1 { margin: 0; font-size: 1.4rem; }
+
+/* The section shell owns the <h1>; its tabs sit right under it, so the
+   heading row does not need the full list-header gap below it. Must stay
+   AFTER `.pageHeader` — same specificity, so source order decides. */
+.pageHeader--section { margin-bottom: 0.5rem; }
 
 /* Title + a small status line ("Refreshed Xs ago") sit together on the
    left side of the header; the page's primary action stays on the right. */
