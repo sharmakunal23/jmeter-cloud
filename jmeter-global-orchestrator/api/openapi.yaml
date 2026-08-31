@@ -2514,8 +2514,9 @@ paths:
       tags: [workflows]
       summary: Validate a draft without saving it
       description: |
-        The same checks a save runs, plus the capacity picture: peak concurrent
-        workers per cluster against the group's reservation. The peak is the
+        The same checks a save runs, plus the capacity picture and the
+        design-time warnings: peak concurrent workers per cluster against the
+        group's reservation. The peak is the
         graph's maximum-weight antichain — the most that can ever run at once —
         not a per-task maximum, and `capacity[].tasks` names the tasks behind
         each number.
@@ -3040,7 +3041,14 @@ components:
       properties:
         valid:    { type: boolean }
         errors:   { type: array, items: { type: string }, description: "Block a save." }
-        warnings: { type: array, items: { type: string }, description: "Do not block a save; over-subscribed capacity lands here." }
+        warnings:
+          type: array
+          items: { type: string }
+          description: |
+            Never block a save. Two kinds land here: capacity the group has not
+            reserved, and a chain of "on success" links whose failure would
+            silence a downstream email — the most expensive workflow mistake,
+            because it is invisible until the day something fails.
         capacity:
           type: array
           items:

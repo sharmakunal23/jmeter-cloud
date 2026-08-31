@@ -185,6 +185,29 @@ class WorkflowEngineRulesTest {
     }
 
     @Test
+    @DisplayName("the outcome names what did not run — a skipped branch is why an expected email never came")
+    void terminalReasonNamesSkippedTasks() {
+        WorkflowGraph g = new WorkflowGraph(1,
+                List.of(node("gate", JoinPolicy.ALL), node("wait", JoinPolicy.ALL), node("mail", JoinPolicy.ALL)),
+                List.of(edge("gate", "wait", EdgeCondition.ON_SUCCESS),
+                        edge("wait", "mail", EdgeCondition.ALWAYS)));
+        List<WorkflowTask> tasks = List.of(
+                task("gate", TaskState.FAILED), task("wait", TaskState.SKIPPED), task("mail", TaskState.SKIPPED));
+
+        String reason = WorkflowEngine.terminalReason(g, tasks, ExecutionState.FAILED);
+
+        assertThat(reason).contains("2 task(s) did not run: Task wait, Task mail");
+    }
+
+    @Test
+    @DisplayName("a clean pass says nothing, because there is nothing to explain")
+    void terminalReasonIsSilentOnACleanPass() {
+        WorkflowGraph g = new WorkflowGraph(1, List.of(node("a", JoinPolicy.ALL)), List.of());
+        assertThat(WorkflowEngine.terminalReason(g, List.of(task("a", TaskState.SUCCEEDED)),
+                ExecutionState.SUCCEEDED)).isNull();
+    }
+
+    @Test
     @DisplayName("all-succeeded is a clean pass")
     void allSucceeded() {
         WorkflowGraph g = new WorkflowGraph(1,

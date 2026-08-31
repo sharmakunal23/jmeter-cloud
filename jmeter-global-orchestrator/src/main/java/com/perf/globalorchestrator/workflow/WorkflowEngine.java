@@ -336,15 +336,29 @@ public class WorkflowEngine {
         return ExecutionState.SUCCEEDED;
     }
 
-    private static String terminalReason(WorkflowGraph graph, List<WorkflowTask> tasks, ExecutionState state) {
-        if (state == ExecutionState.SUCCEEDED) return null;
+    /**
+     * Why the execution ended as it did, in the operator's terms.
+     *
+     * <p>Skipped tasks are named even on a SUCCEEDED execution: a branch that
+     * was not taken is exactly why an email someone expected never arrived, and
+     * finishing green with nothing said about it is how that becomes a mystery.
+     */
+    static String terminalReason(WorkflowGraph graph, List<WorkflowTask> tasks, ExecutionState state) {
+        List<String> parts = new ArrayList<>();
         List<String> failures = new ArrayList<>();
+        List<String> skipped = new ArrayList<>();
         for (WorkflowTask t : tasks) {
             if (t.state() == TaskState.FAILED) {
                 failures.add(t.name() + (t.errorReason() == null ? "" : ": " + t.errorReason()));
+            } else if (t.state() == TaskState.SKIPPED) {
+                skipped.add(t.name());
             }
         }
-        return failures.isEmpty() ? null : String.join("; ", failures);
+        if (!failures.isEmpty()) parts.add(String.join("; ", failures));
+        if (!skipped.isEmpty()) {
+            parts.add(skipped.size() + " task(s) did not run: " + String.join(", ", skipped));
+        }
+        return parts.isEmpty() ? null : String.join(" | ", parts);
     }
 
     /** The earliest moment any open task wants attention; an untimed wait still heartbeats. */
