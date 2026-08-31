@@ -78,6 +78,42 @@ class WorkflowEmailComposerTest {
     }
 
     @Test
+    @DisplayName("a failed load test reports FAILED even when an on-failure link handles it")
+    void outcomeReportsTheWorkNotTheOrchestration() {
+        // This is the shape the builder's own warning tells operators to
+        // create: link the email from both outcomes so it is never silenced.
+        // The execution settles SUCCEEDED (the failure was handled), but the
+        // result email is about the load test, and the load test failed.
+        WorkflowGraph g = new WorkflowGraph(1, List.of(node("load"), node("report")),
+                List.of(new WorkflowEdge("ok", "load", "report", EdgeCondition.ON_SUCCESS),
+                        new WorkflowEdge("bad", "load", "report", EdgeCondition.ON_FAILURE)));
+        List<WorkflowTask> tasks = List.of(
+                task("load", NodeType.LOAD_TEST, TaskState.FAILED, "card-auth", "run-1"),
+                task("report", NodeType.EMAIL, TaskState.RUNNING, null, null));
+
+        assertThat(composer.renderText("${execution.outcome}", execution(g), GROUP, tasks))
+                .isEqualTo("FAILED");
+        assertThat(composer.renderText("${execution.failedTasks}", execution(g), GROUP, tasks))
+                .isEqualTo("Task load");
+    }
+
+    @Test
+    @DisplayName("a skipped branch is not a failure — nothing ran, so there is nothing to report as failed")
+    void skippedIsNotFailed() {
+        WorkflowGraph g = new WorkflowGraph(1, List.of(node("gate"), node("load"), node("report")),
+                List.of(new WorkflowEdge("e1", "gate", "load", EdgeCondition.ON_SUCCESS),
+                        new WorkflowEdge("e2", "gate", "report", EdgeCondition.ON_FAILURE)));
+        List<WorkflowTask> tasks = List.of(
+                task("gate", NodeType.HEALTH_CHECK, TaskState.SUCCEEDED, "card-auth", null),
+                task("load", NodeType.LOAD_TEST, TaskState.SKIPPED, "card-auth", null),
+                task("report", NodeType.EMAIL, TaskState.RUNNING, null, null));
+
+        assertThat(composer.renderText("${execution.outcome}", execution(g), GROUP, tasks))
+                .isEqualTo("SUCCEEDED");
+        assertThat(composer.renderText("${execution.failedTasks}", execution(g), GROUP, tasks)).isEmpty();
+    }
+
+    @Test
     @DisplayName("per-task values are addressed by node id, and the group's team is available")
     void taskAndGroupPlaceholders() {
         WorkflowGraph g = new WorkflowGraph(1, List.of(node("load")), List.of());

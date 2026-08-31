@@ -2,6 +2,7 @@ package com.perf.globalorchestrator.report;
 
 import com.perf.globalorchestrator.domain.ApplicationGroup;
 import com.perf.globalorchestrator.domain.WorkflowExecution;
+import com.perf.globalorchestrator.domain.TaskState;
 import com.perf.globalorchestrator.domain.WorkflowTask;
 import org.springframework.stereotype.Component;
 
@@ -24,6 +25,10 @@ import java.util.regex.Pattern;
  * <p>Use {@code ${execution.outcome}} in a result email, not
  * {@code ${execution.state}}: the state is whatever it is at send time, and a
  * final report is sent while the execution is still RUNNING by definition.
+ * {@code outcome} is FAILED whenever any task failed — it reports the work, not
+ * the orchestration. The execution's own verdict forgives a failure that a node
+ * handles with an {@code ON_FAILURE} branch, which is right for the run's state
+ * chip and wrong for a subject line saying how the test went.
  */
 @Component
 public class WorkflowEmailComposer {
@@ -106,14 +111,18 @@ public class WorkflowEmailComposer {
         v.put("workflow.id", nullSafe(execution.workflowId()));
         v.put("execution.id", nullSafe(execution.executionId()));
         v.put("execution.state", execution.state().name());
-        // The state an email can report is almost never the one the reader
-        // wants: a result email is itself the last task, so the execution is
-        // still RUNNING when it is composed. `outcome` is the verdict the
-        // execution WILL settle to given everything that has happened, which is
-        // what "the result" means to a person.
-        v.put("execution.outcome",
-                com.perf.globalorchestrator.workflow.WorkflowEngine
-                        .outcomeOf(execution.graph(), tasks).name());
+        // `outcome` answers "did the work succeed", which is what a result
+        // email is about — NOT the execution's own verdict, which deliberately
+        // forgives a failure whose node declares an ON_FAILURE branch. Wiring a
+        // result email from both outcomes (what the builder's warning
+        // recommends) is exactly such a branch, so reusing the execution's
+        // verdict here would have every handled failure mail "SUCCEEDED".
+        List<WorkflowTask> failed = tasks.stream()
+                .filter(t -> t.state() == TaskState.FAILED)
+                .toList();
+        v.put("execution.outcome", failed.isEmpty() ? "SUCCEEDED" : "FAILED");
+        v.put("execution.failedTasks",
+                failed.stream().map(WorkflowTask::name).collect(java.util.stream.Collectors.joining(", ")));
         v.put("execution.startedAt", execution.startedAt() == null ? "" : execution.startedAt().toString());
         v.put("execution.triggeredBy", nullSafe(execution.triggeredBy()));
         v.put("group.id", nullSafe(group.groupId()));
