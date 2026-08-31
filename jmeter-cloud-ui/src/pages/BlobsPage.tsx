@@ -3,12 +3,18 @@ import { Link } from "react-router-dom";
 
 import {
   blobsApi,
+  describeBlobError,
   DocumentServiceError,
   type BlobListing,
   type BlobMetadata,
   type BlobType,
 } from "../api/blobs";
 import { applicationsApi, type Application } from "../api/applications";
+import { DeleteBlobsConfirmDialog } from "../components/DeleteBlobsConfirmDialog";
+import { Paginator } from "../components/Paginator";
+import { ToastView, useToast } from "../components/Toast";
+import { persistPageSize, readStoredPageSize } from "../hooks/useClientPagination";
+import { formatBytes, inferDownloadFilename } from "../lib/blobFile";
 
 /**
  * Blob library — Step 18 centerpiece. Drag-and-drop file uploader with
@@ -31,9 +37,9 @@ interface UploadInFlight {
   controller: AbortController;
 }
 
-// UI-D2 standardized page size — 25 docs per page, newest-first (the
-// document-service already returns rows in `uploadedAt DESC` order).
-const PAGE_SIZE = 25;
+// Newest-first — the document-service already returns rows in `uploadedAt
+// DESC` order. Rows per page is the operator's shared list preference
+// (UX-SIMPLIFY), which also bounds how many documents one bulk action covers.
 const TYPES: BlobType[] = ["testPlan", "dataFiles", "result", "other"];
 
 export interface BlobsPageProps {
@@ -64,6 +70,15 @@ export function BlobsPage({ pinnedType, pinnedApplication, hideHeader }: BlobsPa
   // dropdown is populated from the registered-apps registry.
   const [appFilter, setAppFilter] = useState<string>(pinnedApplication ?? "");
   const [offset, setOffset] = useState(0);
+  const [pageSize, setPageSizeState] = useState<number>(() => readStoredPageSize());
+
+  // Bulk operations — the selection is a Map, not a Set of ids, so the
+  // confirm dialog can name every picked file even after the operator paged
+  // past it (paging refetches; the row objects would otherwise be gone).
+  const [selected, setSelected] = useState<Map<string, BlobMetadata>>(new Map());
+  /** The delete dialog's subject: the whole selection, or one row's file. */
+  const [pendingDelete, setPendingDelete] = useState<BlobMetadata[] | null>(null);
+  const { toast, showToast, dismiss } = useToast();
 
   // Form fields for the next upload. Name is no longer operator-supplied —
   // we keep the file's own name (with extension) since that's what the
@@ -116,9 +131,17 @@ export function BlobsPage({ pinnedType, pinnedApplication, hideHeader }: BlobsPa
       .list({
           type: typeFilter || undefined,
           application: appFilter || undefined,
-          offset, limit: PAGE_SIZE,
+          offset, limit: pageSize,
         }, ctl.signal)
-      .then((listing) => setList({ status: "ok", listing }))
+      .then((listing) => {
+        setList({ status: "ok", listing });
+        // Deleting the last rows of the last page would otherwise leave the
+        // operator staring at an empty table; step back instead. The offset
+        // strictly decreases, so the re-fetch this triggers terminates.
+        if (listing.items.length === 0 && listing.offset > 0) {
+          setOffset(Math.max(0, listing.offset - listing.limit));
+        }
+      })
       .catch((err: unknown) => {
         if (ctl.signal.aborted) return;
         setList({
@@ -127,12 +150,25 @@ export function BlobsPage({ pinnedType, pinnedApplication, hideHeader }: BlobsPa
         });
       });
     return ctl;
-  }, [typeFilter, appFilter, offset]);
+  }, [typeFilter, appFilter, offset, pageSize]);
 
   useEffect(() => {
     const ctl = refresh();
     return () => ctl.abort();
   }, [refresh]);
+
+  // A selection means "these files", so it survives paging — but not a change
+  // of scope: rows the operator can no longer see must not stay armed for a
+  // bulk delete.
+  useEffect(() => {
+    setSelected(new Map());
+  }, [typeFilter, appFilter]);
+
+  function setPageSize(next: number) {
+    setPageSizeState(next);
+    persistPageSize(next);
+    setOffset(0);
+  }
 
   // ── Upload handlers ──────────────────────────────────────────────
 
@@ -173,13 +209,7 @@ export function BlobsPage({ pinnedType, pinnedApplication, hideHeader }: BlobsPa
         .catch((err: unknown) => {
           setInFlight(null);
           if (err instanceof DocumentServiceError && err.code === "ABORTED") return;
-          setUploadError(
-            err instanceof DocumentServiceError
-              ? `${err.code}: ${err.message}`
-              : err instanceof Error
-                ? err.message
-                : String(err),
-          );
+          setUploadError(describeBlobError(err));
         });
     },
     [refresh, uploadDescription, uploadType, uploadApplication],
@@ -213,16 +243,46 @@ export function BlobsPage({ pinnedType, pinnedApplication, hideHeader }: BlobsPa
     inFlight?.controller.abort();
   };
 
-  // ── Delete handler ───────────────────────────────────────────────
+  // ── Selection + delete handlers ──────────────────────────────────
 
-  const onDelete = async (blobId: string) => {
-    if (!confirm(`Delete blob ${blobId}?`)) return;
-    try {
-      await blobsApi.delete(blobId);
-      refresh();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
-    }
+  const pageItems = list.status === "ok" ? list.listing.items : [];
+  const pageAllSelected = pageItems.length > 0 && pageItems.every((b) => selected.has(b.blobId));
+  const pageAnySelected = pageItems.some((b) => selected.has(b.blobId));
+
+  const toggleSelected = (blob: BlobMetadata) => {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      if (next.has(blob.blobId)) next.delete(blob.blobId);
+      else next.set(blob.blobId, blob);
+      return next;
+    });
+  };
+
+  /** Header checkbox — covers this page only; picks on other pages stand. */
+  const togglePageSelected = () => {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      for (const b of pageItems) {
+        if (pageAllSelected) next.delete(b.blobId);
+        else next.set(b.blobId, b);
+      }
+      return next;
+    });
+  };
+
+  // The dialog reports what it actually deleted, so a partial failure still
+  // clears the rows that went and leaves the rest selected to retry.
+  const onDeleted = (deletedBlobIds: string[]) => {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      for (const id of deletedBlobIds) next.delete(id);
+      return next;
+    });
+    refresh();
+    showToast({
+      variant: "ok",
+      text: `${deletedBlobIds.length} document${deletedBlobIds.length === 1 ? "" : "s"} deleted.`,
+    });
   };
 
   // ── Render ───────────────────────────────────────────────────────
@@ -392,18 +452,26 @@ export function BlobsPage({ pinnedType, pinnedApplication, hideHeader }: BlobsPa
           </label>
         )}
         <span className="runsToolbar__spacer" />
-        {list.status === "ok" && (
-          <span className="runsToolbar__refreshed">
-            {list.listing.total} total
-            {list.listing.total > 0 && (
-              <>
-                &nbsp;· showing {list.listing.offset + 1}–
-                {Math.min(list.listing.offset + list.listing.items.length, list.listing.total)}
-              </>
-            )}
-          </span>
-        )}
       </div>
+
+      {selected.size > 0 && (
+        <div className="bulkToolbar" role="toolbar" aria-label="Bulk actions for selected documents">
+          <span className="bulkToolbar__count">
+            {selected.size} selected
+          </span>
+          <button type="button" className="btn btn--ghost" onClick={() => setSelected(new Map())}>
+            Clear
+          </button>
+          <span className="bulkToolbar__spacer" />
+          <button
+            type="button"
+            className="btn btn--danger"
+            onClick={() => setPendingDelete([...selected.values()])}
+          >
+            Delete selected
+          </button>
+        </div>
+      )}
 
       {list.status === "loading" && <p>loading…</p>}
       {list.status === "error" && <p className="text--error">{list.message}</p>}
@@ -415,6 +483,19 @@ export function BlobsPage({ pinnedType, pinnedApplication, hideHeader }: BlobsPa
           <table className="runsTable">
             <thead>
               <tr>
+                <th className="runsTable__check">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all documents on this page"
+                    checked={pageAllSelected}
+                    ref={(el) => {
+                      // "Some but not all" is the third checkbox state, and it
+                      // is only settable from JS.
+                      if (el) el.indeterminate = !pageAllSelected && pageAnySelected;
+                    }}
+                    onChange={togglePageSelected}
+                  />
+                </th>
                 <th>File</th>
                 {!pinnedType && <th>Type</th>}
                 {!pinnedApplication && <th>Application</th>}
@@ -429,33 +510,51 @@ export function BlobsPage({ pinnedType, pinnedApplication, hideHeader }: BlobsPa
                 <BlobRow
                   key={b.blobId}
                   blob={b}
-                  onDelete={onDelete}
+                  selected={selected.has(b.blobId)}
+                  onToggleSelected={toggleSelected}
+                  onDelete={(blob) => setPendingDelete([blob])}
                   showType={!pinnedType}
                   showApplication={!pinnedApplication}
                 />
               ))}
             </tbody>
           </table>
-          <Pagination
+          <Paginator
+            page={Math.floor(list.listing.offset / list.listing.limit) + 1}
+            pageSize={list.listing.limit}
             total={list.listing.total}
-            offset={list.listing.offset}
-            limit={list.listing.limit}
-            onChange={setOffset}
+            label="documents"
+            onChange={(nextPage) => setOffset((nextPage - 1) * list.listing.limit)}
+            onPageSizeChange={setPageSize}
           />
         </>
       )}
+
+      {pendingDelete && pendingDelete.length > 0 && (
+        <DeleteBlobsConfirmDialog
+          selected={pendingDelete}
+          onDeleted={onDeleted}
+          onClose={() => setPendingDelete(null)}
+        />
+      )}
+
+      <ToastView toast={toast} onDismiss={dismiss} />
     </section>
   );
 }
 
 function BlobRow({
   blob,
+  selected,
+  onToggleSelected,
   onDelete,
   showType,
   showApplication,
 }: {
   blob: BlobMetadata;
-  onDelete: (blobId: string) => void;
+  selected: boolean;
+  onToggleSelected: (blob: BlobMetadata) => void;
+  onDelete: (blob: BlobMetadata) => void;
   showType: boolean;
   showApplication: boolean;
 }) {
@@ -465,7 +564,15 @@ function BlobRow({
   // and ate horizontal space without adding signal.
   const filename = inferDownloadFilename(blob);
   return (
-    <tr>
+    <tr className={selected ? "blobRow--selected" : undefined}>
+      <td className="runsTable__check">
+        <input
+          type="checkbox"
+          aria-label={`Select ${filename} (${blob.blobId})`}
+          checked={selected}
+          onChange={() => onToggleSelected(blob)}
+        />
+      </td>
       <td>
         <div className="mono blobRow__filename"><strong>{filename}</strong></div>
         {blob.description && (
@@ -514,32 +621,13 @@ function BlobRow({
         <button
           type="button"
           className="btn btn--ghost text--error"
-          onClick={() => onDelete(blob.blobId)}
+          onClick={() => onDelete(blob)}
         >
           Delete
         </button>
       </td>
     </tr>
   );
-}
-
-/**
- * Mirrors the server-side {@code BlobController#inferDownloadFilename}
- * — keeps client + server in lockstep so the visible filename matches
- * what the browser actually saves. Conventions:
- * {@code testPlan → .jmx · dataFiles → .zip · result → .jtl.gz · other → .bin}.
- * If the operator-supplied name already carries an extension, trust it.
- */
-export function inferDownloadFilename(blob: Pick<BlobMetadata, "name" | "type" | "blobId">): string {
-  const base = blob.name && blob.name.trim() ? blob.name.trim() : blob.blobId;
-  const safe = base.replace(/[-"\/]/g, "_");
-  if (safe.includes(".")) return safe;
-  switch (blob.type) {
-    case "testPlan": return safe + ".jmx";
-    case "dataFiles": return safe + ".zip";
-    case "result": return safe + ".jtl.gz";
-    default: return safe + ".bin";
-  }
 }
 
 function UploadInProgress({
@@ -571,50 +659,4 @@ function UploadInProgress({
       </div>
     </div>
   );
-}
-
-function Pagination({
-  total,
-  offset,
-  limit,
-  onChange,
-}: {
-  total: number;
-  offset: number;
-  limit: number;
-  onChange: (next: number) => void;
-}) {
-  if (total <= limit) return null;
-  const hasPrev = offset > 0;
-  const hasNext = offset + limit < total;
-  return (
-    <div className="pagination">
-      <button
-        type="button"
-        className="btn"
-        disabled={!hasPrev}
-        onClick={() => onChange(Math.max(0, offset - limit))}
-      >
-        ← Prev
-      </button>
-      <span className="text--muted">
-        {Math.floor(offset / limit) + 1} / {Math.ceil(total / limit)}
-      </span>
-      <button
-        type="button"
-        className="btn"
-        disabled={!hasNext}
-        onClick={() => onChange(offset + limit)}
-      >
-        Next →
-      </button>
-    </div>
-  );
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }

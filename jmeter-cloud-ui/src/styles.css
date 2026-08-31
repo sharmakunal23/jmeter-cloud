@@ -18,6 +18,10 @@
      and the toast overlay agree — toasts float ABOVE the footer (see .toast)
      instead of overlapping it. */
   --footer-height: 3rem;
+  /* Height of the sticky-top app header. One token so anything that pins
+     BELOW it (.bulkToolbar) clears it — the header sits at z-index 10, so a
+     bar sticking to top:0 would slide underneath and vanish on scroll. */
+  --header-height: 3.5rem;
   /* Shared modal dimensions — every dialog tier draws from these four tokens
      so sizes stay uniform across the app. Confirms hug their content (a tall
      empty confirm reads wrong); form dialogs share a uniform minimum height
@@ -138,6 +142,8 @@ h4 { font-size: var(--fs-sm); }
   position: sticky;
   top: 0;
   z-index: 10;
+  /* Fixed height so .bulkToolbar can pin directly below it (see --header-height). */
+  min-height: var(--header-height);
 }
 
 .appBrand {
@@ -4123,14 +4129,10 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
 .blobRow__id { font-size: 0.78rem; }
 .blobRow__sha { font-size: 0.7rem; }
 
-.pagination {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  justify-content: flex-end;
-  margin-top: 1rem;
-  font-size: 0.9rem;
-}
+/* Documents bulk-select — a checked row is tinted the same way a selected
+   pod row is, so "what will the Delete selected button act on" reads at a
+   glance across pages. */
+.blobRow--selected > td { background: rgba(14, 165, 233, 0.06); }
 
 /* ── Step 19 — log tail panel ─────────────────────────────────────── */
 
@@ -4771,7 +4773,7 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
 
 .bulkToolbar {
   position: sticky;
-  top: 0;
+  top: var(--header-height);
   z-index: 5;
   display: flex;
   align-items: center;
@@ -4787,6 +4789,8 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
   font-weight: 600;
   margin-right: 0.5rem;
 }
+/* Pushes a destructive bulk action away from Clear so the two aren't adjacent. */
+.bulkToolbar__spacer { flex: 1; }
 
 .podTable__check { width: 2rem; text-align: center; }
 .podRow--selected { background: rgba(14, 165, 233, 0.05); }

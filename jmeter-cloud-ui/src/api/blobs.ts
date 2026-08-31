@@ -45,6 +45,26 @@ export class DocumentServiceError extends Error {
   }
 }
 
+/** Human-readable one-liner for any error this module can reject with. */
+export function describeBlobError(err: unknown): string {
+  if (err instanceof DocumentServiceError) return `${err.code}: ${err.message}`;
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+/** Outcome of a bulk delete: it reports per-blob failures rather than throwing. */
+export interface BulkDeleteResult {
+  deleted: string[];
+  failed: Array<{ blobId: string; message: string }>;
+}
+
+/**
+ * Parallel DELETEs in flight. Browsers cap HTTP/1.1 sockets per origin at ~6,
+ * so a wider fan-out only queues in the browser while making a cancel slower
+ * to take effect.
+ */
+const DELETE_CONCURRENCY = 6;
+
 export interface UploadOptions {
   contentType?: string;
   name?: string;
@@ -141,6 +161,39 @@ async function jsonRequest<T>(
   return parsed as T;
 }
 
+function deleteBlob(blobId: string, signal?: AbortSignal): Promise<void> {
+  return jsonRequest<void>("DELETE", `/api/v1/blob/${encodeURIComponent(blobId)}`, signal);
+}
+
+/**
+ * Deletes many blobs, at most {@link DELETE_CONCURRENCY} at a time, resolving
+ * with what succeeded and what did not — one bad blobId never cancels the rest.
+ *
+ * <p>The document-service has no batch delete endpoint; this is the one seam to
+ * swap if it ever gains one.
+ */
+async function deleteManyBlobs(blobIds: string[], signal?: AbortSignal): Promise<BulkDeleteResult> {
+  const deleted: string[] = [];
+  const failed: BulkDeleteResult["failed"] = [];
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < blobIds.length) {
+      if (signal?.aborted) return;
+      const blobId = blobIds[next++];
+      try {
+        await deleteBlob(blobId, signal);
+        deleted.push(blobId);
+      } catch (err: unknown) {
+        failed.push({ blobId, message: describeBlobError(err) });
+      }
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(DELETE_CONCURRENCY, blobIds.length) }, worker),
+  );
+  return { deleted, failed };
+}
+
 export const blobsApi = {
   upload: uploadBlob,
 
@@ -158,8 +211,9 @@ export const blobsApi = {
     return jsonRequest<BlobListing>("GET", `/api/v1/blob${qs ? `?${qs}` : ""}`, signal);
   },
 
-  delete: (blobId: string, signal?: AbortSignal) =>
-    jsonRequest<void>("DELETE", `/api/v1/blob/${encodeURIComponent(blobId)}`, signal),
+  delete: deleteBlob,
+
+  deleteMany: deleteManyBlobs,
 
   metadata: (blobId: string, signal?: AbortSignal) =>
     jsonRequest<BlobMetadata>("GET", `/api/v1/blob/${encodeURIComponent(blobId)}/metadata`, signal),
