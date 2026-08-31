@@ -32,6 +32,7 @@ export interface InfoTipProps {
 export function InfoTip({ label, children, example, id }: InfoTipProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLSpanElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const autoId = useId();
   const contentId = id ?? `${autoId}-infoTip`;
 
@@ -65,7 +66,7 @@ export function InfoTip({ label, children, example, id }: InfoTipProps) {
       return;
     }
     const place = () => {
-      const trigger = rootRef.current?.firstElementChild;
+      const trigger = triggerRef.current;
       if (trigger) setPos(placeBelow(trigger.getBoundingClientRect()));
     };
     place();
@@ -95,6 +96,7 @@ export function InfoTip({ label, children, example, id }: InfoTipProps) {
       }}
     >
       <button
+        ref={triggerRef}
         type="button"
         className="infoIcon"
         aria-label={label}
@@ -122,24 +124,32 @@ interface PopoverPosition {
   top?: number;
   bottom?: number;
   left: number;
+  minWidth: number;
   maxWidth: number;
   maxHeight: number;
 }
 
-const EDGE = 8;      // never touch the viewport edge
+const EDGE = 8;         // never touch the viewport edge
 const PREFERRED = 416;  // 26rem, the CSS max-width
+const NARROWEST = 256;  // 16rem, the CSS min-width
 
 /**
- * Below the trigger when there is room, above it when there is not, and never
- * wider or taller than the space left — so the tip is readable at the bottom of
- * a scrolled panel and at the right edge of the window alike.
+ * Below the trigger when there is room, above it when there is not, and shifted
+ * left when the trigger is near the right edge.
+ *
+ * <p>Capping the width is not enough to keep it on screen: CSS resolves
+ * `min-width` after `max-width`, so a tip pinned beside a right-hand panel kept
+ * its 16rem and ran off the viewport (measured at 163px past the edge, text
+ * cut off). The left edge is what has to move, and `minWidth` is passed
+ * explicitly so a window narrower than 16rem shrinks the tip instead.
  */
 function placeBelow(r: DOMRect): PopoverPosition {
-  const left = Math.max(EDGE, r.left);
+  const minWidth = Math.min(NARROWEST, window.innerWidth - EDGE * 2);
+  const left = Math.min(Math.max(EDGE, r.left), window.innerWidth - EDGE - minWidth);
   const maxWidth = Math.min(PREFERRED, window.innerWidth - left - EDGE);
   const below = window.innerHeight - r.bottom - EDGE * 2;
   const above = r.top - EDGE * 2;
   return below >= above
-    ? { top: r.bottom + 6, left, maxWidth, maxHeight: below }
-    : { bottom: window.innerHeight - r.top + 6, left, maxWidth, maxHeight: above };
+    ? { top: r.bottom + 6, left, minWidth, maxWidth, maxHeight: below }
+    : { bottom: window.innerHeight - r.top + 6, left, minWidth, maxWidth, maxHeight: above };
 }

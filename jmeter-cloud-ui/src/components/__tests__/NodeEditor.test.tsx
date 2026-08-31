@@ -60,6 +60,27 @@ function renderEditor(node: WorkflowNode, opts: {
   return onChange;
 }
 
+/** Renders one node and hands back a rerender that swaps the node in place. */
+function renderBuilderNode(node: WorkflowNode, onChange: (n: WorkflowNode) => void) {
+  const ui = (n: WorkflowNode) => (
+    <MemoryRouter>
+      <NodeEditor
+        node={n}
+        applications={APPS}
+        templates={[...TEMPLATES,
+          { blobId: "t-other", name: "Other", application: "card-auth", uploadedAt: "", sizeBytes: 1 }]}
+        regions={[{ region: "na-east", maxAvailable: 4 }]}
+        groupNotify={{ to: [], cc: [], bcc: [] }}
+        inboundCount={0}
+        onChange={onChange}
+        onDelete={vi.fn()}
+      />
+    </MemoryRouter>
+  );
+  const r = render(ui(node));
+  return { rerender: (n: WorkflowNode) => r.rerender(ui(n)) };
+}
+
 beforeEach(() => {
   mocks.load.mockReset();
   mocks.load.mockResolvedValue(body());
@@ -183,6 +204,27 @@ describe("NodeEditor — a load test is asked for in the order the answers depen
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
       fleetAllocation: [{ region: "na-east", count: 4 }],
     }));
+  });
+
+  it("changing the template replaces the previous one's property defaults", async () => {
+    // Keeping template A's -J values while the box reads template B is the
+    // opposite of what picking a template means — and workers and Save results
+    // beside them are replaced, so leaving properties behind is incoherent.
+    mocks.load.mockResolvedValue(body({ globalProperties: { threads: "50" } }));
+    const onChange = vi.fn();
+    const { rerender } = renderBuilderNode(
+      { ...load(), application: "card-auth", templateBlobId: "t-auth" } as WorkflowNode, onChange);
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+
+    mocks.load.mockResolvedValue(body({ globalProperties: { threads: "200", rampUp: "60" } }));
+    rerender({
+      ...load(), application: "card-auth", templateBlobId: "t-other",
+      properties: { threads: "50" }, fleetAllocation: [{ region: "na-east", count: 2 }],
+    } as WorkflowNode);
+
+    await waitFor(() => expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      properties: { threads: "200", rampUp: "60" },
+    })));
   });
 
   it("does NOT re-seed a saved task — the fleet the operator saved survives a reopen", async () => {

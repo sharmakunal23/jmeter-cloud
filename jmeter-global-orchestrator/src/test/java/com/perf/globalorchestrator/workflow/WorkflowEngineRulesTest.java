@@ -157,7 +157,7 @@ class WorkflowEngineRulesTest {
                 List.of(node("a", JoinPolicy.ALL), node("b", JoinPolicy.ALL)),
                 List.of(edge("a", "b", EdgeCondition.ON_SUCCESS)));
 
-        assertThat(WorkflowEngine.outcomeOf(List.of(
+        assertThat(ExecutionState.verdictOf(List.of(
                 task("a", TaskState.FAILED), task("b", TaskState.SKIPPED))))
                 .isEqualTo(ExecutionState.FAILED);
     }
@@ -168,7 +168,7 @@ class WorkflowEngineRulesTest {
         // The forgiveness this replaces made a run whose load test failed read
         // SUCCEEDED in the history, purely because an alert email was wired to
         // ON_FAILURE. The email said FAILED at the same moment. One verdict.
-        assertThat(WorkflowEngine.outcomeOf(List.of(
+        assertThat(ExecutionState.verdictOf(List.of(
                 task("test", TaskState.FAILED), task("mail", TaskState.SUCCEEDED))))
                 .isEqualTo(ExecutionState.FAILED);
     }
@@ -176,7 +176,7 @@ class WorkflowEngineRulesTest {
     @Test
     @DisplayName("a skipped task is not a failure — nothing ran, so nothing failed")
     void skippedAloneIsNotAFailure() {
-        assertThat(WorkflowEngine.outcomeOf(List.of(
+        assertThat(ExecutionState.verdictOf(List.of(
                 task("a", TaskState.SUCCEEDED), task("b", TaskState.SKIPPED))))
                 .isEqualTo(ExecutionState.SUCCEEDED);
     }
@@ -184,7 +184,7 @@ class WorkflowEngineRulesTest {
     @Test
     @DisplayName("a cancelled task makes the execution CANCELLED, not FAILED")
     void cancelledWins() {
-        assertThat(WorkflowEngine.outcomeOf(List.of(task("a", TaskState.CANCELLED))))
+        assertThat(ExecutionState.verdictOf(List.of(task("a", TaskState.CANCELLED))))
                 .isEqualTo(ExecutionState.CANCELLED);
     }
 
@@ -208,7 +208,7 @@ class WorkflowEngineRulesTest {
     @Test
     @DisplayName("all-succeeded is a clean pass")
     void allSucceeded() {
-        assertThat(WorkflowEngine.outcomeOf(List.of(
+        assertThat(ExecutionState.verdictOf(List.of(
                 task("a", TaskState.SUCCEEDED), task("b", TaskState.SUCCEEDED))))
                 .isEqualTo(ExecutionState.SUCCEEDED);
     }

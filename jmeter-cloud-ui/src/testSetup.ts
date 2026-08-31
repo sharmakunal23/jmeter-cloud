@@ -94,6 +94,11 @@ if (typeof HTMLCanvasElement !== "undefined") {
       const assigned = new Map<string | symbol, unknown>();
       ctx = new Proxy({} as Record<string | symbol, unknown>, {
         get: (_t, prop) => {
+          // Never answer `then` with a function: that would make the context a
+          // thenable, and awaiting one — or merely resolving a promise with it
+          // — would hang on a no-op. Symbols (toPrimitive, iterator) likewise
+          // must be absent rather than callable.
+          if (prop === "then" || typeof prop === "symbol") return undefined;
           if (prop === "canvas") return this;
           if (assigned.has(prop)) return assigned.get(prop);
           switch (prop) {

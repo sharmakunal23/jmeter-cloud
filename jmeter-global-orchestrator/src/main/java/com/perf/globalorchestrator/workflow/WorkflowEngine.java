@@ -207,7 +207,7 @@ public class WorkflowEngine {
             executions.leaseUntil(execution.executionId(), nextTick(finalTasks, now));
             return;
         }
-        ExecutionState state = outcomeOf(finalTasks);
+        ExecutionState state = ExecutionState.verdictOf(finalTasks);
         String reason = terminalReason(finalTasks);
         if (executions.markTerminal(execution.executionId(), state, reason, now) == 1) {
             LOG.info("workflow execution {} ({}) → {}{}",
@@ -329,27 +329,6 @@ public class WorkflowEngine {
         }
         if (refused > 0) return JoinDecision.SKIP;
         return satisfied == inbound.size() ? JoinDecision.READY : JoinDecision.WAIT;
-    }
-
-    /**
-     * The execution's verdict: CANCELLED if any task was, else FAILED if any
-     * task failed, else SUCCEEDED. A skipped task is not a failure — nothing
-     * ran, so nothing failed.
-     *
-     * <p>An {@code ON_FAILURE} branch deliberately does <em>not</em> forgive
-     * the failure it handles: forgiving made a run whose load test failed read
-     * SUCCEEDED in the history because an alert email was wired up, while the
-     * email that same branch sent said FAILED. This is the one verdict both
-     * the chip and the email use, so they cannot disagree again.
-     */
-    public static ExecutionState outcomeOf(List<WorkflowTask> tasks) {
-        for (WorkflowTask t : tasks) {
-            if (t.state() == TaskState.CANCELLED) return ExecutionState.CANCELLED;
-        }
-        for (WorkflowTask t : tasks) {
-            if (t.state() == TaskState.FAILED) return ExecutionState.FAILED;
-        }
-        return ExecutionState.SUCCEEDED;
     }
 
     /**

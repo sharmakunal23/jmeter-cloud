@@ -232,7 +232,7 @@ export function WorkflowBuilderPage() {
           </small>
         </div>
         <div className="pageHeader__actions">
-          <button type="button" className="btn btn--ghost" onClick={exit}>
+          <button type="button" className="btn btn--ghost" disabled={saving} onClick={exit}>
             {editing ? "Exit edit" : "Cancel"}
           </button>
           <button

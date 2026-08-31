@@ -1,6 +1,7 @@
 package com.perf.globalorchestrator.report;
 
 import com.perf.globalorchestrator.domain.ApplicationGroup;
+import com.perf.globalorchestrator.domain.ExecutionState;
 import com.perf.globalorchestrator.domain.WorkflowExecution;
 import com.perf.globalorchestrator.domain.TaskState;
 import com.perf.globalorchestrator.domain.WorkflowTask;
@@ -116,8 +117,7 @@ public class WorkflowEmailComposer {
         List<WorkflowTask> failed = tasks.stream()
                 .filter(t -> t.state() == TaskState.FAILED)
                 .toList();
-        v.put("execution.outcome",
-                com.perf.globalorchestrator.workflow.WorkflowEngine.outcomeOf(tasks).name());
+        v.put("execution.outcome", ExecutionState.verdictOf(tasks).name());
         v.put("execution.failedTasks",
                 failed.stream().map(WorkflowTask::name).collect(java.util.stream.Collectors.joining(", ")));
         v.put("execution.startedAt", execution.startedAt() == null ? "" : execution.startedAt().toString());

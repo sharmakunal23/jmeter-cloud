@@ -201,13 +201,16 @@ function LoadTestFields({ node, applications, templates, regions, onChange }:
       .filter((f) => f.count > 0 && reserved.has(f.region))
       .map((f) => ({ region: f.region, count: Math.min(f.count, reserved.get(f.region)!) }))
       .sort((a, b) => a.region.localeCompare(b.region));
+    // Every default comes from the template, properties included. Keeping the
+    // previous template's -J values while showing the new template's name is
+    // the opposite of what picking a template means — and it would be
+    // inconsistent with the workers and Save results beside them, which the
+    // same call replaces. `seeded` is what keeps this off a saved task.
     onChange({
       ...node,
       fleetAllocation: fleet,
       saveResults: body.saveResults ?? null,
-      properties: Object.keys(node.properties ?? {}).length > 0
-        ? node.properties
-        : { ...(body.globalProperties ?? {}) },
+      properties: { ...(body.globalProperties ?? {}) },
     });
   };
 
@@ -223,6 +226,7 @@ function LoadTestFields({ node, applications, templates, regions, onChange }:
     setReadError(null);
     templatesApi.load(blobId, ac.signal)
       .then((body) => {
+        if (ac.signal.aborted) return;
         setTemplate(body);
         if (seeded.current !== blobId) {
           seeded.current = blobId;
@@ -230,12 +234,15 @@ function LoadTestFields({ node, applications, templates, regions, onChange }:
         }
       })
       .catch((e: Error) => {
-        if (e.name === "AbortError") return;
+        if (ac.signal.aborted || e.name === "AbortError") return;
         // The task is still valid — the launch reads the template itself. Only
         // the pre-filled defaults are lost, so say that rather than blocking.
         setReadError(e.message);
       })
-      .finally(() => setReading(false));
+      // Guarded too: switching templates quickly means THIS read is the stale
+      // one, and clearing the flag would drop "Reading the template…" while the
+      // read that replaces it is still in flight.
+      .finally(() => { if (!ac.signal.aborted) setReading(false); });
     return () => ac.abort();
   }, [node.templateBlobId]);
 

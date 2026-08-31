@@ -31,7 +31,12 @@ export function BuilderStatusBar({
 
   return (
     <div className="builderStatus">
-      <span className={`builderStatus__step builderStatus__step--${step.tone}`}>{step.text}</span>
+      {/* Only the guidance is a live region: the capacity chips change on every
+          keystroke in a worker box, and announcing those would be noise. */}
+      <span
+        role="status"
+        className={`builderStatus__step builderStatus__step--${step.tone}`}
+      >{step.text}</span>
       <span className="builderStatus__spacer" />
       {regions.length > 0 && (
         <span className="builderStatus__capacity">
