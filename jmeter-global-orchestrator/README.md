@@ -10,7 +10,10 @@ workers. It holds no cluster credential: clusters register at runtime in
 `jmeter-regional-orchestrator` before anything is written — CLUSTER-CAPACITY),
 workers are created and reached through that regional, and an operator-declared
 worker is dialled directly at its hub-reachable `baseUrl`. Groups reserve
-capacity on at most two clusters, under each cluster's worker ceiling.
+capacity on at most two clusters, under each cluster's worker ceiling. It also
+runs **workflows** — group-scoped task graphs (health checks, load tests,
+emails, waits, approvals) advanced by a DB-claim engine, one execution per
+replica per tick.
 
 ![global-orchestrator flow](docs/diagrams/globalOrchestrator.svg)
 
