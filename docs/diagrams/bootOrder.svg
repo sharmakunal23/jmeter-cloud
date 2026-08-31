@@ -21,13 +21,9 @@
     <text x="225" y="76" font-weight="600" fill="#065f46">oracle</text>
     <text x="225" y="90" font-size="10" fill="#475569">:1521</text>
 
-    <rect x="340" y="58" width="150" height="42" rx="6" fill="#d1fae5" stroke="#047857"/>
-    <text x="415" y="76" font-weight="600" fill="#065f46">redis</text>
-    <text x="415" y="90" font-size="10" fill="#475569">:6379</text>
-
-    <rect x="530" y="58" width="170" height="42" rx="6" fill="#ffffff" stroke="#cbd5e1"/>
-    <text x="615" y="76" font-weight="600" fill="#475569">mailhog</text>
-    <text x="615" y="90" font-size="10" fill="#94a3b8">:8025 · no dependents</text>
+    <rect x="340" y="58" width="170" height="42" rx="6" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="425" y="76" font-weight="600" fill="#475569">mailhog</text>
+    <text x="425" y="90" font-size="10" fill="#94a3b8">:8025 · no dependents</text>
   </g>
 
   <!-- 2 init -->
@@ -65,7 +61,6 @@
     <path d="M244,182 L232,218"/>
     <path d="M262,100 C300,116 380,120 404,218"/>
     <path d="M338,161 C372,161 398,180 410,218"/>
-    <path d="M415,100 L415,136 L415,218" stroke-dasharray="0"/>
     <path d="M412,264 L412,308"/>
     <path d="M560,264 C520,282 470,290 452,308"/>
   </g>

@@ -30,20 +30,6 @@ spring:
   mail:
     host: ${MAIL_HOST:mailhog}
     port: ${MAIL_PORT:1025}
-  # CACHE C-0 (2026-05-26) — shared Redis cache so every orchestrator
-  # instance reads the same data (the operator's "scalable at each layer"
-  # requirement). Provider is pinned to redis at runtime; the test-only
-  # application-local.yml flips this to `simple` so ITs need no Redis.
-  # Per-cache TTLs + serializer live in config/CacheConfig.java.
-  cache:
-    type: redis
-  data:
-    redis:
-      host: ${REDIS_HOST:redis}
-      port: ${REDIS_PORT:6379}
-      # Lettuce connects lazily; a short command timeout keeps a cache
-      # lookup from stalling an HTTP request if Redis is briefly slow.
-      timeout: ${REDIS_TIMEOUT:2s}
 
 server:
   port: ${HTTP_PORT:8082}
@@ -146,6 +132,24 @@ globalOrchestrator:
   runStateUser:     ${ORACLE_GLOBALRUN_WRITER_USER:GLOBAL_ORCHESTRATOR_WRITER}
   runStatePassword: ${ORACLE_GLOBALRUN_WRITER_PASSWORD:localdev}
   runStateStatementTimeoutMs: ${RUN_STATE_STATEMENT_TIMEOUT_MS:30000}
+
+  # CACHE-ORACLE (2026-08-31) — the shared cache is the ORCH_CACHE table, read
+  # and written through the run-state pool above. Redis is retired: the hosted
+  # environment offers one database and no cache server. `simple` (an
+  # in-process map) is the test-only provider; the cache names and their TTLs
+  # live in config/CacheConfig.java, and ORCH_CACHE_REAP_JOB reclaims expired
+  # rows in the database.
+  cache:
+    provider: ${CACHE_PROVIDER:oracle}
+    # Largest compressed entry that is stored at all. Above it the put is
+    # skipped and the caller refetches from the source — an oversized log tail
+    # must not become a multi-megabyte LOB write on every miss.
+    maxValueBytes: ${CACHE_MAX_VALUE_BYTES:1048576}
+    # Statement bound for cache traffic only — far below the run-state pool's
+    # 30 s, because a cache read is followed by the caller's fall-through to
+    # the same database. A timeout counts as a store failure, so a slow Oracle
+    # takes the cache out of the path in seconds.
+    statementTimeoutMs: ${CACHE_STATEMENT_TIMEOUT_MS:2000}
 
   # HARD-DELETE / purge — a SEPARATE read-write pool used ONLY to DELETE a
   # purged run's metric rows, as the dedicated METRICS_PURGER user (SELECT +

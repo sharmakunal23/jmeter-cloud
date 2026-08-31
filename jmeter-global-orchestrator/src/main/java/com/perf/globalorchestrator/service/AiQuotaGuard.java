@@ -15,8 +15,8 @@ import java.time.ZoneOffset;
  * <p>The counter is per-instance, matching the doc's v1 decision: a multi-pod
  * deployment gets {@code cap × instanceCount} effective headroom. That is
  * acceptable for v1 — the cap is a runaway-cost backstop, not a billing meter.
- * A shared (Redis-backed) counter is the cloud follow-up if precise org-wide
- * limiting is needed.
+ * A shared counter (a row per day in the database) is the cloud follow-up if
+ * precise org-wide limiting is needed.
  *
  * <p>Only actual Claude calls acquire — cache hits never do, so re-loading a
  * cached terminal-run summary is free and uncapped.

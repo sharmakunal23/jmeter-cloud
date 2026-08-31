@@ -22,7 +22,7 @@ spec:
       labels:
         app: jmeter-regional-orchestrator
     spec:
-      enableServiceLinks: false        # kubelet's REDIS_PORT=tcp://… would collide with ${REDIS_PORT:6379}-style bindings
+      enableServiceLinks: false        # kubelet injects <SVC>_PORT=tcp://… per Service; those collide with ${ORACLE_PORT:1521}-style bindings
       serviceAccountName: jmeter-regional-orchestrator
       securityContext:
         runAsNonRoot: true             # runAsUser / fsGroup are tier values (the PV labels) — set by the overlays

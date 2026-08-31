@@ -54,6 +54,26 @@ public class DataSourceConfig {
         return template(ds, statementTimeoutMs);
     }
 
+    /**
+     * The cache store's view of the run-state pool (CACHE-ORACLE): same
+     * connections, same transaction — a write-through evict still joins its
+     * caller's transaction — but a much shorter statement bound.
+     *
+     * <p>A cache read is followed by the caller's fall-through to the same
+     * database, so a cache statement that waits as long as a real query turns
+     * one slow database into two. The bound is what makes
+     * {@code OracleCacheStore}'s passive circuit fire on a <i>slow</i> Oracle
+     * and not only on a failing one: a timeout is a failure, so three of them
+     * take the cache out of the path in seconds instead of minutes.
+     */
+    @Bean
+    @Qualifier("cacheJdbcTemplate")
+    public JdbcTemplate cacheJdbcTemplate(
+            @Qualifier("runStateDataSource") DataSource ds,
+            @Value("${globalOrchestrator.cache.statementTimeoutMs:2000}") int statementTimeoutMs) {
+        return template(ds, statementTimeoutMs);
+    }
+
     // ── Metrics DS (reader) — secondary ─────────────────────────────────
 
     @Bean

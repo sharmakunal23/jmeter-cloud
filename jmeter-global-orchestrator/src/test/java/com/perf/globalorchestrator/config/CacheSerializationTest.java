@@ -1,5 +1,6 @@
 package com.perf.globalorchestrator.config;
 
+import com.perf.globalorchestrator.cache.CacheValueCodec;
 import com.perf.globalorchestrator.client.LocalOrchestratorClient.LogsResult;
 import com.perf.globalorchestrator.domain.GroupCapacity;
 import com.perf.globalorchestrator.domain.MemberState;
@@ -12,7 +13,6 @@ import com.perf.globalorchestrator.domain.MetricsTimeseries.Series;
 import com.perf.globalorchestrator.domain.MetricsTimeseries.TimeseriesPoint;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -21,26 +21,29 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Pins that the JSON serializer used by the Redis cache
- * ({@link CacheConfig#jsonSerializer()}) round-trips the exact value shapes the
- * terminal-run metrics cache stores. This is the highest-risk part of the
- * "Redis everywhere" decision: the cached DTOs are Java <b>records</b> (final
- * classes, not {@code Serializable}), so the serializer must write the
- * {@code @class} type tag even for final types — done via
- * {@code DefaultTyping.EVERYTHING}. Without it, deserialization can't resolve
- * the concrete type and the cache hit would blow up at runtime (a failure mode
- * the {@code simple}-cache behaviour tests can't catch, since they don't
- * serialize).
+ * Pins that {@link CacheValueCodec} — what turns a cached value into the bytes
+ * stored in {@code ORCH_CACHE.CACHE_VALUE} — round-trips the exact value shapes
+ * the hub's caches hold. This is the highest-risk part of storing the cache
+ * outside the process: the cached DTOs are Java <b>records</b> (final classes,
+ * not {@code Serializable}), so the codec must write the {@code @class} type tag
+ * even for final types — done via {@code DefaultTyping.EVERYTHING}. Without it,
+ * decoding can't resolve the concrete type and the cache hit would blow up at
+ * runtime (a failure mode the {@code simple}-cache behaviour tests can't catch,
+ * since they don't serialize).
  *
- * <p>Deterministic + container-free — exercises the serializer directly rather
- * than through a live Redis, so it runs in the unit phase.
+ * <p>Deterministic + container-free — exercises the codec directly rather than
+ * through a database, so it runs in the unit phase.
  */
-@DisplayName("Redis cache serializer — record / rollup round-trip (CACHE C-0)")
+@DisplayName("Cache value codec — record / rollup round-trip (CACHE-ORACLE)")
 class CacheSerializationTest {
 
-    private final GenericJackson2JsonRedisSerializer serializer = CacheConfig.jsonSerializer();
+    private final CacheValueCodec codec = new CacheValueCodec();
+
+    private byte[] serialize(Object value) { return codec.encode(value); }
+    private Object deserialize(byte[] bytes) { return codec.decode(bytes); }
 
     @Test
     @DisplayName("MetricsTimeseries (nested records + status-code map) round-trips byte-for-byte")
@@ -55,8 +58,8 @@ class CacheSerializationTest {
                                 "200", List.of(new TimeseriesPoint(1000, 10.0)),
                                 "500", List.of(new TimeseriesPoint(1005, 1.0))))));
 
-        byte[] bytes = serializer.serialize(original);
-        Object back = serializer.deserialize(bytes);
+        byte[] bytes = serialize(original);
+        Object back = deserialize(bytes);
 
         assertThat(back)
                 .as("must deserialize to the concrete record type, not a LinkedHashMap")
@@ -81,8 +84,8 @@ class CacheSerializationTest {
         row.put("rowCount", 42L);
         List<Map<String, Object>> original = List.of(row);
 
-        byte[] bytes = serializer.serialize(original);
-        Object back = serializer.deserialize(bytes);
+        byte[] bytes = serialize(original);
+        Object back = deserialize(bytes);
 
         assertThat(back).isInstanceOf(List.class).isEqualTo(original);
     }
@@ -99,8 +102,8 @@ class CacheSerializationTest {
                         Instant.parse("2026-05-26T10:00:00Z"), Instant.parse("2026-05-26T11:00:00Z")),
                 new GroupCapacity("cps", "us-west", 0, null, null)));
 
-        byte[] bytes = serializer.serialize(original);
-        Object back = serializer.deserialize(bytes);
+        byte[] bytes = serialize(original);
+        Object back = deserialize(bytes);
 
         assertThat(back).isInstanceOf(Map.class).isEqualTo(original);
     }
@@ -123,8 +126,8 @@ class CacheSerializationTest {
                 Instant.parse("2026-05-26T09:59:00Z"), Instant.parse("2026-05-26T10:00:00Z"),
                 Instant.parse("2026-05-26T10:05:00Z"), true, List.of(member));
 
-        byte[] bytes = serializer.serialize(original);
-        Object back = serializer.deserialize(bytes);
+        byte[] bytes = serialize(original);
+        Object back = deserialize(bytes);
 
         assertThat(back).isInstanceOf(Run.class).isEqualTo(original);
         Run restored = (Run) back;
@@ -136,8 +139,8 @@ class CacheSerializationTest {
     @DisplayName("LogsResult (terminal-member log tail) round-trips")
     void logsResultRoundTrips() {
         LogsResult original = new LogsResult(200, "2026-05-26 INFO line one\n2026-05-26 INFO line two\n");
-        byte[] bytes = serializer.serialize(original);
-        Object back = serializer.deserialize(bytes);
+        byte[] bytes = serialize(original);
+        Object back = deserialize(bytes);
         assertThat(back).isInstanceOf(LogsResult.class).isEqualTo(original);
     }
 
@@ -147,7 +150,43 @@ class CacheSerializationTest {
         RunSummary original = new RunSummary("01J0000000000000000000CACHE", 1000L, 1300L,
                 new RunSummary.Stats(null, 1320, 16, 22.0, 1.2121, 132.1, 198.2, 320.5, 640.0, 900.0, 10),
                 List.of(new RunSummary.Stats("CPS", 1000, 12, 16.6, 1.2, 108.0, 162.0, 308.0, 616.0, 900.0, 10)));
-        Object back = serializer.deserialize(serializer.serialize(original));
+        Object back = deserialize(serialize(original));
         assertThat(back).isInstanceOf(RunSummary.class).isEqualTo(original);
+    }
+
+    @Test
+    @DisplayName("the stored bytes are gzip, and a large timeseries compresses hard")
+    void valuesAreGzipped() {
+        List<MetricsTimeseries.TimeseriesPoint> tps = new java.util.ArrayList<>();
+        for (int i = 0; i < 2000; i++) tps.add(new MetricsTimeseries.TimeseriesPoint(1000 + i * 15L, 12.5));
+        MetricsTimeseries big = new MetricsTimeseries("01J0000000000000000000CACHE", 5, 1000L, 31000L,
+                new Series(tps, List.of(), List.of(), new LinkedHashMap<>()));
+
+        byte[] stored = serialize(big);
+
+        // gzip magic — the column holds compressed bytes, not raw JSON.
+        assertThat(stored[0] & 0xff).isEqualTo(0x1f);
+        assertThat(stored[1] & 0xff).isEqualTo(0x8b);
+        // The point of compressing at all: this is what keeps a cache entry a
+        // small inline LOB instead of a separate segment read on every hit.
+        int rawJsonBytes = gunzip(stored).length;
+        assertThat(stored.length).isLessThan(rawJsonBytes / 5);
+        assertThat(deserialize(stored)).isEqualTo(big);
+    }
+
+    private static byte[] gunzip(byte[] gz) {
+        try (java.util.zip.GZIPInputStream in =
+                     new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(gz))) {
+            return in.readAllBytes();
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+    }
+
+    @Test
+    @DisplayName("a corrupt stored value fails loudly rather than returning a half-read object")
+    void corruptValueThrows() {
+        assertThatThrownBy(() -> deserialize(new byte[] {1, 2, 3, 4}))
+                .isInstanceOf(java.io.UncheckedIOException.class);
     }
 }

@@ -20,7 +20,7 @@ spec:
       labels:
         app: jmeter-cloud-ui
     spec:
-      enableServiceLinks: false        # kubelet's REDIS_PORT=tcp://… would collide with ${REDIS_PORT:6379}-style bindings
+      enableServiceLinks: false        # kubelet injects <SVC>_PORT=tcp://… per Service; those collide with ${ORACLE_PORT:1521}-style bindings
       # Holds no cluster credential — no token mounted (the regional does that work).
       automountServiceAccountToken: false
       # No runAsNonRoot here: the nginx image's master process runs as root to

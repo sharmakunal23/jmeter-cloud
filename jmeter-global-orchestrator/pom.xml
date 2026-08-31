@@ -45,22 +45,20 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-jdbc</artifactId>
         </dependency>
-        <!-- CACHE C-0 (2026-05-26) — shared cache layer. starter-cache pulls
-             the Spring Cache abstraction (@EnableCaching, @Cacheable,
-             @CacheEvict); starter-data-redis backs it with a RedisCacheManager
-             so every global-orchestrator instance reads the SAME cache (the
-             operator's "scalable at each layer + all instances share the
-             cache" requirement). Provider is chosen by spring.cache.type:
-             `redis` at runtime, `simple` in tests (ConcurrentMapCacheManager —
-             no Redis needed; the terminal-vs-active gating is provider-agnostic).
-             Both BOM-managed by spring-boot-dependencies. -->
+        <!-- CACHE-ORACLE (2026-08-31) — shared cache layer. starter-cache
+             pulls the Spring Cache abstraction (@EnableCaching, @Cacheable,
+             @CacheEvict) and nothing else; the provider behind it is this
+             service's own OracleCacheManager over the ORCH_CACHE table, so
+             every global-orchestrator instance reads the SAME cache with no
+             second datastore to run. starter-data-redis (and lettuce + netty
+             with it) was removed here — the hosted environment offers one
+             database and no cache server. Provider is chosen by
+             globalOrchestrator.cache.provider: `oracle` at runtime, `simple`
+             in tests (ConcurrentMapCacheManager — no database needed; the
+             terminal-vs-active gating is provider-agnostic). -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-cache</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
         <!-- ORACLE-MIGRATION (2026-08-28): both schemas live in Oracle.
              ojdbc11 is BOM-managed (oracle-database.version). -->

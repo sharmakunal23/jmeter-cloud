@@ -1,19 +1,12 @@
 # Test-only profile overrides (the default profile is `local`, set in the
 # main application.yml, so this file loads for every @SpringBootTest).
 #
-# CACHE C-0 (2026-05-26): the runtime config pins spring.cache.type=redis,
-# but tests must not require a Redis container. `simple` swaps in a
-# ConcurrentMapCacheManager — the terminal-vs-active caching gating is
-# provider-agnostic, so behaviour ITs verify the same contract without Redis.
-# (MetricsCachingRedisIT opts BACK IN to redis via @SpringBootTest properties
-# + a Testcontainers Redis to smoke-test real serialization.)
-#
-# management.health.redis.enabled=false stops the auto-configured Redis health
-# contributor from pinging a non-existent Redis during any /actuator/health hit.
-spring:
+# CACHE-ORACLE (2026-08-31): the runtime provider is the ORCH_CACHE table, but
+# tests must not need a database to exercise caching. `simple` swaps in a
+# ConcurrentMapCacheManager — the terminal-vs-active gating is
+# provider-agnostic, so behaviour tests verify the same contract in process.
+# The store's own SQL is pinned by OracleCacheStoreTest and, against a real
+# Oracle, CacheStoreDbTest (`mvn test -PdbTests`).
+globalOrchestrator:
   cache:
-    type: simple
-management:
-  health:
-    redis:
-      enabled: false
+    provider: simple

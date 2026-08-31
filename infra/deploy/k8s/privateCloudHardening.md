@@ -68,8 +68,8 @@ The full default-deny set — encoded per service in
 `kube/kustomize/overlays/<env>/network-policy-custom.yml` — is one allow per seam:
 
 - ingress-controller → **ui**:80; ui → **global**:8082 + **document**:8084
-- global → each **regional**:8088 (the `REGIONS` URLs — external when the
-  data center is another cluster), **oracle**:1521, **redis**:6379,
+- global → each **regional**:8088 (the registered clusters' URLs — external
+  when the data center is another cluster), **oracle**:1521,
   api.anthropic.com (443), corporate SMTP. The global never talks to a
   worker or a kube-apiserver directly.
 - regional → kube-apiserver (its own cluster), **workers**:8080

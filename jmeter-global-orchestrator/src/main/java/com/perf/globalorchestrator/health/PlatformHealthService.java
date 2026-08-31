@@ -166,17 +166,19 @@ public class PlatformHealthService {
     }
 
     /**
-     * Only the dependencies an operator can act on: the Oracle pools, the cache,
-     * mail. Spring's process contributors (ping, liveness/readiness state, ssl,
-     * disk) are the kubelet's business and would only add noise here.
+     * Only the dependencies an operator can act on: the Oracle pools and mail.
+     * Spring's process contributors (ping, liveness/readiness state, ssl, disk)
+     * are the kubelet's business and would only add noise here. The cache has
+     * no row of its own since CACHE-ORACLE — it is the ORCH_CACHE table, so the
+     * Oracle rows already say whether it is reachable.
      */
     private static boolean isDependency(String id) {
-        return id.startsWith("db.") || id.equals("db") || id.equals("redis") || id.equals("mail");
+        return id.startsWith("db.") || id.equals("db") || id.equals("mail");
     }
 
-    /** The cache and mail are optional: DOWN only degrades the hub. */
+    /** Mail is optional: DOWN only degrades the hub. */
     private static boolean isOptional(String id) {
-        return id.startsWith("redis") || id.equals("mail");
+        return id.equals("mail");
     }
 
     private static Component leaf(String id, HealthComponent h) {
@@ -196,7 +198,6 @@ public class PlatformHealthService {
             case "db.metricsDataSource" -> "Oracle · metrics (reader)";
             case "db.metricsPurgeDataSource" -> "Oracle · metrics (purge)";
             case "db" -> "Oracle";
-            case "redis" -> "Cache";
             case "mail" -> "Mail";
             default -> id;
         };

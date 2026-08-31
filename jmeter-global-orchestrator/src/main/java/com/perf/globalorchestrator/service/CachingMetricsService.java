@@ -64,7 +64,7 @@ public class CachingMetricsService {
                key = "#runId + ':' + #byRegion + ':' + (#windowSeconds == null ? 'all' : #windowSeconds)",
                condition = "#state != null && #state.terminal",
                // An empty series is not a fact about the run: its rows may not have
-               // landed yet or its group may be unresolved — never pin that in Redis.
+               // landed yet or its group may be unresolved — never pin that in the cache.
                unless = "#result == null || #result.series().tps().isEmpty()")
     public MetricsTimeseries timeseries(String runId, RunState state, boolean byRegion, Long windowSeconds) {
         return read(runId, state, new Query(byRegion, false, null, windowSeconds));
@@ -77,7 +77,7 @@ public class CachingMetricsService {
                      + "+ ':' + (#windowSeconds == null ? 'all' : #windowSeconds)",
                condition = "#state != null && #state.terminal",
                // An empty series is not a fact about the run: its rows may not have
-               // landed yet or its group may be unresolved — never pin that in Redis.
+               // landed yet or its group may be unresolved — never pin that in the cache.
                unless = "#result == null || #result.series().tps().isEmpty()")
     public MetricsTimeseries timeseries(String runId, RunState state, boolean byRegion, boolean byApplication,
                                         boolean byLabel, String labelPrefix, Integer labelLimit,

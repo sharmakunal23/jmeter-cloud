@@ -12,17 +12,18 @@ here is bidirectional.
 and `jmeter-metrics-consumer`.** Everything else is stateless — no JDBC, no
 cache, no queue (the document-service keeps blobs on a mounted volume, which
 is a file system, not a datastore). The Flyway Job is the third Oracle
-principal, at deploy time only.
+principal, at deploy time only, and the hub's shared cache is a table in the
+same schema, so Oracle is the only datastore on the network.
 
-| Service | Oracle | Redis | Mail | Holds state |
-|---|---|---|---|---|
-| `jmeter-global-orchestrator` | yes — 3 pools on `CARDZATE_DB_GRAF` (`GLOBAL_ORCHESTRATOR_WRITER` on the `ORCH_*` tables; `METRICS_READER` + `METRICS_PURGER` on the group facts) | yes (terminal-run cache) | yes (SMTP, notifications) | the control plane |
-| `jmeter-metrics-consumer` | yes — 1 pool (`CARDZATE_DB_GRAF` owner) | no | no | none (insert-only edge) |
-| `oracle/` Flyway Job | yes — the schema owner | no | no | deploy time only |
-| `jmeter-regional-orchestrator` | **no** | no | no | none |
-| `jmeter-local-orchestrator` (worker) | **no** | no | no | its run's files + a disk buffer of unsent envelopes |
-| `document-service` | **no** | no | no | the blob volume (file system) |
-| `jmeter-cloud-ui` | **no** | no | no | none |
+| Service | Oracle | Mail | Holds state |
+|---|---|---|---|
+| `jmeter-global-orchestrator` | yes — 3 pools on `CARDZATE_DB_GRAF` (`GLOBAL_ORCHESTRATOR_WRITER` on the `ORCH_*` tables, the terminal-run cache in `ORCH_CACHE` included; `METRICS_READER` + `METRICS_PURGER` on the group facts) | yes (SMTP, notifications) | the control plane |
+| `jmeter-metrics-consumer` | yes — 1 pool (`CARDZATE_DB_GRAF` owner) | no | none (insert-only edge) |
+| `oracle/` Flyway Job | yes — the schema owner | no | deploy time only |
+| `jmeter-regional-orchestrator` | **no** | no | none |
+| `jmeter-local-orchestrator` (worker) | **no** | no | its run's files + a disk buffer of unsent envelopes |
+| `document-service` | **no** | no | the blob volume (file system) |
+| `jmeter-cloud-ui` | **no** | no | none |
 
 ## Ingress — what may reach each service
 
@@ -40,7 +41,6 @@ principal, at deploy time only.
 | worker Pods | 8080 | the regional (relay) — spun workers | `actuator/health`, `api/v1/test`, `api/v1/test/{drain,abort}`, `api/v1/logs` (the relay allow-list) |
 | | 8080 (or 443 ingress FQDN) | the hub — declared workers | the same calls, direct at the declared hub-reachable `baseUrl` |
 | Oracle | 1521 | the hub, the consumer, the Flyway Job | |
-| Redis | 6379 | the hub only | |
 | SMTP | 1025 local / the corporate relay | the hub only | run reports + alerts |
 | Kubernetes API | 6443 (control-plane endpoint IPs) | the regional only | create / delete / list worker Pods, read their logs and the namespace quotas |
 
@@ -51,8 +51,7 @@ principal, at deploy time only.
 | browser | UI | 443 | |
 | `jmeter-cloud-ui` (nginx) | hub | 8082 (local) / 443 FQDN (hosted) | `API_UPSTREAM` |
 | | document-service | 8084 / 443 FQDN | `BLOB_UPSTREAM` — blob uploads bypass the hub |
-| `jmeter-global-orchestrator` | Oracle | 1521 | three pools |
-| | Redis | 6379 | cache |
+| `jmeter-global-orchestrator` | Oracle | 1521 | three pools; the cache is `ORCH_CACHE` on the run-state pool, not a separate store |
 | | SMTP relay | 1025 / 25 / 587 | notifications |
 | | each regional | 8088 / 443 FQDN | control plane of every data center |
 | | document-service | 8084 / 443 FQDN | metadata, archive, purge, readiness probe |

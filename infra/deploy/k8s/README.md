@@ -37,7 +37,7 @@ The old `overlays/{kind,privateCloud}` and the `privateCloud` umbrella are gone
 1. **Kustomize, not Helm.** Built into kubectl; two overlays cover our
    environments; no new tooling (repo posture: no top-level build tool).
 2. **Service-name parity.** Every K8s `Service` is named exactly like
-   its compose service (`oracle`, `redis`, `metrics-consumer`,
+   its compose service (`oracle`, `metrics-consumer`,
    `document-service`, `global-orchestrator`, `mailhog`) so
    every existing URL default works unchanged. This is the migration
    contract — breaking parity means hunting config in every consumer.
@@ -48,8 +48,8 @@ The old `overlays/{kind,privateCloud}` and the `privateCloud` umbrella are gone
    `network-policy.yml`, `resource-quota.yml`); resource names are DNS-1123
    lowercase-with-hyphens. `oracle/kube` keeps the older camelCase tree.
 5. **`enableServiceLinks: false` on every pod spec.** Kubelet's legacy
-   docker-link env injection (`REDIS_PORT=tcp://…`) collides with our
-   `${REDIS_PORT:6379}`-style Spring bindings.
+   docker-link env injection (`<SVC>_PORT=tcp://…`, one per Service in the
+   namespace) collides with our `${ORACLE_PORT:1521}`-style Spring bindings.
 6. **Three probes, never on aggregate health.** Startup + liveness →
    `/actuator/keepalive` (process only — a database or storage blip must
    not restart every replica); readiness → `/actuator/health/readiness`
@@ -201,8 +201,8 @@ covers it at `replicas > 1`).
 
 **Known accepted deviation:** `RateLimitFilter` counts in memory, so N
 replicas allow up to N× the configured limit. It's a courtesy throttle in
-front of an internal control plane, not a security boundary — move it to
-Redis (or an Ingress-level limit) if that changes. Likewise the
+front of an internal control plane, not a security boundary — move it to a
+shared counter or an Ingress-level limit if that changes. Likewise the
 metrics-consumer's `ingestProgress` health contributor is per-replica: a
 replica that happens to receive no batches reports its own idleness, so
 read it per-pod, not as a fleet signal. And `PodNameAllocator` can have

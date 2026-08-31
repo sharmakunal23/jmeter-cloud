@@ -168,8 +168,8 @@ class GlobalRunDbTest extends OracleDbTestSupport {
     void all_migrations_applied_and_every_object_is_valid() {
         assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_objects WHERE status <> 'VALID'", Integer.class)).isZero();
         // 13 control-plane tables from V2 + ORCH_PLUGIN (V3) + ORCH_REGION (V4)
-        // + the three workflow tables (V5).
-        assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_tables WHERE table_name LIKE 'ORCH\\_%' ESCAPE '\\'", Integer.class)).isEqualTo(18);
+        // + the three workflow tables (V5) + ORCH_CACHE (V8).
+        assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_tables WHERE table_name LIKE 'ORCH\\_%' ESCAPE '\\'", Integer.class)).isEqualTo(19);
         // One convention for the whole schema: nothing quoted-case except Flyway's own history table.
         assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_objects WHERE object_name <> UPPER(object_name) AND object_name NOT LIKE 'flyway\\_schema\\_history%' ESCAPE '\\'", Integer.class)).isZero();
         assertThat(owner.queryForObject("SELECT COUNT(*) FROM user_tab_columns WHERE column_name <> UPPER(column_name) AND table_name <> 'flyway_schema_history'", Integer.class)).isZero();

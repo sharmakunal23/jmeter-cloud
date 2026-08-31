@@ -16,8 +16,6 @@ services:
         condition: service_healthy
       flyway-migrate:
         condition: service_completed_successfully
-      redis:
-        condition: service_healthy
     ports:
       - "${GLOBAL_ORCHESTRATOR_HTTP_PORT:-8082}:8082"
     # Worker provisioning happens inside each region's cluster through its
@@ -52,10 +50,6 @@ services:
       # via POST /api/v1/regions. PROVISIONING_MODE and REGIONS are retired
       # (CLUSTER-CAPACITY): STATIC and DYNAMIC workers coexist per row.
       DOCUMENT_SERVICE_URL:                   ${DOCUMENT_SERVICE_URL:-http://document-service:8084}
-      # CACHE C-0 (2026-05-26) — shared Redis cache. Consumed by
-      # application.yml's spring.data.redis.* placeholders.
-      REDIS_HOST:                             ${REDIS_HOST:-redis}
-      REDIS_PORT:                             ${REDIS_PORT:-6379}
       # AUTOMATION Phase E — SMTP target for report emails (MailHog in dev).
       MAIL_HOST:                              ${MAIL_HOST:-mailhog}
       MAIL_PORT:                              ${MAIL_PORT:-1025}
@@ -74,28 +68,6 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
-
-  # CACHE C-0 (2026-05-26) — shared cache backing store. The
-  # global-orchestrator's @Cacheable / @CacheEvict layer (Spring Cache over
-  # spring-data-redis) reads/writes here so every orchestrator instance shares
-  # one cache. Local dev runs a single unauthenticated KRaft-style instance,
-  # mirroring the no-auth-locally posture of the database; the cloud
-  # deployment swaps in a managed Redis (ElastiCache) via REDIS_HOST/REDIS_PORT
-  # with no code change. AOF persistence is off — the cache is rebuildable from
-  # the database on restart, so durability buys nothing here.
-  redis:
-    image: redis:7-alpine
-    profiles: [default]
-    restart: unless-stopped   # Reliability (Round 5): self-heal — the cache is rebuildable from the database on restart.
-    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-      start_period: 5s
 
   # AUTOMATION Phase E — local SMTP sink for the daily report emails. MailHog
   # accepts SMTP on 1025 and exposes a web UI + REST API on 8025 so the full

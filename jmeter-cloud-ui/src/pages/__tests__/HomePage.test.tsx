@@ -101,7 +101,7 @@ function healthFixture(overrides: Partial<PlatformHealth> = {}): PlatformHealth 
       { id: "global-orchestrator", name: "Global orchestrator", kind: "service", status: "UP", detail: "provisioning DYNAMIC",
         components: [
           { id: "db.globalrunDataSource", name: "Oracle · run state", kind: "dependency", status: "UP", detail: "Oracle" },
-          { id: "redis", name: "Cache", kind: "dependency", status: "UP" },
+          { id: "db.metricsDataSource", name: "Oracle · metrics (reader)", kind: "dependency", status: "UP", detail: "Oracle" },
         ] },
       { id: "metrics-consumer", name: "Metrics consumer", kind: "service", status: "UP", detail: "idle — last envelope 12 min ago", latencyMs: 4 },
       { id: "document-service", name: "Document service", kind: "service", status: "UP", detail: "721 GB free", latencyMs: 3 },

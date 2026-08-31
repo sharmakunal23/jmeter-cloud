@@ -18,7 +18,7 @@ platform is* and how the pieces fit together, see [`README.md`](./README.md).
 | Need | Why |
 |------|-----|
 | Docker Engine + Compose v2 (`docker compose`, not `docker-compose`) | Everything runs as containers, composed from per-subsystem fragments via `include:`. |
-| ~7 GB free RAM for Docker | Oracle Free (~2.2 GB) + Redis + MailHog + 3 Spring services + UI, plus the workers you start. |
+| ~7 GB free RAM for Docker | Oracle Free (~2.2 GB) + MailHog + 3 Spring services + UI, plus the workers you start. |
 | Ports free on the host | See the port table below — mainly `1521`, `8082–8086`. |
 
 No JDK, Maven, or Node is required to *run* the stack — images build inside Docker. You only
@@ -38,7 +38,7 @@ throwaway local credentials, fine as-is.
 ## 3. Bring the stack up
 
 ```bash
-# Full stack (default profile): oracle + redis + mailhog + the 3 services + UI — no workers
+# Full stack (default profile): oracle + mailhog + the 3 services + UI — no workers
 docker compose up -d --build
 ```
 
@@ -75,7 +75,6 @@ same host port. Ports are configurable in `.env`.
 |------|---------|-----|--------------|
 | `1521` | Oracle Database Free (`FREEPDB1`) | `localhost:1521/FREEPDB1` (`system` / `localdev`; the one schema owner `CARDZATE_DB_GRAF` — the consumer connects as it; the hub as `GLOBAL_ORCHESTRATOR_WRITER` / `METRICS_READER` / `METRICS_PURGER`) | `healthcheck.sh` (in the image) |
 | `1025` | MailHog SMTP (dev sink the hub mails to) | `localhost:1025` | — |
-| `6379` | Redis (the hub's cache) | `localhost:6379` | `redis-cli ping` |
 | `8025` | MailHog UI (dev SMTP) | http://localhost:8025 | — |
 | `8080` | Worker HTTP API (`jmeter-local-orchestrator`) | http://localhost:8080 | `GET /actuator/health` |
 | `8082` | global-orchestrator | http://localhost:8082 | `GET /actuator/health` |
@@ -114,7 +113,7 @@ The metric pipeline behind that run:
 ## 6. Watch it
 
 - **Platform health, one call:** `curl -s localhost:8082/api/v1/platform/health | jq` — the hub's tree
-  (itself + Oracle pools + cache, metrics-consumer, document-service, every data center's regional +
+  (itself + Oracle pools + mail, metrics-consumer, document-service, every data center's regional +
   workers), refreshed every minute; the UI Home page renders exactly this. `?refresh=true` probes now.
 - **Live per-run charts:** the UI run-detail **Metrics** tab (native uPlot over the run's `<GROUP_ID>_METRICS` rows, bucketed 15/30/60 s).
 - **Logs:** `docker compose logs -f <service>` — JSON, one record per line, each carrying

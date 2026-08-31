@@ -358,10 +358,6 @@ oracle (healthy)
    │      ├─► metrics-consumer
    │      └─► global-orchestrator
 
-redis (healthy)
-   │
-   └─► global-orchestrator          // Spring Cache provider
-
 mailhog                              // dev SMTP sink, no dependents
 
 global-orchestrator (healthy) ──┐

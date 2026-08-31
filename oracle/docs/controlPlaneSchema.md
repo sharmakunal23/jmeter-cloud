@@ -28,12 +28,13 @@ anyone adding a table or a repository.
 | `ORCH_CRON_JOB` | `CRON_JOB_ID`, unique `(APPLICATION_NAME, NAME)` | `KIND` + kind-fields CHECKs; `(ENABLED, NEXT_FIRE_AT)` index is the claim's candidate scan |
 | `ORCH_CRON_JOB_FIRE_HISTORY`, `ORCH_APPLICATION_HEALTH_HISTORY`, `ORCH_PURGE_AUDIT` | id | deliberately FK-less — they outlive their subjects |
 | `ORCH_RUN_TREND` | `RUN_ID` | `BINARY_DOUBLE` — these are stored ratios, not sums |
-| `ORCH_AI_RESPONSE` | `(KIND, CACHE_KEY, PROMPT_VERSION)` | `RESPONSE CLOB IS JSON` |
+| `ORCH_AI_RESPONSE` | `(KIND, CACHE_KEY, PROMPT_VERSION)` | `RESPONSE CLOB IS JSON`. Its V2 table comment says "rather than in Redis" — a reference to a store retired by V8; an applied migration is immutable, so the correction lives here |
 | `ORCH_PLUGIN` (V3) | `PLUGIN_ID`, unique `NAME`, unique `SHA256` | the global JMeter plugin library — one version per plugin (upgrade = delete + re-register; rows immutable, no UPDATE grant); jar bytes live in a document-service blob (`BLOB_ID`); a delete is blocked `409` while a non-terminal run's snapshot references it |
 | `ORCH_REGION` (V4) | `REGION`, unique `LABEL`, unique `REGIONAL_URL` | a registered cluster, identified three ways and unique in all of them (id/PK, display name, endpoint — one regional serves one cluster): `MAX_WORKERS 1..20` (default 20, the hard cap — the 180 GB grant at 9 GB per worker), `LAST_VALIDATED_AT`, `LAST_PROBE_*` (the on-demand test-provisioning result). Delete is service-guarded — no capacity rows or pods may reference the region; `ORCH_POD.REGION` and `ORCH_RUN.ORIGIN_REGION` deliberately carry no FK (pods are service-guarded, runs are history) |
 | `ORCH_WORKFLOW` (V5) | `WORKFLOW_ID`, unique `(GROUP_ID, NAME)` | a group-scoped task DAG; `GRAPH CLOB IS JSON` is the React Flow document (≤ 64 nodes, hub-validated), `REVISION` is the optimistic lock a stale `PUT` loses on. FK → group, so a group holding workflows cannot be deleted |
 | `ORCH_WORKFLOW_EXECUTION` (V5) | `EXECUTION_ID` | one launch; `WORKFLOW_NAME` + `GRAPH` are **snapshots** so a rename or an edit never rewrites history (hence no FK to `ORCH_WORKFLOW`). `NEXT_TICK_AT` is both the schedule and the claim lease, and `ORCH_WORKFLOW_EXECUTION_TICK_CHK` makes a stranded `RUNNING` row — running, but nothing will ever touch it again — unrepresentable |
 | `ORCH_WORKFLOW_TASK` (V5) | `TASK_ID`, unique `(EXECUTION_ID, NODE_ID)` | one node per execution; FK → execution cascade. `RUN_ID` is `LOAD_TEST`-only (CHECK) and carries **no** FK — a run purge must not delete workflow history; its index is sparse and serves run → workflow on the run page |
+| `ORCH_CACHE` (V8) | `CACHE_KEY` | the hub's Spring Cache store, replacing Redis. `CACHE_KEY` is `<cacheName>::<key>` (hashed past 512 chars) so a get is one `INDEX UNIQUE SCAN` — **the hint names the PK**, because the optimizer otherwise range-scans `ORCH_CACHE_EXPIRES_AT_IDX` and filters the key. `CACHE_VALUE BLOB` is gzipped JSON, stored in-row; a get filters `EXPIRES_AT > SYSTIMESTAMP`, so `ORCH_CACHE_REAP_JOB` reclaims space and never gates freshness. Not partitioned on purpose: a global unique key and `DROP PARTITION` cannot coexist cheaply |
 
 Naming: every identifier UPPER_SNAKE, unquoted (the metrics layout's rule);
 tables `ORCH_<NAME>`, constraints and indexes `ORCH_<TABLE>_<COLS>_{PK,FK,UQ,CHK,IDX}` —
@@ -85,14 +86,16 @@ Both are called from a `BEGIN … END;` block with a `REF CURSOR` out parameter
 | Duplicate platform job name, `MAX_RUNS` without a threshold, pod for an unknown group, non-JSON `PROPERTIES` | ORA-00001, ORA-02290, ORA-02291, ORA-02290 |
 | V5 hand-run 2026-08-31: stranded `RUNNING` execution (no `NEXT_TICK_AT`); terminal execution still carrying one; `EMAIL` task carrying a `RUN_ID`; a second run for one workflow task | ORA-02290 ×3 (`…_TICK_CHK` twice, `…_RUN_ID_CHK`), ORA-00001 on `ORCH_RUN_WORKFLOW_TASK_UQ` — while two runs with a NULL task id coexist |
 | V5: `CLAIM_DUE_WORKFLOWS` against one due execution; `EXPLAIN PLAN` for the crash-recovery lookup and the claim's candidate scan | claims it; `INDEX UNIQUE SCAN ORCH_RUN_WORKFLOW_TASK_UQ` and `INDEX RANGE SCAN ORCH_WORKFLOW_EXECUTION_CLAIM_IDX` — no scan on either path |
-| V1 + V2 + V3 applied from an empty schema | every object `VALID`, 14 `ORCH_*` tables, no non-UPPER object or column name but Flyway's three (`flyway_schema_history`, its `_pk` and `_s_idx` — tool-imposed, like `docker-compose.yml`; don't "fix" them with `-table=`) |
+| Every migration applied from an empty schema | every object `VALID`, 19 `ORCH_*` tables, no non-UPPER object or column name but Flyway's three (`flyway_schema_history`, its `_pk` and `_s_idx` — tool-imposed, like `docker-compose.yml`; don't "fix" them with `-table=`) |
+| V8 (`CacheStoreDbTest`, 2026-08-31): round trip through the BLOB; a row aged past `EXPIRES_AT`; `clear` on one cache name; 8 threads writing one key; `ORCH_CACHE_REAP(10, 200)` over a 26-row backlog | value + `VALUE_BYTES` survive; the expired row is **not served while still present**; only that cache's rows go; one row, no duplicate-key error; 25 deleted in chunks, the live row kept |
+| V8: `EXPLAIN PLAN` for the get, the reaper's delete and the clear | `INDEX UNIQUE SCAN ORCH_CACHE_PK` **only with the `INDEX` hint** — unhinted it picks `ORCH_CACHE_EXPIRES_AT_IDX` and range-scans every live entry; `COUNT STOPKEY` over `ORCH_CACHE_EXPIRES_AT_IDX`; `INDEX RANGE SCAN ORCH_CACHE_CACHE_NAME_IDX` |
 
 ## Roles
 
 `GLOBAL_ORCHESTRATOR_WRITER` — the hub's run-state pool: full DML on `ORCH_RUN`,
 `ORCH_RUN_FLEET_MEMBER`, `ORCH_POD`, `ORCH_APPLICATION_GROUP`, `ORCH_APPLICATION`,
 `ORCH_GROUP_CAPACITY`, `ORCH_CRON_JOB`, `ORCH_AI_RESPONSE`, `ORCH_REGION` (V4),
-`ORCH_WORKFLOW` / `ORCH_WORKFLOW_EXECUTION` / `ORCH_WORKFLOW_TASK` (V5); `SELECT, INSERT, DELETE`
+`ORCH_WORKFLOW` / `ORCH_WORKFLOW_EXECUTION` / `ORCH_WORKFLOW_TASK` (V5), `ORCH_CACHE` (V8); `SELECT, INSERT, DELETE`
 on `ORCH_PLUGIN` (V3 — no UPDATE, rows are immutable); `SELECT, INSERT` on the
 append-only tables (plus `DELETE` where a purge path exists: `ORCH_RUN_TREND`,
 `ORCH_APPLICATION_HEALTH_HISTORY`); `EXECUTE` on `ORCH_CLAIMS` and `ORCH_ID_TABLE`.

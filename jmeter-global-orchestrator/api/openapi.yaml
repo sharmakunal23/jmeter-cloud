@@ -4297,8 +4297,7 @@ components:
         components:
           - { id: global-orchestrator, name: Global orchestrator, kind: service, status: UP, detail: provisioning DYNAMIC,
               components: [ { id: db.globalrunDataSource, name: "Oracle · run state", kind: dependency, status: UP, detail: Oracle },
-                            { id: db.metricsDataSource, name: "Oracle · metrics", kind: dependency, status: UP, detail: Oracle },
-                            { id: redis, name: Cache, kind: dependency, status: UP } ] }
+                            { id: db.metricsDataSource, name: "Oracle · metrics", kind: dependency, status: UP, detail: Oracle } ] }
           - { id: metrics-consumer, name: Metrics consumer, kind: service, status: UP, detail: "idle — last envelope 12 min ago (normal between runs)", url: "http://metrics-consumer:8083", latencyMs: 4 }
           - { id: document-service, name: Document service, kind: service, status: UP, detail: 721 GB free, url: "http://document-service:8084", latencyMs: 3 }
           - { id: regions, name: Data centers, kind: regions, status: DEGRADED, detail: 1 of 2 region(s) down,
