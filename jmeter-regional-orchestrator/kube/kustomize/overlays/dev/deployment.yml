@@ -36,23 +36,23 @@ spec:
             # ResourceQuota + LimitRange first (`kubectl get resourcequota,limitrange -n <ns>`).
             - name: PODPROVISIONER_WORKER_CPU_LIMIT
               value: "2"                     # the quota counts limits.cpu
-            # The 9 GB worker footprint (CLUSTER-CAPACITY): 4 Gi memory + 5 Gi
+            # The 9 GB worker footprint (CLUSTER-CAPACITY): 5 Gi memory + 4 Gi
             # ephemeral -> 20 workers fit a 180 GB cluster grant.
             #
-            # The heaps below are sized FOR that 4 Gi cgroup, not inherited from
-            # the old 6 Gi shape: a limit must fit both JVMs whole, not just
-            # their -Xmx (the platform already lost workers to exactly this).
-            #   orchestrator  768 heap + 192 metaspace + 96 code + ~150 stacks/JVM  ~= 1.2 Gi
+            # A limit must fit both JVMs WHOLE, not just their -Xmx (the platform
+            # already lost workers to exactly that). With both heaps at 1536m the
+            # two PROCESSES land at ~2 Gi each — the "2 GB local-orch + 2 GB
+            # JMeter" split — and the container must also hold page cache:
+            #   orchestrator 1536 heap + 192 metaspace + 96 code + ~200 stacks/GC/JVM ~= 2.0 Gi
             #   JMeter       1536 heap + 192 metaspace + 96 code + 128 direct
-            #                            + ~300 thread stacks + ~100 JVM           ~= 2.4 Gi
-            #   -> ~3.6 Gi committed worst case, ~0.5 Gi left for page cache.
-            # Want the full 2 g JMeter heap? Raise memory to 6144 and drop
-            # ephemeral to 4Gi (10 GB/worker, 18 per cluster) — don't just raise
-            # -Xmx here.
+            #                           + ~300 thread stacks + ~150 GC/JVM           ~= 2.3 Gi
+            #   -> ~4.3 Gi committed worst case, ~0.7 Gi left for page cache.
+            # Raising either -Xmx means raising memory with it; a 2 g JMeter heap
+            # needs 6144 here (10 GB/worker, 18 per cluster).
             - name: PODPROVISIONER_WORKER_MEMORY_MB
-              value: "4096"
+              value: "5120"
             - name: PODPROVISIONER_WORKER_EPHEMERAL_STORAGE
-              value: 5Gi                     # under the LimitRange max 10Gi; request == limit (ratio 1); the JTL lives here, bounded by the worker's RUN_ARTIFACT_RETENTION_* knobs
+              value: 4Gi                     # under the LimitRange max 10Gi; request == limit (ratio 1); the JTL lives here, bounded by the worker's RUN_ARTIFACT_RETENTION_* knobs
             - name: PODPROVISIONER_IMAGE_PULL_SECRET
               value: image-pull-secret
             - name: PODPROVISIONER_RUN_AS_USER
@@ -62,7 +62,7 @@ spec:
             - name: PODPROVISIONER_EXTRA_LABELS
               value: app=jmeter-worker
             - name: PODPROVISIONER_WORKER_JAVA_OPTS
-              value: -Xms512m -Xmx768m -XX:MaxMetaspaceSize=192m -XX:ReservedCodeCacheSize=96m -XX:+UseG1GC -XX:MaxGCPauseMillis=100 -XX:+ExitOnOutOfMemoryError -XX:+UseContainerSupport
+              value: -Xms1536m -Xmx1536m -XX:MaxMetaspaceSize=192m -XX:ReservedCodeCacheSize=96m -XX:+UseG1GC -XX:MaxGCPauseMillis=100 -XX:+ExitOnOutOfMemoryError -XX:+UseContainerSupport
             - name: PODPROVISIONER_JMETER_JVM_ARGS
               value: -Xms1536m -Xmx1536m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=128m -XX:ReservedCodeCacheSize=96m -XX:+ExitOnOutOfMemoryError
           resources:

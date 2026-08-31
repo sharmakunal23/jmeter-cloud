@@ -13,8 +13,8 @@ knobs in `kube/kustomize/overlays/<env>/deployment.yml`.
 |---|---|---|
 | `PODPROVISIONER_CPU_MEMORY_RESOURCES` | `false` under a hard-zero quota (`requests.cpu: 0`): no cpu/memory keys at all | `true` |
 | `PODPROVISIONER_WORKER_CPU_LIMIT` | a CPU limit — required where the quota counts `limits.cpu` | none (request only) |
-| `PODPROVISIONER_WORKER_MEMORY_MB` | memory request == limit; must fit both JVM heaps + native | 6144 (hosted overlays: 4096 — the 9 GB footprint) |
-| `PODPROVISIONER_WORKER_EPHEMERAL_STORAGE` | request == limit (`maxLimitRequestRatio: 1`); the JTL lives here; when set it also bounds `workersFree` | the LimitRange default (hosted overlays: 5Gi) |
+| `PODPROVISIONER_WORKER_MEMORY_MB` | memory request == limit; must fit both JVMs WHOLE (heaps + metaspace + code cache + stacks + direct) plus page cache | 6144 (hosted overlays: 5120 — two 1536m heaps, the 9 GB footprint) |
+| `PODPROVISIONER_WORKER_EPHEMERAL_STORAGE` | request == limit (`maxLimitRequestRatio: 1`); the JTL lives here; when set it also bounds `workersFree` | the LimitRange default (hosted overlays: 4Gi) |
 | `PODPROVISIONER_SERVICE_ACCOUNT_NAME` | the Pod's SA (token never mounted) | the namespace default |
 | `PODPROVISIONER_IMAGE_PULL_SECRET` | pod-level `imagePullSecrets` for a private worker image | none |
 | `PODPROVISIONER_RUN_AS_USER` / `RUN_AS_GROUP` / `FS_GROUP` | pod `securityContext` (`runAsNonRoot` follows) | the image's user |

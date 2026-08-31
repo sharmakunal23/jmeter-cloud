@@ -63,7 +63,7 @@ export function ClusterFormDialog({ existing, onClose, onSaved }: ClusterFormDia
   const footprintHint = footprint?.workerMemoryMb
     ? `${maxWorkers || "N"} workers × (${Math.round(Number(footprint.workerMemoryMb) / 1024)} Gi memory` +
       (footprint.workerEphemeralStorage ? ` + ${footprint.workerEphemeralStorage} disk` : "") + ") each"
-    : "e.g. 20 workers × 9 GB (4 Gi memory + 5 Gi results disk) = 180 GB of a 200 GB cluster grant";
+    : "e.g. 20 workers × 9 GB (5 Gi memory + 4 Gi results disk) = 180 GB of a 200 GB cluster grant";
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();

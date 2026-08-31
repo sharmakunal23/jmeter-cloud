@@ -12,11 +12,12 @@ package com.perf.regionalorchestrator.provision;
  * metaspaces and code caches, JMeter's direct buffers and thread stacks, plus
  * page cache for the JTL it tails. Sizing memory without re-sizing
  * {@code workerJavaOpts} + {@code jmeterJvmArgs} together is how this platform
- * has OOMKilled workers before. The hosted overlays pair 4096 MiB with
- * {@code -Xmx768m} / {@code -Xmx1536m} (the 9 GB footprint: 4 Gi memory + 5 Gi
- * ephemeral, 20 workers per 180 GB cluster); 6144 with {@code -Xmx1g} /
- * {@code -Xmx2g} is the roomier shape for long high-rate runs. Requests equal
- * limits so a runaway worker OOMs inside its own cgroup.
+ * has OOMKilled workers before. The hosted overlays pair 5120 MiB with
+ * {@code -Xmx1536m} for BOTH JVMs — each process then lands at ~2 GiB, the
+ * "2 GB local-orch + 2 GB JMeter" split, inside the 9 GB worker footprint
+ * (5 Gi memory + 4 Gi ephemeral, 20 workers per 180 GB cluster). A 2 g JMeter
+ * heap needs 6144 MiB (10 GB/worker, 18 per cluster). Requests equal limits so
+ * a runaway worker OOMs inside its own cgroup.
  */
 public record ProvisionerProperties(
         // Pod namespace + the headless Service that gives workers their
