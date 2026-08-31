@@ -111,7 +111,7 @@ public class ApplicationGroupRepository {
         return n == null ? 0 : n;
     }
 
-    /** Applications in the group, archived ones included — they hold the FK too. */
+    /** Applications in the group, archived ones included — they hold the FK too (the delete guard's count). */
     public int countApplications(String groupId) {
         Integer n = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM ORCH_APPLICATION WHERE METRICS_GROUP_ID=?",
@@ -119,12 +119,25 @@ public class ApplicationGroupRepository {
         return n == null ? 0 : n;
     }
 
-    /** {@code groupId → application count} for every group that has at least one. */
+    /** Visible (non-archived) applications in the group — the display count. */
+    public int countVisibleApplications(String groupId) {
+        Integer n = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM ORCH_APPLICATION WHERE METRICS_GROUP_ID=? AND HIDDEN_AT IS NULL",
+                Integer.class, groupId);
+        return n == null ? 0 : n;
+    }
+
+    /**
+     * {@code groupId → VISIBLE application count} for every group that has at
+     * least one — the display number, matching the Applications list. Archived
+     * rows still hold the FK; {@link #countApplications} includes them for the
+     * delete guard.
+     */
     public Map<String, Integer> applicationCounts() {
         Map<String, Integer> out = new HashMap<>();
         jdbc.query(
                 "SELECT METRICS_GROUP_ID, COUNT(*) AS n FROM ORCH_APPLICATION "
-                + "GROUP BY METRICS_GROUP_ID",
+                + "WHERE HIDDEN_AT IS NULL GROUP BY METRICS_GROUP_ID",
                 rs -> { out.put(rs.getString("METRICS_GROUP_ID"), rs.getInt("N")); });
         return out;
     }

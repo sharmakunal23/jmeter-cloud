@@ -26,7 +26,9 @@ import java.util.List;
  * @param maxRunsPerPod     the MAX_RUNS / BOTH threshold; null otherwise
  * @param podMaxAgeHours    the MAX_AGE / BOTH threshold; null otherwise
  * @param alwaysOn          DRAIN_REGION jobs skip this group's workers
- * @param applicationCount  applications (visible or archived) in the group —
+ * @param applicationCount  VISIBLE (non-archived) applications in the group —
+ *                          the display count; archived rows still hold the FK
+ *                          and block group deletion —
  *                          hydrated on reads, {@code null} when not requested
  * @param capacity          the group's per-region budget — hydrated on reads,
  *                          {@code null} when not requested

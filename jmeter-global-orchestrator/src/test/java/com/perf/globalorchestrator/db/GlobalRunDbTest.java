@@ -357,6 +357,17 @@ class GlobalRunDbTest extends OracleDbTestSupport {
                 .isInstanceOf(org.springframework.dao.DataAccessException.class);   // ORA-01407: NOT NULL
         assertThat(groups.delete("grp")).isTrue();
         assertThat(groups.findById("grp")).isEmpty();
+
+        // Display counts exclude ARCHIVED apps; the FK delete guard still sees them.
+        groups.insert(new ApplicationGroup("ghostgrp", "Ghost", null, Instant.now(), null));
+        Application ghost = applications.insert(new Application("app-ghost", "ghost-app", null, null, List.of(),
+                Instant.now(), null, null, null, "ghostgrp", "GHOST"));
+        assertThat(groups.applicationCounts()).containsEntry("ghostgrp", 1);
+        assertThat(applications.softDelete(ghost.applicationId(), "ghost-app__deleted__t")).isTrue();   // archive
+        assertThat(groups.applicationCounts()).doesNotContainKey("ghostgrp");
+        assertThat(groups.countVisibleApplications("ghostgrp")).isZero();
+        assertThat(groups.countApplications("ghostgrp")).isEqualTo(1);
+        assertThatThrownBy(() -> groups.delete("ghostgrp")).isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test

@@ -164,7 +164,7 @@ public class ApplicationGroupController {
     }
 
     private ApplicationGroup hydrate(ApplicationGroup group) {
-        return group.withApplicationCount(repo.countApplications(group.groupId()))
+        return group.withApplicationCount(repo.countVisibleApplications(group.groupId()))
                 .withCapacity(capacityRepo.findByGroupId(group.groupId()));
     }
 

@@ -1103,7 +1103,8 @@ paths:
         group's workers send as `?groupId=` on every metrics POST and, upper-cased,
         the prefix of the group's fact tables (`cps` → `CPS_METRICS`), so it must
         name a row of the metrics schema's `GROUP_REGISTRY`. Sorted by name;
-        each row carries `applicationCount` (visible + archived applications).
+        each row carries `applicationCount` (visible applications only — archived
+        rows still hold the FK and block group deletion).
       responses:
         "200":
           description: ok
@@ -2454,7 +2455,7 @@ components:
         podMaxAgeHours: { type: integer, nullable: true, minimum: 1, maximum: 720, description: "Required for MAX_AGE / BOTH; null otherwise." }
         alwaysOn:       { type: boolean, default: false, description: "When true, scheduled DRAIN_REGION jobs SKIP this group's workers (production-like, never auto-drained)." }
         createdAt:        { type: string, format: date-time }
-        applicationCount: { type: integer, nullable: true, description: "Applications in the group, archived ones included. Present on every response from this controller." }
+        applicationCount: { type: integer, nullable: true, description: "VISIBLE (non-archived) applications in the group — matches the Applications list. Archived rows still block group deletion. Present on every response from this controller." }
         capacity:
           type: array
           nullable: true

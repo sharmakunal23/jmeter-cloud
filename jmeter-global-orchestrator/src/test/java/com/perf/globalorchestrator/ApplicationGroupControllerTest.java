@@ -135,7 +135,7 @@ class ApplicationGroupControllerTest {
         when(repo.findById("cps")).thenReturn(Optional.of(CPS));
         when(repo.update("cps", "Servicing MQ (Card)", "the MQ apps", null, null, 7, RecyclePolicy.REUSE, null, null, false))
                 .thenReturn(new ApplicationGroup("cps", "Servicing MQ (Card)", "the MQ apps", CPS.createdAt(), null));
-        when(repo.countApplications("cps")).thenReturn(2);
+        when(repo.countVisibleApplications("cps")).thenReturn(2);
         mvc.perform(put("/api/v1/applicationGroups/cps").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"Servicing MQ (Card)\",\"description\":\"the MQ apps\"}"))
                 .andExpect(status().isOk())
