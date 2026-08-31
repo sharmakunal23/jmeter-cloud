@@ -4,6 +4,7 @@ import { formatRelative } from "../lib/time";
 
 import { useVisiblePolling } from "../hooks/useVisiblePolling";
 import { runsApi, type Run } from "../api/runs";
+import { DataList } from "../components/DataList";
 import { RegionBadgeList } from "../components/RegionBadge";
 import { DeleteRunsConfirmDialog } from "../components/DeleteRunsConfirmDialog";
 import { RunsComparePage } from "./RunsComparePage";
@@ -110,16 +111,6 @@ function RunsTable({ searchParams, setSearchParams }: RunsTableProps) {
 
   // Unlimited multi-select — bulk delete needs to act on any
   // number of runs. Compare is a separate gate that lights up only at exactly
-  // MAX_COMPARE_SELECTION; selecting a third no longer auto-evicts the oldest
-  // (that only made sense when 2 was the hard cap).
-  const toggleSelected = (runId: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(runId)) next.delete(runId);
-      else next.add(runId);
-      return next;
-    });
-  };
 
   const showToast = (message: string) => {
     setToast(message);
@@ -169,26 +160,9 @@ function RunsTable({ searchParams, setSearchParams }: RunsTableProps) {
 
         <span className="runsToolbar__spacer" />
 
-        {selected.size > 0 && (
-          <span className="runsToolbar__selected">
-            {selected.size} selected
-            <button
-              type="button"
-              className="btn btn--ghost"
-              onClick={() => setSelected(new Set())}
-            >
-              Clear
-            </button>
-            <button
-              type="button"
-              className="btn btn--danger btn--sm"
-              onClick={() => setDeleteOpen(true)}
-            >
-              Archive selected
-            </button>
-          </span>
-        )}
-
+        {/* Compare stays visible and disabled rather than appearing with a
+            selection: a control you can see is how you learn the feature
+            exists, and its tooltip says exactly what to do next. */}
         {compareUrl ? (
           <Link to={compareUrl} className="btn btn--primary">
             Compare 2 runs →
@@ -213,54 +187,39 @@ function RunsTable({ searchParams, setSearchParams }: RunsTableProps) {
         </span>
       </div>
 
-      {state.status === "loading" && <p>loading runs…</p>}
       {state.status === "error" && <p className="text--error">{state.message}</p>}
-      {state.status === "ok" && state.runs.length === 0 && (
-        <p>No runs yet. <Link to="/applications">Start your first run →</Link></p>
-      )}
-      {state.status === "ok" && state.runs.length > 0 && (
-        <table className="runsTable">
-          <thead>
-            <tr>
-              <th aria-label="select" className="runsTable__check"></th>
-              <th>Run ID</th>
-              <th>State</th>
-              <th>Cluster</th>
-              <th>Fleet</th>
-              <th>Started</th>
-              <th>Initiated by</th>
-            </tr>
-          </thead>
-          <tbody>
-            {state.runs.map((run) => (
-              <tr key={run.runId}>
-                <td className="runsTable__check">
-                  <input
-                    type="checkbox"
-                    aria-label={`select ${run.runId}`}
-                    checked={selected.has(run.runId)}
-                    onChange={() => toggleSelected(run.runId)}
-                  />
-                </td>
-                <td>
-                  <Link to={`/applications/_/runs/${run.runId}`} className="mono">
-                    {run.runId}
-                  </Link>
-                </td>
-                <td>
-                  <span className={`badge badge--${badgeForState(run.state)}`}>
-                    {run.state}
-                  </span>
-                </td>
-                <td><RegionBadgeList run={run} /></td>
-                <td>{run.fleetMembers?.length ?? 0}</td>
-                <td>{formatDate(run.startedAt ?? run.createdAt)}</td>
-                <td>{run.initiatedBy}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+
+      <DataList<Run>
+        label="Runs"
+        loading={state.status === "loading"}
+        rows={state.status === "ok" ? state.runs : []}
+        rowKey={(r) => r.runId}
+        itemNoun="runs"
+        resetKey={String(activeOnly)}
+        selectedIds={selected}
+        onSelectionChange={(next) => setSelected(new Set(next))}
+        empty={<>
+          <strong>No runs yet.</strong>
+          <div><Link to="/applications">Start your first run →</Link></div>
+        </>}
+        bulkActions={[
+          { label: "Archive selected", danger: true, onRun: () => setDeleteOpen(true) },
+        ]}
+        columns={[
+          { key: "runId", header: "Run ID", cell: (r) => (
+            <Link to={`/applications/_/runs/${r.runId}`} className="mono">{r.runId}</Link>
+          ) },
+          { key: "state", header: "State", cell: (r) => (
+            <span className={`badge badge--${badgeForState(r.state)}`}>{r.state}</span>
+          ) },
+          { key: "cluster", header: "Cluster", cell: (r) => <RegionBadgeList run={r} /> },
+          { key: "fleet", header: "Fleet", className: "dataList__num",
+            cell: (r) => r.fleetMembers?.length ?? 0 },
+          { key: "started", header: "Started",
+            cell: (r) => formatDate(r.startedAt ?? r.createdAt) },
+          { key: "by", header: "Initiated by", cell: (r) => r.initiatedBy },
+        ]}
+      />
 
       {deleteOpen && selectedRuns.length > 0 && (
         <DeleteRunsConfirmDialog

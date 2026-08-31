@@ -1,3 +1,4 @@
+import React from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 
@@ -179,5 +180,49 @@ describe("DataList — the one list shape", () => {
     expect(header).toHaveAttribute("aria-sort", "ascending");
     fireEvent.click(within(header).getByRole("button"));
     expect(onSort).toHaveBeenCalled();
+  });
+
+  it("controlled selection does not re-render forever when nothing changed", () => {
+    // The regression: the prune effect runs every render and returns the same
+    // set when there is nothing to prune. A controlled parent that stores
+    // `new Set(next)` would then be told the selection changed on every
+    // render. Guard removed → this test hangs the suite.
+    const onSelectionChange = vi.fn();
+    function Controlled() {
+      const [ids, setIds] = React.useState<ReadonlySet<string>>(new Set(["r0"]));
+      return (
+        <DataList<Row>
+          label="t" columns={columns} rows={rows(5)} rowKey={(r) => r.id}
+          empty={<>none</>}
+          bulkActions={[{ label: "Delete", onRun: () => {} }]}
+          selectedIds={ids}
+          onSelectionChange={(next) => { onSelectionChange(next); setIds(new Set(next)); }}
+        />
+      );
+    }
+    render(<Controlled />);
+
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
+    // A no-op prune must not be reported as a change at all.
+    expect(onSelectionChange).not.toHaveBeenCalled();
+  });
+
+  it("controlled selection still round-trips a real toggle", () => {
+    function Controlled() {
+      const [ids, setIds] = React.useState<ReadonlySet<string>>(new Set());
+      return (
+        <DataList<Row>
+          label="t" columns={columns} rows={rows(5)} rowKey={(r) => r.id}
+          empty={<>none</>}
+          bulkActions={[{ label: "Delete", onRun: () => {} }]}
+          selectedIds={ids}
+          onSelectionChange={(next) => setIds(new Set(next))}
+        />
+      );
+    }
+    render(<Controlled />);
+
+    fireEvent.click(screen.getAllByRole("checkbox")[1]!);
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
   });
 });

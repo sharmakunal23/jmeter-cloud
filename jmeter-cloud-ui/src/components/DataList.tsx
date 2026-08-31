@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { Paginator } from "./Paginator";
 import { useClientPagination } from "../hooks/useClientPagination";
@@ -69,6 +69,13 @@ export interface DataListProps<T> {
   rowProps?: (row: T) => React.HTMLAttributes<HTMLTableRowElement>;
   /** Opt in to the checkbox column by supplying at least one bulk action. */
   bulkActions?: DataListBulkAction<T>[];
+  /**
+   * Lift the selection when the page needs it too — a toolbar button outside
+   * the list, a dialog that takes the selected rows. Omit both and the list
+   * owns its own selection, which is what most callers want.
+   */
+  selectedIds?: ReadonlySet<string>;
+  onSelectionChange?: (next: ReadonlySet<string>) => void;
   /** Rendered in the toolbar beside the bulk actions (a search box, a filter). */
   toolbar?: ReactNode;
   /** Rows visible at once before the body scrolls. Default 10 — the default page size. */
@@ -82,12 +89,28 @@ const HEADER_HEIGHT = 40;
 export function DataList<T>({
   label, columns, rows, rowKey, itemNoun = "items", empty, loading = false,
   resetKey, rowProps, bulkActions, toolbar, viewportRows = 10,
+  selectedIds: controlledIds, onSelectionChange,
 }: DataListProps<T>) {
   const { page, setPage, pageItems, total, pageSize, setPageSize } =
     useClientPagination(rows, resetKey);
 
-  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
-  const selectable = (bulkActions?.length ?? 0) > 0;
+  const [ownIds, setOwnIds] = useState<ReadonlySet<string>>(new Set());
+  const controlled = controlledIds !== undefined;
+  const selectedIds = controlled ? controlledIds : ownIds;
+  const setSelectedIds = useCallback((update: (prev: ReadonlySet<string>) => ReadonlySet<string>) => {
+    if (controlled) {
+      // The identity guard is load-bearing. The prune effect below runs on
+      // every render (its `rows`/`rowKey` deps are new objects each time) and
+      // returns the SAME set when there is nothing to prune. Without this,
+      // a controlled parent storing `new Set(next)` would be told the
+      // selection "changed" on every render and re-render forever.
+      const next = update(controlledIds!);
+      if (next !== controlledIds) onSelectionChange?.(next);
+    } else {
+      setOwnIds(update);
+    }
+  }, [controlled, controlledIds, onSelectionChange]);
+  const selectable = (bulkActions?.length ?? 0) > 0 || controlled;
 
   // Drop selections whose row is gone — a poll that removes a row must not
   // leave it selected and silently included in the next bulk action.
@@ -141,7 +164,7 @@ export function DataList<T>({
       {(toolbar || selectable) && (
         <div className="dataList__toolbar">
           {toolbar}
-          {selectable && selectedRows.length > 0 && (
+          {(bulkActions?.length ?? 0) > 0 && selectedRows.length > 0 && (
             <div className="dataList__bulk" role="group" aria-label={`${label} bulk actions`}>
               <span className="dataList__bulkCount">{selectedRows.length} selected</span>
               {bulkActions!.map((a) => (
@@ -156,7 +179,7 @@ export function DataList<T>({
                 </button>
               ))}
               <button type="button" className="btn btn--ghost btn--sm"
-                      onClick={() => setSelectedIds(new Set())}>
+                      onClick={() => setSelectedIds(() => new Set<string>())}>
                 Clear
               </button>
             </div>
