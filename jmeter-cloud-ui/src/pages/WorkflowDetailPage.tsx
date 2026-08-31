@@ -51,13 +51,11 @@ export function WorkflowDetailPage() {
     try {
       const wf = await workflowsApi.get(workflowId, signal);
       setWorkflow(wf);
-      const [runs, check, archived] = await Promise.all([
+      const [runs, archived] = await Promise.all([
         workflowsApi.history(workflowId, HISTORY_LIMIT, showArchived, signal),
-        workflowsApi.validate(wf.groupId, wf.graph, signal).catch(() => null),
         workflowsApi.archivedCount(workflowId, signal).catch(() => ({ archived: 0 })),
       ]);
       setHistory(runs);
-      setValidation(check);
       setArchivedCount(archived.archived);
       setError(null);
     } catch (e) {
@@ -71,6 +69,23 @@ export function WorkflowDetailPage() {
     void load(ac.signal);
     return () => ac.abort();
   }, [load]);
+
+  // Validation is keyed on the saved revision, not on the poll: the graph
+  // cannot change while a run is in progress (editing is refused), so
+  // re-validating every tick would re-read the whole application registry and
+  // re-run the capacity analysis to reach the same answer.
+  const revision = workflow?.revision;
+  const groupId = workflow?.groupId;
+  const graph = workflow?.graph;
+  useEffect(() => {
+    if (!groupId || !graph) return;
+    const ac = new AbortController();
+    workflowsApi.validate(groupId, graph, ac.signal)
+      .then(setValidation)
+      .catch(() => { /* a failed check just leaves the panel unfilled */ });
+    return () => ac.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workflowId, revision]);
 
   // One execution runs at a time, so the newest one still running is THE one.
   const running = useMemo(
@@ -135,8 +150,10 @@ export function WorkflowDetailPage() {
     setBusy(true);
     try {
       const result = await workflowsApi.remove(workflowId, cancelRunning);
+      // The list says what the delete did; landing there with no word on it
+      // leaves the operator guessing whether the run was stopped.
       navigate(`/workflows/groups/${encodeURIComponent(workflow!.groupId)}`, {
-        state: { deleted: result },
+        state: { deletedWorkflow: { name: workflow!.name, ...result } },
       });
     } catch (e) {
       setError((e as Error).message);
@@ -154,7 +171,9 @@ export function WorkflowDetailPage() {
 
   const tabs: ReadonlyArray<TabDefinition<Tab>> = [
     { id: "flow", label: "Flow" },
-    { id: "runs", label: "Recent runs", badge: history.length > 0 ? history.length : undefined },
+    // No count: `history` is whichever side of the archive line is showing, so
+    // a number here would relabel the tab when the operator opens the archive.
+    { id: "runs", label: "Recent runs" },
   ];
   const [tab, setTab] = useTabInUrl(tabs, searchParams, setSearchParams);
   // A running execution owns the workflow: re-running it would be refused
@@ -395,8 +414,8 @@ export function WorkflowDetailPage() {
           onConfirm={() => void deleteWorkflow(Boolean(running))}
         >
           <p>
-            The workflow and its {history.length + archivedCount} run record
-            {history.length + archivedCount === 1 ? "" : "s"} are deleted.
+            The workflow is deleted, along with every run record it has —
+            the history and the archive both.
           </p>
           {running && (
             <p className="ink-warn">

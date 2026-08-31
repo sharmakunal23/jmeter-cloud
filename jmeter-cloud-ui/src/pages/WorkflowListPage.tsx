@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 
 import {
   workflowsApi, type Workflow, type WorkflowGroupSummary,
@@ -14,8 +14,16 @@ import { ExecutionStateChip } from "../components/workflow/ExecutionStateChip";
  * what the graph holds, so an operator can tell at a glance which workflow is
  * the one they came for.
  */
+/** What the detail page hands over after deleting a workflow. */
+interface DeletedWorkflow {
+  deletedWorkflow?: { name: string; cancelledExecutions: number; deletedExecutions: number };
+}
+
 export function WorkflowListPage() {
   const { groupId = "" } = useParams();
+  // Handed over by the detail page's delete, so the outcome is reported where
+  // the operator lands rather than on a page that no longer exists.
+  const deleted = (useLocation().state as DeletedWorkflow | null)?.deletedWorkflow ?? null;
   const [group, setGroup] = useState<WorkflowGroupSummary | null>(null);
   const [rows, setRows] = useState<Workflow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +88,17 @@ export function WorkflowListPage() {
           </Link>
         </div>
       </header>
+
+      {deleted && (
+        <div className="banner banner--info">
+          Deleted "{deleted.name}" and {deleted.deletedExecutions} run record
+          {deleted.deletedExecutions === 1 ? "" : "s"}
+          {deleted.cancelledExecutions > 0
+            ? `, cancelling ${deleted.cancelledExecutions} run in progress.`
+            : "."}
+          {" "}The load tests' own runs are unaffected.
+        </div>
+      )}
 
       {error && <div className="banner banner--error" role="alert">{error}</div>}
 

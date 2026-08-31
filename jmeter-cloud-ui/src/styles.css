@@ -5681,7 +5681,6 @@ tr.isMuted td { opacity: 0.6; }
   height: calc(100vh - 19rem);
   min-height: 26rem;
 }
-.workflowDetail__layout--flow { align-items: stretch; }
 
 /* ── Workflow metrics board (the hosted live dashboard's shape) ─────── */
 .workflowMetrics__toolbar {
@@ -5703,7 +5702,6 @@ tr.isMuted td { opacity: 0.6; }
   font: inherit;
   font-size: 0.82rem;
 }
-.metricsHeading { font-size: 0.95rem; margin: 1.1rem 0 0.5rem; color: var(--ink); }
 .workflowMetrics__summary { margin-bottom: 0.5rem; }
 .workflowMetrics__summary tr.isTotal td {
   font-weight: 600;

@@ -273,13 +273,18 @@ function ApplicationsTable({ tasks }: { tasks: WorkflowTask[] }) {
               </td>
               <td>{t.name}</td>
               <td className="mono" style={{ fontSize: "0.82rem" }}>
-                {t.runId
-                  ? (
-                    <Link to={`/applications/${encodeURIComponent(t.applicationName ?? "")}/runs/${t.runId}`}>
-                      {t.runId.slice(-8)}
-                    </Link>
-                  )
-                  : <span className="ink-soft">not started</span>}
+                {/* The run page lives under its application, so without one
+                    there is no address to link to — show the id rather than a
+                    link that lands on Not found. */}
+                {!t.runId
+                  ? <span className="ink-soft">not started</span>
+                  : t.applicationName
+                    ? (
+                      <Link to={`/applications/${encodeURIComponent(t.applicationName)}/runs/${t.runId}`}>
+                        {t.runId.slice(-8)}
+                      </Link>
+                    )
+                    : <span>{t.runId.slice(-8)}</span>}
               </td>
               <td>
                 <ExecutionStateChip state={t.state} />

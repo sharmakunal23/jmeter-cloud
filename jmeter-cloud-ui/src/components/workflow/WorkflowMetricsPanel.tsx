@@ -31,11 +31,6 @@ import { TimeseriesChart, type TimeseriesSeries } from "../charts/TimeseriesChar
 const REFRESH_MS = 15_000;
 const CHART_HEIGHT = 260;
 const GRANULARITIES: MetricsGranularity[] = [15, 30, 60];
-/** Shown while the summaries are still loading, so the stat row keeps its shape. */
-const EMPTY_STATS: RunSummaryStats = {
-  samples: 0, errors: 0, tps: 0, errorPct: 0, avgMs: 0,
-  p90Ms: 0, p95Ms: 0, p99Ms: 0, maxMs: 0, maxActiveThreads: 0,
-};
 
 export interface WorkflowMetricsPanelProps {
   tasks: WorkflowTask[];
@@ -103,7 +98,15 @@ export function WorkflowMetricsPanel({ tasks, live }: WorkflowMetricsPanelProps)
 
   const summaryRows = useMemo(() => summaries.data ?? [], [summaries.data]);
   const chartRows = useMemo(() => seriesRows.data ?? [], [seriesRows.data]);
-  const folded = useMemo(() => foldStats(summaryRows.map((r) => r.summary.total)), [summaryRows]);
+  const folded = useMemo(
+    () => foldStats(
+      summaryRows.map((r) => r.summary.total),
+      // The windows make throughput a wall-clock rate rather than the sum of
+      // rates that, for sequential load tests, never coexisted.
+      summaryRows.map((r) => ({ fromSecond: r.summary.fromSecond, toSecond: r.summary.toSecond })),
+    ),
+    [summaryRows],
+  );
 
   if (loadTests.length === 0) {
     return (
@@ -134,8 +137,8 @@ export function WorkflowMetricsPanel({ tasks, live }: WorkflowMetricsPanelProps)
     : [];
 
   const rowCount = Math.max(summaryRows.length, chartRows.length, loadTests.length);
-  const loading = (needsSummary && summaries.status.kind === "loading" && summaryRows.length === 0)
-    || (needsSeries && seriesRows.status.kind === "loading" && chartRows.length === 0);
+  const summaryLoading = needsSummary && summaries.status.kind === "loading";
+  const seriesLoading = needsSeries && seriesRows.status.kind === "loading";
 
   return (
     <div className="workflowMetrics">
@@ -157,29 +160,35 @@ export function WorkflowMetricsPanel({ tasks, live }: WorkflowMetricsPanelProps)
         </span>
       </div>
 
-      {loading ? (
-        <p className="ink-soft">Loading metrics…</p>
-      ) : folded === null && chartRows.length === 0 ? (
-        <p className="ink-soft">No samples yet.</p>
-      ) : (
-        <>
+      {/* The sections always render. An empty state that replaced the board
+          would take the headers with it, and with every section collapsed
+          there is nothing that needs data — so there would be no way back to
+          an open one. Each section reports its own emptiness instead. */}
+      <>
           <MetricsSection
             id="wfKeyMetrics" title="Key metrics" open={keyOpen} onToggle={toggleKey}
             meta={`${rowCount} application${rowCount === 1 ? "" : "s"}`}
           >
-            <dl className="statRow" aria-label="Key metrics across every application">
-              {statsFor(folded ?? EMPTY_STATS).map((st) => (
-                <div key={st.label} className={`statCard ${st.tone ? `statCard--${st.tone}` : ""}`} title={st.title}>
-                  <dt className="statCard__label">{st.label}</dt>
-                  <dd className="statCard__value">{st.value}</dd>
-                </div>
-              ))}
-            </dl>
+            {folded === null ? (
+              <p className="ink-soft">{summaryLoading ? "Loading metrics…" : "No samples yet."}</p>
+            ) : (
+              <dl className="statRow" aria-label="Key metrics across every application">
+                {statsFor(folded).map((st) => (
+                  <div key={st.label} className={`statCard ${st.tone ? `statCard--${st.tone}` : ""}`} title={st.title}>
+                    <dt className="statCard__label">{st.label}</dt>
+                    <dd className="statCard__value">{st.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
           </MetricsSection>
 
           <MetricsSection
             id="wfSummary" title="Summary by application" open={summaryOpen} onToggle={toggleSummary}
           >
+          {summaryRows.length === 0 ? (
+            <p className="ink-soft">{summaryLoading ? "Loading metrics…" : "No samples yet."}</p>
+          ) : (
           <table className="miniTable workflowMetrics__summary">
             <thead>
               <tr>
@@ -201,6 +210,7 @@ export function WorkflowMetricsPanel({ tasks, live }: WorkflowMetricsPanelProps)
               )}
             </tbody>
           </table>
+          )}
           </MetricsSection>
 
           <MetricsSection
@@ -227,6 +237,9 @@ export function WorkflowMetricsPanel({ tasks, live }: WorkflowMetricsPanelProps)
               </div>
             }
           >
+          {chartRows.length === 0 ? (
+            <p className="ink-soft">{seriesLoading ? "Loading metrics…" : "No samples yet."}</p>
+          ) : (
           <div className="workflowMetrics__charts">
             <TimeseriesChart title="Throughput by application (req/s)" series={throughput} height={CHART_HEIGHT} />
             <TimeseriesChart
@@ -235,9 +248,13 @@ export function WorkflowMetricsPanel({ tasks, live }: WorkflowMetricsPanelProps)
               height={CHART_HEIGHT}
             />
           </div>
+          )}
           </MetricsSection>
 
           <MetricsSection id="wfErrors" title="Errors" open={errorsOpen} onToggle={toggleErrors}>
+          {chartRows.length === 0 ? (
+            <p className="ink-soft">{seriesLoading ? "Loading metrics…" : "No samples yet."}</p>
+          ) : (
           <div className="workflowMetrics__charts">
             <TimeseriesChart
               title="Error % by application"
@@ -246,9 +263,9 @@ export function WorkflowMetricsPanel({ tasks, live }: WorkflowMetricsPanelProps)
             />
             <TimeseriesChart title="Error codes across the execution (per second)" series={codeSeries} height={CHART_HEIGHT} />
           </div>
+          )}
           </MetricsSection>
-        </>
-      )}
+      </>
     </div>
   );
 }
