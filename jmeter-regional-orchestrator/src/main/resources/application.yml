@@ -94,6 +94,9 @@ regionalOrchestrator:
     # worker's production default (-Xms2g -Xmx2g); a validation cluster sets
     # "-Xms256m -Xmx512m" with a matching workerMemoryMb.
     jmeterJvmArgs:         ${PODPROVISIONER_JMETER_JVM_ARGS:}
+    # Stamped as BEANSHELL_PORT on every spawned worker (the worker's own
+    # default is 0 = off; the platform's Pods opt in). 0 disables.
+    beanshellPort:         ${PODPROVISIONER_BEANSHELL_PORT:4446}
 
     # ── Worker Pod shape on the hosted platform (Track 8) ─────────────
     # Read the namespace's ResourceQuota + LimitRange BEFORE setting these

@@ -359,7 +359,11 @@ public final class OrchestratorConfig {
         // and control planes don't collide. Default 4445 matches JMeter's own.
         this.jmeterShutdownPort = parsePositiveInt(env,
                 "JMETER_SHUTDOWN_PORT", 4445);
-        this.beanshellPort             = parseNonNegativeInt(env, "BEANSHELL_PORT", 4446);
+        // Default 0 = OFF (the bsh server is unauthenticated code-exec inside
+        // the container, so an unmanaged environment must opt in). The
+        // platform's managed paths stamp 4446 explicitly: the K8s provisioner,
+        // the local driver's dev workers, an operator's declared-worker env.
+        this.beanshellPort             = parseNonNegativeInt(env, "BEANSHELL_PORT", 0);
         // Default drain budget: 60s. After this, the lifecycle escalates the
         // drain to abort (SIGKILL) and the run ends ABORTED.
         this.jmeterDrainTimeoutSeconds = parsePositiveInt(env,

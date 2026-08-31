@@ -82,6 +82,7 @@ substrate uses. What it needs:
 | Env var | Required? | Why |
 |---|---|---|
 | `METRICS_INGEST_URL` | **yes** | where the 15-second metric windows are POSTed. Without it the run produces no data. |
+| `BEANSHELL_PORT` | no | default `0` = runtime property pushes OFF (the bsh server is unauthenticated code-exec). Set `4446` to enable `POST /runs/{id}/properties`; keep the port unreachable from outside the worker's pod/host. |
 | `BASE_DIR` | yes (image default is fine) | working root; also how the worker recognises its own JMeter processes |
 | `POD_ID` | recommended | the worker's id. **Must equal the name you declare** — it is also the `workerId` stamped on every metric, so the metrics join breaks if they differ. Defaults to the hostname, which is normally what you want. |
 | `GLOBAL_ORCHESTRATOR_URL` + `GROUP_ID` | optional | enables self-registration (the group whose pool the worker joins). Harmless alongside declaring — the two converge on one row, and your declared address wins. |

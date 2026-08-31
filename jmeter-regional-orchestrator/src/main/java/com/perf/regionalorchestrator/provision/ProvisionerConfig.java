@@ -43,6 +43,7 @@ public class ProvisionerConfig {
             @Value("${regionalOrchestrator.podProvisioner.gracePeriodSeconds:10}")                  int    gracePeriodSeconds,
             @Value("${regionalOrchestrator.podProvisioner.jmeterJvmArgs:}")                          String jmeterJvmArgs,
             @Value("${regionalOrchestrator.podProvisioner.metricsIngestAuth:}")                      String metricsIngestAuth,
+            @Value("${regionalOrchestrator.podProvisioner.beanshellPort:4446}")                      int    beanshellPort,
             @Value("${regionalOrchestrator.podProvisioner.cpuMemoryResources:true}")                 boolean cpuMemoryResources,
             @Value("${regionalOrchestrator.podProvisioner.workerCpuLimit:}")                         String workerCpuLimit,
             @Value("${regionalOrchestrator.podProvisioner.workerEphemeralStorage:}")                 String workerEphemeralStorage,
@@ -68,6 +69,7 @@ public class ProvisionerConfig {
                 workerMemoryMb, workerCpuRequest, gracePeriodSeconds,
                 jmeterJvmArgs == null || jmeterJvmArgs.isBlank() ? null : jmeterJvmArgs.trim(),
                 metricsIngestAuth == null || metricsIngestAuth.isBlank() ? null : metricsIngestAuth.trim(),
+                beanshellPort,
                 shape);
     }
 

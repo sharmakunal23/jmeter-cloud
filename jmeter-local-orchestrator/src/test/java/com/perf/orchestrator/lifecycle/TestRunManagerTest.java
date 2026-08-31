@@ -612,7 +612,62 @@ class TestRunManagerTest {
                 gracePeriodSeconds, null, null, List.of(), null);
     }
 
+    // -----------------------------------------------------------------------
+    // UX-DYNAMICS T5 — BeanShell server posture on the launch command
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("BeanShell flags — secure by default")
+    class BeanShellFlags {
+
+        @Test
+        @DisplayName("default config (BEANSHELL_PORT unset = 0): no -Jbeanshell flags")
+        void offByDefault() {
+            manager.start(req("r-bshOff"));
+            Awaitility.await().atMost(Duration.ofSeconds(3)).until(() -> launcher.lastSpec.get() != null);
+            assertThat(launcher.lastSpec.get().command())
+                    .noneMatch(a -> a.startsWith("-Jbeanshell."));
+        }
+
+        @Test
+        @DisplayName("BEANSHELL_PORT=4446 + extras/startup.bsh present: both flags, absolute file path")
+        void optInEmitsBothFlags() throws Exception {
+            Path home = baseDir.resolve("jmHome");
+            Path startup = home.resolve("extras").resolve("startup.bsh");
+            Files.createDirectories(startup.getParent());
+            Files.writeString(startup, "// stock startup script\n");
+
+            Map<String, String> env = configEnv(baseDir);
+            env.put("BEANSHELL_PORT", "4446");
+            env.put("JMETER_HOME", home.toString());
+            OrchestratorConfig cfg = OrchestratorConfig.from(env);
+            ArtifactStager st = new ArtifactStager(cfg);
+            st.storeTestPlan(new ByteArrayInputStream(jmxBody()), "plan.jmx");
+            TestRunManager m = new TestRunManager(
+                    cfg, st, currentRun, launcher, pipelineFactory,
+                    new HttpResultSink(),
+                    new com.perf.orchestrator.storage.HttpArtifactSource(),
+                    Clock.systemUTC());
+            try {
+                m.start(req("r-bshOn"));
+                Awaitility.await().atMost(Duration.ofSeconds(3)).until(() -> launcher.lastSpec.get() != null);
+                assertThat(launcher.lastSpec.get().command())
+                        .contains("-Jbeanshell.server.port=4446")
+                        .contains("-Jbeanshell.server.file=" + startup.toAbsolutePath());
+                // Let the fake run finish before shutdown so @TempDir can delete.
+                Awaitility.await().atMost(Duration.ofSeconds(3))
+                        .until(() -> currentRun.isTerminal() || currentRun.state() == TestState.IDLE);
+            } finally {
+                m.shutdown();
+            }
+        }
+    }
+
     private static OrchestratorConfig configIn(Path base) {
+        return OrchestratorConfig.from(configEnv(base));
+    }
+
+    private static Map<String, String> configEnv(Path base) {
         Map<String, String> env = new HashMap<>(Map.of(
                 "POD_NAME",            "jmeter-worker-0",
                 "TEST_REGION",         "us-east-1",
@@ -630,7 +685,7 @@ class TestRunManagerTest {
         // default 120s. The behaviour we're verifying is the signal flow,
         // not the grace duration.
         env.put("JMETER_TERMINATION_GRACE_S", "2");
-        return OrchestratorConfig.from(env);
+        return env;
     }
 
     private static byte[] jmxBody() {

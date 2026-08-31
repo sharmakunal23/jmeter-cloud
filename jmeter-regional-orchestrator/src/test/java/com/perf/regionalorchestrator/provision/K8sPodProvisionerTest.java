@@ -102,6 +102,9 @@ class K8sPodProvisionerTest {
                 .containsEntry("METRICS_INGEST_URL", "http://metrics-consumer:8083/api/v1/ingest")
                 .doesNotContainKey("SCHEMA_REGISTRY_URL")
                 .containsEntry("GRACE_PERIOD_SECONDS", "10")
+                // Secure-by-default posture: the worker's own default is 0 —
+                // the provisioner's stamp is the managed opt-in.
+                .containsEntry("BEANSHELL_PORT", "4446")
                 .containsEntry("METRICS_INGEST_AUTH", "Bearer testToken")
                 .containsEntry("ARTIFACT_SOURCE", "DOCUMENT_SERVICE")
                 .containsEntry("HTTP_PORT", "8080")

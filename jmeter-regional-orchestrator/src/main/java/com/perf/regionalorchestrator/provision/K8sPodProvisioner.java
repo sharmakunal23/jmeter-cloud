@@ -468,6 +468,12 @@ public class K8sPodProvisioner implements PodProvisioner {
         // config (TestRunManager.buildPerRunConfig); a per-run POST /test
         // gracePeriodSeconds still overrides.
         e.put("GRACE_PERIOD_SECONDS",    String.valueOf(props.gracePeriodSeconds()));
+        // UX-DYNAMICS T5 posture: the worker's own default is 0 (secure by
+        // default — bsh is unauthenticated code-exec). Provisioner-spun Pods
+        // opt in here so runtime property pushes need no foresight; the port
+        // stays pod-internal (never a Service port, NetworkPolicy never
+        // admits 4446/4447).
+        e.put("BEANSHELL_PORT",          String.valueOf(props.beanshellPort()));
         // Artifact + result wiring.
         e.put("ARTIFACT_SOURCE",         "DOCUMENT_SERVICE");
         e.put("DOCUMENT_SERVICE_URL",    props.documentServiceUrl());

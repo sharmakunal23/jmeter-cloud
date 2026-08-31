@@ -72,11 +72,15 @@ principal, at deploy time only.
 | everything | DNS | 53 | |
 
 **Worker-pod-internal only (UX-DYNAMICS T5):** the JMeter child's BeanShell
-server (`BEANSHELL_PORT`, default 4446, plus bsh's HTTP twin on 4447) binds all
-interfaces but is never a Service port — the worker's NetworkPolicy must NOT
-admit it (only 8080). Its only caller is the worker's own orchestrator on
-`127.0.0.1`, relaying `POST /api/v1/test/properties` as `props.put` statements
-(never scripts). Opt out per deployment with `BEANSHELL_PORT=0`.
+server (`BEANSHELL_PORT`, plus bsh's HTTP twin on 4447) binds all interfaces
+but is never a Service port — the worker's NetworkPolicy must NOT admit it
+(only 8080). Its only caller is the worker's own orchestrator on `127.0.0.1`,
+relaying `POST /api/v1/test/properties` as `props.put` statements (never
+scripts). **Secure by default (2026-08-31):** the worker's default is `0`
+(off) — bsh is unauthenticated code-exec, so unmanaged environments never
+expose it; the managed paths opt in with 4446 (the K8s provisioner stamp
+`PODPROVISIONER_BEANSHELL_PORT`, the local driver's dev workers, an
+operator's declared-worker env). `0` disables per deployment.
 
 ## What is NOT in the picture (and must stay out)
 

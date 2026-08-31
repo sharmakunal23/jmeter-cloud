@@ -278,7 +278,7 @@ paths:
         "502":
           description: BEANSHELL_UNREACHABLE — the server refused the push (JMeter may still be starting).
         "503":
-          description: BEANSHELL_DISABLED — `BEANSHELL_PORT=0` on this worker.
+          description: BEANSHELL_DISABLED — the worker runs without `BEANSHELL_PORT` (default 0 = off; managed environments stamp 4446).
 
   /api/v1/test/abort:
     post:

@@ -46,9 +46,24 @@ public record ProvisionerProperties(
         // Authorization value (`Bearer <token>`), the hosted ingest.auth; from
         // a Secret in a real cloud. Null = the consumer runs without auth (local).
         String metricsIngestAuth,
+        // Stamped as BEANSHELL_PORT. The worker's own default is 0 (the bsh
+        // server is unauthenticated code-exec, so unmanaged environments are
+        // off); provisioner-spun Pods opt in here — pod-internal only, the
+        // NetworkPolicy never admits it. 0 disables per deployment.
+        int    beanshellPort,
         // What the hosting platform dictates about a worker Pod's spec
         // (PRIVATE-CLOUD-ALIGNMENT Track 8); WorkerPodShape.DEFAULTS locally.
         WorkerPodShape shape) {
+
+    /** The pre-beanshellPort shape signature (tests) — bsh on its 4446 default. */
+    public ProvisionerProperties(String namespace, String headlessService, String image, int localOrchestratorPort,
+                                 String metricsIngestUrl, String documentServiceUrl, long workerMemoryMb,
+                                 String workerCpuRequest, int gracePeriodSeconds, String jmeterJvmArgs,
+                                 String metricsIngestAuth, WorkerPodShape shape) {
+        this(namespace, headlessService, image, localOrchestratorPort, metricsIngestUrl, documentServiceUrl,
+                workerMemoryMb, workerCpuRequest, gracePeriodSeconds, jmeterJvmArgs, metricsIngestAuth,
+                4446, shape);
+    }
 
     /** The local shape ({@link WorkerPodShape#DEFAULTS}). */
     public ProvisionerProperties(String namespace, String headlessService, String image, int localOrchestratorPort,
