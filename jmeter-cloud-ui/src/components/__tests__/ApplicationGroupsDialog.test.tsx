@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { ApplicationGroupsDialog } from "../ApplicationGroupsDialog";
 
@@ -74,13 +74,18 @@ describe("ApplicationGroupsDialog", () => {
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("A group with this id already exists."));
   });
 
-  it("renames inline through PUT", async () => {
+  it("renames through the edit panel (PUT) — the list swaps for a form with the id locked", async () => {
     api.update.mockResolvedValue({ ...cps, name: "Servicing MQ (Card)" });
     render(<ApplicationGroupsDialog onClose={vi.fn()} />);
     await waitFor(() => expect(screen.getByText("Servicing MQ")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "edit group cps" }));
-    fireEvent.change(within(screen.getByRole("table", { name: "application groups" })).getByLabelText(/^Name \*/i), { target: { value: "Servicing MQ (Card)" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    // The table is replaced by the edit form; the immutable id is a locked field.
+    expect(screen.queryByRole("table", { name: "application groups" })).toBeNull();
+    const idField = screen.getByLabelText("Id") as HTMLInputElement;
+    expect(idField.value).toBe("cps");
+    expect(idField).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/^Name \*/i), { target: { value: "Servicing MQ (Card)" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(api.update).toHaveBeenCalledWith("cps", {
       name: "Servicing MQ (Card)", description: "MQ apps", grafanaLiveUrl: undefined, grafanaHistoryUrl: undefined, hotDays: 7,
       recyclePolicy: "REUSE", maxRunsPerPod: null, podMaxAgeHours: null, alwaysOn: false,
@@ -118,7 +123,7 @@ describe("ApplicationGroupsDialog", () => {
     expect((document.querySelector("#edit-cpsAlwaysOn") as HTMLInputElement).checked).toBe(true);
     fireEvent.click(document.querySelector('input[name="edit-cpsRecyclePolicy"][value="REUSE"]')!);
     fireEvent.click(document.querySelector("#edit-cpsAlwaysOn")!);
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(api.update).toHaveBeenCalledWith("cps", {
       name: "Servicing MQ", description: "MQ apps", grafanaLiveUrl: "https://g.example.com/d/cps", grafanaHistoryUrl: undefined, hotDays: 14,
       recyclePolicy: "REUSE", maxRunsPerPod: null, podMaxAgeHours: null, alwaysOn: false,

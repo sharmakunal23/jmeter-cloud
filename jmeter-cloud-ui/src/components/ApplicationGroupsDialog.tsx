@@ -76,6 +76,9 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
   const [tab, setTab] = useState<"existing" | "add">("existing");
   const groups = list.status === "ok" ? list.groups : [];
   const { page, setPage, pageItems, total, pageSize } = useClientPagination(groups, undefined, 8);
+  // Editing swaps the list for a first-class form (same layout as Add);
+  // the immutable id renders as a locked field, like the app dialog's name.
+  const editing = editingId !== null ? groups.find((g) => g.groupId === editingId) ?? null : null;
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -102,6 +105,8 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
   const urlError = (v: string) => (v.trim() === "" || isDashboardUrl(v.trim()) ? null : "must be an absolute http(s) URL");
   const hotDaysError = (v: string) => (/^\d+$/.test(v.trim()) && Number(v) >= 1 && Number(v) <= 3650 ? null : "1–3650 days");
   const createUrlError = urlError(grafanaLiveUrl) ?? urlError(grafanaHistoryUrl);
+  const canSaveEdit = editName.trim() !== "" && urlError(editGrafanaLiveUrl) == null
+    && urlError(editGrafanaHistoryUrl) == null && hotDaysError(editHotDays) == null;
   const canCreate = !creating && idError === null && nameError === null && description.length <= MAX_DESCRIPTION_LEN
     && createUrlError === null && hotDaysError(hotDays) === null;
 
@@ -220,7 +225,7 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
           <button
             type="button" role="tab" aria-selected={tab === "add"}
             className={`tabBar__tab ${tab === "add" ? "tabBar__tab--active" : ""}`}
-            onClick={() => setTab("add")}
+            onClick={() => { setTab("add"); setEditingId(null); }}
           >
             Add a group
           </button>
@@ -230,7 +235,7 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
         {tab === "existing" && list.status === "ok" && list.groups.length === 0 && (
           <p className="ink-soft">No groups yet — add one on the "Add a group" tab.</p>
         )}
-        {tab === "existing" && list.status === "ok" && list.groups.length > 0 && (
+        {tab === "existing" && editingId === null && list.status === "ok" && list.groups.length > 0 && (
           <table className="runsTable applicationListTable" aria-label="application groups">
             <thead>
               <tr>
@@ -243,89 +248,6 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
             <tbody>
               {pageItems.map((g) => (
                 <tr key={g.groupId}>
-                  {editingId === g.groupId ? (
-                    <td colSpan={4}>
-                      <div className="ink-soft" style={{ marginBottom: "0.5rem" }}>
-                        Editing <strong>{g.name}</strong> · id <span className="mono">{g.groupId}</span>
-                      </div>
-                        <div className="formField">
-                          <label htmlFor={`editGroupName_${g.groupId}`}>Name *</label>
-                          <input
-                            id={`editGroupName_${g.groupId}`}
-                            type="text"
-                            value={editName}
-                            onChange={(e) => setEditName(e.target.value)}
-                            maxLength={MAX_NAME_LEN}
-                          />
-                        </div>
-                        <div className="formField" style={{ marginTop: "0.3rem" }}>
-                          <label htmlFor={`editGroupDescription_${g.groupId}`}>Description</label>
-                          <input
-                            id={`editGroupDescription_${g.groupId}`}
-                            type="text"
-                            value={editDescription}
-                            onChange={(e) => setEditDescription(e.target.value)}
-                            placeholder="optional"
-                            maxLength={MAX_DESCRIPTION_LEN}
-                          />
-                        </div>
-                        <div className="formField" style={{ marginTop: "0.3rem" }}>
-                          <label htmlFor={`editGroupGrafanaLive_${g.groupId}`}>Grafana live URL</label>
-                          <input
-                            id={`editGroupGrafanaLive_${g.groupId}`}
-                            type="url"
-                            value={editGrafanaLiveUrl}
-                            onChange={(e) => setEditGrafanaLiveUrl(e.target.value)}
-                            aria-invalid={urlError(editGrafanaLiveUrl) != null}
-                            placeholder="optional"
-                            maxLength={2000}
-                          />
-                        </div>
-                        <div className="formField" style={{ marginTop: "0.3rem" }}>
-                          <label htmlFor={`editGroupGrafanaHistory_${g.groupId}`}>Grafana history URL</label>
-                          <input
-                            id={`editGroupGrafanaHistory_${g.groupId}`}
-                            type="url"
-                            value={editGrafanaHistoryUrl}
-                            onChange={(e) => setEditGrafanaHistoryUrl(e.target.value)}
-                            aria-invalid={urlError(editGrafanaHistoryUrl) != null}
-                            placeholder="optional"
-                            maxLength={2000}
-                          />
-                        </div>
-                        <div className="formField" style={{ marginTop: "0.3rem" }}>
-                          <label htmlFor={`editGroupHotDays_${g.groupId}`}>Hot days</label>
-                          <input
-                            id={`editGroupHotDays_${g.groupId}`}
-                            type="number"
-                            value={editHotDays}
-                            onChange={(e) => setEditHotDays(e.target.value)}
-                            aria-invalid={hotDaysError(editHotDays) != null}
-                            min={1}
-                            max={3650}
-                            style={{ width: "6rem" }}
-                            title="Days the live dashboard covers; older runs open the history dashboard"
-                          />
-                        </div>
-                        <PodPolicyFields idPrefix={`edit-${g.groupId}`} value={editPolicy} onChange={setEditPolicy} disabled={saving} />
-                        {/* Footer convention: actions at the BOTTOM of the edit
-                            stack — in a middle-aligned sibling cell they float
-                            beside the fields' vertical center. */}
-                        <div className="groupEditActions">
-                          <button type="button" className="btn btn--sm btn--ghost"
-                                  onClick={() => setEditingId(null)} disabled={saving}>
-                            Cancel
-                          </button>
-                          <button type="button" className="btn btn--sm btn--primary"
-                                  onClick={() => void handleSave(g)}
-                                  disabled={saving || editName.trim() === "" || urlError(editGrafanaLiveUrl) != null
-                                    || urlError(editGrafanaHistoryUrl) != null || hotDaysError(editHotDays) != null}>
-                            Save
-                          </button>
-                        </div>
-                    </td>
-                  ) : (
-                    <>
                       <td>
                         <strong>{g.name}</strong>
                         {g.description && <div className="ink-soft appListTable__desc">{g.description}</div>}
@@ -352,15 +274,101 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
                           Delete
                         </button>
                       </td>
-                    </>
-                  )}
                 </tr>
               ))}
             </tbody>
           </table>
         )}
-        {tab === "existing" && list.status === "ok" && list.groups.length > 0 && (
+        {tab === "existing" && editingId === null && list.status === "ok" && list.groups.length > 0 && (
           <Paginator page={page} pageSize={pageSize} total={total} label="groups" onChange={setPage} />
+        )}
+
+        {tab === "existing" && editing && (
+          <form
+            className="createApp"
+            noValidate
+            onSubmit={(e) => { e.preventDefault(); if (canSaveEdit && !saving) void handleSave(editing); }}
+          >
+            <fieldset className="createApp__endpoints">
+              <legend>Edit group</legend>
+              <div className="formField">
+                <label htmlFor="editGroupIdLocked">Id</label>
+                <input id="editGroupIdLocked" type="text" value={editing.groupId} disabled />
+                <small>Locked.</small>
+              </div>
+              <div className="formField">
+                <label htmlFor="editGroupName">Name *</label>
+                <input
+                  id="editGroupName"
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  maxLength={MAX_NAME_LEN}
+                  autoFocus
+                />
+              </div>
+              <div className="formField">
+                <label htmlFor="editGroupDescription">Description</label>
+                <input
+                  id="editGroupDescription"
+                  type="text"
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  placeholder="optional"
+                  maxLength={MAX_DESCRIPTION_LEN}
+                />
+              </div>
+              <div className="formField">
+                <label htmlFor="editGroupGrafanaLive">Grafana live dashboard URL</label>
+                <input
+                  id="editGroupGrafanaLive"
+                  type="url"
+                  value={editGrafanaLiveUrl}
+                  onChange={(e) => setEditGrafanaLiveUrl(e.target.value)}
+                  aria-invalid={urlError(editGrafanaLiveUrl) != null}
+                  placeholder="optional"
+                  maxLength={2000}
+                />
+              </div>
+              <div className="formField">
+                <label htmlFor="editGroupGrafanaHistory">Grafana history dashboard URL</label>
+                <input
+                  id="editGroupGrafanaHistory"
+                  type="url"
+                  value={editGrafanaHistoryUrl}
+                  onChange={(e) => setEditGrafanaHistoryUrl(e.target.value)}
+                  aria-invalid={urlError(editGrafanaHistoryUrl) != null}
+                  placeholder="optional"
+                  maxLength={2000}
+                />
+              </div>
+              <div className="formField">
+                <label htmlFor="editGroupHotDays">Hot days</label>
+                <input
+                  id="editGroupHotDays"
+                  type="number"
+                  value={editHotDays}
+                  onChange={(e) => setEditHotDays(e.target.value)}
+                  aria-invalid={hotDaysError(editHotDays) != null}
+                  min={1}
+                  max={3650}
+                  style={{ width: "6rem" }}
+                  title="Days the live dashboard covers; older runs open the history dashboard"
+                />
+              </div>
+              <PodPolicyFields idPrefix={`edit-${editing.groupId}`} value={editPolicy} onChange={setEditPolicy} disabled={saving} />
+              <div className="groupEditActions">
+                <button type="button" className="btn btn--ghost"
+                        onClick={() => setEditingId(null)} disabled={saving}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn--primary"
+                        disabled={saving || !canSaveEdit} aria-busy={saving}>
+                  {saving ? "Saving…" : "Save changes"}
+                </button>
+              </div>
+            </fieldset>
+          </form>
         )}
 
         {tab === "add" && (
