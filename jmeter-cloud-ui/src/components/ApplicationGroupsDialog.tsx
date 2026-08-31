@@ -41,6 +41,25 @@ type ListState =
   | { status: "ok"; groups: ApplicationGroup[] }
   | { status: "error"; message: string };
 
+/**
+ * A comma-separated address box to the list the API takes. Trimmed and
+ * de-duplicated here so the same address typed twice does not become two
+ * recipients; the server validates the shape.
+ */
+function addressList(raw: string): string[] {
+  const seen = new Set<string>();
+  for (const part of raw.split(",")) {
+    const value = part.trim();
+    if (value) seen.add(value);
+  }
+  return [...seen];
+}
+
+/** Every address the boxes hold, for the "N recipients" hint under them. */
+function addressCount(...raw: string[]): number {
+  return raw.reduce((n, r) => n + addressList(r).length, 0);
+}
+
 export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroupsDialogProps) {
   const [list, setList] = useState<ListState>({ status: "loading" });
   const [reloadSeq, setReloadSeq] = useState(0);
@@ -53,6 +72,10 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
   const [grafanaLiveUrl, setGrafanaLiveUrl] = useState("");
   const [grafanaHistoryUrl, setGrafanaHistoryUrl] = useState("");
   const [hotDays, setHotDays] = useState("7");
+  const [teamName, setTeamName] = useState("");
+  const [notifyTo, setNotifyTo] = useState("");
+  const [notifyCc, setNotifyCc] = useState("");
+  const [notifyBcc, setNotifyBcc] = useState("");
   const [policy, setPolicy] = useState<PodPolicyValue>(DEFAULT_POLICY);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -64,6 +87,10 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
   const [editGrafanaLiveUrl, setEditGrafanaLiveUrl] = useState("");
   const [editGrafanaHistoryUrl, setEditGrafanaHistoryUrl] = useState("");
   const [editHotDays, setEditHotDays] = useState("7");
+  const [editTeamName, setEditTeamName] = useState("");
+  const [editNotifyTo, setEditNotifyTo] = useState("");
+  const [editNotifyCc, setEditNotifyCc] = useState("");
+  const [editNotifyBcc, setEditNotifyBcc] = useState("");
   const [editPolicy, setEditPolicy] = useState<PodPolicyValue>(DEFAULT_POLICY);
   const [saving, setSaving] = useState(false);
 
@@ -120,6 +147,10 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
         groupId: trimmedId,
         name: name.trim(),
         description: description.trim() || undefined,
+        teamName: teamName.trim() || null,
+        notifyTo: addressList(notifyTo),
+        notifyCc: addressList(notifyCc),
+        notifyBcc: addressList(notifyBcc),
         grafanaLiveUrl: grafanaLiveUrl.trim() || undefined,
         grafanaHistoryUrl: grafanaHistoryUrl.trim() || undefined,
         hotDays: Number(hotDays),
@@ -147,6 +178,10 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
     setEditGrafanaLiveUrl(g.grafanaLiveUrl ?? "");
     setEditGrafanaHistoryUrl(g.grafanaHistoryUrl ?? "");
     setEditHotDays(String(g.hotDays ?? 7));
+    setEditTeamName(g.teamName ?? "");
+    setEditNotifyTo((g.notifyTo ?? []).join(", "));
+    setEditNotifyCc((g.notifyCc ?? []).join(", "));
+    setEditNotifyBcc((g.notifyBcc ?? []).join(", "));
     setEditPolicy({ recyclePolicy: pickerPolicyOf(g.recyclePolicy), alwaysOn: g.alwaysOn ?? false });
   }
 
@@ -160,6 +195,10 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
         grafanaLiveUrl: editGrafanaLiveUrl.trim() || undefined,
         grafanaHistoryUrl: editGrafanaHistoryUrl.trim() || undefined,
         hotDays: Number(editHotDays),
+        teamName: editTeamName.trim() || null,
+        notifyTo: addressList(editNotifyTo),
+        notifyCc: addressList(editNotifyCc),
+        notifyBcc: addressList(editNotifyBcc),
         recyclePolicy: editPolicy.recyclePolicy,
         maxRunsPerPod: null,
         podMaxAgeHours: null,
@@ -356,6 +395,14 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
                   title="Days the live dashboard covers; older runs open the history dashboard"
                 />
               </div>
+              <OwnershipFields
+                idPrefix={`edit-${editing.groupId}`}
+                teamName={editTeamName} onTeamName={setEditTeamName}
+                to={editNotifyTo} onTo={setEditNotifyTo}
+                cc={editNotifyCc} onCc={setEditNotifyCc}
+                bcc={editNotifyBcc} onBcc={setEditNotifyBcc}
+                disabled={saving}
+              />
               <PodPolicyFields idPrefix={`edit-${editing.groupId}`} value={editPolicy} onChange={setEditPolicy} disabled={saving} />
               <div className="groupEditActions">
                 <button type="button" className="btn btn--ghost"
@@ -473,6 +520,14 @@ export function ApplicationGroupsDialog({ onClose, onChanged }: ApplicationGroup
                 style={{ width: "6rem" }}
               />
             </div>
+            <OwnershipFields
+              idPrefix="new"
+              teamName={teamName} onTeamName={setTeamName}
+              to={notifyTo} onTo={setNotifyTo}
+              cc={notifyCc} onCc={setNotifyCc}
+              bcc={notifyBcc} onBcc={setNotifyBcc}
+              disabled={creating}
+            />
             <PodPolicyFields idPrefix="new" value={policy} onChange={setPolicy} disabled={creating} />
             {createUrlError && grafanaLiveUrl + grafanaHistoryUrl !== "" && (
               <p className="text--error" role="alert" style={{ fontSize: "0.78rem" }}>Dashboard URL {createUrlError}.</p>
@@ -519,4 +574,81 @@ function describe(err: unknown): string {
     }
   }
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Who owns the group and where its workflows send mail. The lists are the
+ * defaults an email task inherits when it names no recipients of its own, so a
+ * group that changes owners needs no workflow edited.
+ */
+function OwnershipFields({
+  idPrefix, teamName, onTeamName, to, onTo, cc, onCc, bcc, onBcc, disabled,
+}: {
+  idPrefix: string;
+  teamName: string; onTeamName: (v: string) => void;
+  to: string; onTo: (v: string) => void;
+  cc: string; onCc: (v: string) => void;
+  bcc: string; onBcc: (v: string) => void;
+  disabled?: boolean;
+}) {
+  const total = addressCount(to, cc, bcc);
+  return (
+    <>
+      <div className="formField">
+        <label htmlFor={`${idPrefix}GroupTeam`}>Owning team</label>
+        <input
+          id={`${idPrefix}GroupTeam`}
+          type="text"
+          value={teamName}
+          onChange={(e) => onTeamName(e.target.value)}
+          placeholder="optional — e.g. Payments Platform"
+          maxLength={255}
+          disabled={disabled}
+        />
+      </div>
+      <div className="formField">
+        <label htmlFor={`${idPrefix}GroupNotifyTo`}>
+          Notify — To
+          <InfoTip label="About notification defaults">
+            Comma-separated. A workflow's email task uses these unless it names its own recipients.
+          </InfoTip>
+        </label>
+        <input
+          id={`${idPrefix}GroupNotifyTo`}
+          type="text"
+          value={to}
+          onChange={(e) => onTo(e.target.value)}
+          placeholder="perf-team@example.com, oncall@example.com"
+          disabled={disabled}
+        />
+      </div>
+      <div className="formField">
+        <label htmlFor={`${idPrefix}GroupNotifyCc`}>Notify — Cc</label>
+        <input
+          id={`${idPrefix}GroupNotifyCc`}
+          type="text"
+          value={cc}
+          onChange={(e) => onCc(e.target.value)}
+          placeholder="optional"
+          disabled={disabled}
+        />
+      </div>
+      <div className="formField">
+        <label htmlFor={`${idPrefix}GroupNotifyBcc`}>Notify — Bcc</label>
+        <input
+          id={`${idPrefix}GroupNotifyBcc`}
+          type="text"
+          value={bcc}
+          onChange={(e) => onBcc(e.target.value)}
+          placeholder="optional"
+          disabled={disabled}
+        />
+        {total > 0 && (
+          <small className="ink-soft">
+            {total} recipient{total === 1 ? "" : "s"} across To, Cc and Bcc.
+          </small>
+        )}
+      </div>
+    </>
+  );
 }

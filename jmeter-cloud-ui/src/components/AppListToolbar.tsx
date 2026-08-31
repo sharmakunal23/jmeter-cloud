@@ -21,7 +21,7 @@ export interface AppListToolbarProps {
   total: number;
   loading?: boolean;
   /** What the list holds, singular — "application" (default), "group", or "plugin"; drives the placeholder and the count. */
-  noun?: "application" | "group" | "plugin" | "cluster";
+  noun?: "application" | "group" | "plugin" | "cluster" | "workflow";
 }
 
 export function AppListToolbar({

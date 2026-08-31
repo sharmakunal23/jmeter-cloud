@@ -17,6 +17,11 @@ import { NotFoundPage } from "./pages/NotFoundPage";
 import { PluginsPage } from "./pages/PluginsPage";
 import { RunDetailPage } from "./pages/RunDetailPage";
 import { TemplatesListPage } from "./pages/TemplatesListPage";
+import { WorkflowGroupsPage } from "./pages/WorkflowGroupsPage";
+import { WorkflowListPage } from "./pages/WorkflowListPage";
+import { WorkflowBuilderPage } from "./pages/WorkflowBuilderPage";
+import { WorkflowDetailPage } from "./pages/WorkflowDetailPage";
+import { WorkflowExecutionPage } from "./pages/WorkflowExecutionPage";
 import { TemplatesDetailPage } from "./pages/TemplatesDetailPage";
 
 /**
@@ -50,6 +55,17 @@ export function App() {
           <Route path="applications/:appName" element={<ApplicationDetailPage />} />
           <Route path="applications/:appName/runs/new" element={<NewRunPage />} />
           <Route path="applications/:appName/runs/:runId" element={<RunDetailPage />} />
+
+          {/* Workflows — group first, because a workflow's load tests draw on
+              its group's reserved capacity: the group is what scopes it and
+              what caps how much it can run at once. `groups/` keeps the group
+              drill-in out of the workflowId namespace. */}
+          <Route path="workflows" element={<WorkflowGroupsPage />} />
+          <Route path="workflows/groups/:groupId" element={<WorkflowListPage />} />
+          <Route path="workflows/groups/:groupId/new" element={<WorkflowBuilderPage />} />
+          <Route path="workflows/executions/:executionId" element={<WorkflowExecutionPage />} />
+          <Route path="workflows/:workflowId" element={<WorkflowDetailPage />} />
+          <Route path="workflows/:workflowId/edit" element={<WorkflowBuilderPage />} />
 
           {/* Capacity — one section, two tabs (2026-08-31): Reservations, one
               row per application group (the worker pool is the group's;

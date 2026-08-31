@@ -105,12 +105,14 @@ describe("UI-D1 routing — legacy URLs 404 (no redirect)", () => {
 });
 
 describe("UI-D1 routing — top nav", () => {
-    it("renders the 6 primary tabs in standardized order", () => {
+    it("renders the 7 primary tabs in standardized order", () => {
         renderAt("/");
         const nav = screen.getByRole("navigation", { name: "primary" });
         expect(nav).toBeInTheDocument();
         // Clusters left the nav 2026-08-31 — it is a tab under Capacity now.
-        const order = ["Applications", "Capacity", "Documents", "Plugins", "Templates", "Automation"];
+        // Workflows sits beside Applications: both are things you author, and a
+        // workflow is scoped to the group its applications belong to.
+        const order = ["Applications", "Workflows", "Capacity", "Documents", "Plugins", "Templates", "Automation"];
         for (const label of order) {
             expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
         }

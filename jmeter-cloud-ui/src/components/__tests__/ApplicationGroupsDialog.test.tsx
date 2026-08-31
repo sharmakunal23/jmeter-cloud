@@ -57,10 +57,42 @@ describe("ApplicationGroupsDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: /Add group/i }));
     await waitFor(() => expect(api.create).toHaveBeenCalledWith({
       groupId: "cpp", name: "Card Payments", description: undefined, grafanaLiveUrl: undefined, grafanaHistoryUrl: undefined, hotDays: 7,
+      // WORKFLOWS — a group carries its owner and the recipients its
+      // workflows' email tasks inherit; empty boxes send empty lists.
+      teamName: null, notifyTo: [], notifyCc: [], notifyBcc: [],
       recyclePolicy: "REUSE", maxRunsPerPod: null, podMaxAgeHours: null, alwaysOn: false,
     }));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
     expect(api.list).toHaveBeenCalledTimes(2);
+  });
+
+  it("carries the group's owner and its notification defaults, de-duplicated", async () => {
+    api.list.mockResolvedValue([
+      { ...cps, teamName: "Payments Platform", notifyTo: ["perf@example.com"], notifyCc: ["boss@example.com"] },
+      empty,
+    ]);
+    api.update.mockResolvedValue(cps);
+    render(<ApplicationGroupsDialog onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText("Servicing MQ")).toBeInTheDocument());
+
+    // The edit form hydrates what is stored, so a save never wipes what it did not show.
+    fireEvent.click(screen.getByRole("button", { name: "edit group cps" }));
+    const field = (id: string) => document.querySelector(`#${id}`) as HTMLInputElement;
+    expect(field("edit-cpsGroupTeam").value).toBe("Payments Platform");
+    expect(field("edit-cpsGroupNotifyTo").value).toBe("perf@example.com");
+    expect(field("edit-cpsGroupNotifyCc").value).toBe("boss@example.com");
+
+    // The same address twice is one recipient, not two.
+    fireEvent.change(field("edit-cpsGroupNotifyTo"),
+      { target: { value: "a@example.com, b@example.com , a@example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(api.update).toHaveBeenCalledWith("cps", expect.objectContaining({
+      teamName: "Payments Platform",
+      notifyTo: ["a@example.com", "b@example.com"],
+      notifyCc: ["boss@example.com"],
+      notifyBcc: [],
+    })));
   });
 
   it("surfaces a duplicate id as an inline error", async () => {
@@ -88,6 +120,7 @@ describe("ApplicationGroupsDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(api.update).toHaveBeenCalledWith("cps", {
       name: "Servicing MQ (Card)", description: "MQ apps", grafanaLiveUrl: undefined, grafanaHistoryUrl: undefined, hotDays: 7,
+      teamName: null, notifyTo: [], notifyCc: [], notifyBcc: [],
       recyclePolicy: "REUSE", maxRunsPerPod: null, podMaxAgeHours: null, alwaysOn: false,
     }));
   });
@@ -126,6 +159,7 @@ describe("ApplicationGroupsDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(api.update).toHaveBeenCalledWith("cps", {
       name: "Servicing MQ", description: "MQ apps", grafanaLiveUrl: "https://g.example.com/d/cps", grafanaHistoryUrl: undefined, hotDays: 14,
+      teamName: null, notifyTo: [], notifyCc: [], notifyBcc: [],
       recyclePolicy: "REUSE", maxRunsPerPod: null, podMaxAgeHours: null, alwaysOn: false,
     }));
   });

@@ -470,6 +470,12 @@ export class GlobalOrchestratorError extends Error {
   readonly regions?: string[];
   readonly requested?: number;
   readonly max?: number;
+  /**
+   * The whole parsed body. Codes that carry structured detail beyond the
+   * named fields above read it directly — `WORKFLOW_INVALID` carries a
+   * `validation`, `WORKFLOW_CAPACITY_EXCEEDED` a `clusters`.
+   */
+  readonly extra?: Record<string, unknown>;
   constructor(httpStatus: number, code: string, message: string, extras?: Partial<ApiError>) {
     super(message);
     this.code = code;
@@ -478,6 +484,7 @@ export class GlobalOrchestratorError extends Error {
     this.regions = extras?.regions;
     this.requested = extras?.requested;
     this.max = extras?.max;
+    this.extra = extras as Record<string, unknown> | undefined;
   }
 }
 
@@ -487,7 +494,7 @@ export class GlobalOrchestratorError extends Error {
  * place. Exported for that reuse; most callers go through `runsApi`.
  */
 export async function request<T>(
-  method: "GET" | "POST" | "DELETE",
+  method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
   body?: unknown,
   signal?: AbortSignal,
@@ -498,7 +505,7 @@ export async function request<T>(
   // state-changing call so the global-orchestrator can record who did it.
   // Reads are unaffected. Absent actor → header omitted → server defaults
   // to "anonymous".
-  if (method === "POST" || method === "DELETE") {
+  if (method !== "GET") {
     const actor = getActor();
     if (actor) headers["X-Actor"] = actor;
   }

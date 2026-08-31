@@ -10,6 +10,7 @@ import {
   DocumentsIcon,
   PluginsIcon,
   TemplatesIcon,
+  WorkflowsIcon,
 } from "./Icons";
 
 /**
@@ -90,6 +91,7 @@ export function Layout() {
               detection so the brand stays "selected-looking" via styling
               but isn't a duplicate tab. */}
           <NavLink to="/applications"><ApplicationsIcon />Applications</NavLink>
+          <NavLink to="/workflows"><WorkflowsIcon />Workflows</NavLink>
           <NavLink to="/capacity"><CapacityIcon />Capacity</NavLink>
           <NavLink to="/documents"><DocumentsIcon />Documents</NavLink>
           <NavLink to="/plugins"><PluginsIcon />Plugins</NavLink>

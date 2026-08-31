@@ -40,6 +40,15 @@ export interface ApplicationGroup {
   podMaxAgeHours?: number | null;
   /** When true, scheduled DRAIN_REGION jobs skip this group's workers. */
   alwaysOn?: boolean;
+  /** The team that owns the group; display only. */
+  teamName?: string | null;
+  /**
+   * Default recipients a workflow's email tasks inherit when they name none of
+   * their own — so a group that changes owners needs no workflow edited.
+   */
+  notifyTo?: string[];
+  notifyCc?: string[];
+  notifyBcc?: string[];
 }
 
 /** The pod-policy half of a group; PUT replaces it wholesale with the rest of the record. */
@@ -57,6 +66,15 @@ export interface CreateApplicationGroupRequest extends ApplicationGroupPolicy {
   grafanaLiveUrl?: string | null;
   grafanaHistoryUrl?: string | null;
   hotDays?: number | null;
+  /** Who owns the group; display only. */
+  teamName?: string | null;
+  /**
+   * Default email recipients for the group's workflows. Each list is replaced
+   * only when sent, so a caller that omits one keeps the stored value.
+   */
+  notifyTo?: string[];
+  notifyCc?: string[];
+  notifyBcc?: string[];
 }
 
 /** Replaced wholesale — send the full group (name, description, dashboards, hot days, policy). */
@@ -66,6 +84,15 @@ export interface UpdateApplicationGroupRequest extends ApplicationGroupPolicy {
   grafanaLiveUrl?: string | null;
   grafanaHistoryUrl?: string | null;
   hotDays?: number | null;
+  /** Who owns the group; display only. */
+  teamName?: string | null;
+  /**
+   * Default email recipients for the group's workflows. Each list is replaced
+   * only when sent, so a caller that omits one keeps the stored value.
+   */
+  notifyTo?: string[];
+  notifyCc?: string[];
+  notifyBcc?: string[];
 }
 
 /** Mirrors the server's rule: an identifier stem — lowercase letter first, then letters / digits / _, max 30. */

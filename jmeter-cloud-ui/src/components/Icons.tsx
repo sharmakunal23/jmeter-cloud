@@ -126,3 +126,16 @@ export function AutomationIcon() {
     </Icon>
   );
 }
+
+/** Workflows — three nodes wired into a branch: the shape of a task graph. */
+export function WorkflowsIcon() {
+  return (
+    <Icon>
+      <rect x="2.5" y="9" width="6" height="6" rx="1.5" />
+      <rect x="15.5" y="3" width="6" height="6" rx="1.5" />
+      <rect x="15.5" y="15" width="6" height="6" rx="1.5" />
+      <path d="M8.5 12h3.5V6h3.5" />
+      <path d="M12 12v6h3.5" />
+    </Icon>
+  );
+}
