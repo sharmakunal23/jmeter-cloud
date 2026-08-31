@@ -2027,12 +2027,6 @@ public class RunService {
     }
 
     /**
-     * A platform-detected run-terminal event (RUN_COMPLETED /
-     * RUN_FAILED / RUN_ABORTED), attributed to the system actor since no
-     * operator hit a button — the orchestrator observed the run end. Callers
-     * must invoke this exactly on the transition into a terminal state.
-     */
-    /**
      * Announce a run's terminal state to anything waiting on it — today, the
      * workflow engine, which pulls the owning execution's next tick forward
      * instead of discovering the run finished on its own poll.
@@ -2049,6 +2043,12 @@ public class RunService {
         }
     }
 
+    /**
+     * A platform-detected run-terminal event (RUN_COMPLETED /
+     * RUN_FAILED / RUN_ABORTED), attributed to the system actor since no
+     * operator hit a button — the orchestrator observed the run end. Callers
+     * must invoke this exactly on the transition into a terminal state.
+     */
     private void recordRunTerminal(String runId, RunState state, String reason) {
         RunEventType type = switch (state) {
             case COMPLETED -> RunEventType.RUN_COMPLETED;

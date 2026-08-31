@@ -13,6 +13,8 @@ import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.GroupCapacityRepository;
 import com.perf.globalorchestrator.repo.WorkflowExecutionRepository;
+import com.perf.globalorchestrator.domain.Actor;
+import com.perf.globalorchestrator.domain.Workflow;
 import com.perf.globalorchestrator.repo.WorkflowRepository;
 import com.perf.globalorchestrator.repo.WorkflowTaskRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,7 +26,11 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -39,6 +45,8 @@ class WorkflowServiceValidationTest {
 
     private ApplicationGroupRepository groups;
     private GroupCapacityRepository capacity;
+    private WorkflowRepository workflows;
+    private WorkflowExecutionRepository executions;
     private WorkflowService service;
 
     @BeforeEach
@@ -50,7 +58,9 @@ class WorkflowServiceValidationTest {
                 new ApplicationGroup("cps", "Group", null, Instant.now(), null)));
         when(applications.findAll()).thenReturn(List.of());
         when(capacity.findByGroupId("cps")).thenReturn(List.of());
-        service = new WorkflowService(mock(WorkflowRepository.class), mock(WorkflowExecutionRepository.class),
+        workflows = mock(WorkflowRepository.class);
+        executions = mock(WorkflowExecutionRepository.class);
+        service = new WorkflowService(workflows, executions,
                 mock(WorkflowTaskRepository.class), groups, applications, capacity);
     }
 
@@ -112,5 +122,59 @@ class WorkflowServiceValidationTest {
                 List.of(edge("a", "b", EdgeCondition.ON_SUCCESS)));
 
         assertThat(service.validate("cps", g).warnings()).isEmpty();
+    }
+}
+
+@DisplayName("WorkflowService — editing while a run is in progress")
+class WorkflowServiceUpdateGuardTest {
+
+    private static final NodePosition P = new NodePosition(0, 0);
+    private static final WorkflowGraph GRAPH = new WorkflowGraph(1,
+            List.of(new DelayNode("d", "Wait", P, JoinPolicy.ALL, 5)), List.of());
+
+    private final WorkflowRepository workflows = mock(WorkflowRepository.class);
+    private final WorkflowExecutionRepository executions = mock(WorkflowExecutionRepository.class);
+    private final ApplicationGroupRepository groups = mock(ApplicationGroupRepository.class);
+    private final ApplicationRepository applications = mock(ApplicationRepository.class);
+    private final GroupCapacityRepository capacity = mock(GroupCapacityRepository.class);
+    private final WorkflowService service = new WorkflowService(
+            workflows, executions, mock(WorkflowTaskRepository.class), groups, applications, capacity);
+
+    private Workflow stored() {
+        return new Workflow("wf1", "cps", "Nightly", null, GRAPH, true, 3,
+                "alice", Instant.now(), "alice", Instant.now(), null);
+    }
+
+    @BeforeEach
+    void setUp() {
+        when(workflows.findById("wf1")).thenReturn(Optional.of(stored()));
+        when(groups.findById("cps")).thenReturn(Optional.of(
+                new ApplicationGroup("cps", "Group", null, Instant.now(), null)));
+        when(applications.findAll()).thenReturn(List.of());
+        when(capacity.findByGroupId("cps")).thenReturn(List.of());
+        when(executions.countRunning("wf1")).thenReturn(1);
+    }
+
+    @Test
+    @DisplayName("changing the graph while a run is in progress is refused")
+    void graphChangeRefused() {
+        WorkflowGraph edited = new WorkflowGraph(1,
+                List.of(new DelayNode("d", "Wait longer", P, JoinPolicy.ALL, 30)), List.of());
+
+        assertThatThrownBy(() -> service.update("wf1", 3, "Nightly", null, edited, true, Actor.system("t")))
+                .isInstanceOf(WorkflowService.WorkflowBusyException.class);
+    }
+
+    @Test
+    @DisplayName("disabling a workflow is not a graph change, so a run in progress does not block it")
+    void disableAllowedWhileRunning() {
+        // PUT is the only mutation route; guarding the whole request would leave
+        // an operator no way to stop the NEXT launch while one is running.
+        when(workflows.update(eq("wf1"), eq(3), eq("Nightly"), any(), any(), eq(false), any(), any()))
+                .thenReturn(Optional.of(stored()));
+
+        service.update("wf1", 3, "Nightly", null, GRAPH, false, Actor.system("t"));
+
+        verify(workflows).update(eq("wf1"), eq(3), eq("Nightly"), any(), any(), eq(false), any(), any());
     }
 }

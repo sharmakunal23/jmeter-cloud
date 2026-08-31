@@ -85,9 +85,21 @@ public class WorkflowEngine {
 
     /**
      * Lock the due executions and push each lease out by {@code leaseSeconds}.
-     * Advancing happens after this commits: the push is what stops a sibling
-     * replica claiming a row this one is still working on, and it expiring is
-     * what lets another replica finish the job if this one dies.
+     * Advancing happens after this commits, so a slow probe or run poll never
+     * holds a row lock, and a lease that expires lets another replica finish
+     * the job if this one dies.
+     *
+     * <p><b>The lease limits duplicate work; it does not guarantee exclusivity.</b>
+     * A run finishing mid-advance wakes its own execution
+     * ({@code WorkflowRunCompletionListener}), which pulls {@code NEXT_TICK_AT}
+     * back to now and so drops the lease this advance is holding — a sibling
+     * sweep can then advance the same execution concurrently. That is safe
+     * because correctness rests on the per-row guards, not on the lease:
+     * {@code claimForStart} is a compare-and-set so exactly one replica ever
+     * STARTS a task, {@code markTerminal} is conditional on RUNNING, and
+     * settling an already-running task writes the same values from either
+     * replica. Never move a side effect out from behind those guards on the
+     * assumption that the lease makes an advance exclusive.
      */
     @Transactional
     public List<WorkflowExecution> claimDue() {

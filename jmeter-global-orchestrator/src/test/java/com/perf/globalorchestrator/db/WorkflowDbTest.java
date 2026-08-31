@@ -31,6 +31,11 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -236,6 +241,45 @@ class WorkflowDbTest extends OracleDbTestSupport {
         assertThat(claimed.state()).isEqualTo(TaskState.RUNNING);
         assertThat(claimed.attempt()).isEqualTo(1);
         assertThat(claimed.startedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("two replicas advancing one execution still start each task once — the claim, not the lease, is the fence")
+    void concurrentAdvanceStartsEachTaskOnce() throws Exception {
+        // The lease can be dropped mid-advance: a run finishing wakes its own
+        // execution, pulling NEXT_TICK_AT back to now. Correctness must not
+        // depend on that, so prove the per-task claim holds under real
+        // contention rather than trusting the lease to prevent it.
+        Workflow wf = freshWorkflow(freshGroup(), "Contended");
+        Instant now = Instant.now();
+        WorkflowExecution ex = executions.insert(new WorkflowExecution(Ulid.generate(), wf.workflowId(),
+                wf.groupId(), wf.name(), sampleGraph(), ExecutionState.RUNNING, null, "tester", now, null,
+                now, List.of()));
+        String taskId = Ulid.generate();
+        tasks.insertAll(List.of(new WorkflowTask(taskId, ex.executionId(), "d1", NodeType.DELAY,
+                "Settle", TaskState.PENDING, 0, null, null, null, null, null, null, null)));
+
+        int racers = 6;
+        ExecutorService pool = Executors.newFixedThreadPool(racers);
+        CountDownLatch go = new CountDownLatch(1);
+        try {
+            List<Future<Boolean>> claims = new ArrayList<>();
+            for (int i = 0; i < racers; i++) {
+                claims.add(pool.submit(() -> {
+                    go.await();
+                    return tasks.claimForStart(taskId, 1, Instant.now());
+                }));
+            }
+            go.countDown();
+            int winners = 0;
+            for (Future<Boolean> f : claims) {
+                if (f.get()) winners++;
+            }
+            assertThat(winners).isEqualTo(1);
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(tasks.findById(taskId).orElseThrow().state()).isEqualTo(TaskState.RUNNING);
     }
 
     @Test

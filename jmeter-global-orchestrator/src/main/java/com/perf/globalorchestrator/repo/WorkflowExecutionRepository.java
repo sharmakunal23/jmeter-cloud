@@ -153,7 +153,11 @@ public class WorkflowExecutionRepository {
         for (int i = 0; i < executionIds.size(); i++) args[i + 1] = executionIds.get(i);
         return jdbc.update(
                 "UPDATE ORCH_WORKFLOW_EXECUTION SET HIDDEN_AT=NULL "
-                + "WHERE WORKFLOW_ID=? AND EXECUTION_ID IN (" + placeholders + ")", args);
+                // Only rows actually in the archive: without this a row already
+                // on the history counts as restored, and the operator is told
+                // "1 run put back" when nothing moved.
+                + "WHERE WORKFLOW_ID=? AND HIDDEN_AT IS NOT NULL "
+                + "AND EXECUTION_ID IN (" + placeholders + ")", args);
     }
 
     /**

@@ -38,6 +38,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
@@ -257,9 +258,16 @@ public class WorkflowService {
         // An execution snapshots the graph, so an edit could not corrupt one —
         // but it would leave the canvas showing something the run in progress
         // is not doing, which is worse than refusing.
-        int running = executions.countRunning(workflowId);
-        if (running > 0) {
-            throw new WorkflowBusyException(workflowId, running);
+        //
+        // Only the GRAPH is refused, though: PUT is the sole mutation route, so
+        // guarding the whole request would also block disabling a workflow to
+        // stop the next launch — exactly what an operator reaches for while one
+        // is running.
+        if (!Objects.equals(existing.graph(), graph)) {
+            int running = executions.countRunning(workflowId);
+            if (running > 0) {
+                throw new WorkflowBusyException(workflowId, running);
+            }
         }
         WorkflowValidation validation = validate(existing.groupId(), graph);
         if (!validation.valid()) throw new WorkflowInvalidException(validation);
