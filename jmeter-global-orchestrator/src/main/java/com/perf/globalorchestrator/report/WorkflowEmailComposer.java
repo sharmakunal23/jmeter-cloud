@@ -20,6 +20,10 @@ import java.util.regex.Pattern;
  *
  * <p>An unknown placeholder renders as empty text rather than failing the send —
  * a typo in a subject must not be why nobody hears the load test finished.
+ *
+ * <p>Use {@code ${execution.outcome}} in a result email, not
+ * {@code ${execution.state}}: the state is whatever it is at send time, and a
+ * final report is sent while the execution is still RUNNING by definition.
  */
 @Component
 public class WorkflowEmailComposer {
@@ -102,6 +106,14 @@ public class WorkflowEmailComposer {
         v.put("workflow.id", nullSafe(execution.workflowId()));
         v.put("execution.id", nullSafe(execution.executionId()));
         v.put("execution.state", execution.state().name());
+        // The state an email can report is almost never the one the reader
+        // wants: a result email is itself the last task, so the execution is
+        // still RUNNING when it is composed. `outcome` is the verdict the
+        // execution WILL settle to given everything that has happened, which is
+        // what "the result" means to a person.
+        v.put("execution.outcome",
+                com.perf.globalorchestrator.workflow.WorkflowEngine
+                        .outcomeOf(execution.graph(), tasks).name());
         v.put("execution.startedAt", execution.startedAt() == null ? "" : execution.startedAt().toString());
         v.put("execution.triggeredBy", nullSafe(execution.triggeredBy()));
         v.put("group.id", nullSafe(group.groupId()));

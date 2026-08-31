@@ -324,7 +324,7 @@ public class WorkflowEngine {
      * no {@code ON_FAILURE} branch. Drawing a failure branch is what says "I
      * handled this", so a test-then-email-either-way workflow reads SUCCEEDED.
      */
-    static ExecutionState outcomeOf(WorkflowGraph graph, List<WorkflowTask> tasks) {
+    public static ExecutionState outcomeOf(WorkflowGraph graph, List<WorkflowTask> tasks) {
         for (WorkflowTask t : tasks) {
             if (t.state() == TaskState.CANCELLED) return ExecutionState.CANCELLED;
         }

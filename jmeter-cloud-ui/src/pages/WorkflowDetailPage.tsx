@@ -126,7 +126,7 @@ export function WorkflowDetailPage() {
 
       <div className="workflowDetail__layout">
         <div className="workflowDetail__canvas">
-          <WorkflowCanvas graph={workflow.graph} height={420} />
+          <WorkflowCanvas graph={workflow.graph} />
         </div>
         <aside className="workflowDetail__side">
           <CapacityPanel validation={validation} groupId={workflow.groupId} />

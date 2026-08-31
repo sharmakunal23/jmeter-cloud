@@ -404,8 +404,12 @@ function EmailFields({ node, groupNotify, onChange }: NodeEditorProps & { node: 
         <span>
           Subject
           <InfoTip label="About placeholders">
-            Placeholders: <code>{"${workflow.name}"}</code>, <code>{"${execution.state}"}</code>,{" "}
-            <code>{"${applications}"}</code>, <code>{"${task.<id>.state}"}</code>.
+            <code>{"${workflow.name}"}</code>, <code>{"${applications}"}</code>,{" "}
+            <code>{"${group.team}"}</code>, <code>{"${task.<id>.state}"}</code>,{" "}
+            <code>{"${task.<id>.runId}"}</code>. For a result email use{" "}
+            <code>{"${execution.outcome}"}</code> — the verdict — rather than{" "}
+            <code>{"${execution.state}"}</code>, which is still "RUNNING" while
+            the email that reports it is being sent.
           </InfoTip>
         </span>
         <input

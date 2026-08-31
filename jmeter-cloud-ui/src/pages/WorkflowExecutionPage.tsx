@@ -117,7 +117,7 @@ export function WorkflowExecutionPage() {
         </div>
       ))}
 
-      <WorkflowCanvas graph={execution.graph} states={states} height={400} />
+      <WorkflowCanvas graph={execution.graph} states={states} />
 
       <h2 className="sectionHeading">Metrics</h2>
       <WorkflowMetricsPanel tasks={execution.tasks} live={live} />

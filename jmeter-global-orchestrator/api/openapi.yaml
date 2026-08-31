@@ -2918,7 +2918,16 @@ components:
           description: "EMAIL — empty inherits the group's `notifyTo`; `cc` and `bcc` inherit theirs the same way."
         cc:      { type: array, items: { type: string } }
         bcc:     { type: array, items: { type: string } }
-        subject: { type: string, maxLength: 255, description: "EMAIL — `${…}` placeholders are resolved against the execution." }
+        subject:
+          type: string
+          maxLength: 255
+          description: |
+            EMAIL — `${…}` placeholders resolved against the execution:
+            `${workflow.name}`, `${applications}`, `${group.team}`,
+            `${task.<id>.state}`, `${task.<id>.runId}`, `${execution.outcome}`.
+            Use `${execution.outcome}` in a result email, not
+            `${execution.state}` — a final report is sent while the execution is
+            still RUNNING by definition, so the state is never the verdict.
         body:    { type: string, maxLength: 20000, description: "EMAIL — as `subject`. An unknown placeholder renders empty rather than failing the send." }
         includeSummary: { type: boolean, description: "EMAIL — append a table of every task's state, timing and result." }
         # ── DELAY ──
