@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { formatRelative } from "../lib/time";
 
 import { applicationsApi, type Application } from "../api/applications";
 import { blobsApi, type BlobType } from "../api/blobs";
 import { AppListToolbar } from "../components/AppListToolbar";
-import { Paginator } from "../components/Paginator";
-import { useClientPagination } from "../hooks/useClientPagination";
+import { DataList } from "../components/DataList";
+import { useRowLink } from "../hooks/useRowLink";
 
 /**
  * Phase IA-Documents (2026-05-12) — Documents list view following the
@@ -51,6 +51,7 @@ type State =
   | { status: "error"; message: string };
 
 export function DocumentsListPage() {
+  const rowLink = useRowLink();
   const [state, setState] = useState<State>({ status: "loading" });
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("name");
@@ -127,9 +128,6 @@ export function DocumentsListPage() {
     return sorted;
   }, [state, search, sortKey, sortDir]);
 
-  const { page, setPage, pageItems, total, pageSize, setPageSize } =
-    useClientPagination(sortedFiltered, `${search}|${sortKey}|${sortDir}`);
-
   function toggleSort(k: SortKey) {
     if (sortKey === k) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     else { setSortKey(k); setSortDir(k === "name" ? "asc" : "desc"); }
@@ -174,90 +172,63 @@ export function DocumentsListPage() {
         loading={loading}
       />
 
-      {loading ? (
-        <SkeletonTable />
-      ) : sortedFiltered.length === 0 ? (
-        <div className="emptyState">
-          {totalRowCount === 0 ? (
-            <>
-              <p>No applications registered yet.</p>
-              <p className="ink-soft">
-                Register one in <Link to="/applications">Applications</Link> to start uploading documents against it.
-              </p>
-            </>
-          ) : (
-            <p className="ink-soft">No applications match "{search}".</p>
-          )}
-        </div>
-      ) : (
-        <table className="runsTable capacityListTable">
-          <thead>
-            <tr>
-              <SortHeader label="Application" k="name"      cur={sortKey} dir={sortDir} onClick={toggleSort} />
-              <th>Activity</th>
-              <SortHeader label="Test Plans" k="testPlan"  cur={sortKey} dir={sortDir} onClick={toggleSort} numeric />
-              <SortHeader label="Data Files" k="dataFiles" cur={sortKey} dir={sortDir} onClick={toggleSort} numeric />
-              <SortHeader label="Results"    k="result"    cur={sortKey} dir={sortDir} onClick={toggleSort} numeric />
-              <SortHeader label="Other"      k="other"     cur={sortKey} dir={sortDir} onClick={toggleSort} numeric />
-              <SortHeader label="Total"      k="total"     cur={sortKey} dir={sortDir} onClick={toggleSort} numeric />
-            </tr>
-          </thead>
-          <tbody>
-            {pageItems.map((r) => (
-              <DocumentsListRow key={r.app.applicationId} row={r} />
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      {!loading && sortedFiltered.length > 0 && (
-        <Paginator page={page} pageSize={pageSize} total={total} label="applications" onChange={setPage} onPageSizeChange={setPageSize} />
-      )}
+      <DataList<RowAggregate>
+        label="Applications"
+        loading={loading}
+        rows={sortedFiltered}
+        rowKey={(r) => r.app.applicationId}
+        itemNoun="applications"
+        resetKey={`${search}|${sortKey}|${sortDir}`}
+        empty={totalRowCount === 0 ? (
+          <>
+            <strong>No applications registered yet.</strong>
+            <div>Register one in <Link to="/applications">Applications</Link> to start uploading
+                 documents against it.</div>
+          </>
+        ) : <>No applications match &quot;{search}&quot;.</>}
+        rowProps={(r) => rowLink(`/documents/${encodeURIComponent(r.app.name)}`,
+                                 `Open documents for ${r.app.name}`)}
+        columns={[
+          { key: "name", header: "Application",
+            onSort: () => toggleSort("name"),
+            sortDirection: sortKey === "name" ? sortDir : null,
+            cell: (r) => (
+              <Link to={`/documents/${encodeURIComponent(r.app.name)}`}
+                    className="mono capacityListRow__name"
+                    onClick={(e) => e.stopPropagation()}>
+                {r.app.name}
+              </Link>
+            ) },
+          { key: "activity", header: "Activity",
+            cell: (r) => <ActivityChip lastUpload={r.mostRecentUpload} hasDocs={r.total > 0} /> },
+          { key: "testPlan", header: "Test Plans", className: "dataList__num",
+            onSort: () => toggleSort("testPlan"),
+            sortDirection: sortKey === "testPlan" ? sortDir : null,
+            cell: (r) => <span className="mono">{r.byType.testPlan}</span> },
+          { key: "dataFiles", header: "Data Files", className: "dataList__num",
+            onSort: () => toggleSort("dataFiles"),
+            sortDirection: sortKey === "dataFiles" ? sortDir : null,
+            cell: (r) => <span className="mono">{r.byType.dataFiles}</span> },
+          { key: "result", header: "Results", className: "dataList__num",
+            onSort: () => toggleSort("result"),
+            sortDirection: sortKey === "result" ? sortDir : null,
+            cell: (r) => <span className="mono">{r.byType.result}</span> },
+          { key: "other", header: "Other", className: "dataList__num",
+            onSort: () => toggleSort("other"),
+            sortDirection: sortKey === "other" ? sortDir : null,
+            cell: (r) => <span className="mono">{r.byType.other}</span> },
+          { key: "total", header: "Total", className: "dataList__num",
+            onSort: () => toggleSort("total"),
+            sortDirection: sortKey === "total" ? sortDir : null,
+            cell: (r) => <strong className="mono">{r.total}</strong> },
+        ]}
+      />
     </section>
   );
 }
 
 // ── Row ──────────────────────────────────────────────────────────
 
-function DocumentsListRow({ row }: { row: RowAggregate }) {
-  const navigate = useNavigate();
-  const href = `/documents/${encodeURIComponent(row.app.name)}`;
-  function open() { navigate(href); }
-  function onKey(e: React.KeyboardEvent<HTMLTableRowElement>) {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      open();
-    }
-  }
-  return (
-    <tr
-      className="capacityListRow capacityListRow--clickable"
-      onClick={open}
-      onKeyDown={onKey}
-      tabIndex={0}
-      role="link"
-      aria-label={`Open documents for ${row.app.name}`}
-    >
-      <td>
-        <Link
-          to={href}
-          className="mono capacityListRow__name"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {row.app.name}
-        </Link>
-      </td>
-      <td>
-        <ActivityChip lastUpload={row.mostRecentUpload} hasDocs={row.total > 0} />
-      </td>
-      <td className="mono num">{row.byType.testPlan}</td>
-      <td className="mono num">{row.byType.dataFiles}</td>
-      <td className="mono num">{row.byType.result}</td>
-      <td className="mono num">{row.byType.other}</td>
-      <td className="mono num"><strong>{row.total}</strong></td>
-    </tr>
-  );
-}
 
 function ActivityChip({ lastUpload, hasDocs }: { lastUpload?: Date; hasDocs: boolean }) {
   if (!hasDocs) return <span className="ink-soft" style={{ fontSize: "0.78rem" }}>no documents</span>;
@@ -281,65 +252,9 @@ function ActivityChip({ lastUpload, hasDocs }: { lastUpload?: Date; hasDocs: boo
 
 // ── Sortable header ──────────────────────────────────────────────
 
-function SortHeader({
-  label, k, cur, dir, onClick, numeric = false,
-}: {
-  label: string;
-  k: SortKey;
-  cur: SortKey;
-  dir: SortDir;
-  onClick: (k: SortKey) => void;
-  numeric?: boolean;
-}) {
-  const active = k === cur;
-  const arrow = active ? (dir === "asc" ? "▲" : "▼") : "";
-  return (
-    <th className={numeric ? "num" : ""}>
-      <button
-        type="button"
-        className={`sortHeader ${active ? "sortHeader--active" : ""}`}
-        onClick={() => onClick(k)}
-        title={`Sort by ${label}`}
-      >
-        {label} <span className="sortHeader__arrow" aria-hidden="true">{arrow}</span>
-      </button>
-    </th>
-  );
-}
 
 // ── Loading skeleton ────────────────────────────────────────────
 
-function SkeletonTable() {
-  const rows = Array.from({ length: 6 });
-  return (
-    <table className="runsTable capacityListTable" aria-busy="true">
-      <thead>
-        <tr>
-          <th>Application</th>
-          <th>Activity</th>
-          <th className="num">Test Plans</th>
-          <th className="num">Data Files</th>
-          <th className="num">Results</th>
-          <th className="num">Other</th>
-          <th className="num">Total</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((_, i) => (
-          <tr key={i} className="capacityListRow capacityListRow--skeleton">
-            <td><span className="skeleton skeleton--text" style={{ width: "8rem" }} /></td>
-            <td><span className="skeleton skeleton--chip" /></td>
-            <td className="num"><span className="skeleton skeleton--text" style={{ width: "1.5rem" }} /></td>
-            <td className="num"><span className="skeleton skeleton--text" style={{ width: "1.5rem" }} /></td>
-            <td className="num"><span className="skeleton skeleton--text" style={{ width: "1.5rem" }} /></td>
-            <td className="num"><span className="skeleton skeleton--text" style={{ width: "1.5rem" }} /></td>
-            <td className="num"><span className="skeleton skeleton--text" style={{ width: "2rem" }} /></td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
 
 // ── Helpers ─────────────────────────────────────────────────────
 

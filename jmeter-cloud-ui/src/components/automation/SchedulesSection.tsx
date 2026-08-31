@@ -158,11 +158,14 @@ export function SchedulesSection({
 
   return (
     <section className="schedulesSection" aria-label={title}>
-      <div className="pageHeader schedulesSection__head">
-        <h2>
-          {title}
-          <InfoTip label={`About ${title}`}>{info}</InfoTip>
-        </h2>
+      {/* The tab already names this section — repeating it as a heading is
+          noise. The name stays in the accessibility tree so the document
+          outline and the section's aria-label still work. */}
+      <h2 className="visuallyHidden">{title}</h2>
+      <div className="schedulesSection__head">
+        {/* The ⓘ sits with the add button rather than alone on the left: one
+            control cluster reads as deliberate, a floating icon does not. */}
+        <InfoTip label={`About ${title}`}>{info}</InfoTip>
         <button type="button" className="btn btn--primary btn--sm" onClick={() => setShowCreate(true)}>
           + {addLabel}
         </button>

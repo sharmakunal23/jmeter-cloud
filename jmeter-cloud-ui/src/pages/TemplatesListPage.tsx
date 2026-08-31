@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { formatRelative } from "../lib/time";
 
 import { applicationsApi, type Application } from "../api/applications";
 import { templatesApi } from "../api/templates";
 import { AppListToolbar } from "../components/AppListToolbar";
-import { Paginator } from "../components/Paginator";
-import { useClientPagination } from "../hooks/useClientPagination";
+import { DataList } from "../components/DataList";
+import { useRowLink } from "../hooks/useRowLink";
 
 /**
  * Phase IA-Templates (2026-05-13) — list view following the IA pattern
@@ -40,6 +40,7 @@ type State =
   | { status: "error"; message: string };
 
 export function TemplatesListPage() {
+  const rowLink = useRowLink();
   const [state, setState] = useState<State>({ status: "loading" });
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("name");
@@ -107,9 +108,6 @@ export function TemplatesListPage() {
     return sorted;
   }, [state, search, sortKey, sortDir]);
 
-  const { page, setPage, pageItems, total, pageSize, setPageSize } =
-    useClientPagination(sortedFiltered, `${search}|${sortKey}|${sortDir}`);
-
   function toggleSort(k: SortKey) {
     if (sortKey === k) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     else { setSortKey(k); setSortDir(k === "name" ? "asc" : "desc"); }
@@ -152,82 +150,47 @@ export function TemplatesListPage() {
         loading={loading}
       />
 
-      {loading ? (
-        <SkeletonTable />
-      ) : sortedFiltered.length === 0 ? (
-        <div className="emptyState">
-          {totalRowCount === 0 ? (
-            <>
-              <p>No applications registered yet.</p>
-              <p className="ink-soft">
-                Register one in <Link to="/applications">Applications</Link> to start saving templates against it.
-              </p>
-            </>
-          ) : (
-            <p className="ink-soft">No applications match "{search}".</p>
-          )}
-        </div>
-      ) : (
-        <table className="runsTable capacityListTable">
-          <thead>
-            <tr>
-              <SortHeader label="Application" k="name"  cur={sortKey} dir={sortDir} onClick={toggleSort} />
-              <th>Activity</th>
-              <SortHeader label="Templates"   k="count" cur={sortKey} dir={sortDir} onClick={toggleSort} numeric />
-            </tr>
-          </thead>
-          <tbody>
-            {pageItems.map((r) => (
-              <TemplatesListRow key={r.app.applicationId} row={r} />
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      {!loading && sortedFiltered.length > 0 && (
-        <Paginator page={page} pageSize={pageSize} total={total} label="applications" onChange={setPage} onPageSizeChange={setPageSize} />
-      )}
+      <DataList<RowAggregate>
+        label="Applications"
+        loading={loading}
+        rows={sortedFiltered}
+        rowKey={(r) => r.app.applicationId}
+        itemNoun="applications"
+        resetKey={`${search}|${sortKey}|${sortDir}`}
+        empty={totalRowCount === 0 ? (
+          <>
+            <strong>No applications registered yet.</strong>
+            <div>Register one in <Link to="/applications">Applications</Link> to start saving
+                 templates against it.</div>
+          </>
+        ) : <>No applications match &quot;{search}&quot;.</>}
+        rowProps={(r) => rowLink(`/templates/${encodeURIComponent(r.app.name)}`,
+                                      `Open templates for ${r.app.name}`)}
+        columns={[
+          { key: "name", header: "Application",
+            onSort: () => toggleSort("name"),
+            sortDirection: sortKey === "name" ? sortDir : null,
+            cell: (r) => (
+              <Link to={`/templates/${encodeURIComponent(r.app.name)}`}
+                    className="mono capacityListRow__name"
+                    onClick={(e) => e.stopPropagation()}>
+                {r.app.name}
+              </Link>
+            ) },
+          { key: "activity", header: "Activity",
+            cell: (r) => <ActivityChip lastSave={r.mostRecentSave} hasTemplates={r.count > 0} /> },
+          { key: "count", header: "Templates", className: "dataList__num",
+            onSort: () => toggleSort("count"),
+            sortDirection: sortKey === "count" ? sortDir : null,
+            cell: (r) => <strong className="mono">{r.count}</strong> },
+        ]}
+      />
     </section>
   );
 }
 
 // ── Row ──────────────────────────────────────────────────────────
 
-function TemplatesListRow({ row }: { row: RowAggregate }) {
-  const navigate = useNavigate();
-  const href = `/templates/${encodeURIComponent(row.app.name)}`;
-  function open() { navigate(href); }
-  function onKey(e: React.KeyboardEvent<HTMLTableRowElement>) {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      open();
-    }
-  }
-  return (
-    <tr
-      className="capacityListRow capacityListRow--clickable"
-      onClick={open}
-      onKeyDown={onKey}
-      tabIndex={0}
-      role="link"
-      aria-label={`Open templates for ${row.app.name}`}
-    >
-      <td>
-        <Link
-          to={href}
-          className="mono capacityListRow__name"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {row.app.name}
-        </Link>
-      </td>
-      <td>
-        <ActivityChip lastSave={row.mostRecentSave} hasTemplates={row.count > 0} />
-      </td>
-      <td className="mono num"><strong>{row.count}</strong></td>
-    </tr>
-  );
-}
 
 function ActivityChip({ lastSave, hasTemplates }: { lastSave?: Date; hasTemplates: boolean }) {
   if (!hasTemplates) return <span className="ink-soft" style={{ fontSize: "0.78rem" }}>no templates</span>;
@@ -250,57 +213,9 @@ function ActivityChip({ lastSave, hasTemplates }: { lastSave?: Date; hasTemplate
 
 // ── Sortable header ──────────────────────────────────────────────
 
-function SortHeader({
-  label, k, cur, dir, onClick, numeric = false,
-}: {
-  label: string;
-  k: SortKey;
-  cur: SortKey;
-  dir: SortDir;
-  onClick: (k: SortKey) => void;
-  numeric?: boolean;
-}) {
-  const active = k === cur;
-  const arrow = active ? (dir === "asc" ? "▲" : "▼") : "";
-  return (
-    <th className={numeric ? "num" : ""}>
-      <button
-        type="button"
-        className={`sortHeader ${active ? "sortHeader--active" : ""}`}
-        onClick={() => onClick(k)}
-        title={`Sort by ${label}`}
-      >
-        {label} <span className="sortHeader__arrow" aria-hidden="true">{arrow}</span>
-      </button>
-    </th>
-  );
-}
 
 // ── Loading skeleton ────────────────────────────────────────────
 
-function SkeletonTable() {
-  const rows = Array.from({ length: 6 });
-  return (
-    <table className="runsTable capacityListTable" aria-busy="true">
-      <thead>
-        <tr>
-          <th>Application</th>
-          <th>Activity</th>
-          <th className="num">Templates</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((_, i) => (
-          <tr key={i} className="capacityListRow capacityListRow--skeleton">
-            <td><span className="skeleton skeleton--text" style={{ width: "8rem" }} /></td>
-            <td><span className="skeleton skeleton--chip" /></td>
-            <td className="num"><span className="skeleton skeleton--text" style={{ width: "2rem" }} /></td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
 
 // ── Helpers ─────────────────────────────────────────────────────
 

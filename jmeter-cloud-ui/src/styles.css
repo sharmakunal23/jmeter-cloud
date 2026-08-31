@@ -3426,9 +3426,20 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
 
 .dataList__viewport {
   overflow-y: auto; overflow-x: auto;
-  border: 1px solid var(--border); border-radius: 8px;
+  border: 1px solid var(--border); border-radius: 10px;
   background: var(--surface);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  /* Thin, unobtrusive scrollbar: the viewport scrolls often, so the default
+     chunky bar would read as chrome rather than as part of the card. */
+  scrollbar-width: thin;
 }
+.dataList__viewport::-webkit-scrollbar { width: 10px; height: 10px; }
+.dataList__viewport::-webkit-scrollbar-thumb {
+  background: #cbd5e1; border-radius: 6px;
+  border: 3px solid var(--surface);       /* inset, so it floats inside the card */
+}
+.dataList__viewport::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+.dataList__viewport::-webkit-scrollbar-track { background: transparent; }
 .dataList__table { width: 100%; border-collapse: separate; border-spacing: 0; }
 .dataList__table thead th {
   position: sticky; top: 0; z-index: 1;   /* the header stays while the body scrolls */
@@ -3444,11 +3455,33 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
   vertical-align: middle;
 }
 .dataList__table tbody tr:last-child td { border-bottom: none; }
+/* Every row highlights on hover, not only clickable ones — it is the cheapest
+   way to keep your eye on one row while reading across a wide table. */
+.dataList__table tbody tr:not(.dataList__emptyRow):hover { background: #f8fafc; }
 .dataList__table tbody tr[role="link"] { cursor: pointer; }
-.dataList__table tbody tr[role="link"]:hover { background: var(--bg); }
+.dataList__table tbody tr[role="link"]:focus-visible {
+  outline: 2px solid var(--brand); outline-offset: -2px;
+}
+/* Row actions reveal on hover/focus so a dense list reads as data, not buttons —
+   but they stay reachable by keyboard and visible on touch. */
+.dataList__table .runsTable__actions { white-space: nowrap; text-align: right; }
+.dataList__table .runsTable__actions > * { opacity: 0.8; transition: opacity 120ms ease; }
+.dataList__table tr:hover .runsTable__actions > *,
+.dataList__table .runsTable__actions:focus-within > * { opacity: 1; }
+@media (hover: none) {
+  .dataList__table .runsTable__actions > * { opacity: 1; }
+}
+/* Numbers line up on the decimal, so a column of counts scans vertically. */
+.dataList__num { text-align: right; font-variant-numeric: tabular-nums; }
 .dataList__checkCell { width: 2.5rem; text-align: center; }
 .dataList__emptyRow td {
-  height: auto; padding: 1.5rem 0.75rem; text-align: center; color: var(--ink-soft);
+  height: auto; padding: 3.5rem 1.5rem; text-align: center; color: var(--ink-soft);
+  font-size: var(--fs-sm); line-height: 1.7;
+}
+.dataList__emptyRow strong { display: block; color: var(--ink); margin-bottom: 0.25rem; }
+.dataList__bulk {
+  background: var(--brand-soft); border: 1px solid rgba(17, 122, 202, 0.25);
+  border-radius: 999px; padding: 0.15rem 0.35rem 0.15rem 0.75rem;
 }
 .dataList__sort {
   background: none; border: 0; padding: 0; font: inherit; color: inherit;
@@ -3458,8 +3491,12 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
 
 /* AUTOMATION-3 — the three sections of /automation share one shell. */
 .schedulesSection { margin-bottom: 2rem; }
-.schedulesSection__head { margin-bottom: 0.5rem; }
-.schedulesSection__head h2 { margin: 0; display: flex; align-items: center; gap: 0.35rem; }
+/* The tab already names the section, so this row carries only the ⓘ and the add
+   button — as one right-aligned cluster, so neither floats. */
+.schedulesSection__head {
+  display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem;
+  margin-bottom: 0.75rem; min-height: 2rem;
+}
 .schedulesSection__empty { font-size: var(--fs-sm); }
 .schedulesSection__recipients { font-size: var(--fs-xs); }
 

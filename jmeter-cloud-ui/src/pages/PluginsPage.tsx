@@ -5,9 +5,8 @@ import { AddPluginDialog } from "../components/AddPluginDialog";
 import { AppListToolbar } from "../components/AppListToolbar";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { InfoTip } from "../components/InfoTip";
-import { Paginator } from "../components/Paginator";
+import { DataList } from "../components/DataList";
 import { ToastView, useToast } from "../components/Toast";
-import { useClientPagination } from "../hooks/useClientPagination";
 import { formatRelative } from "../lib/time";
 
 /**
@@ -32,6 +31,8 @@ export function PluginsPage() {
   const [search, setSearch] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [toDelete, setToDelete] = useState<PluginSummary | null>(null);
+  /** A bulk delete awaiting confirmation. */
+  const [bulkDelete, setBulkDelete] = useState<PluginSummary[] | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const { toast, showToast, dismiss } = useToast();
@@ -67,7 +68,19 @@ export function PluginsPage() {
       || p.version.toLowerCase().includes(needle)
       || p.fileName.toLowerCase().includes(needle));
   }, [items, search]);
-  const { page, setPage, pageItems, total, pageSize, setPageSize } = useClientPagination(filtered, search);
+
+  /** Delete a selection. Independent calls, so a partial failure keeps what landed. */
+  async function runBulkDelete() {
+    const rows = bulkDelete ?? [];
+    const results = await Promise.allSettled(rows.map((r) => pluginsApi.delete(r.pluginId)));
+    setBulkDelete(null);
+    const failed = results.filter((r) => r.status === "rejected").length;
+    showToast(failed === 0
+      ? { variant: "ok", text: `${rows.length} plugin(s) deleted.` }
+      : { variant: "warn", text: `${rows.length - failed} of ${rows.length} deleted`,
+          detail: `${failed} failed — a plugin in use by a live run cannot be removed.` });
+    void refresh();
+  }
 
   async function confirmDelete() {
     if (!toDelete) return;
@@ -113,65 +126,46 @@ export function PluginsPage() {
         loading={list.status === "loading"}
       />
 
-      {list.status === "loading" && <p className="ink-soft">Loading plugins…</p>}
       {list.status === "error" && (
         <div className="formError" role="alert">{list.message}</div>
       )}
-      {list.status === "ok" && list.items.length === 0 && (
-        <div className="emptyState">
-          <p>No plugins yet.</p>
-          <p className="ink-soft">
-            Upload a JMeter plugin jar (or a zip bundle of the plugin plus its
-            dependency jars) once, and every run can stage it.
-          </p>
-        </div>
-      )}
-      {list.status === "ok" && list.items.length > 0 && filtered.length === 0 && (
-        <div className="emptyState">
-          <p className="ink-soft">No plugins match "{search}".</p>
-        </div>
-      )}
-      {list.status === "ok" && filtered.length > 0 && (
-        <table className="runsTable">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Version</th>
-              <th>File</th>
-              <th>Size</th>
-              <th>Uploaded</th>
-              <th>By</th>
-              <th><span className="visuallyHidden">actions</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            {pageItems.map((p) => (
-              <tr key={p.pluginId}>
-                <td className="mono" title={p.description ?? undefined}>{p.name}</td>
-                <td>{p.version}</td>
-                <td className="mono">{p.fileName}</td>
-                <td>{formatSize(p.sizeBytes)}</td>
-                <td>{formatRelative(p.createdAt)}</td>
-                <td>{p.createdBy ?? "—"}</td>
-                <td>
-                  <button
-                    type="button"
-                    className="btn btn--danger btn--sm"
-                    onClick={() => { setToDelete(p); setDeleteError(null); }}
-                    aria-label={`delete plugin ${p.name}`}
-                  >
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
 
-      {list.status === "ok" && filtered.length > 0 && (
-        <Paginator page={page} pageSize={pageSize} total={total} label="plugins" onChange={setPage} onPageSizeChange={setPageSize} />
-      )}
+      <DataList<PluginSummary>
+        label="Plugins"
+        loading={list.status === "loading"}
+        rows={filtered}
+        rowKey={(p) => p.pluginId}
+        itemNoun="plugins"
+        resetKey={search}
+        empty={items.length === 0 ? (
+          <>
+            <strong>No plugins yet.</strong>
+            <div>Upload a JMeter plugin jar — or a zip of the plugin plus its dependency
+                 jars — once, and every run can stage it.</div>
+          </>
+        ) : <>No plugins match &quot;{search}&quot;.</>}
+        columns={[
+          { key: "name", header: "Name",
+            cell: (p) => <span className="mono" title={p.description ?? undefined}>{p.name}</span> },
+          { key: "version", header: "Version", cell: (p) => p.version },
+          { key: "file", header: "File", cell: (p) => <span className="mono">{p.fileName}</span> },
+          { key: "size", header: "Size", className: "dataList__num", cell: (p) => formatSize(p.sizeBytes) },
+          { key: "uploaded", header: "Uploaded", cell: (p) => formatRelative(p.createdAt) },
+          { key: "by", header: "By", cell: (p) => p.createdBy ?? "—" },
+          { key: "actions", header: <span className="visuallyHidden">actions</span>,
+            className: "runsTable__actions",
+            cell: (p) => (
+              <button type="button" className="btn btn--ghost btn--sm text--error"
+                      onClick={() => { setToDelete(p); setDeleteError(null); }}
+                      aria-label={`delete plugin ${p.name}`}>
+                Delete
+              </button>
+            ) },
+        ]}
+        bulkActions={[
+          { label: "Delete", danger: true, onRun: (rows) => setBulkDelete(rows) },
+        ]}
+      />
 
       {addOpen && (
         <AddPluginDialog
@@ -181,6 +175,18 @@ export function PluginsPage() {
             void refresh();
           }}
           onClose={() => setAddOpen(false)}
+        />
+      )}
+
+      {bulkDelete && (
+        <ConfirmDialog
+          title={`Delete ${bulkDelete.length} plugin(s)?`}
+          body={<>Runs already launched keep the jars they staged; new runs can no longer
+                select these. This can&apos;t be undone.</>}
+          confirmLabel={`Delete ${bulkDelete.length}`}
+          danger
+          onConfirm={() => void runBulkDelete()}
+          onCancel={() => setBulkDelete(null)}
         />
       )}
 

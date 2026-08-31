@@ -4,9 +4,8 @@ import { ClusterApiError, clustersApi, type ClusterStatus } from "../api/cluster
 import { AppListToolbar } from "../components/AppListToolbar";
 import { ClusterFormDialog } from "../components/ClusterFormDialog";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { Paginator } from "../components/Paginator";
+import { DataList } from "../components/DataList";
 import { ToastView, useToast } from "../components/Toast";
-import { useClientPagination } from "../hooks/useClientPagination";
 import { useVisiblePolling } from "../hooks/useVisiblePolling";
 import { formatRelative } from "../lib/time";
 
@@ -59,7 +58,6 @@ export function ClustersPage() {
       || c.label.toLowerCase().includes(q)
       || c.regionalUrl.toLowerCase().includes(q));
   }, [clusters, search]);
-  const { page, setPage, pageItems, total, pageSize, setPageSize } = useClientPagination(filtered, search);
 
   async function testProvision(cluster: ClusterStatus) {
     try {
@@ -137,50 +135,64 @@ export function ClustersPage() {
             registration validates the endpoint before anything can run there.
           </p>
         </div>
-      ) : (
-        <>
-          <div style={{ overflowX: "auto" }}>
-            <table className="runsTable">
-              <thead>
-                <tr>
-                  <th>Cluster</th>
-                  <th>Health</th>
-                  <th>Workers</th>
-                  <th>Reserved</th>
-                  <th>Validated</th>
-                  <th>Probe</th>
-                  <th aria-label="actions" />
-                </tr>
-              </thead>
-              <tbody>
-                {state.status === "loading"
-                  ? Array.from({ length: 3 }, (_, i) => (
-                      <tr key={i}>
-                        <td colSpan={7}><span className="skeleton skeleton--text" aria-hidden="true" /></td>
-                      </tr>
-                    ))
-                  : pageItems.map((c) => (
-                      <ClusterRow
-                        key={c.region}
-                        cluster={c}
-                        onTestProvision={() => void testProvision(c)}
-                        onEdit={() => setEditing(c)}
-                        onRemove={() => setRemoving(c)}
-                      />
-                    ))}
-              </tbody>
-            </table>
-          </div>
-          <Paginator
-            page={page}
-            pageSize={pageSize}
-            total={total}
-            label="clusters"
-            onChange={setPage}
-            onPageSizeChange={setPageSize}
-          />
-        </>
-      )}
+      ) : null}
+
+      <DataList<ClusterStatus>
+        label="Clusters"
+        loading={state.status === "loading"}
+        rows={filtered}
+        rowKey={(c) => c.region}
+        itemNoun="clusters"
+        resetKey={search}
+        empty={<>No clusters match &quot;{search}&quot;.</>}
+        columns={[
+          { key: "cluster", header: "Cluster", cell: (c) => (
+            <div className="clusterCell">
+              <strong>{c.label}</strong>
+              <small className="ink-soft">{c.region} · {c.regionalUrl}</small>
+            </div>
+          ) },
+          { key: "health", header: "Health", cell: (c) => healthChip(c) },
+          { key: "workers", header: "Workers", cell: (c) => {
+            const util = c.maxWorkers > 0 ? c.provisionedWorkers / c.maxWorkers : 0;
+            const barVariant = util >= 1 ? "err" : util >= 0.8 ? "warn" : "ok";
+            return (
+              <span className="regionPanel__util"
+                    title={`${c.provisionedWorkers} of ${c.maxWorkers} workers`}>
+                <span className={`capacityBar capacityBar--${barVariant} regionPanel__utilBar`} aria-hidden="true">
+                  <span style={{ width: `${Math.min(100, Math.round(util * 100))}%` }} />
+                </span>
+                {c.provisionedWorkers}/{c.maxWorkers}
+              </span>
+            );
+          } },
+          { key: "reserved", header: "Reserved", cell: (c) => (
+            <span title="Sum of every group's reservation against the cluster ceiling">
+              {c.reservedWorkers}/{c.maxWorkers}
+            </span>
+          ) },
+          { key: "validated", header: "Validated", cell: (c) => (
+            c.lastValidatedAt
+              ? <span title={c.lastValidatedAt}>{formatRelative(c.lastValidatedAt)}</span>
+              : <span className="ink-soft">—</span>
+          ) },
+          { key: "probe", header: "Probe", cell: (c) => probeChip(c) },
+          { key: "actions", header: <span className="visuallyHidden">actions</span>,
+            className: "runsTable__actions", cell: (c) => (
+              <>
+                <button className="btn btn--sm btn--ghost" onClick={() => void testProvision(c)}
+                        disabled={c.probing}
+                        title="Spin one real probe worker, wait until it is ready, delete it">
+                  {c.probing ? "Probing…" : "Test provisioning"}
+                </button>
+                <button className="btn btn--sm btn--ghost" onClick={() => setEditing(c)}>Edit</button>
+                <button className="btn btn--sm btn--ghost text--error"
+                        onClick={() => setRemoving(c)}>Remove</button>
+              </>
+            ) },
+        ]}
+      />
+
 
       {adding && (
         <ClusterFormDialog
@@ -220,62 +232,6 @@ export function ClustersPage() {
   );
 }
 
-function ClusterRow({
-  cluster,
-  onTestProvision,
-  onEdit,
-  onRemove,
-}: {
-  cluster: ClusterStatus;
-  onTestProvision: () => void;
-  onEdit: () => void;
-  onRemove: () => void;
-}) {
-  const util = cluster.maxWorkers > 0 ? cluster.provisionedWorkers / cluster.maxWorkers : 0;
-  const barVariant = util >= 1 ? "err" : util >= 0.8 ? "warn" : "ok";
-  return (
-    <tr>
-      <td>
-        <div className="clusterCell">
-          <strong>{cluster.label}</strong>
-          <small className="ink-soft">{cluster.region} · {cluster.regionalUrl}</small>
-        </div>
-      </td>
-      <td>{healthChip(cluster)}</td>
-      <td>
-        <span className="regionPanel__util" title={`${cluster.provisionedWorkers} of ${cluster.maxWorkers} workers`}>
-          <span className={`capacityBar capacityBar--${barVariant} regionPanel__utilBar`} aria-hidden="true">
-            <span style={{ width: `${Math.min(100, Math.round(util * 100))}%` }} />
-          </span>
-          {cluster.provisionedWorkers}/{cluster.maxWorkers}
-        </span>
-      </td>
-      <td>
-        <span title="Sum of every group's reservation against the cluster ceiling">
-          {cluster.reservedWorkers}/{cluster.maxWorkers}
-        </span>
-      </td>
-      <td>
-        {cluster.lastValidatedAt
-          ? <span title={cluster.lastValidatedAt}>{formatRelative(cluster.lastValidatedAt)}</span>
-          : <span className="ink-soft">—</span>}
-      </td>
-      <td>{probeChip(cluster)}</td>
-      <td className="runsTable__actions">
-        <button
-          className="btn btn--sm btn--ghost"
-          onClick={onTestProvision}
-          disabled={cluster.probing}
-          title="Spin one real probe worker, wait until it is ready, delete it"
-        >
-          {cluster.probing ? "Probing…" : "Test provisioning"}
-        </button>
-        <button className="btn btn--sm btn--ghost" onClick={onEdit}>Edit</button>
-        <button className="btn btn--sm btn--ghost text--error" onClick={onRemove}>Remove</button>
-      </td>
-    </tr>
-  );
-}
 
 function healthChip(c: ClusterStatus) {
   if (c.reachable == null) {
