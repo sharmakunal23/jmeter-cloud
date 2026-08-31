@@ -25,10 +25,8 @@ import java.util.regex.Pattern;
  * <p>Use {@code ${execution.outcome}} in a result email, not
  * {@code ${execution.state}}: the state is whatever it is at send time, and a
  * final report is sent while the execution is still RUNNING by definition.
- * {@code outcome} is FAILED whenever any task failed — it reports the work, not
- * the orchestration. The execution's own verdict forgives a failure that a node
- * handles with an {@code ON_FAILURE} branch, which is right for the run's state
- * chip and wrong for a subject line saying how the test went.
+ * {@code outcome} is the same verdict the run's own chip shows, so a subject
+ * line and a history row never disagree.
  */
 @Component
 public class WorkflowEmailComposer {
@@ -111,16 +109,15 @@ public class WorkflowEmailComposer {
         v.put("workflow.id", nullSafe(execution.workflowId()));
         v.put("execution.id", nullSafe(execution.executionId()));
         v.put("execution.state", execution.state().name());
-        // `outcome` answers "did the work succeed", which is what a result
-        // email is about — NOT the execution's own verdict, which deliberately
-        // forgives a failure whose node declares an ON_FAILURE branch. Wiring a
-        // result email from both outcomes (what the builder's warning
-        // recommends) is exactly such a branch, so reusing the execution's
-        // verdict here would have every handled failure mail "SUCCEEDED".
+        // The same verdict the run's own chip shows — one rule, so a subject
+        // line and a history row can never disagree about whether it went well.
+        // It is not the live state: a result email is itself the last task, so
+        // the execution is still RUNNING whenever one is composed.
         List<WorkflowTask> failed = tasks.stream()
                 .filter(t -> t.state() == TaskState.FAILED)
                 .toList();
-        v.put("execution.outcome", failed.isEmpty() ? "SUCCEEDED" : "FAILED");
+        v.put("execution.outcome",
+                com.perf.globalorchestrator.workflow.WorkflowEngine.outcomeOf(tasks).name());
         v.put("execution.failedTasks",
                 failed.stream().map(WorkflowTask::name).collect(java.util.stream.Collectors.joining(", ")));
         v.put("execution.startedAt", execution.startedAt() == null ? "" : execution.startedAt().toString());

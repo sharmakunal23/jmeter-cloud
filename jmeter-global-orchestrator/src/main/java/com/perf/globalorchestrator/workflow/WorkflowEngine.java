@@ -207,8 +207,8 @@ public class WorkflowEngine {
             executions.leaseUntil(execution.executionId(), nextTick(finalTasks, now));
             return;
         }
-        ExecutionState state = outcomeOf(graph, finalTasks);
-        String reason = terminalReason(graph, finalTasks, state);
+        ExecutionState state = outcomeOf(finalTasks);
+        String reason = terminalReason(finalTasks);
         if (executions.markTerminal(execution.executionId(), state, reason, now) == 1) {
             LOG.info("workflow execution {} ({}) → {}{}",
                     execution.executionId(), execution.workflowName(), state,
@@ -332,18 +332,22 @@ public class WorkflowEngine {
     }
 
     /**
-     * The execution's verdict: FAILED when a task failed and its node declares
-     * no {@code ON_FAILURE} branch. Drawing a failure branch is what says "I
-     * handled this", so a test-then-email-either-way workflow reads SUCCEEDED.
+     * The execution's verdict: CANCELLED if any task was, else FAILED if any
+     * task failed, else SUCCEEDED. A skipped task is not a failure — nothing
+     * ran, so nothing failed.
+     *
+     * <p>An {@code ON_FAILURE} branch deliberately does <em>not</em> forgive
+     * the failure it handles: forgiving made a run whose load test failed read
+     * SUCCEEDED in the history because an alert email was wired up, while the
+     * email that same branch sent said FAILED. This is the one verdict both
+     * the chip and the email use, so they cannot disagree again.
      */
-    public static ExecutionState outcomeOf(WorkflowGraph graph, List<WorkflowTask> tasks) {
+    public static ExecutionState outcomeOf(List<WorkflowTask> tasks) {
         for (WorkflowTask t : tasks) {
             if (t.state() == TaskState.CANCELLED) return ExecutionState.CANCELLED;
         }
         for (WorkflowTask t : tasks) {
-            if (t.state() == TaskState.FAILED && !graph.handlesFailure(t.nodeId())) {
-                return ExecutionState.FAILED;
-            }
+            if (t.state() == TaskState.FAILED) return ExecutionState.FAILED;
         }
         return ExecutionState.SUCCEEDED;
     }
@@ -355,7 +359,7 @@ public class WorkflowEngine {
      * was not taken is exactly why an email someone expected never arrived, and
      * finishing green with nothing said about it is how that becomes a mystery.
      */
-    static String terminalReason(WorkflowGraph graph, List<WorkflowTask> tasks, ExecutionState state) {
+    static String terminalReason(List<WorkflowTask> tasks) {
         List<String> parts = new ArrayList<>();
         List<String> failures = new ArrayList<>();
         List<String> skipped = new ArrayList<>();

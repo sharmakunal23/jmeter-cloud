@@ -157,44 +157,44 @@ class WorkflowEngineRulesTest {
                 List.of(node("a", JoinPolicy.ALL), node("b", JoinPolicy.ALL)),
                 List.of(edge("a", "b", EdgeCondition.ON_SUCCESS)));
 
-        assertThat(WorkflowEngine.outcomeOf(g, List.of(
+        assertThat(WorkflowEngine.outcomeOf(List.of(
                 task("a", TaskState.FAILED), task("b", TaskState.SKIPPED))))
                 .isEqualTo(ExecutionState.FAILED);
     }
 
     @Test
-    @DisplayName("drawing a failure branch is what marks the failure handled — the execution succeeds")
-    void handledFailureSucceeds() {
-        // "run the test, mail the team either way, and don't call the workflow broken."
-        WorkflowGraph g = new WorkflowGraph(1,
-                List.of(node("test", JoinPolicy.ALL), node("mail", JoinPolicy.ALL)),
-                List.of(edge("test", "mail", EdgeCondition.ALWAYS),
-                        edge("test", "mail", EdgeCondition.ON_FAILURE)));
-
-        assertThat(WorkflowEngine.outcomeOf(g, List.of(
+    @DisplayName("a failure branch routes the work but does not launder the verdict")
+    void handledFailureStillFails() {
+        // The forgiveness this replaces made a run whose load test failed read
+        // SUCCEEDED in the history, purely because an alert email was wired to
+        // ON_FAILURE. The email said FAILED at the same moment. One verdict.
+        assertThat(WorkflowEngine.outcomeOf(List.of(
                 task("test", TaskState.FAILED), task("mail", TaskState.SUCCEEDED))))
+                .isEqualTo(ExecutionState.FAILED);
+    }
+
+    @Test
+    @DisplayName("a skipped task is not a failure — nothing ran, so nothing failed")
+    void skippedAloneIsNotAFailure() {
+        assertThat(WorkflowEngine.outcomeOf(List.of(
+                task("a", TaskState.SUCCEEDED), task("b", TaskState.SKIPPED))))
                 .isEqualTo(ExecutionState.SUCCEEDED);
     }
 
     @Test
     @DisplayName("a cancelled task makes the execution CANCELLED, not FAILED")
     void cancelledWins() {
-        WorkflowGraph g = new WorkflowGraph(1, List.of(node("a", JoinPolicy.ALL)), List.of());
-        assertThat(WorkflowEngine.outcomeOf(g, List.of(task("a", TaskState.CANCELLED))))
+        assertThat(WorkflowEngine.outcomeOf(List.of(task("a", TaskState.CANCELLED))))
                 .isEqualTo(ExecutionState.CANCELLED);
     }
 
     @Test
     @DisplayName("the outcome names what did not run — a skipped branch is why an expected email never came")
     void terminalReasonNamesSkippedTasks() {
-        WorkflowGraph g = new WorkflowGraph(1,
-                List.of(node("gate", JoinPolicy.ALL), node("wait", JoinPolicy.ALL), node("mail", JoinPolicy.ALL)),
-                List.of(edge("gate", "wait", EdgeCondition.ON_SUCCESS),
-                        edge("wait", "mail", EdgeCondition.ALWAYS)));
         List<WorkflowTask> tasks = List.of(
                 task("gate", TaskState.FAILED), task("wait", TaskState.SKIPPED), task("mail", TaskState.SKIPPED));
 
-        String reason = WorkflowEngine.terminalReason(g, tasks, ExecutionState.FAILED);
+        String reason = WorkflowEngine.terminalReason(tasks);
 
         assertThat(reason).contains("2 task(s) did not run: Task wait, Task mail");
     }
@@ -202,18 +202,13 @@ class WorkflowEngineRulesTest {
     @Test
     @DisplayName("a clean pass says nothing, because there is nothing to explain")
     void terminalReasonIsSilentOnACleanPass() {
-        WorkflowGraph g = new WorkflowGraph(1, List.of(node("a", JoinPolicy.ALL)), List.of());
-        assertThat(WorkflowEngine.terminalReason(g, List.of(task("a", TaskState.SUCCEEDED)),
-                ExecutionState.SUCCEEDED)).isNull();
+        assertThat(WorkflowEngine.terminalReason(List.of(task("a", TaskState.SUCCEEDED)))).isNull();
     }
 
     @Test
     @DisplayName("all-succeeded is a clean pass")
     void allSucceeded() {
-        WorkflowGraph g = new WorkflowGraph(1,
-                List.of(node("a", JoinPolicy.ALL), node("b", JoinPolicy.ALL)),
-                List.of(edge("a", "b", EdgeCondition.ON_SUCCESS)));
-        assertThat(WorkflowEngine.outcomeOf(g, List.of(
+        assertThat(WorkflowEngine.outcomeOf(List.of(
                 task("a", TaskState.SUCCEEDED), task("b", TaskState.SUCCEEDED))))
                 .isEqualTo(ExecutionState.SUCCEEDED);
     }

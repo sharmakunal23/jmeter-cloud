@@ -91,11 +91,4 @@ public record WorkflowGraph(int v, List<WorkflowNode> nodes, List<WorkflowEdge> 
         return out;
     }
 
-    /** True when the node declares a failure branch, which is what marks its failure handled. */
-    public boolean handlesFailure(String nodeId) {
-        for (WorkflowEdge e : edges) {
-            if (e.source().equals(nodeId) && e.condition() == EdgeCondition.ON_FAILURE) return true;
-        }
-        return false;
-    }
 }

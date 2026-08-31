@@ -4,10 +4,9 @@ package com.perf.globalorchestrator.domain;
  * When an edge lets its target run, evaluated against the source task's
  * outcome.
  *
- * <p>{@link #ON_FAILURE} does double duty: drawing one is also what declares a
- * failure <em>handled</em>, so the execution finishes SUCCEEDED instead of
- * FAILED. That is the only way to say "run the test, email either way, and
- * don't call the workflow broken".
+ * <p>{@link #ON_FAILURE} routes the work; it does not change the verdict. An
+ * execution whose task failed reads FAILED however carefully the graph handled
+ * it, because "did anything fail" is the question a history list is asked.
  */
 public enum EdgeCondition {
     ON_SUCCESS,

@@ -92,8 +92,8 @@ class WorkflowGraphJsonTest {
     }
 
     @Test
-    @DisplayName("drawing a failure branch is what marks a node's failure handled")
-    void handlesFailureReadsTheEdges() {
+    @DisplayName("a failure branch is an ordinary edge — it does not make its target a root")
+    void failureBranchIsAnOrdinaryEdge() {
         WorkflowGraph g = new WorkflowGraph(1,
                 List.of(new DelayNode("a", "A", new NodePosition(0, 0), JoinPolicy.ALL, 5),
                         new DelayNode("b", "B", new NodePosition(0, 0), JoinPolicy.ALL, 5),
@@ -101,8 +101,6 @@ class WorkflowGraphJsonTest {
                 List.of(new WorkflowEdge("e1", "a", "b", EdgeCondition.ON_SUCCESS),
                         new WorkflowEdge("e2", "a", "c", EdgeCondition.ON_FAILURE)));
 
-        assertThat(g.handlesFailure("a")).isTrue();
-        assertThat(g.handlesFailure("b")).isFalse();
         assertThat(g.roots()).extracting(WorkflowNode::id).containsExactly("a");
     }
 }

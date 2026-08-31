@@ -2974,9 +2974,9 @@ components:
           description: |
             When the target may run. `ALWAYS` means the source succeeded **or**
             failed — a source that was skipped or cancelled never ran, so it
-            satisfies nothing. Drawing an `ON_FAILURE` edge also declares the
-            source's failure *handled*, which is what lets a
-            test-then-mail-either-way workflow finish SUCCEEDED.
+            satisfies nothing. `ON_FAILURE` routes the work only: an execution
+            whose task failed reads FAILED however carefully the graph handled
+            it.
 
     WorkflowNode:
       type: object
@@ -3067,10 +3067,8 @@ components:
             Use `${execution.outcome}` in a result email, not
             `${execution.state}` — a final report is sent while the execution is
             still RUNNING by definition, so the state is never the verdict.
-            `outcome` is FAILED whenever any task failed: it reports the work,
-            not the orchestration. (The execution's own state forgives a failure
-            whose node declares an `ON_FAILURE` branch — right for the run's
-            state chip, wrong for a subject line saying how the test went.)
+            `outcome` is FAILED whenever any task failed, and is the same verdict
+            the run's own chip ends up showing.
         body:    { type: string, maxLength: 20000, description: "EMAIL — as `subject`. An unknown placeholder renders empty rather than failing the send." }
         includeSummary: { type: boolean, description: "EMAIL — append a table of every task's state, timing and result." }
         # ── DELAY ──
@@ -3122,7 +3120,14 @@ components:
         groupId:      { type: string }
         workflowName: { type: string, description: "Snapshot: a rename never rewrites history." }
         graph:        { $ref: "#/components/schemas/WorkflowGraph" }
-        state:        { type: string, enum: [RUNNING, SUCCEEDED, FAILED, CANCELLED] }
+        state:
+          type: string
+          enum: [RUNNING, SUCCEEDED, FAILED, CANCELLED]
+          description: |
+            CANCELLED if any task was, else FAILED if any task failed, else
+            SUCCEEDED — the same verdict `${execution.outcome}` puts in an
+            email. An `ON_FAILURE` branch routes the work but does not forgive
+            the failure it handles. A skipped task is not a failure.
         stateReason:  { type: string, nullable: true }
         triggeredBy:  { type: string }
         startedAt:    { type: string, format: date-time }
@@ -3153,7 +3158,10 @@ components:
         state:
           type: string
           enum: [PENDING, RUNNING, AWAITING_APPROVAL, SUCCEEDED, FAILED, SKIPPED, CANCELLED]
-          description: "`SKIPPED` means its join can no longer be satisfied — an upstream branch went the other way."
+          description: |
+            `SKIPPED` means its join can no longer be satisfied — an upstream
+            branch went the other way. The UI shows it as "Not executed"; it
+            never ran, so it does not make the execution FAILED.
         attempt:         { type: integer }
         applicationName: { type: string, nullable: true }
         runId:
