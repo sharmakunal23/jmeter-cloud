@@ -5491,6 +5491,7 @@ fieldset.field { border: 1px solid var(--border); border-radius: 6px; padding: 0
   padding: 0.3rem 0.4rem;
   border-bottom: 1px solid var(--border);
 }
+.miniTable th.num { text-align: right; }
 .miniTable td { padding: 0.32rem 0.4rem; border-bottom: 1px solid #f1f5f9; }
 .miniTable tr.isOver td { color: #b45309; }
 
@@ -5616,9 +5617,13 @@ fieldset.field { border: 1px solid var(--border); border-radius: 6px; padding: 0
 .workflowMetrics__head { margin-bottom: 0.5rem; }
 .workflowMetrics__charts {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(30rem, 1fr));
   gap: 0.8rem;
   margin-bottom: 0.9rem;
+}
+@media (min-width: 1200px) {
+  /* Four charts read as a block of four, not a row of three and an orphan. */
+  .workflowMetrics__charts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 tr.isMuted td { opacity: 0.6; }
@@ -5628,4 +5633,97 @@ tr.isMuted td { opacity: 0.6; }
   .workflowBuilder__layout,
   .workflowDetail__layout { grid-template-columns: minmax(0, 1fr); }
   .workflowBuilder__meta { flex-wrap: wrap; }
+}
+
+/* ── Shared tab strip (TabStrip) ────────────────────────────────────── */
+.tabStrip {
+  display: flex;
+  gap: 0.15rem;
+  border-bottom: 1px solid var(--border);
+  margin: 0 0 1rem;
+  overflow-x: auto;
+}
+.tabStrip__tab {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 0.55rem 0.9rem;
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  white-space: nowrap;
+}
+.tabStrip__tab:hover { color: var(--ink); }
+.tabStrip__tab--active {
+  color: var(--brand);
+  border-bottom-color: var(--brand);
+  font-weight: 600;
+}
+.tabStrip__tab:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
+  border-radius: 4px 4px 0 0;
+}
+.tabStrip__badge {
+  margin-left: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  font-weight: 400;
+}
+
+/* The flow tab's canvas takes what is left of the window: on that tab the
+   diagram is the content, not an illustration above it. The floor keeps it
+   usable on a short window. */
+.wfCanvas--fill {
+  height: calc(100vh - 19rem);
+  min-height: 26rem;
+}
+.workflowDetail__layout--flow { align-items: stretch; }
+
+/* ── Workflow metrics board (the hosted live dashboard's shape) ─────── */
+.workflowMetrics__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+.workflowMetrics__controls { display: flex; gap: 0.75rem; align-items: center; }
+.inlineField { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.82rem; color: var(--ink-soft); }
+.inlineField select {
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.82rem;
+}
+.metricsHeading { font-size: 0.95rem; margin: 1.1rem 0 0.5rem; color: var(--ink); }
+.workflowMetrics__summary { margin-bottom: 0.5rem; }
+.workflowMetrics__summary tr.isTotal td {
+  font-weight: 600;
+  border-top: 2px solid var(--border);
+}
+.workflowMetrics__chartWithPicker { position: relative; }
+.workflowMetrics__pickerRow {
+  display: flex;
+  gap: 0.25rem;
+  justify-content: flex-end;
+  margin-bottom: 0.3rem;
+}
+.btn--sm.isActive {
+  background: rgba(17,122,202,0.10);
+  border-color: rgba(17,122,202,0.35);
+  color: var(--brand);
+}
+/* A disabled action that is a link elsewhere still has to read as disabled. */
+.btn.isDisabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
 }

@@ -5,6 +5,7 @@ import com.perf.globalorchestrator.domain.Actor;
 import com.perf.globalorchestrator.domain.ApplicationGroup;
 import com.perf.globalorchestrator.domain.Workflow;
 import com.perf.globalorchestrator.domain.WorkflowExecution;
+import com.perf.globalorchestrator.domain.WorkflowExecutionSummary;
 import com.perf.globalorchestrator.domain.WorkflowGraph;
 import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
 import com.perf.globalorchestrator.repo.WorkflowExecutionRepository;
@@ -75,9 +76,19 @@ public class WorkflowController {
         return ResponseEntity.ok(service.listByGroup(groupId));
     }
 
+    /**
+     * One workflow, carrying its most recent execution — the UI disables Run
+     * and Edit while that one is still going, and only this tells it so.
+     */
     @GetMapping("/{workflowId}")
     public ResponseEntity<Workflow> get(@PathVariable String workflowId) {
-        return ResponseEntity.ok(service.requireWorkflow(workflowId));
+        Workflow workflow = service.requireWorkflow(workflowId);
+        return ResponseEntity.ok(workflow.withLastExecution(
+                executions.findByWorkflow(workflowId, 1).stream()
+                        .findFirst()
+                        .map(e -> new WorkflowExecutionSummary(
+                                e.executionId(), e.state(), e.startedAt(), e.completedAt()))
+                        .orElse(null)));
     }
 
     /** Validate a draft without saving it — errors, warnings and the peak-workers picture. */

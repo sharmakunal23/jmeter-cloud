@@ -254,6 +254,13 @@ public class WorkflowService {
     public Workflow update(String workflowId, int revision, String name, String description,
                            WorkflowGraph graph, boolean enabled, Actor actor) {
         Workflow existing = requireWorkflow(workflowId);
+        // An execution snapshots the graph, so an edit could not corrupt one —
+        // but it would leave the canvas showing something the run in progress
+        // is not doing, which is worse than refusing.
+        int running = executions.countRunning(workflowId);
+        if (running > 0) {
+            throw new WorkflowBusyException(workflowId, running);
+        }
         WorkflowValidation validation = validate(existing.groupId(), graph);
         if (!validation.valid()) throw new WorkflowInvalidException(validation);
         return workflows.update(workflowId, revision, name, description, graph, enabled, actor.name(),
@@ -409,10 +416,12 @@ public class WorkflowService {
         }
     }
 
+    /** Something is running, so the workflow may be neither edited nor deleted. */
     public static final class WorkflowBusyException extends RuntimeException {
         private final int running;
         public WorkflowBusyException(String id, int running) {
-            super("workflow " + id + " has " + running + " running execution(s); cancel them first");
+            super("workflow " + id + " has " + running
+                    + " running execution(s); wait for it to finish or cancel it first");
             this.running = running;
         }
         public int running() { return running; }

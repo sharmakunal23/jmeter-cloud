@@ -2546,6 +2546,9 @@ paths:
     get:
       tags: [workflows]
       summary: One workflow
+      description: >-
+        Carries `lastExecution`, which is how a client knows an execution is in
+        progress and that Run and Edit are therefore refused.
       responses:
         "200":
           description: The workflow and its graph.
@@ -2574,7 +2577,12 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Workflow" }
         "400": { description: "`WORKFLOW_INVALID`, or `BAD_REQUEST` when `revision` is missing." }
-        "409": { description: "`WORKFLOW_REVISION_CONFLICT` — reload and re-apply. `WORKFLOW_NAME_TAKEN` for a duplicate name." }
+        "409":
+          description: >-
+            `WORKFLOW_REVISION_CONFLICT` — reload and re-apply;
+            `WORKFLOW_RUNNING` — an execution is in progress, and editing would
+            leave the canvas showing something that run is not doing;
+            `WORKFLOW_NAME_TAKEN` for a duplicate name.
         "404": { description: "No such workflow." }
     delete:
       tags: [workflows]

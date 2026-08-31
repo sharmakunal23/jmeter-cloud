@@ -1,17 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import {
   workflowsApi, type WorkflowExecution, type WorkflowTask,
 } from "../api/workflows";
 import { formatRelative } from "../lib/time";
 import { useVisiblePolling } from "../hooks/useVisiblePolling";
+import { TabPanel, TabStrip, useTabInUrl, type TabDefinition } from "../components/TabStrip";
 import { WorkflowCanvas } from "../components/workflow/WorkflowCanvas";
 import { WorkflowMetricsPanel } from "../components/workflow/WorkflowMetricsPanel";
 import { ExecutionStateChip } from "../components/workflow/ExecutionStateChip";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 
 const POLL_MS = 4_000;
+
+type Tab = "flow" | "metrics" | "applications" | "tasks";
 
 /**
  * A workflow execution as it happens: the graph with every task's state on it,
@@ -27,6 +30,7 @@ export function WorkflowExecutionPage() {
   const [error, setError] = useState<string | null>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -70,6 +74,14 @@ export function WorkflowExecutionPage() {
   const states: Record<string, string> = {};
   for (const t of execution.tasks) states[t.nodeId] = t.state;
   const waiting = execution.tasks.filter((t) => t.state === "AWAITING_APPROVAL");
+  const loadTests = execution.tasks.filter((t) => t.type === "LOAD_TEST");
+  const tabs: ReadonlyArray<TabDefinition<Tab>> = [
+    { id: "flow", label: "Flow" },
+    { id: "metrics", label: "Metrics" },
+    { id: "applications", label: "Applications", badge: loadTests.length || undefined },
+    { id: "tasks", label: "Tasks", badge: execution.tasks.length },
+  ];
+  const [tab, setTab] = useTabInUrl(tabs, searchParams, setSearchParams);
 
   return (
     <section className="workflowsPage">
@@ -79,7 +91,9 @@ export function WorkflowExecutionPage() {
           <small className="ink-soft">
             <Link to="/workflows">Workflows</Link>
             {" · "}
-            <Link to={`/workflows/${execution.workflowId}`}>the workflow</Link>
+            <Link to={`/workflows/groups/${encodeURIComponent(execution.groupId)}`}>{execution.groupId}</Link>
+            {" · workflow "}
+            <Link to={`/workflows/${execution.workflowId}`}>{execution.workflowName}</Link>
             {" · started "}{formatRelative(execution.startedAt)} by {execution.triggeredBy}
           </small>
         </div>
@@ -117,12 +131,21 @@ export function WorkflowExecutionPage() {
         </div>
       ))}
 
-      <WorkflowCanvas graph={execution.graph} states={states} />
+      <TabStrip tabs={tabs} active={tab} onChange={setTab} idPrefix="execution" ariaLabel="Execution sections" />
 
-      <h2 className="sectionHeading">Metrics</h2>
-      <WorkflowMetricsPanel tasks={execution.tasks} live={live} />
+      <TabPanel id="flow" idPrefix="execution" active={tab === "flow"}>
+        <WorkflowCanvas graph={execution.graph} states={states} fillViewport />
+      </TabPanel>
 
-      <h2 className="sectionHeading">Tasks</h2>
+      <TabPanel id="metrics" idPrefix="execution" active={tab === "metrics"}>
+        <WorkflowMetricsPanel tasks={execution.tasks} live={live} />
+      </TabPanel>
+
+      <TabPanel id="applications" idPrefix="execution" active={tab === "applications"}>
+        <ApplicationsTable tasks={execution.tasks} />
+      </TabPanel>
+
+      <TabPanel id="tasks" idPrefix="execution" active={tab === "tasks"}>
       <table className="runsTable">
         <thead>
           <tr>
@@ -150,6 +173,7 @@ export function WorkflowExecutionPage() {
           ))}
         </tbody>
       </table>
+      </TabPanel>
 
       {cancelOpen && (
         <ConfirmDialog
@@ -201,4 +225,69 @@ function TaskDetail({ task }: { task: WorkflowTask }) {
     return <>waited {r.waitSeconds}s</>;
   }
   return <>—</>;
+}
+
+/**
+ * The applications this execution put under load, one row each: the task that
+ * drove it, the run it produced, and how that run ended. Split out from the
+ * metrics board so "which applications ran, and did they pass" is answerable
+ * without reading a chart.
+ */
+function ApplicationsTable({ tasks }: { tasks: WorkflowTask[] }) {
+  const loadTests = tasks.filter((t) => t.type === "LOAD_TEST");
+  if (loadTests.length === 0) {
+    return (
+      <div className="emptyState emptyState--compact">
+        <p className="ink-soft">This workflow runs no load tests.</p>
+      </div>
+    );
+  }
+  const health = new Map<string, WorkflowTask>();
+  for (const t of tasks) {
+    if (t.type === "HEALTH_CHECK" && t.applicationName) health.set(t.applicationName, t);
+  }
+  return (
+    <table className="runsTable">
+      <thead>
+        <tr>
+          <th scope="col">Application</th>
+          <th scope="col">Health gate</th>
+          <th scope="col">Load test</th>
+          <th scope="col">Run</th>
+          <th scope="col">Result</th>
+        </tr>
+      </thead>
+      <tbody>
+        {loadTests.map((t) => {
+          const gate = t.applicationName ? health.get(t.applicationName) : undefined;
+          return (
+            <tr key={t.taskId}>
+              <td>{t.applicationName ?? "—"}</td>
+              <td>
+                {gate
+                  ? <ExecutionStateChip state={gate.state} />
+                  : <span className="ink-soft">not gated</span>}
+              </td>
+              <td>{t.name}</td>
+              <td className="mono" style={{ fontSize: "0.82rem" }}>
+                {t.runId
+                  ? (
+                    <Link to={`/applications/${encodeURIComponent(t.applicationName ?? "")}/runs/${t.runId}`}>
+                      {t.runId.slice(-8)}
+                    </Link>
+                  )
+                  : <span className="ink-soft">not started</span>}
+              </td>
+              <td>
+                <ExecutionStateChip state={t.state} />
+                {t.errorReason && (
+                  <div className="ink-warn" style={{ fontSize: "0.8rem" }}>{t.errorReason}</div>
+                )}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
 }

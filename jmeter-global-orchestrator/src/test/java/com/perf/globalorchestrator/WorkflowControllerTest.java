@@ -194,6 +194,34 @@ class WorkflowControllerTest {
     }
 
     @Test
+    @DisplayName("editing a workflow while it is running is refused — the canvas must not drift from the run")
+    void editRefusedWhileRunning() throws Exception {
+        when(service.update(eq("wf1"), eq(3), anyString(), any(), any(), anyBoolean(), any()))
+                .thenThrow(new WorkflowService.WorkflowBusyException("wf1", 1));
+
+        mvc.perform(put("/api/v1/workflows/wf1").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Nightly\",\"revision\":3,"
+                                + "\"graph\":{\"v\":1,\"nodes\":[],\"edges\":[]}}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("WORKFLOW_RUNNING"))
+                .andExpect(jsonPath("$.runningExecutions").value(1));
+    }
+
+    @Test
+    @DisplayName("GET carries the last execution, which is how the UI knows to disable Run and Edit")
+    void getCarriesTheLastExecution() throws Exception {
+        when(service.requireWorkflow("wf1")).thenReturn(WF);
+        when(executions.findByWorkflow("wf1", 1)).thenReturn(List.of(
+                new WorkflowExecution("ex9", "wf1", "cps", "Nightly", GRAPH,
+                        ExecutionState.RUNNING, null, "alice", NOW, null, NOW, List.of())));
+
+        mvc.perform(get("/api/v1/workflows/wf1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lastExecution.executionId").value("ex9"))
+                .andExpect(jsonPath("$.lastExecution.state").value("RUNNING"));
+    }
+
+    @Test
     @DisplayName("deleting a workflow with a running execution is 409, not a silent orphan")
     void deleteRefusedWhileRunning() throws Exception {
         doThrow(new WorkflowService.WorkflowBusyException("wf1", 1)).when(service).delete("wf1");

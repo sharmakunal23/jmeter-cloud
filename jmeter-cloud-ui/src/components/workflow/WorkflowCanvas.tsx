@@ -48,6 +48,11 @@ export interface WorkflowCanvasProps {
   onDeleteSelection?: (nodeIds: string[], edgeIds: string[]) => void;
   /** Fixed height; omitted lets the canvas size itself to the graph. */
   height?: number;
+  /**
+   * Take the rest of the viewport instead of sizing to the graph. For a tab
+   * whose whole purpose IS the diagram, the screen is the right budget.
+   */
+  fillViewport?: boolean;
 }
 
 export function WorkflowCanvas(props: WorkflowCanvasProps) {
@@ -60,7 +65,7 @@ export function WorkflowCanvas(props: WorkflowCanvasProps) {
 
 function CanvasInner({
   graph, states, problems, editable = false, selectedNodeId,
-  onSelectNode, onSelectEdge, onNodesMoved, onConnect, onDeleteSelection, height,
+  onSelectNode, onSelectEdge, onNodesMoved, onConnect, onDeleteSelection, height, fillViewport,
 }: WorkflowCanvasProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<FlowNodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -102,7 +107,10 @@ function CanvasInner({
   const measured = height ?? measuredHeight(graph);
 
   return (
-    <div className="wfCanvas" style={{ height: measured }}>
+    <div
+      className={fillViewport ? "wfCanvas wfCanvas--fill" : "wfCanvas"}
+      style={fillViewport ? undefined : { height: measured }}
+    >
       <ReactFlow
         nodes={nodes}
         edges={edges}
