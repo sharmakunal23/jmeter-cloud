@@ -307,7 +307,7 @@ globalOrchestrator:
     # Thinking tokens bill as output, so maxTokens must cover the reasoning as
     # well as the terse JSON — a truncated reply is rejected (AI_UPSTREAM_ERROR),
     # never cached, and output bills on tokens produced, so a high cap is free.
-    maxTokens:          ${AI_MAX_TOKENS:8192}
+    maxTokens:          ${AI_MAX_TOKENS:16000}
     # Quality dials. effort: low|medium|high|xhigh|max. thinking: adaptive
     # (the only on-mode on current models) or disabled. Set either to `none` to
     # omit the parameter entirely for a model that rejects it.
@@ -316,6 +316,14 @@ globalOrchestrator:
     # output_config.format — the reply is schema-valid JSON instead of prose the
     # parser has to recover. Turn off only if the provider rejects the schema.
     structuredOutput:   ${AI_STRUCTURED_OUTPUT:true}
+    # Server-side fallback on a safety-classifier refusal, which is otherwise a
+    # hard 502 for that run. `none` omits both the parameter and its beta header.
+    fallbacks:          ${AI_FALLBACKS:default}
+    # Counts INVOCATIONS, not tokens. At the defaults above (claude-opus-5,
+    # $5/$25 per MTok, ~5k in and up to 16k out with thinking) a full day at
+    # this cap is roughly $85 — the ceiling is ~10x what it bounded under
+    # claude-sonnet-4-6 with 512 output tokens. Lower it if that matters more
+    # than always having an answer.
     dailyInvocationCap: ${AI_DAILY_INVOCATION_CAP:200}
     # PII redaction is a Phase-1 backlog item — flag stubbed here, no-op in v1
     # (local data is synthetic). Cloud flips it true once the redaction pass lands.

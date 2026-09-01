@@ -45,12 +45,15 @@ public class AiClient {
 
     /** Anthropic Messages API version header — pinned per their versioning contract. */
     private static final String ANTHROPIC_VERSION = "2023-06-01";
+    /** Beta gate for the {@code fallbacks} parameter; sent only when fallbacks are on. */
+    private static final String FALLBACK_BETA = "server-side-fallback-2026-07-01";
 
     private final String model;
     private final int maxTokens;
     private final String effort;
     private final String thinking;
     private final boolean structuredOutput;
+    private final String fallbacks;
     private final boolean enabled;
     private final ObjectMapper mapper;
     private final RestClient http;
@@ -60,16 +63,18 @@ public class AiClient {
             @Value("${globalOrchestrator.ai.apiKey:}") String apiKey,
             @Value("${globalOrchestrator.ai.model:claude-opus-5}") String model,
             @Value("${globalOrchestrator.ai.baseUrl:https://api.anthropic.com}") String baseUrl,
-            @Value("${globalOrchestrator.ai.maxTokens:8192}") int maxTokens,
+            @Value("${globalOrchestrator.ai.maxTokens:16000}") int maxTokens,
             @Value("${globalOrchestrator.ai.effort:high}") String effort,
             @Value("${globalOrchestrator.ai.thinking:adaptive}") String thinking,
-            @Value("${globalOrchestrator.ai.structuredOutput:true}") boolean structuredOutput) {
+            @Value("${globalOrchestrator.ai.structuredOutput:true}") boolean structuredOutput,
+            @Value("${globalOrchestrator.ai.fallbacks:default}") String fallbacks) {
         this.mapper = mapper;
         this.model = model;
         this.maxTokens = maxTokens;
         this.effort = blankToNull(effort);
         this.thinking = blankToNull(thinking);
         this.structuredOutput = structuredOutput;
+        this.fallbacks = blankToNull(fallbacks);
         this.enabled = apiKey != null && !apiKey.isBlank();
 
         // Adaptive thinking on a hard run can take a minute or more before the
@@ -80,13 +85,16 @@ public class AiClient {
         rf.setConnectTimeout(5_000);
         rf.setReadTimeout(180_000);
 
-        this.http = RestClient.builder()
+        RestClient.Builder b = RestClient.builder()
                 .baseUrl(stripTrailingSlash(baseUrl))
                 .requestFactory(rf)
                 .defaultHeader("x-api-key", apiKey == null ? "" : apiKey)
                 .defaultHeader("anthropic-version", ANTHROPIC_VERSION)
-                .defaultHeader("content-type", "application/json")
-                .build();
+                .defaultHeader("content-type", "application/json");
+        if (this.fallbacks != null) {
+            b = b.defaultHeader("anthropic-beta", FALLBACK_BETA);
+        }
+        this.http = b.build();
     }
 
     /** True when an {@code ANTHROPIC_API_KEY} is configured. */
@@ -138,6 +146,13 @@ public class AiClient {
         }
         if (!outputConfig.isEmpty()) {
             body.put("output_config", outputConfig);
+        }
+        // A safety classifier can decline a digest (HTTP 200, stop_reason
+        // "refusal"), which parse() turns into a hard 502 — so the run would be
+        // unanalysable, ?fresh=true included. Fallbacks re-run it server-side on
+        // another model inside the same call.
+        if (fallbacks != null) {
+            body.put("fallbacks", fallbacks);
         }
 
         String responseBody;

@@ -63,6 +63,11 @@ services:
       AI_MODEL:                 ${AI_MODEL:-claude-opus-5}
       AI_EFFORT:                ${AI_EFFORT:-high}
       AI_THINKING:              ${AI_THINKING:-adaptive}
+      # Wired through because the 502 on a truncated reply tells the operator to
+      # raise AI_MAX_TOKENS — unset here, that remedy is a silent no-op.
+      AI_MAX_TOKENS:            ${AI_MAX_TOKENS:-16000}
+      AI_STRUCTURED_OUTPUT:     ${AI_STRUCTURED_OUTPUT:-true}
+      AI_FALLBACKS:             ${AI_FALLBACKS:-default}
       AI_DAILY_INVOCATION_CAP:  ${AI_DAILY_INVOCATION_CAP:-200}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8082/actuator/health | grep -q '\"status\":\"UP\"'"]

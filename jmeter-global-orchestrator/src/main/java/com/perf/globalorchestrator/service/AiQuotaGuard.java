@@ -19,7 +19,11 @@ import java.time.ZoneOffset;
  * precise org-wide limiting is needed.
  *
  * <p>Only actual Claude calls acquire — cache hits never do, so re-loading a
- * cached terminal-run summary is free and uncapped.
+ * cached terminal-run summary is free and uncapped. It counts
+ * <b>invocations, not tokens</b>, so the bill it bounds moves with the model
+ * and {@code maxTokens}: the same cap of 200 that bounded ~$5/day under
+ * {@code claude-sonnet-4-6} bounds roughly $85/day under {@code claude-opus-5}
+ * with adaptive thinking. Re-read it whenever either changes.
  */
 @Service
 public class AiQuotaGuard {
