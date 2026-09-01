@@ -17,12 +17,17 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * AI-0 — thin client for the Anthropic Messages API.
+ * Thin client for the Anthropic Messages API — one JSON POST to
+ * {@code /v1/messages}, no SDK (the fat JAR is already near its size budget and
+ * {@link RestClient} ships with {@code spring-boot-starter-web}).
  *
- * <p>Deliberately NOT the {@code anthropic-java} SDK: the fat JAR is already at
- * the doc's 80 MB flag and the call is a single JSON POST, so we use the
- * {@link RestClient} that already ships with {@code spring-boot-starter-web}.
- * Zero new dependencies.
+ * <p>Three response rules callers depend on: a {@code stop_reason} of
+ * {@code max_tokens} or {@code refusal} is an {@link AiUpstreamException}, never
+ * a partial answer — a truncated body would otherwise be cached as if it were
+ * the summary; only {@code text} blocks are concatenated, so a thinking block
+ * never leaks into the output; and passing a {@code responseSchema} sets
+ * {@code output_config.format}, which makes the reply schema-valid JSON rather
+ * than something the caller has to recover by hand.
  *
  * <p>The bean is <b>always</b> constructed (not {@code @ConditionalOnProperty})
  * so callers can inject it unconditionally; {@link #isEnabled()} reports whether
@@ -43,6 +48,9 @@ public class AiClient {
 
     private final String model;
     private final int maxTokens;
+    private final String effort;
+    private final String thinking;
+    private final boolean structuredOutput;
     private final boolean enabled;
     private final ObjectMapper mapper;
     private final RestClient http;
@@ -50,20 +58,27 @@ public class AiClient {
     public AiClient(
             ObjectMapper mapper,
             @Value("${globalOrchestrator.ai.apiKey:}") String apiKey,
-            @Value("${globalOrchestrator.ai.model:claude-sonnet-4-6}") String model,
+            @Value("${globalOrchestrator.ai.model:claude-opus-5}") String model,
             @Value("${globalOrchestrator.ai.baseUrl:https://api.anthropic.com}") String baseUrl,
-            @Value("${globalOrchestrator.ai.maxTokens:512}") int maxTokens) {
+            @Value("${globalOrchestrator.ai.maxTokens:8192}") int maxTokens,
+            @Value("${globalOrchestrator.ai.effort:high}") String effort,
+            @Value("${globalOrchestrator.ai.thinking:adaptive}") String thinking,
+            @Value("${globalOrchestrator.ai.structuredOutput:true}") boolean structuredOutput) {
         this.mapper = mapper;
         this.model = model;
         this.maxTokens = maxTokens;
+        this.effort = blankToNull(effort);
+        this.thinking = blankToNull(thinking);
+        this.structuredOutput = structuredOutput;
         this.enabled = apiKey != null && !apiKey.isBlank();
 
-        // Claude calls take seconds, not milliseconds: a generous read timeout
-        // (the operator sees a "Claude is reading your run…" spinner) but a tight
-        // connect timeout so an unreachable endpoint fails fast.
+        // Adaptive thinking on a hard run can take a minute or more before the
+        // first byte, so the read timeout is generous (the operator sees a
+        // "Claude is reading your run…" spinner); the connect timeout stays
+        // tight so an unreachable endpoint fails fast.
         SimpleClientHttpRequestFactory rf = new SimpleClientHttpRequestFactory();
         rf.setConnectTimeout(5_000);
-        rf.setReadTimeout(90_000);
+        rf.setReadTimeout(180_000);
 
         this.http = RestClient.builder()
                 .baseUrl(stripTrailingSlash(baseUrl))
@@ -84,24 +99,46 @@ public class AiClient {
         return model;
     }
 
+    /** Free-text completion — the {@code /ai/ping} smoke test; no schema constraint. */
+    public AiResult complete(String system, String user) {
+        return complete(system, user, null);
+    }
+
     /**
      * Single-turn completion. {@code system} sets the role + output contract;
      * {@code user} carries the run data. Returns the concatenated text blocks
      * plus the token counts (surfaced to the operator for cost observability).
      *
+     * @param responseSchema JSON Schema the reply must satisfy, or null for free
+     *                       text. Sent as {@code output_config.format}, so the
+     *                       model cannot answer with prose around the JSON.
      * @throws AiDisabledException  when no API key is configured.
-     * @throws AiUpstreamException  on any non-2xx, connectivity failure, or
-     *                              unparseable response.
+     * @throws AiUpstreamException  on any non-2xx, connectivity failure,
+     *                              truncated / refused answer, or unparseable response.
      */
-    public AiResult complete(String system, String user) {
+    public AiResult complete(String system, String user, Map<String, Object> responseSchema) {
         if (!enabled) {
             throw new AiDisabledException("ANTHROPIC_API_KEY is not configured");
         }
+
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", model);
         body.put("max_tokens", maxTokens);
         body.put("system", system);
         body.put("messages", List.of(Map.of("role", "user", "content", user)));
+        if (thinking != null) {
+            body.put("thinking", Map.of("type", thinking));
+        }
+        Map<String, Object> outputConfig = new LinkedHashMap<>();
+        if (effort != null) {
+            outputConfig.put("effort", effort);
+        }
+        if (structuredOutput && responseSchema != null) {
+            outputConfig.put("format", Map.of("type", "json_schema", "schema", responseSchema));
+        }
+        if (!outputConfig.isEmpty()) {
+            body.put("output_config", outputConfig);
+        }
 
         String responseBody;
         try {
@@ -122,28 +159,54 @@ public class AiClient {
             throw new AiUpstreamException("Anthropic API call failed: " + e.getMessage(), e);
         }
 
+        return parse(responseBody);
+    }
+
+    /**
+     * Reads one Messages API response. Package-private so the wire contract can
+     * be tested without an HTTP call.
+     */
+    AiResult parse(String responseBody) {
+        JsonNode root;
         try {
-            JsonNode root = mapper.readTree(responseBody);
-            StringBuilder text = new StringBuilder();
-            JsonNode content = root.path("content");
-            if (content.isArray()) {
-                for (JsonNode block : content) {
-                    if ("text".equals(block.path("type").asText())) {
-                        text.append(block.path("text").asText());
-                    }
-                }
-            }
-            if (text.length() == 0) {
-                throw new AiUpstreamException("Anthropic response carried no text content");
-            }
-            int tokensIn = root.path("usage").path("input_tokens").asInt();
-            int tokensOut = root.path("usage").path("output_tokens").asInt();
-            return new AiResult(text.toString(), tokensIn, tokensOut);
-        } catch (AiUpstreamException e) {
-            throw e;
+            root = mapper.readTree(responseBody);
         } catch (Exception e) {
             throw new AiUpstreamException("Failed to parse Anthropic response: " + e.getMessage(), e);
         }
+
+        // A truncated or declined answer is NOT a result: returning it would let
+        // half a JSON object be stored as the operator's summary for the whole
+        // cache TTL. Fail loudly and let the caller surface 502 instead.
+        String stopReason = root.path("stop_reason").asText("");
+        if ("max_tokens".equals(stopReason)) {
+            throw new AiUpstreamException(
+                    "Anthropic response hit max_tokens (" + maxTokens + ") and is truncated;"
+                            + " raise globalOrchestrator.ai.maxTokens");
+        }
+        if ("refusal".equals(stopReason)) {
+            throw new AiUpstreamException("Anthropic declined the request: "
+                    + root.path("stop_details").path("category").asText("unspecified"));
+        }
+
+        StringBuilder text = new StringBuilder();
+        JsonNode content = root.path("content");
+        if (content.isArray()) {
+            for (JsonNode block : content) {
+                if ("text".equals(block.path("type").asText())) {
+                    text.append(block.path("text").asText());
+                }
+            }
+        }
+        if (text.length() == 0) {
+            throw new AiUpstreamException("Anthropic response carried no text content");
+        }
+        int tokensIn = root.path("usage").path("input_tokens").asInt();
+        int tokensOut = root.path("usage").path("output_tokens").asInt();
+        return new AiResult(text.toString(), tokensIn, tokensOut);
+    }
+
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() || "none".equalsIgnoreCase(s.trim()) ? null : s.trim();
     }
 
     private static String stripTrailingSlash(String s) {

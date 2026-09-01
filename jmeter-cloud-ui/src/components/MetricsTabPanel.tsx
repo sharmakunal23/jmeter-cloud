@@ -113,8 +113,11 @@ export function MetricsTabPanel({ runId, runState, run, dashboards }: MetricsTab
   const { enabled: aiEnabled } = useAiStatus();
   const [showInsights, setShowInsights] = useState(false);
   const insights = useRunInsights(runId);
+  // The analysis reads the WHOLE run, so this gate must not turn on the
+  // toolbar's range: a terminal run showing any data has a run to read, while a
+  // live one still needs a window or two before a summary says anything.
   const secondsOfData = data ? data.series.tps.length * Math.max(1, data.bucketSize) : 0;
-  const insightsReady = secondsOfData >= 30;
+  const insightsReady = hasChartData && (isTerminal || secondsOfData >= 30);
   const insightsOpen = aiEnabled && showInsights;
   const insightsGenerate = insights.generate;
   const insightsKind = insights.status.kind;

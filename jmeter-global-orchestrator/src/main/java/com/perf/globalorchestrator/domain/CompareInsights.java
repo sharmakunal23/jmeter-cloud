@@ -27,7 +27,9 @@ public record CompareInsights(
     /**
      * One per-metric comparison. {@code verdict} ∈ {regression, improvement,
      * "no significant change"}; {@code delta} is a human-readable change string
-     * (e.g. {@code "+12.3%"}, {@code "-0.4 pp"}).
+     * (e.g. {@code "+12.3%"}, {@code "-0.4 pp"}); {@code evidence} names the two
+     * figures it was computed from, so the operator can check it.
      */
-    public record CompareFinding(String metric, String verdict, String delta) { }
+    public record CompareFinding(String metric, String verdict, String delta,
+                                 String detail, String evidence) { }
 }

@@ -31,8 +31,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * AI-0/AI-1/AI-2 — controller-level tests of the HTTP contract + error mapping,
  * with a real {@link AiQuotaGuard} (cap = 1) and mocked {@link AiClient} /
  * {@link AiInsightsService}. Standalone MockMvc (no Spring context, no database)
- * keeps these fast; the DB-backed cache behaviour is covered by
- * {@link AiInsightsIT}.
+ * keeps these fast; the durable cache behaviour is covered by the
+ * {@code @Tag("db")} {@code GlobalRunDbTest}, and the digest math by
+ * {@link com.perf.globalorchestrator.service.AiInsightsServiceTest}.
  */
 @DisplayName("AiController — HTTP contract + error mapping")
 class AiControllerTest {
@@ -119,13 +120,15 @@ class AiControllerTest {
     void insights_happyPath() throws Exception {
         RunInsights stub = new RunInsights("01ARZ3NDEKTSV4RRFFQ69G5FB1", "claude-test", "v1",
                 "Steady throughput.",
-                List.of(new RunInsights.Finding("warn", "Latency tail", "p99 climbed late.")),
+                List.of(new RunInsights.Finding("warn", "Latency tail", "p99 climbed late.",
+                        "p99 1418 ms vs avg 187 ms")),
                 10, 20, Instant.parse("2026-05-31T00:00:00Z"), false);
         when(insights.runInsights(eq("01ARZ3NDEKTSV4RRFFQ69G5FB1"), eq(false))).thenReturn(stub);
         mvc.perform(post("/api/v1/runs/01ARZ3NDEKTSV4RRFFQ69G5FB1/insights"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.summary").value("Steady throughput."))
                 .andExpect(jsonPath("$.findings[0].severity").value("warn"))
+                .andExpect(jsonPath("$.findings[0].evidence").value("p99 1418 ms vs avg 187 ms"))
                 .andExpect(jsonPath("$.fromCache").value(false));
     }
 

@@ -28,6 +28,11 @@ public record RunInsights(
         Instant cachedAt,
         boolean fromCache) {
 
-    /** One severity-tagged observation. {@code severity} ∈ {info, warn, crit}. */
-    public record Finding(String severity, String title, String detail) { }
+    /**
+     * One severity-tagged observation. {@code severity} ∈ {info, warn, crit};
+     * {@code evidence} is the digest figure the claim rests on (e.g.
+     * {@code "p95 604 ms vs 187 ms mean"}), so the operator can check the
+     * finding against the charts instead of taking it on trust.
+     */
+    public record Finding(String severity, String title, String detail, String evidence) { }
 }

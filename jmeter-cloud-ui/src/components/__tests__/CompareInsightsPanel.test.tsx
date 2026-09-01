@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { axe } from "vitest-axe";
 
 import { CompareInsightsPanel } from "../CompareInsightsPanel";
@@ -16,9 +16,9 @@ function withData(): CompareInsights {
     promptVersion: "v1",
     summary: "Run B regressed average RT vs Run A.",
     findings: [
-      { metric: "tps", verdict: "no significant change", delta: "+1.2%" },
-      { metric: "avgRtMs", verdict: "regression", delta: "+12.3%" },
-      { metric: "errorPct", verdict: "improvement", delta: "-0.4 pp" },
+      { metric: "tps", verdict: "no significant change", delta: "+1.2%", detail: "Load matched.", evidence: "74.3 → 75.2/s" },
+      { metric: "avgRtMs", verdict: "regression", delta: "+12.3%", detail: "Slower under the same load.", evidence: "187 → 210 ms" },
+      { metric: "errorPct", verdict: "improvement", delta: "-0.4 pp", detail: "Fewer 5xx.", evidence: "0.8 → 0.4%" },
     ],
     tokensIn: 200,
     tokensOut: 60,
@@ -45,6 +45,13 @@ beforeEach(() => {
 });
 
 describe("CompareInsightsPanel (presentational side column)", () => {
+  it("shows the delta's evidence and states both sides are read whole", () => {
+    renderPanel({ kind: "ok" }, withData());
+    expect(screen.getByText(/whole run on both sides/i)).toBeInTheDocument();
+    expect(screen.getByText("187 → 210 ms")).toBeInTheDocument();
+    expect(screen.getByText("0.8 → 0.4%")).toBeInTheDocument();
+  });
+
   it("shows a 'not yet' hint when idle and both runs lack data", () => {
     renderPanel({ kind: "idle" }, null, false);
     expect(screen.getByText(/both runs have metrics/i)).toBeInTheDocument();
@@ -61,6 +68,22 @@ describe("CompareInsightsPanel (presentational side column)", () => {
     expect(screen.getByText("regression")).toHaveClass("badge--err");
     expect(screen.getByText("improvement")).toHaveClass("badge--ok");
     expect(screen.getByText("no significant change")).toHaveClass("badge--info");
+  });
+
+  it("copies the comparison as Markdown, naming both runs in A/B order", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+
+    renderPanel({ kind: "ok" }, withData());
+    fireEvent.click(screen.getByRole("button", { name: /copy/i }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const copied = writeText.mock.calls[0][0] as string;
+    expect(copied).toContain("# AI comparison — run A 01J0A vs run B 01J0B");
+    expect(copied).toContain("**avgRtMs — regression** (+12.3%)");
+    expect(copied).toContain("Evidence: 187 → 210 ms");
+    expect(copied).toContain("Advisory only");
+    expect(await screen.findByRole("button", { name: /copied/i })).toBeInTheDocument();
   });
 
   it("Re-evaluate and close fire their callbacks", () => {

@@ -60,7 +60,9 @@ services:
       # tunable from .env without a rebuild. Consumed by application.yml's
       # globalOrchestrator.ai.* placeholders.
       ANTHROPIC_API_KEY:        ${ANTHROPIC_API_KEY:-}
-      AI_MODEL:                 ${AI_MODEL:-claude-sonnet-4-6}
+      AI_MODEL:                 ${AI_MODEL:-claude-opus-5}
+      AI_EFFORT:                ${AI_EFFORT:-high}
+      AI_THINKING:              ${AI_THINKING:-adaptive}
       AI_DAILY_INVOCATION_CAP:  ${AI_DAILY_INVOCATION_CAP:-200}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8082/actuator/health | grep -q '\"status\":\"UP\"'"]

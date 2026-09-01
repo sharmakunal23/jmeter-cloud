@@ -1322,15 +1322,14 @@ h4 { font-size: var(--fs-sm); }
   text-shadow: 0 0 2px rgba(255, 255, 255, 0.7);
 }
 
-/* This page's toolbar row (counts + Compare/Clear/Archive). Same 0.5rem to
-   the table as `.dataList__toolbar` leaves, so its list sits as tight as
-   every DataList — this table is hand-rolled and does not get that for free. */
+/* The runs list's toolbar content (counts + Compare/Clear/Archive). It sits
+   inside `.dataList__toolbar`, which owns the spacing — the margin reset below
+   with the other toolbar contents is what keeps this page's gap uniform. */
 .appDetailChips {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 0.6rem;
-  margin: 0.4rem 0 0.5rem;
 }
 /* Action chips (Compare Results / Clear) reuse the chip shell so they
    sit visually paired with Total runs / Active instead of breaking
@@ -3442,7 +3441,8 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
 }
 /* The filter owns the left of that row and stops carrying its own margins. */
 .dataList__toolbar > .appListToolbar,
-.dataList__toolbar > .runsToolbar { margin: 0; flex: 1 1 auto; }
+.dataList__toolbar > .runsToolbar,
+.dataList__toolbar > .appDetailChips { margin: 0; flex: 1 1 auto; }
 .dataList__bulk { display: flex; align-items: center; gap: 0.4rem; margin-left: auto; }
 .dataList__bulkCount { font-size: var(--fs-sm); color: var(--ink-soft); }
 
@@ -5115,6 +5115,9 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
 .aiPanel__actions {
   display: flex;
   gap: 0.4rem;
+  /* Copy + Re-evaluate + close can outgrow the side column's width. */
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .aiPanel__loading {
   margin: 0.6rem 0 0;
@@ -5153,6 +5156,20 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
   line-height: 1.45;
 }
 .aiPanel__findingDetail {
+  color: var(--ink-soft);
+}
+/* The figure a finding rests on — quieter than the claim, but checkable. */
+.aiPanel__findingEvidence {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+/* Says what the analysis covered — the charts beside it may show a narrower range. */
+.aiPanel__scope {
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
   color: var(--ink-soft);
 }
 .aiPanel__meta {

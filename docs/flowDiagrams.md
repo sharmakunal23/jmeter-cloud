@@ -19,6 +19,7 @@ prose only says what a diagram cannot.
 Solid arrows are requests, dashed arrows are replies; every line into `DB` is persistence.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#eff6ff','primaryBorderColor':'#2563eb','primaryTextColor':'#0f172a','lineColor':'#94a3b8','fontFamily':'Segoe UI, Helvetica, Arial, sans-serif'}}}%%
 sequenceDiagram
     autonumber
     participant U  as Browser (UI)
@@ -83,6 +84,7 @@ Dynamic workers in a routed region never call the hub. The kubelet is the
 liveness truth, read once per region per tick:
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#eff6ff','primaryBorderColor':'#2563eb','primaryTextColor':'#0f172a','lineColor':'#94a3b8','fontFamily':'Segoe UI, Helvetica, Arial, sans-serif'}}}%%
 sequenceDiagram
     autonumber
     participant GO as global-orchestrator<br/>(WorkerLivenessProbe, every 15 s)
@@ -112,6 +114,7 @@ sequenceDiagram
 Operator-declared (static or direct-region) workers keep the heartbeat model:
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#eff6ff','primaryBorderColor':'#2563eb','primaryTextColor':'#0f172a','lineColor':'#94a3b8','fontFamily':'Segoe UI, Helvetica, Arial, sans-serif'}}}%%
 sequenceDiagram
     autonumber
     participant LO as local-orchestrator pod<br/>(PodRegistrar bean)
@@ -241,6 +244,7 @@ A worker gets its artifacts one of two ways, set by `ARTIFACT_SOURCE`:
 `DOCUMENT_SERVICE` (pulled by blobId). Either way JMeter reads from local disk.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#eff6ff','primaryBorderColor':'#2563eb','primaryTextColor':'#0f172a','lineColor':'#94a3b8','fontFamily':'Segoe UI, Helvetica, Arial, sans-serif'}}}%%
 flowchart LR
     U["Browser / CLI"]
 
@@ -275,6 +279,7 @@ One pod's state machine. `RunService.refreshAndGet` rolls many of these up into
 the run-level state.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#eff6ff','primaryBorderColor':'#2563eb','primaryTextColor':'#0f172a','lineColor':'#94a3b8','fontFamily':'Segoe UI, Helvetica, Arial, sans-serif'}}}%%
 stateDiagram-v2
     [*] --> IDLE
     IDLE --> PREPARING: POST /api/v1/test
@@ -310,6 +315,7 @@ nginx routes every API call to the right backend, so the browser only ever
 talks to one origin.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#eff6ff','primaryBorderColor':'#2563eb','primaryTextColor':'#0f172a','lineColor':'#94a3b8','fontFamily':'Segoe UI, Helvetica, Arial, sans-serif'}}}%%
 flowchart LR
     B["Browser<br/>http://localhost:8086"]
 

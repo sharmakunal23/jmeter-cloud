@@ -6,6 +6,7 @@ import com.perf.globalorchestrator.domain.CompareInsights;
 import com.perf.globalorchestrator.domain.MetricsTimeseries;
 import com.perf.globalorchestrator.domain.Run;
 import com.perf.globalorchestrator.domain.RunInsights;
+import com.perf.globalorchestrator.domain.RunSummary;
 import com.perf.globalorchestrator.repo.MetricsTimeseriesRepository;
 import com.perf.globalorchestrator.repo.AiResponseRepository;
 import com.perf.globalorchestrator.repo.AiResponseRepository.CachedAiResponse;
@@ -28,45 +29,62 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * AI-1 / AI-2 — composes prompts, calls {@link AiClient},
- * and serves the durable {@code aiResponse} cache for single-run insights and
- * two-run comparison narratives.
+ * Composes the run digest Claude reads, calls {@link AiClient}, and serves the
+ * durable {@code aiResponse} cache for single-run insights and two-run
+ * comparison narratives.
  *
- * <p>Inputs reuse the existing (already terminal-cached) surfaces:
- * {@link CachingMetricsService#timeseries} and {@link CachingMetricsService#rollupByLabel}.
+ * <p>Two rules the digest exists to enforce. <b>Every aggregate comes from
+ * {@link CachingMetricsService#summary}</b>, which is throughput-weighted in
+ * SQL — averaging the bucket arrays here instead would weight a 5-sample bucket
+ * like a 5,000-sample one and quietly misreport every ramping run. And
+ * <b>{@code statusCodes} are per-second rates, not counts</b>
+ * ({@code MetricsTimeseriesRepository.series}), so a total is
+ * {@code Σ rate × bucketSize} — summing them raw under-reports by 15-60× and
+ * rounding each point first drops any code below 0.5/s to zero.
  *
  * <p>Cache discipline matches the rest of the platform: only TERMINAL runs are
  * persisted (an active run's inputs are still moving, so its summary would go
- * stale). A cache hit costs no quota and no Claude bill; {@code fresh=true}
- * bypasses the cache to re-bill (for a second angle, or after a prompt tweak).
+ * stale), and only a response that actually parsed. A cache hit costs no quota
+ * and no Claude bill; {@code fresh=true} bypasses the cache to re-bill.
  */
 @Service
 public class AiInsightsService {
 
     private static final Logger LOG = LoggerFactory.getLogger(AiInsightsService.class);
 
-    // v2 (2026-05-31): inputs became a COMPACT DIGEST (aggregates + downsample +
-    // top-N labels) instead of the full 15-second timeseries — ~56k → ~1-5k
-    // input tokens. v3 (2026-05-31): prompt forbids exposing "bucket" indices in
-    // the output (it's just the input encoding) and tells the model to phrase
-    // timing as elapsed wall time via bucketSec. Each bump invalidates the prior
-    // cache so summaries regenerate with the new behaviour.
-    static final String PROMPT_VERSION = "v3";
+    /**
+     * Bump on ANY change to the digest or the prompts — the cache key carries
+     * this and nothing else about the inputs, so a digest fix that forgets it
+     * ships to nobody: every terminal run keeps serving the summary generated
+     * from the old, wrong numbers for the rest of the 30-day TTL.
+     *
+     * <p>v4 (2026-08-31): aggregates come from the throughput-weighted
+     * {@code RunSummary} instead of unweighted bucket means; {@code statusTotals}
+     * corrected from rates to counts; per-label carries both error meters; p95
+     * added to the shape and p90/p95/p99 to the totals; peaks carry their
+     * elapsed time so the model never does index arithmetic; comparison gained a
+     * per-label delta table. v5 (2026-08-31): elapsed time is phrased in
+     * minutes or hours past two minutes — a verified reply said "at ~870 s".
+     */
+    static final String PROMPT_VERSION = "v5";
     static final String KIND_RUN = "runInsights";
     static final String KIND_COMPARE = "compareInsights";
 
     // Shape resolution scales with run duration (then clamps), so a short run
-    // stays cheap and a long run gets fine-grained buckets — the sweet spot the
-    // operator asked for (~5-8k input tokens for an 8 h test; short runs far
-    // less). One bucket per ~30 s, floored at 30 and capped at 720:
-    //   8 h  → 28800/30 = 960 → capped 720 (~40 s resolution) ≈ ~4-5k tokens.
+    // stays cheap and a long run keeps fine-grained buckets. One bucket per
+    // ~30 s, floored at 30 and capped at 720:
+    //   8 h  → 28800/30 = 960 → capped 720 (~40 s resolution).
     //   1 h  → 120 buckets (~30 s resolution).
-    //   5 m  → floored to 30 buckets (~10 s resolution).
+    //   5 m  → floored to 30 buckets, then bounded by the points that exist.
     private static final int MIN_SHAPE_BUCKETS = 30;
     private static final int MAX_SHAPE_BUCKETS = 720;
     private static final int TARGET_BUCKET_SEC = 30;
-    /** Top labels by throughput included in the digest (most plans have fewer than this). */
-    private static final int TOP_LABELS = 25;
+    /** Labels included in the digest, busiest first; {@code perLabelTotal} tells the model what it did not see. */
+    private static final int TOP_LABELS = 40;
+    /** Labels in the comparison's per-label delta table — the join the model would otherwise do by hand. */
+    private static final int TOP_LABEL_DELTAS = 20;
+    /** Cap on the "only in one run" name lists, so a renamed plan cannot flood the prompt. */
+    private static final int MAX_ONLY_IN = 20;
 
     /** A cache miss costs a Claude bill (not just a query), so the TTL is long. */
     static final Duration TTL = Duration.ofDays(30);
@@ -93,8 +111,8 @@ public class AiInsightsService {
         this.quota = quota;
         this.cache = cache;
         this.mapper = mapper;
-        this.runSystemPrompt = loadPrompt("prompts/runInsights.v3.txt");
-        this.compareSystemPrompt = loadPrompt("prompts/compareInsights.v3.txt");
+        this.runSystemPrompt = loadPrompt("prompts/runInsights." + PROMPT_VERSION + ".txt");
+        this.compareSystemPrompt = loadPrompt("prompts/compareInsights." + PROMPT_VERSION + ".txt");
     }
 
     // ── AI-1: single-run insights ────────────────────────────────────────
@@ -107,7 +125,7 @@ public class AiInsightsService {
      */
     public RunInsights runInsights(String runId, boolean fresh) {
         Run run = runs.getRun(runId);   // 404s on unknown
-        boolean terminal = run.state() != null && run.state().isTerminal();
+        boolean terminal = isTerminal(run);
 
         if (terminal && !fresh) {
             Optional<CachedAiResponse> hit = cache.find(KIND_RUN, runId, PROMPT_VERSION, TTL);
@@ -120,14 +138,14 @@ public class AiInsightsService {
         requireEnabled();
         String userPrompt = buildRunUserPrompt(run,
                 metrics.timeseries(runId, run.state(), false, null),
+                metrics.summary(runId, run.state(), null),
                 metrics.rollupByLabel(runId, run.state(), null, null, MetricsTimeseriesRepository.LABELS_ALL));
         quota.acquire();
-        AiResult result = ai.complete(runSystemPrompt, userPrompt);
+        AiResult result = ai.complete(runSystemPrompt, userPrompt, runResponseSchema());
 
         ParsedRun parsed = parseRunResponse(result.text());
-        String storedJson = writeStored(parsed.summary(), parsed.findings());
-        if (terminal) {
-            cache.upsert(KIND_RUN, runId, PROMPT_VERSION, storedJson,
+        if (terminal && parsed.structured()) {
+            cache.upsert(KIND_RUN, runId, PROMPT_VERSION, writeStored(parsed.summary(), parsed.findings()),
                     ai.model(), result.tokensIn(), result.tokensOut());
         }
         return new RunInsights(runId, ai.model(), PROMPT_VERSION,
@@ -159,16 +177,13 @@ public class AiInsightsService {
         }
 
         requireEnabled();
-        String userPrompt = buildCompareUserPrompt(
-                runA, metrics.timeseries(idA, runA.state(), false, null),
-                runB, metrics.timeseries(idB, runB.state(), false, null));
+        String userPrompt = buildCompareUserPrompt(runA, runB);
         quota.acquire();
-        AiResult result = ai.complete(compareSystemPrompt, userPrompt);
+        AiResult result = ai.complete(compareSystemPrompt, userPrompt, compareResponseSchema());
 
         ParsedCompare parsed = parseCompareResponse(result.text());
-        String storedJson = writeStored(parsed.summary(), parsed.findings());
-        if (bothTerminal) {
-            cache.upsert(KIND_COMPARE, cacheKey, PROMPT_VERSION, storedJson,
+        if (bothTerminal && parsed.structured()) {
+            cache.upsert(KIND_COMPARE, cacheKey, PROMPT_VERSION, writeStored(parsed.summary(), parsed.findings()),
                     ai.model(), result.tokensIn(), result.tokensOut());
         }
         return new CompareInsights(List.of(idA, idB), ai.model(), PROMPT_VERSION,
@@ -197,35 +212,49 @@ public class AiInsightsService {
 
     // ── prompt assembly ────────────────────────────────────────────────────
 
-    private String buildRunUserPrompt(Run run, MetricsTimeseries ts, List<Map<String, Object>> rollup) {
-        Map<String, Object> digest = seriesDigest(run, ts);
-        digest.put("statusTotals", statusTotals(ts.series().statusCodes()));
+    String buildRunUserPrompt(Run run, MetricsTimeseries ts, RunSummary summary,
+                              List<Map<String, Object>> rollup) {
+        Map<String, Object> digest = runDigest(run, ts, summary);
+        digest.put("statusTotals", statusTotals(ts.series().statusCodes(), ts.bucketSize()));
+        digest.put("perLabelTotal", rollup == null ? 0 : rollup.size());
+        digest.put("perLabelShown", Math.min(TOP_LABELS, rollup == null ? 0 : rollup.size()));
         digest.put("perLabel", topLabels(rollup));
         return "Run digest (JSON):\n\n" + toJson(digest)
                 + "\n\nRespond with the JSON object as instructed.";
     }
 
-    private String buildCompareUserPrompt(Run runA, MetricsTimeseries tsA,
-                                          Run runB, MetricsTimeseries tsB) {
+    private String buildCompareUserPrompt(Run runA, Run runB) {
+        List<Map<String, Object>> rollupA = metrics.rollupByLabel(runA.runId(), runA.state(), null, null,
+                MetricsTimeseriesRepository.LABELS_ALL);
+        List<Map<String, Object>> rollupB = metrics.rollupByLabel(runB.runId(), runB.state(), null, null,
+                MetricsTimeseriesRepository.LABELS_ALL);
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("runA", seriesDigest(runA, tsA));
-        payload.put("runB", seriesDigest(runB, tsB));
+        payload.put("runA", compareSide(runA));
+        payload.put("runB", compareSide(runB));
+        payload.putAll(labelDeltas(rollupA, rollupB));
         return "Digests for the two runs (JSON):\n\n" + toJson(payload)
                 + "\n\nRespond with the JSON object as instructed.";
     }
 
+    /** One run's half of a comparison: the same digest, plus its status totals. */
+    private Map<String, Object> compareSide(Run run) {
+        MetricsTimeseries ts = metrics.timeseries(run.runId(), run.state(), false, null);
+        Map<String, Object> d = runDigest(run, ts, metrics.summary(run.runId(), run.state(), null));
+        d.put("statusTotals", statusTotals(ts.series().statusCodes(), ts.bucketSize()));
+        return d;
+    }
+
     /**
-     * Compact, token-cheap digest of a run's headline metrics: a few aggregates
-     * plus a duration-scaled downsample of each series (finer for long runs,
-     * coarse for short ones) so Claude can read the shape without us shipping
-     * every 15-second point. The raw timeseries is ~20-80× larger and adds no
-     * analytical value at summary altitude.
+     * The run's headline numbers plus a duration-scaled downsample of each
+     * series, so Claude can read the shape without every 15-second point.
+     *
+     * <p>{@code totals} is the throughput-weighted SQL aggregate — never a mean
+     * of the arrays below it. {@code peaks} carry their elapsed offset
+     * ({@code atSec}) because asking the model to multiply an array index by
+     * {@code bucketSec} is the step it gets wrong.
      */
-    private Map<String, Object> seriesDigest(Run run, MetricsTimeseries ts) {
+    private Map<String, Object> runDigest(Run run, MetricsTimeseries ts, RunSummary summary) {
         MetricsTimeseries.Series s = ts.series();
-        List<MetricsTimeseries.TimeseriesPoint> tps = s.tps();
-        List<MetricsTimeseries.TimeseriesPoint> rt = s.avgRtMs();
-        List<MetricsTimeseries.TimeseriesPoint> err = s.errorPct();
         long durationSec = durationSeconds(ts);
 
         Map<String, Object> meta = new LinkedHashMap<>();
@@ -235,39 +264,113 @@ public class AiInsightsService {
         meta.put("durationSec", durationSec);
         meta.put("fleetSize", run.fleetMembers() == null ? 0 : run.fleetMembers().size());
 
-        int buckets = shapeBuckets(durationSec, tps.size());
+        int buckets = shapeBuckets(durationSec, s.tps().size());
+        long bucketSec = buckets > 0 ? Math.max(1, durationSec / buckets) : durationSec;
+        List<Number> tps = downsample(s.tps(), buckets, 1);
+        List<Number> rt = downsample(s.avgRtMs(), buckets, 0);
+        List<Number> p95 = downsample(s.p95Ms(), buckets, 0);
+        List<Number> err = downsample(s.errorPct(), buckets, 2);
+
         Map<String, Object> shape = new LinkedHashMap<>();
         shape.put("buckets", buckets);
-        shape.put("bucketSec", buckets > 0 ? Math.max(1, durationSec / buckets) : durationSec);
-        shape.put("tps", downsample(tps, buckets, 1));
-        shape.put("avgRtMs", downsample(rt, buckets, 0));
-        shape.put("errorPct", downsample(err, buckets, 2));
+        shape.put("bucketSec", bucketSec);
+        shape.put("tps", tps);
+        shape.put("avgRtMs", rt);
+        shape.put("p95Ms", p95);
+        shape.put("errorPct", err);
+
+        Map<String, Object> peaks = new LinkedHashMap<>();
+        putPeak(peaks, "tps", tps, bucketSec);
+        putPeak(peaks, "avgRtMs", rt, bucketSec);
+        putPeak(peaks, "p95Ms", p95, bucketSec);
+        putPeak(peaks, "errorPct", err, bucketSec);
 
         Map<String, Object> d = new LinkedHashMap<>();
         d.put("run", meta);
-        d.put("avgTps", round(avg(tps), 1));
-        d.put("peakTps", round(max(tps), 1));
-        d.put("avgRtMs", round(avg(rt), 0));
-        d.put("avgErrorPct", round(avg(err), 2));
-        d.put("peakErrorPct", round(max(err), 2));
+        Map<String, Object> totals = totals(summary);
+        if (!totals.isEmpty()) {
+            d.put("totals", totals);
+        }
+        List<Map<String, Object>> byApp = byApplication(summary);
+        if (!byApp.isEmpty()) {
+            d.put("byApplication", byApp);
+        }
+        d.put("peaks", peaks);
         d.put("shape", shape);
         return d;
     }
 
-    /** Sum each status code's per-second counts into one small totals map. */
-    private Map<String, Long> statusTotals(Map<String, List<MetricsTimeseries.TimeseriesPoint>> codes) {
+    /**
+     * The run's aggregate, straight from the {@code GROUP BY ROLLUP} statement
+     * behind {@code GET /runs/{id}/summary}: throughput-weighted, so it is the
+     * run's real mean rather than a mean of bucket means. Empty when no rows
+     * landed — the prompt treats a missing {@code totals} as "no data".
+     */
+    private static Map<String, Object> totals(RunSummary summary) {
+        if (summary == null || summary.total() == null || summary.total().samples() == 0) {
+            return Map.of();
+        }
+        RunSummary.Stats t = summary.total();
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("samples", t.samples());
+        m.put("httpErrors", t.errors());
+        m.put("httpErrorPct", round(t.errorPct(), 2));
+        m.put("tps", round(t.tps(), 1));
+        m.put("avgMs", round(t.avgMs(), 0));
+        m.put("p90Ms", round(t.p90Ms(), 0));
+        m.put("p95Ms", round(t.p95Ms(), 0));
+        m.put("p99Ms", round(t.p99Ms(), 0));
+        m.put("maxMs", round(t.maxMs(), 0));
+        m.put("maxThreads", t.maxActiveThreads());
+        return m;
+    }
+
+    /** Per-application split, only when the run actually spans more than one. */
+    private static List<Map<String, Object>> byApplication(RunSummary summary) {
+        if (summary == null || summary.byApplication() == null || summary.byApplication().size() < 2) {
+            return List.of();
+        }
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (RunSummary.Stats a : summary.byApplication()) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("application", a.application());
+            m.put("samples", a.samples());
+            m.put("httpErrorPct", round(a.errorPct(), 2));
+            m.put("avgMs", round(a.avgMs(), 0));
+            m.put("p95Ms", round(a.p95Ms(), 0));
+            out.add(m);
+        }
+        return out;
+    }
+
+    /**
+     * Total requests per HTTP class. The series carries per-second <b>rates</b>
+     * ({@code count / bucketSize}), so the count is {@code Σ rate × bucketSize}
+     * and the rounding happens once, at the end — rounding each point first
+     * floors any class below 0.5/s to zero, which reads as "no 5xx" on a run
+     * that had thousands.
+     */
+    static Map<String, Long> statusTotals(Map<String, List<MetricsTimeseries.TimeseriesPoint>> codes,
+                                          int bucketSeconds) {
         Map<String, Long> totals = new LinkedHashMap<>();
         if (codes == null) return totals;
+        int g = Math.max(1, bucketSeconds);
         for (var e : codes.entrySet()) {
-            long sum = 0;
-            for (var p : e.getValue()) sum += Math.round(p.v());
-            totals.put(e.getKey(), sum);
+            double sum = 0;
+            for (var p : e.getValue()) sum += p.v();
+            totals.put(e.getKey(), Math.round(sum * g));
         }
         return totals;
     }
 
-    /** Top {@value #TOP_LABELS} labels by throughput, rounded — the prompt notes this is not exhaustive. */
-    private List<Map<String, Object>> topLabels(List<Map<String, Object>> rollup) {
+    /**
+     * The {@value #TOP_LABELS} busiest labels. Both error meters travel together
+     * on purpose: {@code httpErrorPct} is 4xx+5xx (what every run-level figure
+     * means) and {@code jmeterErrorPct} is JMeter's success flag, so a gap
+     * between them is assertions failing on 2xx responses — invisible if only
+     * one is sent, and actively misleading if the two are mixed under one name.
+     */
+    private static List<Map<String, Object>> topLabels(List<Map<String, Object>> rollup) {
         if (rollup == null) return List.of();
         return rollup.stream()
                 .sorted((a, b) -> Long.compare(asLong(b.get("totalThroughput")), asLong(a.get("totalThroughput"))))
@@ -275,9 +378,13 @@ public class AiInsightsService {
                 .map(r -> {
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("label", r.get("label"));
-                    m.put("throughput", asLong(r.get("totalThroughput")));
-                    m.put("errorPct", round(asDouble(r.get("errorRate")) * 100.0, 2));
+                    m.put("application", r.get("application"));
+                    m.put("samples", asLong(r.get("totalThroughput")));
+                    m.put("tps", round(asDouble(r.get("throughputRps")), 2));
+                    m.put("httpErrorPct", round(asDouble(r.get("httpErrorRate")) * 100.0, 2));
+                    m.put("jmeterErrorPct", round(asDouble(r.get("errorRate")) * 100.0, 2));
                     m.put("p50", round(asDouble(r.get("avgP50Ms")), 0));
+                    m.put("p90", round(asDouble(r.get("avgP90Ms")), 0));
                     m.put("p95", round(asDouble(r.get("avgP95Ms")), 0));
                     m.put("p99", round(asDouble(r.get("avgP99Ms")), 0));
                     m.put("maxMs", asLong(r.get("maxMs")));
@@ -287,6 +394,66 @@ public class AiInsightsService {
                 .toList();
     }
 
+    /**
+     * Per-label A-vs-B rows for the comparison, plus the labels that exist on
+     * only one side. Joining two 40-row label lists by name is mechanical work
+     * the model gets wrong, so it is done here.
+     */
+    static Map<String, Object> labelDeltas(List<Map<String, Object>> rollupA, List<Map<String, Object>> rollupB) {
+        Map<String, Map<String, Object>> byLabelA = byLabel(rollupA);
+        Map<String, Map<String, Object>> byLabelB = byLabel(rollupB);
+
+        List<Map<String, Object>> rows = new ArrayList<>();
+        List<String> onlyInA = new ArrayList<>();
+        for (var e : byLabelA.entrySet()) {
+            Map<String, Object> b = byLabelB.get(e.getKey());
+            if (b == null) {
+                if (onlyInA.size() < MAX_ONLY_IN) onlyInA.add(e.getKey());
+                continue;
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("label", e.getKey());
+            row.put("a", side(e.getValue()));
+            row.put("b", side(b));
+            rows.add(row);
+        }
+        rows.sort((x, y) -> Long.compare(sideSamples(y), sideSamples(x)));
+        List<String> onlyInB = byLabelB.keySet().stream()
+                .filter(k -> !byLabelA.containsKey(k)).limit(MAX_ONLY_IN).toList();
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("labelDeltas", rows.size() > TOP_LABEL_DELTAS ? rows.subList(0, TOP_LABEL_DELTAS) : rows);
+        if (!onlyInA.isEmpty()) out.put("labelsOnlyInA", onlyInA);
+        if (!onlyInB.isEmpty()) out.put("labelsOnlyInB", onlyInB);
+        return out;
+    }
+
+    private static Map<String, Map<String, Object>> byLabel(List<Map<String, Object>> rollup) {
+        Map<String, Map<String, Object>> m = new LinkedHashMap<>();
+        if (rollup == null) return m;
+        for (Map<String, Object> r : rollup) {
+            Object label = r.get("label");
+            if (label != null) m.putIfAbsent(String.valueOf(label), r);
+        }
+        return m;
+    }
+
+    private static Map<String, Object> side(Map<String, Object> r) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("samples", asLong(r.get("totalThroughput")));
+        m.put("tps", round(asDouble(r.get("throughputRps")), 2));
+        m.put("httpErrorPct", round(asDouble(r.get("httpErrorRate")) * 100.0, 2));
+        m.put("p95", round(asDouble(r.get("avgP95Ms")), 0));
+        m.put("p99", round(asDouble(r.get("avgP99Ms")), 0));
+        return m;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static long sideSamples(Map<String, Object> row) {
+        Object a = row.get("a");
+        return a instanceof Map<?, ?> m ? asLong(((Map<String, Object>) m).get("samples")) : 0L;
+    }
+
     // ── digest math ────────────────────────────────────────────────────────
 
     /**
@@ -294,23 +461,31 @@ public class AiInsightsService {
      * run, clamped to [{@value #MIN_SHAPE_BUCKETS}, {@value #MAX_SHAPE_BUCKETS}]
      * and never more than the points we actually have (no upsampling).
      */
-    private static int shapeBuckets(long durationSec, int availablePoints) {
+    static int shapeBuckets(long durationSec, int availablePoints) {
         if (availablePoints <= 0) return 0;
         long target = Math.round(durationSec / (double) TARGET_BUCKET_SEC);
         int clamped = (int) Math.max(MIN_SHAPE_BUCKETS, Math.min(MAX_SHAPE_BUCKETS, target));
         return Math.min(clamped, availablePoints);
     }
 
-    private static long durationSeconds(MetricsTimeseries ts) {
+    /**
+     * Wall-clock length of the range the series covers. {@code fromSecond} and
+     * {@code toSecond} are bucket <b>starts</b>, so the last bucket contributes
+     * its own width — {@code to - from} alone is short by one bucket, and that
+     * error lands straight in {@code bucketSec}, which the prompt uses for every
+     * elapsed-time statement.
+     */
+    static long durationSeconds(MetricsTimeseries ts) {
+        int g = Math.max(1, ts.bucketSize());
         Long from = ts.fromSecond(), to = ts.toSecond();
-        if (from != null && to != null && to >= from) return to - from + 1;
-        return (long) ts.series().tps().size() * Math.max(1, ts.bucketSize());
+        if (from != null && to != null && to >= from) return to - from + g;
+        return (long) ts.series().tps().size() * g;
     }
 
     /** Even-width downsample to {@code buckets} points, averaging each slice, rounded. */
-    private static List<Number> downsample(List<MetricsTimeseries.TimeseriesPoint> pts, int buckets, int decimals) {
+    static List<Number> downsample(List<MetricsTimeseries.TimeseriesPoint> pts, int buckets, int decimals) {
         List<Number> out = new ArrayList<>(Math.max(0, buckets));
-        int n = pts.size();
+        int n = pts == null ? 0 : pts.size();
         if (n == 0 || buckets <= 0) return out;
         for (int b = 0; b < buckets; b++) {
             int start = (int) ((long) b * n / buckets);
@@ -327,21 +502,31 @@ public class AiInsightsService {
         return out;
     }
 
-    private static double avg(List<MetricsTimeseries.TimeseriesPoint> pts) {
-        if (pts.isEmpty()) return 0;
-        double sum = 0;
-        for (var p : pts) sum += p.v();
-        return sum / pts.size();
+    /**
+     * The series' maximum and the elapsed second it happened at. Read off the
+     * <b>downsampled</b> arrays, not the raw 15-second windows: one thin window
+     * with 2 samples and 1 error is a 50% spike that no chart shows and no
+     * operator can act on.
+     */
+    static void putPeak(Map<String, Object> into, String key, List<Number> series, long bucketSec) {
+        int idx = -1;
+        double best = 0;
+        for (int i = 0; i < series.size(); i++) {
+            double v = series.get(i).doubleValue();
+            if (idx < 0 || v > best) {
+                best = v;
+                idx = i;
+            }
+        }
+        if (idx < 0) return;
+        Map<String, Object> peak = new LinkedHashMap<>();
+        peak.put("v", series.get(idx));
+        peak.put("atSec", idx * bucketSec);
+        into.put(key, peak);
     }
 
-    private static double max(List<MetricsTimeseries.TimeseriesPoint> pts) {
-        double m = 0;
-        for (var p : pts) if (p.v() > m) m = p.v();
-        return m;
-    }
-
-    /** Round to {@code decimals}; 0 decimals returns a Long so the JSON has no ".0" noise. */
     private static Number round(double v, int decimals) {
+        if (!Double.isFinite(v)) return 0L;
         if (decimals <= 0) return Math.round(v);
         double f = Math.pow(10, decimals);
         return Math.round(v * f) / f;
@@ -355,14 +540,62 @@ public class AiInsightsService {
         return o instanceof Number n ? n.doubleValue() : 0.0;
     }
 
+    // ── response schema (structured outputs) ────────────────────────────────
+
+    /** The reply shape for AI-1, sent as {@code output_config.format}. */
+    static Map<String, Object> runResponseSchema() {
+        return object(
+                List.of("summary", "findings"),
+                Map.of("summary", Map.of("type", "string"),
+                        "findings", Map.of(
+                                "type", "array",
+                                "items", object(
+                                        List.of("severity", "title", "detail", "evidence"),
+                                        Map.of("severity", Map.of("type", "string",
+                                                        "enum", List.of("info", "warn", "crit")),
+                                                "title", Map.of("type", "string"),
+                                                "detail", Map.of("type", "string"),
+                                                "evidence", Map.of("type", "string"))))));
+    }
+
+    /** The reply shape for AI-2, sent as {@code output_config.format}. */
+    static Map<String, Object> compareResponseSchema() {
+        return object(
+                List.of("summary", "findings"),
+                Map.of("summary", Map.of("type", "string"),
+                        "findings", Map.of(
+                                "type", "array",
+                                "items", object(
+                                        List.of("metric", "verdict", "delta", "detail", "evidence"),
+                                        Map.of("metric", Map.of("type", "string"),
+                                                "verdict", Map.of("type", "string",
+                                                        "enum", List.of("regression", "improvement",
+                                                                "no significant change")),
+                                                "delta", Map.of("type", "string"),
+                                                "detail", Map.of("type", "string"),
+                                                "evidence", Map.of("type", "string"))))));
+    }
+
+    private static Map<String, Object> object(List<String> required, Map<String, Object> properties) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("type", "object");
+        m.put("additionalProperties", false);
+        m.put("required", required);
+        m.put("properties", properties);
+        return m;
+    }
+
     // ── response parsing (tolerant) ─────────────────────────────────────────
 
-    private ParsedRun parseRunResponse(String text) {
+    /**
+     * {@code structured} is false when the reply was not recoverable JSON and
+     * the raw text became the summary — a fallback that must never reach the
+     * cache, or one malformed answer is what the operator sees for 30 days.
+     */
+    ParsedRun parseRunResponse(String text) {
         JsonNode root = tryParseJsonObject(text);
         if (root == null) {
-            // Model didn't return parseable JSON — surface its text as the
-            // summary rather than wasting the paid call.
-            return new ParsedRun(text.strip(), List.of());
+            return new ParsedRun(text == null ? "" : text.strip(), List.of(), false);
         }
         String summary = root.path("summary").asText("");
         List<RunInsights.Finding> findings = new ArrayList<>();
@@ -370,15 +603,16 @@ public class AiInsightsService {
             findings.add(new RunInsights.Finding(
                     normalizeSeverity(f.path("severity").asText("info")),
                     f.path("title").asText(""),
-                    f.path("detail").asText("")));
+                    f.path("detail").asText(""),
+                    f.path("evidence").asText("")));
         }
-        return new ParsedRun(summary.isBlank() ? text.strip() : summary, findings);
+        return new ParsedRun(summary.isBlank() ? text.strip() : summary, findings, true);
     }
 
-    private ParsedCompare parseCompareResponse(String text) {
+    ParsedCompare parseCompareResponse(String text) {
         JsonNode root = tryParseJsonObject(text);
         if (root == null) {
-            return new ParsedCompare(text.strip(), List.of());
+            return new ParsedCompare(text == null ? "" : text.strip(), List.of(), false);
         }
         String summary = root.path("summary").asText("");
         List<CompareInsights.CompareFinding> findings = new ArrayList<>();
@@ -386,9 +620,11 @@ public class AiInsightsService {
             findings.add(new CompareInsights.CompareFinding(
                     f.path("metric").asText(""),
                     f.path("verdict").asText(""),
-                    f.path("delta").asText("")));
+                    f.path("delta").asText(""),
+                    f.path("detail").asText(""),
+                    f.path("evidence").asText("")));
         }
-        return new ParsedCompare(summary.isBlank() ? text.strip() : summary, findings);
+        return new ParsedCompare(summary.isBlank() ? text.strip() : summary, findings, true);
     }
 
     /**
@@ -450,7 +686,8 @@ public class AiInsightsService {
             findings.add(new RunInsights.Finding(
                     f.path("severity").asText("info"),
                     f.path("title").asText(""),
-                    f.path("detail").asText("")));
+                    f.path("detail").asText(""),
+                    f.path("evidence").asText("")));
         }
         return new RunInsights(runId, row.model(), PROMPT_VERSION,
                 stored.path("summary").asText(""), findings,
@@ -464,7 +701,9 @@ public class AiInsightsService {
             findings.add(new CompareInsights.CompareFinding(
                     f.path("metric").asText(""),
                     f.path("verdict").asText(""),
-                    f.path("delta").asText("")));
+                    f.path("delta").asText(""),
+                    f.path("detail").asText(""),
+                    f.path("evidence").asText("")));
         }
         return new CompareInsights(List.of(idA, idB), row.model(), PROMPT_VERSION,
                 stored.path("summary").asText(""), findings,
@@ -505,7 +744,7 @@ public class AiInsightsService {
         }
     }
 
-    private record ParsedRun(String summary, List<RunInsights.Finding> findings) { }
+    record ParsedRun(String summary, List<RunInsights.Finding> findings, boolean structured) { }
 
-    private record ParsedCompare(String summary, List<CompareInsights.CompareFinding> findings) { }
+    record ParsedCompare(String summary, List<CompareInsights.CompareFinding> findings, boolean structured) { }
 }

@@ -1,91 +1,87 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 424" width="900" height="424"
-     font-family="-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
-  <defs>
-    <marker id="a" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L0,6 L7,3 z" fill="#64748b"/>
-    </marker>
-    <marker id="ag" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L0,6 L7,3 z" fill="#047857"/>
-    </marker>
-  </defs>
-  <rect width="900" height="424" fill="#fafaf9"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 662" width="960" height="662" role="img" aria-label="Service topology: the browser reaches nginx, which proxies to the global orchestrator and the document service. The global reaches workers only through each cluster's regional orchestrator. Workers POST metric windows to the consumer, and the global and the consumer are the only writers to the database.">
+    <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+        </marker>
+    </defs>
 
-  <rect x="16" y="30"  width="868" height="92"  rx="8" fill="none" stroke="#bfdbfe"/>
-  <rect x="16" y="140" width="868" height="136" rx="8" fill="none" stroke="#99f6e4"/>
-  <rect x="16" y="294" width="868" height="116" rx="8" fill="none" stroke="#a7f3d0"/>
-  <text x="28" y="46"  font-size="10" font-weight="600" fill="#1e3a8a" letter-spacing="1">CONTROL PLANE</text>
-  <text x="28" y="156" font-size="10" font-weight="600" fill="#115e59" letter-spacing="1">DATA PLANE</text>
-  <text x="28" y="310" font-size="10" font-weight="600" fill="#065f46" letter-spacing="1">DATA STORAGE</text>
+    <rect x="0" y="0" width="960" height="662" fill="#ffffff"/>
 
-  <!-- control plane -->
-  <rect x="32" y="58" width="94" height="46" rx="6" fill="#ffffff" stroke="#93c5fd"/>
-  <text x="79" y="79" font-size="12" font-weight="600" text-anchor="middle" fill="#1e3a8a">Browser</text>
-  <text x="79" y="94" font-size="10" text-anchor="middle" fill="#64748b">operator</text>
+    <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
 
-  <rect x="176" y="58" width="130" height="46" rx="6" fill="#ffffff" stroke="#93c5fd"/>
-  <text x="241" y="78" font-size="12" font-weight="600" text-anchor="middle" fill="#1e3a8a">jmeter-cloud-ui</text>
-  <text x="241" y="93" font-size="10" text-anchor="middle" fill="#64748b">nginx + React · 8086</text>
+        <text x="14" y="28" font-size="15" font-weight="700" fill="#0f172a">jmeter-cloud &#8212; service topology</text>
+        <text x="14" y="48" font-size="11" fill="#64748b">One control plane, a stateless arm in each data center, and two writers to the one database.</text>
 
-  <rect x="372" y="58" width="196" height="46" rx="6" fill="#dbeafe" stroke="#2563eb"/>
-  <text x="470" y="78" font-size="12" font-weight="600" text-anchor="middle" fill="#1e3a8a">global-orchestrator</text>
-  <text x="470" y="93" font-size="10" text-anchor="middle" fill="#475569">runs · capacity · registry · 8082</text>
+        <g font-size="10" font-weight="600" fill="#64748b" letter-spacing="1">
+            <text x="14" y="110">1 &#183; OPERATOR</text>
+            <text x="14" y="214">2 &#183; CONTROL</text>
+            <text x="14" y="308">3 &#183; DATA CENTER</text>
+            <text x="14" y="402">4 &#183; WORKERS</text>
+            <text x="14" y="506">5 &#183; INGEST</text>
+            <text x="14" y="600">6 &#183; STORAGE</text>
+        </g>
 
-  <line x1="126" y1="81" x2="172" y2="81" stroke="#64748b" stroke-width="1.4" marker-end="url(#a)"/>
-  <line x1="306" y1="81" x2="368" y2="81" stroke="#64748b" stroke-width="1.4" marker-end="url(#a)"/>
-  <text x="341" y="74" font-size="9" text-anchor="middle" fill="#475569">/api/*</text>
+        <g fill="none" stroke="#94a3b8" stroke-width="2">
+            <line x1="330" y1="106" x2="420" y2="106" marker-end="url(#arrow)"/>
+            <line x1="520" y1="132" x2="520" y2="158"/>
+            <line x1="520" y1="158" x2="810" y2="158"/>
+            <line x1="520" y1="158" x2="520" y2="184" marker-end="url(#arrow)"/>
+            <line x1="810" y1="158" x2="810" y2="184" marker-end="url(#arrow)"/>
+            <line x1="520" y1="236" x2="520" y2="278" marker-end="url(#arrow)"/>
+            <line x1="520" y1="330" x2="520" y2="372" marker-end="url(#arrow)"/>
+            <line x1="520" y1="424" x2="520" y2="450"/>
+            <line x1="520" y1="450" x2="810" y2="450"/>
+            <line x1="520" y1="450" x2="520" y2="476" marker-end="url(#arrow)"/>
+            <line x1="810" y1="450" x2="810" y2="236" marker-end="url(#arrow)"/>
+            <line x1="520" y1="528" x2="520" y2="570" marker-end="url(#arrow)"/>
+            <line x1="420" y1="222" x2="118" y2="222"/>
+            <line x1="118" y1="222" x2="118" y2="606"/>
+            <line x1="118" y1="606" x2="130" y2="606" marker-end="url(#arrow)"/>
+        </g>
 
-  <!-- data plane: the hub's arm sits above the workers it creates -->
-  <rect x="276" y="166" width="200" height="32" rx="6" fill="#ffffff" stroke="#93c5fd"/>
-  <text x="376" y="180" font-size="12" font-weight="600" text-anchor="middle" fill="#1e3a8a">regional-orchestrator</text>
-  <text x="376" y="193" font-size="10" text-anchor="middle" fill="#64748b">8088 · pods · liveness · relay</text>
+        <g font-size="11" fill="#64748b">
+            <text x="345" y="97">HTTPS</text>
+            <text x="530" y="176">/api/*</text>
+            <text x="820" y="176">/api/v1/blob/*</text>
+            <text x="530" y="261">/api/v1/pods &#183; /workers</text>
+            <text x="530" y="355">relays POST /test &#183; status</text>
+            <text x="820" y="440">plan &#183; results</text>
+            <text x="530" y="468">ingest &#183; every 15 s</text>
+            <text x="530" y="553">inserts &#183; first wins</text>
+            <text x="128" y="300">run state &#183; reads facts</text>
+        </g>
 
-  <rect x="20" y="212" width="172" height="52" rx="6" fill="#ccfbf1" stroke="#0f766e"/>
-  <text x="106" y="232" font-size="12" font-weight="600" text-anchor="middle" fill="#115e59">document-service</text>
-  <text x="106" y="247" font-size="10" text-anchor="middle" fill="#475569">plans · data · results · 8084</text>
+        <rect x="130" y="80" width="200" height="52" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="230" y="102" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">Browser</text>
+        <text x="230" y="119" text-anchor="middle" font-size="11" fill="#475569">operator</text>
 
-  <rect x="276" y="212" width="200" height="56" rx="6" fill="#ccfbf1" stroke="#0f766e"/>
-  <text x="376" y="229" font-size="12" font-weight="600" text-anchor="middle" fill="#115e59">local-orchestrator</text>
-  <text x="376" y="242" font-size="10" text-anchor="middle" fill="#475569">worker · 8080 · N per run</text>
-  <rect x="306" y="247" width="140" height="16" rx="4" fill="#ffffff" stroke="#5eead4"/>
-  <text x="376" y="259" font-size="10" text-anchor="middle" fill="#115e59">JMeter (child)</text>
+        <rect x="420" y="80" width="200" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+        <text x="520" y="102" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">jmeter-cloud-ui</text>
+        <text x="520" y="119" text-anchor="middle" font-size="11" fill="#475569">nginx + React &#183; 8086</text>
 
-  <rect x="600" y="212" width="150" height="52" rx="6" fill="#ccfbf1" stroke="#0f766e"/>
-  <text x="675" y="232" font-size="12" font-weight="600" text-anchor="middle" fill="#115e59">metrics-consumer</text>
-  <text x="675" y="247" font-size="10" text-anchor="middle" fill="#475569">ingest · 8083</text>
+        <rect x="420" y="184" width="200" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+        <text x="520" y="206" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">global-orchestrator</text>
+        <text x="520" y="223" text-anchor="middle" font-size="11" fill="#475569">runs &#183; capacity &#183; 8082</text>
 
-  <path d="M228,104 C210,140 160,176 130,208" stroke="#64748b" stroke-width="1.4" fill="none" marker-end="url(#a)"/>
-  <text x="176" y="180" font-size="9" text-anchor="start" fill="#475569">/api/v1/blob/*</text>
+        <rect x="710" y="184" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="810" y="206" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">document-service</text>
+        <text x="810" y="223" text-anchor="middle" font-size="11" fill="#475569">plans &#183; data &#183; results &#183; 8084</text>
 
-  <!-- global → regional (the only way the hub touches a data center) -->
-  <path d="M420,104 L420,162" stroke="#64748b" stroke-width="1.4" fill="none" marker-end="url(#a)"/>
-  <text x="412" y="130" font-size="9" text-anchor="end" fill="#475569">/api/v1/pods · /workers (liveness)</text>
-  <text x="412" y="141" font-size="9" text-anchor="end" fill="#475569">/workers/status · /workers/{pod}/…</text>
-  <!-- regional → worker -->
-  <path d="M376,200 L376,208" stroke="#64748b" stroke-width="1.4" fill="none" marker-end="url(#a)"/>
-  <text x="384" y="208" font-size="9" text-anchor="start" fill="#94a3b8">relays POST /test · status</text>
-  <!-- no worker → hub control traffic: the kubelet is the liveness truth -->
-  <text x="556" y="182" font-size="9" text-anchor="start" fill="#94a3b8">no heartbeats —</text>
-  <text x="556" y="193" font-size="9" text-anchor="start" fill="#94a3b8">the Pod list is liveness</text>
+        <rect x="420" y="278" width="200" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+        <text x="520" y="300" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">regional-orchestrator</text>
+        <text x="520" y="317" text-anchor="middle" font-size="11" fill="#475569">pods &#183; relay &#183; 8088</text>
 
-  <line x1="272" y1="238" x2="194" y2="238" stroke="#64748b" stroke-width="1.4" marker-end="url(#a)"/>
-  <text x="233" y="231" font-size="9" text-anchor="middle" fill="#475569">fetch · upload</text>
+        <rect x="420" y="372" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="520" y="394" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">local-orchestrator</text>
+        <text x="520" y="411" text-anchor="middle" font-size="11" fill="#475569">worker &#183; 8080 &#183; N per run</text>
 
-  <line x1="476" y1="244" x2="596" y2="244" stroke="#64748b" stroke-width="1.4" marker-end="url(#a)"/>
-  <text x="556" y="237" font-size="9" text-anchor="start" fill="#475569">ingest</text>
-  <text x="556" y="259" font-size="9" text-anchor="start" fill="#94a3b8">every 15 s</text>
+        <rect x="420" y="476" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="520" y="498" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">metrics-consumer</text>
+        <text x="520" y="515" text-anchor="middle" font-size="11" fill="#475569">ingest &#183; 8083</text>
 
-  <!-- data storage -->
-  <rect x="256" y="322" width="300" height="72" rx="6" fill="#d1fae5" stroke="#047857"/>
-  <text x="406" y="344" font-size="12" font-weight="600" text-anchor="middle" fill="#065f46">Database</text>
-  <text x="406" y="362" font-size="10" text-anchor="middle" fill="#475569">run state · pod registry · cache</text>
-  <text x="406" y="378" font-size="10" text-anchor="middle" fill="#475569">per-group fact tables</text>
+        <rect x="130" y="570" width="780" height="72" rx="8" fill="#f1f5f9" stroke="#334155" stroke-width="1.5"/>
+        <text x="520" y="600" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Database</text>
+        <text x="520" y="620" text-anchor="middle" font-size="11" fill="#475569">run state &#183; pod registry &#183; cache &#183; per-group fact tables</text>
 
-
-  <!-- orchestrator → Database, straight down the free corridor between worker and consumer -->
-  <path d="M548,104 L548,318" stroke="#047857" stroke-width="1.4" fill="none" marker-end="url(#ag)"/>
-  <text x="540" y="290" font-size="9" text-anchor="end" fill="#065f46">run state · reads facts</text>
-
-  <!-- metrics-consumer → Database -->
-  <path d="M640,268 L566,318" stroke="#047857" stroke-width="1.4" fill="none" marker-end="url(#ag)"/>
-  <text x="652" y="288" font-size="9" text-anchor="start" fill="#065f46">inserts, first wins</text>
+    </g>
 </svg>

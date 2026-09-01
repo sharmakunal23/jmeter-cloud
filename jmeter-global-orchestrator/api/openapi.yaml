@@ -980,11 +980,14 @@ paths:
       tags: [ai]
       summary: Generate AI insights for a single run (AI-1)
       description: |
-        Hands the run's metadata, timeseries, and per-label rollup to
-        Claude and returns a short summary plus 3–5 severity-tagged findings.
-        Advisory only. Terminal runs are cached in the durable `aiResponse`
-        table (no re-bill on reload); active runs are never cached (their inputs
-        are still moving). `?fresh=true` bypasses the cache and re-bills.
+        Hands a compact digest of the **whole run** — the throughput-weighted
+        aggregate, a downsampled shape, HTTP status totals and the busiest
+        labels — to Claude, and returns a short summary plus 2–5 severity-tagged
+        findings, each carrying the figure it rests on. Advisory only. Terminal
+        runs are cached in the durable `aiResponse` table (no re-bill on
+        reload); active runs are never cached (their inputs are still moving),
+        and neither is a reply that failed to parse. `?fresh=true` bypasses the
+        cache and re-bills.
       parameters:
         - name: fresh
           in: query
@@ -1008,7 +1011,10 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
         "502":
-          description: Upstream provider call failed (`AI_UPSTREAM_ERROR`).
+          description: |
+            Upstream provider call failed, or answered with a truncated or
+            declined reply (`AI_UPSTREAM_ERROR`). A partial answer is rejected
+            rather than stored — retry, or raise `AI_MAX_TOKENS`.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -1023,12 +1029,13 @@ paths:
       tags: [ai]
       summary: Explain the delta between two runs (AI-2)
       description: |
-        Hands both runs' timeseries to Claude and returns a comparison narrative
-        plus per-metric verdicts (regression / improvement / no significant
-        change). Mirrors the batch timeseries endpoint's strict exactly-2-distinct-ids
-        contract; both runs must exist (a missing run is a 404 — we refuse to
-        compare against nothing). Cached on the sorted pair for terminal runs;
-        `?fresh=true` bypasses + re-bills.
+        Hands both runs' digests plus a pre-joined per-label delta table to
+        Claude and returns a comparison narrative with per-metric verdicts
+        (regression / improvement / no significant change). Mirrors the batch
+        timeseries endpoint's strict exactly-2-distinct-ids contract; both runs
+        must exist (a missing run is a 404 — we refuse to compare against
+        nothing). Cached on the sorted pair for terminal runs; `?fresh=true`
+        bypasses + re-bills.
       parameters:
         - name: ids
           in: query
@@ -1064,7 +1071,10 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
         "502":
-          description: Upstream provider call failed (`AI_UPSTREAM_ERROR`).
+          description: |
+            Upstream provider call failed, or answered with a truncated or
+            declined reply (`AI_UPSTREAM_ERROR`). A partial answer is rejected
+            rather than stored — retry, or raise `AI_MAX_TOKENS`.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -4644,7 +4654,7 @@ components:
       description: AI feature probe — whether analysis is configured + which model.
       properties:
         enabled: { type: boolean, description: "True when an ANTHROPIC_API_KEY is configured server-side." }
-        model:   { type: string, description: "Model id the analysis endpoints use, e.g. claude-sonnet-4-6." }
+        model:   { type: string, description: "Model id the analysis endpoints use, e.g. claude-opus-5." }
 
     AiPingResponse:
       type: object
@@ -4663,9 +4673,10 @@ components:
       properties:
         runId:         { type: string }
         model:         { type: string }
-        promptVersion: { type: string, example: v1 }
-        summary:       { type: string, description: "3–5 sentence plain-text overview." }
+        promptVersion: { type: string, example: v4 }
+        summary:       { type: string, description: "1–2 sentence plain-text overview." }
         findings:
+          description: "2–5 observations, most important first."
           type: array
           items:
             type: object
@@ -4673,6 +4684,10 @@ components:
               severity: { type: string, enum: [info, warn, crit] }
               title:    { type: string }
               detail:   { type: string }
+              evidence:
+                type: string
+                description: "The digest figure the finding rests on, so it can be checked against the charts."
+                example: "p99 1418 ms vs avg 187 ms"
         tokensIn:  { type: integer }
         tokensOut: { type: integer }
         cachedAt:  { type: string, format: date-time }
@@ -4689,16 +4704,24 @@ components:
           items: { type: string }
           description: "The two run ids in the operator's submitted order (A, B)."
         model:         { type: string }
-        promptVersion: { type: string, example: v1 }
-        summary:       { type: string, description: "3–5 sentence comparison of B relative to A." }
+        promptVersion: { type: string, example: v4 }
+        summary:       { type: string, description: "1–2 sentence comparison of B relative to A." }
         findings:
+          description: |
+            One per metric for throughput, response time and errors, plus up to
+            two for the transactions that moved most (then `metric` is a label).
           type: array
           items:
             type: object
             properties:
-              metric:  { type: string, example: avgRtMs }
+              metric:  { type: string, example: p95Ms }
               verdict: { type: string, enum: [regression, improvement, "no significant change"] }
               delta:   { type: string, example: "+12.3%" }
+              detail:  { type: string }
+              evidence:
+                type: string
+                description: "The two figures the delta came from."
+                example: "604 → 891 ms"
         tokensIn:  { type: integer }
         tokensOut: { type: integer }
         cachedAt:  { type: string, format: date-time }

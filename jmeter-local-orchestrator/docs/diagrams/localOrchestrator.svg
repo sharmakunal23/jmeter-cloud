@@ -1,86 +1,79 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 420" width="1240" height="420" font-family="-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
-  <defs>
-    <marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 z" fill="#475569"/></marker>
-    <marker id="ak" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 z" fill="#0d9488"/></marker>
-  </defs>
-  <rect width="1240" height="420" fill="#fafaf9"/>
-  <text x="30" y="34" font-size="19" font-weight="700" fill="#0f172a">jmeter-local-orchestrator — one worker pod</text>
-  <text x="30" y="56" font-size="12.5" fill="#64748b">HTTP-driven: stage artifacts → launch JMeter → tail JTL → aggregate 15-s windows → POST JSON metrics.</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 632" width="960" height="632" role="img" aria-label="The local orchestrator, one per worker pod: the region relays the hub's start call, the stager fetches the plan and data files from the document service, JMeter runs as a child process, and the tailer aggregates 15-second windows and POSTs them to the metrics consumer. Results are uploaded back to the document service.">
+    <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+        </marker>
+    </defs>
+    <rect x="0" y="0" width="960" height="632" fill="#ffffff"/>
+    <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
+        <text x="14" y="28" font-size="15" font-weight="700" fill="#0f172a">jmeter-local-orchestrator &#8212; one worker pod</text>
+        <text x="14" y="48" font-size="11" fill="#64748b">Stage artifacts, launch JMeter, tail the JTL, aggregate 15-second windows, POST them to the consumer.</text>
 
-  <!-- pod boundary -->
-  <rect x="20" y="76" width="990" height="180" rx="12" fill="none" stroke="#5eead4" stroke-dasharray="6 4"/>
-  <text x="38" y="98" font-size="11" font-weight="700" fill="#0f766e" letter-spacing="1">POD (single JMeter worker)</text>
+        <g font-size="10" font-weight="600" fill="#64748b" letter-spacing="1">
+            <text x="14" y="110">1 &#183; CONTROL</text>
+            <text x="14" y="204">2 &#183; WORKER API</text>
+            <text x="14" y="298">3 &#183; STAGE</text>
+            <text x="14" y="392">4 &#183; RUN</text>
+            <text x="14" y="496">5 &#183; SHIP</text>
+            <text x="14" y="590">6 &#183; INGEST</text>
+        </g>
 
-  <g font-size="12.5">
-    <rect x="36" y="120" width="150" height="76" rx="8" fill="#dbeafe" stroke="#1e40af" stroke-width="1.5"/>
-    <text x="111" y="150" text-anchor="middle" font-weight="600" fill="#1e3a8a">REST API</text>
-    <text x="111" y="168" text-anchor="middle" font-size="10.5" fill="#2563eb" font-family="monospace">/api/v1 · :8080</text>
-    <text x="111" y="184" text-anchor="middle" font-size="10" fill="#2563eb">plan · data · start</text>
+        <g fill="none" stroke="#94a3b8" stroke-width="2">
+            <line x1="520" y1="132" x2="520" y2="174" marker-end="url(#arrow)"/>
+            <line x1="520" y1="226" x2="520" y2="268" marker-end="url(#arrow)"/>
+            <line x1="420" y1="294" x2="330" y2="294" marker-end="url(#arrow)"/>
+            <line x1="520" y1="320" x2="520" y2="362" marker-end="url(#arrow)"/>
+            <line x1="520" y1="414" x2="520" y2="440"/>
+            <line x1="230" y1="440" x2="520" y2="440"/>
+            <line x1="230" y1="440" x2="230" y2="466" marker-end="url(#arrow)"/>
+            <line x1="520" y1="440" x2="520" y2="466" marker-end="url(#arrow)"/>
+            <line x1="520" y1="518" x2="520" y2="560" marker-end="url(#arrow)"/>
+            <line x1="130" y1="492" x2="118" y2="492"/>
+            <line x1="118" y1="492" x2="118" y2="294"/>
+            <line x1="118" y1="294" x2="130" y2="294" marker-end="url(#arrow)"/>
+        </g>
 
-    <rect x="242" y="120" width="150" height="76" rx="8" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
-    <text x="317" y="150" text-anchor="middle" font-weight="600" fill="#115e59">ArtifactStager</text>
-    <text x="317" y="170" text-anchor="middle" font-size="10" fill="#0f766e">stage plan +</text>
-    <text x="317" y="184" text-anchor="middle" font-size="10" fill="#0f766e">dataFiles.zip</text>
+        <g font-size="11" fill="#64748b">
+            <text x="530" y="157">relayed by the region</text>
+            <text x="530" y="251">stage plan + data</text>
+            <text x="350" y="284">fetch</text>
+            <text x="530" y="345">launch</text>
+            <text x="240" y="458">results.jtl</text>
+            <text x="530" y="458">tail</text>
+            <text x="128" y="360">results.zip</text>
+            <text x="530" y="543">one batch per window</text>
+        </g>
 
-    <rect x="448" y="120" width="150" height="76" rx="8" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
-    <text x="523" y="146" text-anchor="middle" font-weight="600" fill="#115e59">JMeter child</text>
-    <text x="523" y="165" text-anchor="middle" font-size="10" fill="#0f766e">runs test plan</text>
-    <text x="523" y="183" text-anchor="middle" font-size="10" fill="#0f766e" font-family="monospace">→ results.jtl</text>
+        <rect x="420" y="80" width="200" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+        <text x="520" y="102" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">regional relay</text>
+        <text x="520" y="119" text-anchor="middle" font-size="11" fill="#475569">POST /api/v1/test &#183; drain</text>
 
-    <rect x="654" y="120" width="160" height="76" rx="8" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
-    <text x="734" y="146" text-anchor="middle" font-weight="600" fill="#115e59">JTL tailer +</text>
-    <text x="734" y="164" text-anchor="middle" font-weight="600" fill="#115e59">aggregator</text>
-    <text x="734" y="184" text-anchor="middle" font-size="10" fill="#0f766e">15-s windows / label</text>
+        <rect x="420" y="174" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="520" y="196" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">REST API</text>
+        <text x="520" y="213" text-anchor="middle" font-size="11" fill="#475569">/api/v1 &#183; 8080</text>
 
-    <rect x="870" y="120" width="120" height="76" rx="8" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
-    <text x="930" y="150" text-anchor="middle" font-weight="600" fill="#115e59">Ingest</text>
-    <text x="930" y="168" text-anchor="middle" font-weight="600" fill="#115e59">dispatcher</text>
-    <text x="930" y="184" text-anchor="middle" font-size="10" fill="#0f766e">disk buffer + retry</text>
-  </g>
+        <rect x="130" y="268" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="230" y="290" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">document-service</text>
+        <text x="230" y="307" text-anchor="middle" font-size="11" fill="#475569">plan &#183; dataFiles &#183; plugins</text>
 
-  <!-- external -->
-  <g font-size="12.5">
-    <rect x="1060" y="120" width="140" height="76" rx="8" fill="#f0fdfa" stroke="#0d9488" stroke-width="1.5"/>
-    <text x="1130" y="150" text-anchor="middle" font-weight="600" fill="#115e59">metrics-consumer</text>
-    <text x="1130" y="170" text-anchor="middle" font-size="10" fill="#0f766e" font-family="monospace">POST /api/v1/ingest</text>
-    <text x="1130" y="186" text-anchor="middle" font-size="10" fill="#0f766e">JSON · :8083</text>
+        <rect x="420" y="268" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="520" y="290" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">ArtifactStager</text>
+        <text x="520" y="307" text-anchor="middle" font-size="11" fill="#475569">content-addressed cache</text>
 
-    <rect x="320" y="300" width="220" height="68" rx="8" fill="#dbeafe" stroke="#1e40af" stroke-width="1.5"/>
-    <text x="430" y="328" text-anchor="middle" font-weight="600" fill="#1e3a8a">document-service</text>
-    <text x="430" y="347" text-anchor="middle" font-size="10.5" fill="#2563eb">ARTIFACT_SOURCE · RESULT_SINK</text>
+        <rect x="420" y="362" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="520" y="384" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">JMeter child</text>
+        <text x="520" y="401" text-anchor="middle" font-size="11" fill="#475569">runs the plan &#183; results.jtl</text>
 
-    <rect x="613" y="300" width="220" height="68" rx="8" fill="#dbeafe" stroke="#1e40af" stroke-width="1.5"/>
-    <text x="723" y="328" text-anchor="middle" font-weight="600" fill="#1e3a8a">global-orchestrator</text>
-    <text x="723" y="347" text-anchor="middle" font-size="10.5" fill="#2563eb">register · heartbeat (declared only)</text>
-  </g>
+        <rect x="130" y="466" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="230" y="488" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">ResultUploader</text>
+        <text x="230" y="505" text-anchor="middle" font-size="11" fill="#475569">after the run ends</text>
 
-  <!-- pipeline arrows -->
-  <g stroke="#475569" stroke-width="1.6" fill="none" marker-end="url(#a)">
-    <line x1="186" y1="158" x2="240" y2="158"/>
-    <line x1="392" y1="158" x2="446" y2="158"/>
-    <line x1="598" y1="158" x2="652" y2="158"/>
-    <!-- stager -> document-service (fetch) -->
-    <path d="M300,196 Q318,250 398,298"/>
-    <!-- result -> document-service (push results) -->
-    <path d="M520,196 Q498,250 462,298"/>
-  </g>
-  <!-- registrar → global-orch: only when GLOBAL_ORCHESTRATOR_URL is set (operator-declared workers);
-       workers a regional creates get no hub URL — the kubelet is their liveness. Dashed = optional. -->
-  <g stroke="#475569" stroke-width="1.6" fill="none" stroke-dasharray="5 4" marker-end="url(#a)">
-    <path d="M95,196 C80,408 480,428 723,408 L723,370"/>
-  </g>
-  <g stroke="#0d9488" stroke-width="1.8" fill="none" stroke-dasharray="7 4" marker-end="url(#ak)">
-    <line x1="814" y1="158" x2="868" y2="158"/>
-    <line x1="990" y1="158" x2="1058" y2="158"/>
-  </g>
+        <rect x="420" y="466" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="520" y="488" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">Tailer + aggregator</text>
+        <text x="520" y="505" text-anchor="middle" font-size="11" fill="#475569">15 s windows per label</text>
 
-  <g font-size="10.5" fill="#64748b">
-    <text x="213" y="150" text-anchor="middle">stage</text>
-    <text x="419" y="150" text-anchor="middle">launch</text>
-    <text x="625" y="150" text-anchor="middle">tail</text>
-    <text x="841" y="150" text-anchor="middle" fill="#0f766e">batch</text>
-    <text x="1024" y="150" text-anchor="middle" fill="#0f766e">POST</text>
-    <text x="330" y="262" text-anchor="end" fill="#2563eb">fetch plan</text>
-    <text x="527" y="276" text-anchor="middle" fill="#2563eb">push results</text>
-  </g>
+        <rect x="420" y="560" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="520" y="582" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">metrics-consumer</text>
+        <text x="520" y="599" text-anchor="middle" font-size="11" fill="#475569">POST /api/v1/ingest &#183; 8083</text>
+    </g>
 </svg>

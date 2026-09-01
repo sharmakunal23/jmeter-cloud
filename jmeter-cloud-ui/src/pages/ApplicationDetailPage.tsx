@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 
 import { runsApi, type Run, type RunListing } from "../api/runs";
 import { applicationsApi, type Application } from "../api/applications";
-import { Paginator } from "../components/Paginator";
+import { DataList } from "../components/DataList";
 import { persistPageSize, readStoredPageSize } from "../hooks/useClientPagination";
 import { RegionBadgeList } from "../components/RegionBadge";
 import { CreateApplicationDialog } from "../components/CreateApplicationDialog";
@@ -140,21 +140,13 @@ function ApplicationDetailBody({ appName }: { appName: string }) {
   const totalRuns = state.status === "ok" ? state.listing.total : null;
   const activeRuns = state.status === "ok" ? state.activeCount : null;
 
-  // 2026-05-16 — compare-selection lives at this level so the Compare
-  // button can sit on the chips row alongside Total/Active while the
-  // checkboxes stay inside RunsTableForApp.
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-
-  // Unlimited multi-select — bulk delete acts on any number of runs.
-  // Compare is a separate gate that lights up only at exactly 2.
-  function toggleSelected(runId: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(runId)) next.delete(runId);
-      else next.add(runId);
-      return next;
-    });
-  }
+  // Compare-selection lives at this level so the Compare button can sit on
+  // the chips row alongside Total/Active while the checkboxes live in the list.
+  // Unlimited multi-select — bulk delete acts on any number of runs; Compare
+  // is a separate gate that lights up only at exactly 2. DataList owns the
+  // checkbox column and reports every change here, so the chips row above the
+  // list and the rows inside it read one selection.
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
 
   function startCompare() {
     if (selected.size !== MAX_COMPARE_SELECTION) return;
@@ -238,97 +230,145 @@ function ApplicationDetailBody({ appName }: { appName: string }) {
         </button>
       </div>
 
-      <div className="appDetailChips" role="group" aria-label="application summary">
-        <Chip label={archived ? "Archived runs" : "Total runs"} value={totalRuns} />
-        {!archived && <Chip label="Active" value={activeRuns} />}
-        {/* Compare + Clear sit inline with the chips so the row reads
-            "Total runs · Active · Compare Results · Clear" left-to-right.
-            Both use `appDetailChip` styling so they pair visually with
-            Total/Active instead of looking like primary actions.
-            Compare is an Active-view affordance; the Archived view offers
-            bulk permanent-delete instead. */}
-        {!archived && (
-          <button
-            type="button"
-            className={`appDetailChip appDetailChip--action${canCompare ? " appDetailChip--actionPrimary" : ""}`}
-            disabled={!canCompare}
-            onClick={startCompare}
-            title={
-              canCompare
-                ? "Open the side-by-side comparison view"
-                : selected.size === 1
-                  ? "Select one more run to compare (the comparison view shows exactly two)"
-                  : "Select two runs to compare"
-            }
-          >
-            Compare Results
-          </button>
-        )}
-        {archived && selectedRuns.length > 0 && (
-          <button
-            type="button"
-            className="appDetailChip appDetailChip--action appDetailChip--danger"
-            onClick={() => setPurgeTargets(selectedRuns)}
-            title="Permanently delete the selected runs — reclaims storage, cannot be undone"
-          >
-            Delete permanently ({selectedRuns.length})
-          </button>
-        )}
-        {selected.size > 0 && (
-          <button
-            type="button"
-            className="appDetailChip appDetailChip--action"
-            onClick={() => setSelected(new Set())}
-            aria-label="Clear selection"
-          >
-            Clear ({selected.size})
-          </button>
-        )}
-        {!archived && selectedRuns.length > 0 && (
-          <button
-            type="button"
-            className="appDetailChip appDetailChip--action appDetailChip--danger"
-            onClick={() => setDeleteTargets(selectedRuns)}
-            title="Archive the selected runs — they move to the Archived tab; results and metrics are kept"
-          >
-            Archive selected ({selectedRuns.length})
-          </button>
-        )}
-      </div>
-
-      {state.status === "loading" && <p className="ink-soft">Loading runs…</p>}
       {state.status === "error" && <p className="text--error">{state.message}</p>}
 
-      {state.status === "ok" && state.listing.runs.length === 0 && (
-        <div className="emptyState">
-          {archived ? (
-            <p>No archived (hidden) runs for <strong className="mono">{appName}</strong>.</p>
-          ) : (
-            <>
-              <p>No runs for <strong className="mono">{appName}</strong> yet.</p>
-              <p className="ink-soft">
-                <Link to={`/applications/${encodeURIComponent(appName)}/runs/new`}>
-                  Start a new run →
-                </Link>
-              </p>
-            </>
-          )}
-        </div>
-      )}
-
-      {state.status === "ok" && state.listing.runs.length > 0 && (
-        <RunsTableForApp
-          appName={appName}
-          listing={state.listing}
-          page={page}
-          setPage={setPage}
-          selected={selected}
-          onToggle={toggleSelected}
-          archived={archived}
-          onDeleteOne={(run) => setDeleteTargets([run])}
-          onPageSizeChange={changePageSize}
-        />
-      )}
+      {/* The chips are this list's toolbar row — counts on the left, the
+          selection's actions on the right — so they share the row DataList
+          reserves for a bulk bar instead of costing a second one. */}
+      <DataList<Run>
+        toolbar={
+    <div className="appDetailChips" role="group" aria-label="application summary">
+            <Chip label={archived ? "Archived runs" : "Total runs"} value={totalRuns} />
+            {!archived && <Chip label="Active" value={activeRuns} />}
+            {/* Compare + Clear sit inline with the chips so the row reads
+                "Total runs · Active · Compare Results · Clear" left-to-right.
+                Both use `appDetailChip` styling so they pair visually with
+                Total/Active instead of looking like primary actions.
+                Compare is an Active-view affordance; the Archived view offers
+                bulk permanent-delete instead. */}
+            {!archived && (
+              <button
+                type="button"
+                className={`appDetailChip appDetailChip--action${canCompare ? " appDetailChip--actionPrimary" : ""}`}
+                disabled={!canCompare}
+                onClick={startCompare}
+                title={
+                  canCompare
+                    ? "Open the side-by-side comparison view"
+                    : selected.size === 1
+                      ? "Select one more run to compare (the comparison view shows exactly two)"
+                      : "Select two runs to compare"
+                }
+              >
+                Compare Results
+              </button>
+            )}
+            {archived && selectedRuns.length > 0 && (
+              <button
+                type="button"
+                className="appDetailChip appDetailChip--action appDetailChip--danger"
+                onClick={() => setPurgeTargets(selectedRuns)}
+                title="Permanently delete the selected runs — reclaims storage, cannot be undone"
+              >
+                Delete permanently ({selectedRuns.length})
+              </button>
+            )}
+            {selected.size > 0 && (
+              <button
+                type="button"
+                className="appDetailChip appDetailChip--action"
+                onClick={() => setSelected(new Set())}
+                aria-label="Clear selection"
+              >
+                Clear ({selected.size})
+              </button>
+            )}
+            {!archived && selectedRuns.length > 0 && (
+              <button
+                type="button"
+                className="appDetailChip appDetailChip--action appDetailChip--danger"
+                onClick={() => setDeleteTargets(selectedRuns)}
+                title="Archive the selected runs — they move to the Archived tab; results and metrics are kept"
+              >
+                Archive selected ({selectedRuns.length})
+              </button>
+            )}
+          </div>
+        }
+        label={archived ? "Archived runs" : "Runs"}
+        loading={state.status === "loading"}
+        rows={state.status === "ok" ? state.listing.runs : []}
+        rowKey={(run) => run.runId}
+        itemNoun="runs"
+        selectedIds={selected}
+        onSelectionChange={setSelected}
+        // The run id IS the run's name here — there is nothing shorter that
+        // identifies which one a checkbox is about to archive.
+        rowSelectionLabel={(run) => `select ${run.runId}`}
+        empty={state.status === "error" ? (
+          <>Could not load runs for <strong className="mono">{appName}</strong>.</>
+        ) : archived ? (
+          <>No archived (hidden) runs for <strong className="mono">{appName}</strong>.</>
+        ) : (
+          <>
+            <strong>No runs for {appName} yet.</strong>
+            <div>
+              <Link to={`/applications/${encodeURIComponent(appName)}/runs/new`}>
+                Start a new run →
+              </Link>
+            </div>
+          </>
+        )}
+        // Server-paged: the backend returns one page and owns the count, so
+        // the list must render it as-is rather than paging it again.
+        pagination={state.status === "ok" ? {
+          page,
+          pageSize: state.listing.limit,
+          total: state.listing.total,
+          onPageChange: setPage,
+          onPageSizeChange: changePageSize,
+        } : undefined}
+        columns={[
+          { key: "run", header: "Run", cell: (run) => (
+            <Link to={`/applications/${encodeURIComponent(appName)}/runs/${run.runId}`} className="mono">
+              {run.runId}
+            </Link>
+          ) },
+          { key: "state", header: "State", cell: (run) => (
+            <span className={`badge badge--${badgeVariantForState(run.state)}`}>{run.state}</span>
+          ) },
+          { key: "clusters", header: "Clusters", cell: (run) => <RegionBadgeList run={run} /> },
+          { key: "pods", header: "Pods", className: "dataList__num",
+            cell: (run) => <span className="mono">{run.fleetMembers.length}</span> },
+          { key: "started", header: "Started",
+            cell: (run) => formatDateTime(run.startedAt ?? run.createdAt) },
+          { key: "actions", header: <span className="visuallyHidden">Actions</span>,
+            className: "runsTable__actions",
+            cell: (run) => {
+              // Archived view → permanent delete is a SELECTION action (check
+              // rows, then "Delete permanently (N)"); no per-row button. The
+              // active view keeps the per-row archive.
+              if (archived) return null;
+              // Only terminal runs can be hidden — an active run still pins
+              // live pods, so abort it first.
+              const terminal = run.state === "COMPLETED" || run.state === "FAILED" || run.state === "ABORTED";
+              return (
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm btn--danger"
+                  onClick={() => setDeleteTargets([run])}
+                  disabled={!terminal}
+                  title={terminal
+                    ? "Archive this run — it moves to the Archived tab"
+                    : "Active runs can't be archived — abort or let it finish first"}
+                  aria-label={`archive run ${run.runId}`}
+                >
+                  Archive
+                </button>
+              );
+            } },
+        ]}
+      />
 
       {editingApp && (
         <CreateApplicationDialog
@@ -385,103 +425,6 @@ function ApplicationDetailBody({ appName }: { appName: string }) {
         </div>
       )}
     </section>
-  );
-}
-
-function RunsTableForApp({
-  appName, listing, page, setPage, selected, onToggle, archived, onDeleteOne, onPageSizeChange,
-}: {
-  appName: string;
-  listing: RunListing;
-  page: number;
-  setPage: (n: number) => void;
-  selected: Set<string>;
-  onToggle: (runId: string) => void;
-  archived: boolean;
-  onDeleteOne: (run: Run) => void;
-  onPageSizeChange: (n: number) => void;
-}) {
-  return (
-    <>
-      <table className="runsTable">
-        <thead>
-          <tr>
-            <th aria-label="select" className="runsTable__check"></th>
-            <th>Run</th>
-            <th>State</th>
-            <th>Clusters</th>
-            <th>Pods</th>
-            <th>Started</th>
-            <th aria-label="actions"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {listing.runs.map((run) => {
-            const podCount = run.fleetMembers.length;
-            // Only terminal runs can be hidden (an active run is still
-            // important + pins live pods — abort it first).
-            const terminal = run.state === "COMPLETED" || run.state === "FAILED" || run.state === "ABORTED";
-            return (
-              <tr key={run.runId}>
-                <td className="runsTable__check">
-                  <input
-                    type="checkbox"
-                    aria-label={`select ${run.runId}`}
-                    checked={selected.has(run.runId)}
-                    onChange={() => onToggle(run.runId)}
-                  />
-                </td>
-                <td>
-                  <Link
-                    to={`/applications/${encodeURIComponent(appName)}/runs/${run.runId}`}
-                    className="mono"
-                  >
-                    {run.runId}
-                  </Link>
-                </td>
-                <td>
-                  <span className={`badge badge--${badgeVariantForState(run.state)}`}>
-                    {run.state}
-                  </span>
-                </td>
-                <td>
-                  <RegionBadgeList run={run} />
-                </td>
-                <td className="mono">{podCount}</td>
-                <td>{formatDateTime(run.startedAt ?? run.createdAt)}</td>
-                <td className="runsTable__actions">
-                  {/* Archived view → permanent delete is a SELECTION action
-                      (check rows, then "Delete permanently (N)"); no per-row
-                      button. Active view keeps the per-row archive. */}
-                  {!archived && (
-                    <button
-                      type="button"
-                      className="btn btn--ghost btn--sm btn--danger"
-                      onClick={() => onDeleteOne(run)}
-                      disabled={!terminal}
-                      title={terminal
-                        ? "Archive this run — it moves to the Archived tab"
-                        : "Active runs can't be archived — abort or let it finish first"}
-                      aria-label={`archive run ${run.runId}`}
-                    >
-                      Archive
-                    </button>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      <Paginator
-        page={page}
-        pageSize={listing.limit}
-        total={listing.total}
-        label="runs"
-        onChange={setPage}
-        onPageSizeChange={onPageSizeChange}
-      />
-    </>
   );
 }
 

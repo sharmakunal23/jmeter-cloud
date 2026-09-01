@@ -19,7 +19,7 @@ function sample(fromCache: boolean): RunInsights {
     model: "claude-test",
     promptVersion: "v1",
     summary: "Steady run.",
-    findings: [{ severity: "warn", title: "Latency tail", detail: "p99 climbed." }],
+    findings: [{ severity: "warn", title: "Latency tail", detail: "p99 climbed.", evidence: "p99 1418 ms" }],
     tokensIn: 100,
     tokensOut: 50,
     cachedAt: "2026-05-31T00:00:00Z",

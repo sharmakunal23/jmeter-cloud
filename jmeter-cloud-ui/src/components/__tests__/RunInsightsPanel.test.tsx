@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { axe } from "vitest-axe";
 
 import { RunInsightsPanel } from "../RunInsightsPanel";
@@ -16,9 +16,9 @@ function withData(overrides: Partial<RunInsights> = {}): RunInsights {
     promptVersion: "v1",
     summary: "Sustained ~75 RPS; p99 climbed late.",
     findings: [
-      { severity: "info", title: "Steady throughput", detail: "TPS held flat." },
-      { severity: "warn", title: "Latency tail", detail: "p99 climbed late." },
-      { severity: "crit", title: "Error spike", detail: "5xx at +90s." },
+      { severity: "info", title: "Steady throughput", detail: "TPS held flat.", evidence: "tps 75.2 avg, peak 78.1" },
+      { severity: "warn", title: "Latency tail", detail: "p99 climbed late.", evidence: "p99 1418 ms vs avg 187 ms" },
+      { severity: "crit", title: "Error spike", detail: "5xx at +90s.", evidence: "5xx 2047 of 1295620" },
     ],
     tokensIn: 100,
     tokensOut: 50,
@@ -64,6 +64,40 @@ describe("RunInsightsPanel (presentational side column)", () => {
     expect(screen.getByText("warn")).toHaveClass("badge--warn");
     expect(screen.getByText("info")).toHaveClass("badge--info");
     expect(screen.getByText(/Claude can be wrong/i)).toBeInTheDocument();
+  });
+
+  it("shows each finding's evidence and says the analysis covers the whole run", () => {
+    renderPanel({ kind: "ok" }, withData());
+    // The charts beside this panel follow the toolbar's range; the analysis
+    // does not, so the scope has to be stated rather than discovered.
+    expect(screen.getByText(/whole run, every label/i)).toBeInTheDocument();
+    expect(screen.getByText("p99 1418 ms vs avg 187 ms")).toBeInTheDocument();
+    expect(screen.getByText("5xx 2047 of 1295620")).toBeInTheDocument();
+  });
+
+  it("copies the analysis as Markdown and confirms on the button", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+
+    renderPanel({ kind: "ok" }, withData());
+    fireEvent.click(screen.getByRole("button", { name: /copy/i }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const copied = writeText.mock.calls[0][0] as string;
+    expect(copied).toContain("# AI insights — run 01J0RUN");
+    expect(copied).toContain("Sustained ~75 RPS");
+    expect(copied).toContain("**[warn] Latency tail**");
+    // The figure has to travel with the claim, or a pasted finding reads as fact.
+    expect(copied).toContain("Evidence: p99 1418 ms vs avg 187 ms");
+    expect(copied).toContain("Advisory only");
+    expect(await screen.findByRole("button", { name: /copied/i })).toBeInTheDocument();
+  });
+
+  it("says so when the clipboard is unavailable rather than pretending it copied", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    renderPanel({ kind: "ok" }, withData());
+    fireEvent.click(screen.getByRole("button", { name: /copy/i }));
+    expect(await screen.findByRole("button", { name: /copy failed/i })).toBeInTheDocument();
   });
 
   it("Re-evaluate and close fire their callbacks", () => {

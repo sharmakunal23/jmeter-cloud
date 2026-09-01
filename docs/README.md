@@ -7,6 +7,6 @@ service — design docs under `<service>/docs/`, its diagram under
 | File | Embedded by | Shows |
 |------|-------------|-------|
 | [`flowDiagrams.md`](flowDiagrams.md) | — | Eight runtime flows: run launch (sync and async), worker liveness and claim, metrics, artifacts, run lifecycle, request routing, boot, shutdown. |
-| `diagrams/architecture.svg` | root `README.md` | Service topology — control plane, the regional inside each data center, data plane, data storage. |
+| `diagrams/architecture.svg` | root `README.md` | Service topology, top to bottom — operator, edge, control plane, the regional inside each data center, workers, ingest, storage. |
 | `diagrams/dataFlow.svg` | root `README.md`, `RUNBOOK.md` | The metrics pipeline and the technology at each hop. |
 | `diagrams/bootOrder.svg` | `RUNBOOK.md` | Compose boot and dependency order. |

@@ -21,6 +21,8 @@ export interface RunInsightFinding {
   severity: "info" | "warn" | "crit";
   title: string;
   detail: string;
+  /** The digest figure the claim rests on, so the operator can check it. */
+  evidence: string;
 }
 
 /** AI-1 — Claude's reading of a single run. `fromCache` ⇒ served without a new bill. */
@@ -36,11 +38,14 @@ export interface RunInsights {
   fromCache: boolean;
 }
 
-/** One per-metric verdict in a comparison insight. */
+/** One per-metric verdict in a comparison insight. `metric` may also be a label name. */
 export interface CompareInsightFinding {
   metric: string;
   verdict: "regression" | "improvement" | "no significant change" | string;
   delta: string;
+  detail: string;
+  /** The two figures the delta came from, e.g. "604 → 891 ms". */
+  evidence: string;
 }
 
 /** AI-2 — Claude's reading of the delta between two runs (B relative to A). */

@@ -140,6 +140,25 @@ describe("ApplicationDetailPage", () => {
     });
   });
 
+  it("the runs list is a DataList: fixed viewport, and the chips are its toolbar row", async () => {
+    mocks.listPage.mockResolvedValue({
+      runs: [fixtureRun("01J0RUN001", { state: "COMPLETED" })], total: 1, offset: 0, limit: DEFAULT_LIST_PAGE_SIZE,
+    });
+    renderAt("/applications/checkout-svc");
+    await waitFor(() => expect(screen.getByText("01J0RUN001")).toBeInTheDocument());
+
+    // One list shell, not a hand-rolled <table className="runsTable">.
+    expect(document.querySelector(".dataList")).not.toBeNull();
+    expect(document.querySelector("table.runsTable")).toBeNull();
+    // Fixed-height viewport: 1 run and 100 occupy the same box.
+    const viewport = document.querySelector(".dataList__viewport") as HTMLElement;
+    expect(viewport.style.height).not.toBe("");
+    // The chips share the row DataList reserves for a bulk bar, so this page's
+    // gap to the list matches every other list in the app.
+    const chips = document.querySelector(".appDetailChips") as HTMLElement;
+    expect(chips.closest(".dataList__toolbar")).not.toBeNull();
+  });
+
   it("per-row Archive is disabled for active runs, enabled for terminal runs", async () => {
     mocks.listPage.mockResolvedValue({
       runs: [
@@ -162,6 +181,28 @@ describe("ApplicationDetailPage", () => {
     await waitFor(() => expect(screen.getByText("DONE")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: /archive run DONE/i }));
     expect(screen.getByRole("heading", { name: /Archive 1 run\?/ })).toBeInTheDocument();
+  });
+
+  it("the Archived view drops the per-row Archive and says what empty means there", async () => {
+    // Active view first, then switch — the second fetch asks for hidden runs.
+    mocks.listPage.mockResolvedValue({ runs: [], total: 0, offset: 0, limit: DEFAULT_LIST_PAGE_SIZE });
+    renderAt("/applications/checkout-svc");
+    await waitFor(() => expect(screen.getByText(/No runs for/i)).toBeInTheDocument());
+
+    mocks.listPage.mockResolvedValue({
+      runs: [fixtureRun("01J0OLD001", { state: "COMPLETED" })], total: 1, offset: 0, limit: DEFAULT_LIST_PAGE_SIZE,
+    });
+    fireEvent.click(screen.getByRole("tab", { name: /Archived/i }));
+
+    await waitFor(() => expect(screen.getByText("01J0OLD001")).toBeInTheDocument());
+    expect(mocks.listPage.mock.calls.at(-1)![0]).toEqual(expect.objectContaining({ hidden: true }));
+    // Permanent delete is a selection action here, so there is no per-row button.
+    expect(screen.queryByRole("button", { name: /archive run 01J0OLD001/i })).not.toBeInTheDocument();
+
+    mocks.listPage.mockResolvedValue({ runs: [], total: 0, offset: 0, limit: DEFAULT_LIST_PAGE_SIZE });
+    fireEvent.click(screen.getByRole("tab", { name: /Active runs/i }));
+    fireEvent.click(screen.getByRole("tab", { name: /Archived/i }));
+    await waitFor(() => expect(screen.getByText(/No archived \(hidden\) runs/i)).toBeInTheDocument());
   });
 
   it("selecting runs reveals 'Archive selected' which opens a bulk confirm dialog", async () => {

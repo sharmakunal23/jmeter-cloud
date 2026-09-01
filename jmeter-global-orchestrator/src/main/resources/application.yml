@@ -302,11 +302,20 @@ globalOrchestrator:
   # daily cap is an in-memory, per-instance runaway-cost backstop.
   ai:
     apiKey:             ${ANTHROPIC_API_KEY:}
-    model:              ${AI_MODEL:claude-sonnet-4-6}
+    model:              ${AI_MODEL:claude-opus-5}
     baseUrl:            ${ANTHROPIC_BASE_URL:https://api.anthropic.com}
-    # 512 comfortably fits the terse summary + 2-4 findings and caps per-call
-    # cost; bump AI_MAX_TOKENS if a future prompt needs more room.
-    maxTokens:          ${AI_MAX_TOKENS:512}
+    # Thinking tokens bill as output, so maxTokens must cover the reasoning as
+    # well as the terse JSON — a truncated reply is rejected (AI_UPSTREAM_ERROR),
+    # never cached, and output bills on tokens produced, so a high cap is free.
+    maxTokens:          ${AI_MAX_TOKENS:8192}
+    # Quality dials. effort: low|medium|high|xhigh|max. thinking: adaptive
+    # (the only on-mode on current models) or disabled. Set either to `none` to
+    # omit the parameter entirely for a model that rejects it.
+    effort:             ${AI_EFFORT:high}
+    thinking:           ${AI_THINKING:adaptive}
+    # output_config.format — the reply is schema-valid JSON instead of prose the
+    # parser has to recover. Turn off only if the provider rejects the schema.
+    structuredOutput:   ${AI_STRUCTURED_OUTPUT:true}
     dailyInvocationCap: ${AI_DAILY_INVOCATION_CAP:200}
     # PII redaction is a Phase-1 backlog item — flag stubbed here, no-op in v1
     # (local data is synthetic). Cloud flips it true once the redaction pass lands.
