@@ -151,19 +151,34 @@ class AiInsightsServiceTest {
         @DisplayName("a peak carries its elapsed offset so the model never does index maths")
         void peakCarriesElapsedTime() {
             Map<String, Object> peaks = new LinkedHashMap<>();
-            AiInsightsService.putPeak(peaks, "tps", List.of(10L, 90L, 20L), 40);
+            AiInsightsService.putPeak(peaks, "tps", List.of(10L, 90L, 20L), 120, 3);
             @SuppressWarnings("unchecked")
             Map<String, Object> tps = (Map<String, Object>) peaks.get("tps");
             assertThat(tps).containsEntry("v", 90L).containsEntry("atSec", 40L);
         }
 
         @Test
+        @DisplayName("atSec divides once — a pre-rounded bucket width drifts minutes late in a run")
+        void atSecDoesNotCompoundRounding() {
+            // 28,799 s over 720 slices is 39.998 s each. Scaling index 719 by a
+            // truncated 39 puts the peak at 28,041 s — ~12 minutes early, and the
+            // prompt reads atSec out to the operator verbatim.
+            List<Number> series = new ArrayList<>();
+            for (int i = 0; i < 720; i++) series.add(i == 719 ? 99L : 1L);
+            Map<String, Object> peaks = new LinkedHashMap<>();
+            AiInsightsService.putPeak(peaks, "tps", series, 28_799, 720);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> tps = (Map<String, Object>) peaks.get("tps");
+            assertThat((Long) tps.get("atSec")).isEqualTo(28_759L);
+        }
+
+        @Test
         @DisplayName("an all-zero series still reports a peak of zero, not nothing")
         void allZeroSeries() {
             Map<String, Object> peaks = new LinkedHashMap<>();
-            AiInsightsService.putPeak(peaks, "errorPct", List.of(0L, 0L), 15);
+            AiInsightsService.putPeak(peaks, "errorPct", List.of(0L, 0L), 30, 2);
             assertThat(peaks).containsKey("errorPct");
-            AiInsightsService.putPeak(peaks, "absent", List.of(), 15);
+            AiInsightsService.putPeak(peaks, "absent", List.of(), 30, 2);
             assertThat(peaks).doesNotContainKey("absent");
         }
     }
@@ -188,8 +203,9 @@ class AiInsightsServiceTest {
             List<Map<String, Object>> rows = (List<Map<String, Object>>) out.get("labelDeltas");
             assertThat(rows).hasSize(1);
             assertThat(rows.get(0)).containsEntry("label", "checkout");
-            assertThat(out).containsEntry("labelsOnlyInA", List.of("browse"));
-            assertThat(out).containsEntry("labelsOnlyInB", List.of("newSearch"));
+            // Written application/label — the grain the rollup actually groups by.
+            assertThat(out).containsEntry("labelsOnlyInA", List.of("payments/browse"));
+            assertThat(out).containsEntry("labelsOnlyInB", List.of("payments/newSearch"));
         }
 
         @Test
@@ -203,6 +219,36 @@ class AiInsightsServiceTest {
             @SuppressWarnings("unchecked")
             Map<String, Object> sideB = (Map<String, Object>) rows.get(0).get("b");
             assertThat(sideB).containsEntry("httpErrorPct", 5.0).containsEntry("p95", 900L);
+        }
+
+        @Test
+        @DisplayName("two applications sharing a label stay separate rows, and never cross-pair")
+        void labelIsScopedToItsApplication() {
+            // rollupByLabel groups by (LABEL_KEY, APPLICATION), so one group can
+            // return `checkout` twice. Keying on the label alone dropped one and
+            // could compare payments' p95 against search's.
+            Map<String, Object> aPayments = label("checkout", 9000, 0.01, 200);
+            Map<String, Object> aSearch = label("checkout", 100, 0.02, 800);
+            aSearch.put("application", "search");
+            Map<String, Object> bSearch = label("checkout", 120, 0.02, 810);
+            bSearch.put("application", "search");
+
+            Map<String, Object> out = AiInsightsService.labelDeltas(
+                    List.of(aPayments, aSearch), List.of(bSearch));
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> rows = (List<Map<String, Object>>) out.get("labelDeltas");
+            assertThat(rows).singleElement()
+                    .satisfies(r -> {
+                        assertThat(r).containsEntry("label", "checkout");
+                        assertThat(r).containsEntry("application", "search");
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> a = (Map<String, Object>) r.get("a");
+                        // search's 800 ms row, never payments' 200 ms one.
+                        assertThat(a).containsEntry("p95", 800L);
+                    });
+            // payments/checkout exists only in A and must be reported as such.
+            assertThat(out).containsEntry("labelsOnlyInA", List.of("payments/checkout"));
         }
 
         @Test
@@ -263,6 +309,28 @@ class AiInsightsServiceTest {
             assertThat(digest.path("perLabelTotal").asInt()).isEqualTo(61);
             assertThat(digest.path("perLabelShown").asInt()).isEqualTo(40);
             assertThat(digest.path("perLabel")).hasSize(40);
+        }
+
+        @Test
+        @DisplayName("the comparison digest carries both runs, corrected status counts and the label join")
+        void compareDigestCarriesBothSides() throws Exception {
+            MetricsTimeseries ts = new MetricsTimeseries("r", 15, 0L, 285L,
+                    new Series(flat(20, 10), flat(20, 100), flat(20, 1),
+                            Map.of("5xx", flat(20, 0.3)), flat(20, 150), flat(20, 200)));
+            RunSummary sum = new RunSummary("r", 0L, 285L,
+                    new RunSummary.Stats(null, 3000, 90, 10.0, 3.0, 100, 140, 150, 200, 900, 8),
+                    List.of());
+            var a = new AiInsightsService.DigestInputs(run(), ts, sum, List.of(label("checkout", 500, 0.02, 400)));
+            var b = new AiInsightsService.DigestInputs(run(), ts, sum, List.of(label("checkout", 500, 0.09, 900)));
+
+            JsonNode d = digestOf(service().buildCompareUserPrompt(a, b));
+
+            assertThat(d.path("runA").path("totals").path("samples").asLong()).isEqualTo(3000);
+            assertThat(d.path("runB").path("totals").path("p95Ms").asLong()).isEqualTo(150);
+            // The rate-to-count fix must hold on the compare path too: 0.3/s over
+            // 20 buckets of 15 s is 90 server errors, not 0 and not 6.
+            assertThat(d.path("runA").path("statusTotals").path("5xx").asLong()).isEqualTo(90);
+            assertThat(d.path("labelDeltas").get(0).path("b").path("httpErrorPct").asDouble()).isEqualTo(9.0);
         }
 
         @Test

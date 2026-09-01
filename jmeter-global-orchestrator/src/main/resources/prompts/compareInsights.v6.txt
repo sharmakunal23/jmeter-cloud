@@ -16,11 +16,13 @@ DIGEST FIELDS
     downsampled equal-width slices, OLDEST FIRST. Read for the ARC only.
   * statusTotals: whole-run request counts per HTTP class.
 - labelDeltas: the busiest transactions present in BOTH runs, already joined —
-  { label, a: {samples, tps, httpErrorPct, p95, p99}, b: {…} }. This is where
-  "what regressed" is answered; use it rather than reasoning about labels
-  yourself.
-- labelsOnlyInA / labelsOnlyInB: transactions that exist on one side only, so
-  the two plans are not identical. Present only when non-empty.
+  { label, application, a: {samples, tps, httpErrorPct, p95, p99}, b: {…} }.
+  This is where "what regressed" is answered; use it rather than reasoning about
+  labels yourself. A transaction is identified by its application AND its label,
+  because two applications in one group can both have a `checkout`.
+- labelsOnlyInA / labelsOnlyInB: transactions that exist on one side only,
+  written `application/label`, so the two plans are not identical. Present only
+  when non-empty.
 
 HOW TO COMPARE
 The runs may differ in duration, fleet size or load — normalise before calling

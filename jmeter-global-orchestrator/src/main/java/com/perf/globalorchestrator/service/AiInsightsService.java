@@ -65,8 +65,12 @@ public class AiInsightsService {
      * elapsed time so the model never does index arithmetic; comparison gained a
      * per-label delta table. v5 (2026-08-31): elapsed time is phrased in
      * minutes or hours past two minutes — a verified reply said "at ~870 s".
+     * v6 (2026-08-31): {@code atSec} no longer inherits the bucket width's
+     * rounding (a late peak on an 8 h run read ~12 minutes early), and a
+     * transaction is identified by application AND label, so two applications
+     * sharing a {@code checkout} can no longer be compared against each other.
      */
-    static final String PROMPT_VERSION = "v5";
+    static final String PROMPT_VERSION = "v6";
     static final String KIND_RUN = "runInsights";
     static final String KIND_COMPARE = "compareInsights";
 
@@ -85,6 +89,14 @@ public class AiInsightsService {
     private static final int TOP_LABEL_DELTAS = 20;
     /** Cap on the "only in one run" name lists, so a renamed plan cannot flood the prompt. */
     private static final int MAX_ONLY_IN = 20;
+    /**
+     * Label rows a comparison reads per run. Bounded — unlike the single-run
+     * digest, which needs every row to report {@code perLabelTotal} honestly —
+     * because the delta table keeps {@value #TOP_LABEL_DELTAS} and each
+     * one-sided list {@value #MAX_ONLY_IN}: reading a 2,000-label plan twice to
+     * discard all but 20 is the unbounded query the platform forbids.
+     */
+    private static final int COMPARE_LABELS = MetricsTimeseriesRepository.LABELS_MAX;
 
     /** A cache miss costs a Claude bill (not just a query), so the TTL is long. */
     static final Duration TTL = Duration.ofDays(30);
@@ -177,7 +189,7 @@ public class AiInsightsService {
         }
 
         requireEnabled();
-        String userPrompt = buildCompareUserPrompt(runA, runB);
+        String userPrompt = buildCompareUserPrompt(loadInputs(runA), loadInputs(runB));
         quota.acquire();
         AiResult result = ai.complete(compareSystemPrompt, userPrompt, compareResponseSchema());
 
@@ -223,24 +235,29 @@ public class AiInsightsService {
                 + "\n\nRespond with the JSON object as instructed.";
     }
 
-    private String buildCompareUserPrompt(Run runA, Run runB) {
-        List<Map<String, Object>> rollupA = metrics.rollupByLabel(runA.runId(), runA.state(), null, null,
-                MetricsTimeseriesRepository.LABELS_ALL);
-        List<Map<String, Object>> rollupB = metrics.rollupByLabel(runB.runId(), runB.state(), null, null,
-                MetricsTimeseriesRepository.LABELS_ALL);
+    /** Everything one run contributes to a comparison, read once so the assembly below stays pure. */
+    record DigestInputs(Run run, MetricsTimeseries ts, RunSummary summary, List<Map<String, Object>> rollup) { }
+
+    private DigestInputs loadInputs(Run run) {
+        return new DigestInputs(run,
+                metrics.timeseries(run.runId(), run.state(), false, null),
+                metrics.summary(run.runId(), run.state(), null),
+                metrics.rollupByLabel(run.runId(), run.state(), null, null, COMPARE_LABELS));
+    }
+
+    String buildCompareUserPrompt(DigestInputs a, DigestInputs b) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("runA", compareSide(runA));
-        payload.put("runB", compareSide(runB));
-        payload.putAll(labelDeltas(rollupA, rollupB));
+        payload.put("runA", compareSide(a));
+        payload.put("runB", compareSide(b));
+        payload.putAll(labelDeltas(a.rollup(), b.rollup()));
         return "Digests for the two runs (JSON):\n\n" + toJson(payload)
                 + "\n\nRespond with the JSON object as instructed.";
     }
 
     /** One run's half of a comparison: the same digest, plus its status totals. */
-    private Map<String, Object> compareSide(Run run) {
-        MetricsTimeseries ts = metrics.timeseries(run.runId(), run.state(), false, null);
-        Map<String, Object> d = runDigest(run, ts, metrics.summary(run.runId(), run.state(), null));
-        d.put("statusTotals", statusTotals(ts.series().statusCodes(), ts.bucketSize()));
+    private Map<String, Object> compareSide(DigestInputs in) {
+        Map<String, Object> d = runDigest(in.run(), in.ts(), in.summary());
+        d.put("statusTotals", statusTotals(in.ts().series().statusCodes(), in.ts().bucketSize()));
         return d;
     }
 
@@ -265,7 +282,8 @@ public class AiInsightsService {
         meta.put("fleetSize", run.fleetMembers() == null ? 0 : run.fleetMembers().size());
 
         int buckets = shapeBuckets(durationSec, s.tps().size());
-        long bucketSec = buckets > 0 ? Math.max(1, durationSec / buckets) : durationSec;
+        // Rounded, not truncated: 28,799 s over 720 slices is 40 s each, not 39.
+        long bucketSec = buckets > 0 ? Math.max(1, Math.round((double) durationSec / buckets)) : durationSec;
         List<Number> tps = downsample(s.tps(), buckets, 1);
         List<Number> rt = downsample(s.avgRtMs(), buckets, 0);
         List<Number> p95 = downsample(s.p95Ms(), buckets, 0);
@@ -280,10 +298,10 @@ public class AiInsightsService {
         shape.put("errorPct", err);
 
         Map<String, Object> peaks = new LinkedHashMap<>();
-        putPeak(peaks, "tps", tps, bucketSec);
-        putPeak(peaks, "avgRtMs", rt, bucketSec);
-        putPeak(peaks, "p95Ms", p95, bucketSec);
-        putPeak(peaks, "errorPct", err, bucketSec);
+        putPeak(peaks, "tps", tps, durationSec, buckets);
+        putPeak(peaks, "avgRtMs", rt, durationSec, buckets);
+        putPeak(peaks, "p95Ms", p95, durationSec, buckets);
+        putPeak(peaks, "errorPct", err, durationSec, buckets);
 
         Map<String, Object> d = new LinkedHashMap<>();
         d.put("run", meta);
@@ -412,7 +430,8 @@ public class AiInsightsService {
                 continue;
             }
             Map<String, Object> row = new LinkedHashMap<>();
-            row.put("label", e.getKey());
+            row.put("label", e.getValue().get("label"));
+            row.put("application", e.getValue().get("application"));
             row.put("a", side(e.getValue()));
             row.put("b", side(b));
             rows.add(row);
@@ -428,14 +447,29 @@ public class AiInsightsService {
         return out;
     }
 
+    /**
+     * Index by the rollup's real grain — it groups by {@code (LABEL_KEY,
+     * APPLICATION)}, so two applications in one group may both expose
+     * {@code checkout}. Keying on the label alone dropped one of them and could
+     * pair run A's payments row against run B's search row and call the
+     * difference a regression.
+     */
     private static Map<String, Map<String, Object>> byLabel(List<Map<String, Object>> rollup) {
         Map<String, Map<String, Object>> m = new LinkedHashMap<>();
         if (rollup == null) return m;
         for (Map<String, Object> r : rollup) {
             Object label = r.get("label");
-            if (label != null) m.putIfAbsent(String.valueOf(label), r);
+            if (label != null) m.putIfAbsent(labelKey(r), r);
         }
         return m;
+    }
+
+    /** {@code label} when the run has one application, {@code application/label} otherwise. */
+    private static String labelKey(Map<String, Object> r) {
+        Object app = r.get("application");
+        return app == null || String.valueOf(app).isBlank()
+                ? String.valueOf(r.get("label"))
+                : app + "/" + r.get("label");
     }
 
     private static Map<String, Object> side(Map<String, Object> r) {
@@ -507,8 +541,14 @@ public class AiInsightsService {
      * <b>downsampled</b> arrays, not the raw 15-second windows: one thin window
      * with 2 samples and 1 error is a 50% spike that no chart shows and no
      * operator can act on.
+     *
+     * <p>{@code atSec} divides once, at the end. Scaling an index by an
+     * already-rounded bucket width compounds that rounding across every slice —
+     * on an 8 h run it puts a late peak ~12 minutes early — and the prompt reads
+     * {@code atSec} out to the operator verbatim.
      */
-    static void putPeak(Map<String, Object> into, String key, List<Number> series, long bucketSec) {
+    static void putPeak(Map<String, Object> into, String key, List<Number> series,
+                        long durationSec, int buckets) {
         int idx = -1;
         double best = 0;
         for (int i = 0; i < series.size(); i++) {
@@ -521,7 +561,7 @@ public class AiInsightsService {
         if (idx < 0) return;
         Map<String, Object> peak = new LinkedHashMap<>();
         peak.put("v", series.get(idx));
-        peak.put("atSec", idx * bucketSec);
+        peak.put("atSec", buckets > 0 ? (long) idx * durationSec / buckets : 0L);
         into.put(key, peak);
     }
 
@@ -542,38 +582,58 @@ public class AiInsightsService {
 
     // ── response schema (structured outputs) ────────────────────────────────
 
+    // Every map here is insertion-ordered on purpose. `Map.of` salts its
+    // iteration order once per JVM start, so the serialized schema — and with it
+    // the whole tools/system prefix — would come out in a different byte order
+    // after every restart, forfeiting the one prefix stable enough to cache.
+
     /** The reply shape for AI-1, sent as {@code output_config.format}. */
     static Map<String, Object> runResponseSchema() {
         return object(
                 List.of("summary", "findings"),
-                Map.of("summary", Map.of("type", "string"),
-                        "findings", Map.of(
+                ordered("summary", type("string"),
+                        "findings", ordered(
                                 "type", "array",
                                 "items", object(
                                         List.of("severity", "title", "detail", "evidence"),
-                                        Map.of("severity", Map.of("type", "string",
-                                                        "enum", List.of("info", "warn", "crit")),
-                                                "title", Map.of("type", "string"),
-                                                "detail", Map.of("type", "string"),
-                                                "evidence", Map.of("type", "string"))))));
+                                        ordered("severity", enumOf("info", "warn", "crit"),
+                                                "title", type("string"),
+                                                "detail", type("string"),
+                                                "evidence", type("string"))))));
     }
 
     /** The reply shape for AI-2, sent as {@code output_config.format}. */
     static Map<String, Object> compareResponseSchema() {
         return object(
                 List.of("summary", "findings"),
-                Map.of("summary", Map.of("type", "string"),
-                        "findings", Map.of(
+                ordered("summary", type("string"),
+                        "findings", ordered(
                                 "type", "array",
                                 "items", object(
                                         List.of("metric", "verdict", "delta", "detail", "evidence"),
-                                        Map.of("metric", Map.of("type", "string"),
-                                                "verdict", Map.of("type", "string",
-                                                        "enum", List.of("regression", "improvement",
-                                                                "no significant change")),
-                                                "delta", Map.of("type", "string"),
-                                                "detail", Map.of("type", "string"),
-                                                "evidence", Map.of("type", "string"))))));
+                                        ordered("metric", type("string"),
+                                                "verdict", enumOf("regression", "improvement",
+                                                        "no significant change"),
+                                                "delta", type("string"),
+                                                "detail", type("string"),
+                                                "evidence", type("string"))))));
+    }
+
+    /** An insertion-ordered map from alternating key/value pairs. */
+    private static Map<String, Object> ordered(Object... keyValues) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        for (int i = 0; i + 1 < keyValues.length; i += 2) {
+            m.put(String.valueOf(keyValues[i]), keyValues[i + 1]);
+        }
+        return m;
+    }
+
+    private static Map<String, Object> type(String jsonType) {
+        return ordered("type", jsonType);
+    }
+
+    private static Map<String, Object> enumOf(String... values) {
+        return ordered("type", "string", "enum", List.of(values));
     }
 
     private static Map<String, Object> object(List<String> required, Map<String, Object> properties) {
