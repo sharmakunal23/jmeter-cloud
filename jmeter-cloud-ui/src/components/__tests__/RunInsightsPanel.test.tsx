@@ -100,6 +100,21 @@ describe("RunInsightsPanel (presentational side column)", () => {
     expect(await screen.findByRole("button", { name: /copy failed/i })).toBeInTheDocument();
   });
 
+  it("does not settle a copy that lands after the panel closed", async () => {
+    let resolveWrite: () => void = () => {};
+    const writeText = vi.fn().mockReturnValue(new Promise<void>((res) => { resolveWrite = res; }));
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+
+    const { unmount } = renderPanel({ kind: "ok" }, withData());
+    fireEvent.click(screen.getByRole("button", { name: /copy/i }));
+    unmount();
+    // The write settles after the panel is gone: cancelling the timer is not
+    // enough, because no timer had been scheduled yet.
+    resolveWrite();
+    await Promise.resolve();
+    expect(writeText).toHaveBeenCalledTimes(1);
+  });
+
   it("Re-evaluate and close fire their callbacks", () => {
     renderPanel({ kind: "ok" }, withData());
     fireEvent.click(screen.getByRole("button", { name: /re-evaluate/i }));

@@ -19,6 +19,7 @@ export interface UseCopyToClipboardResult {
 export function useCopyToClipboard(resetMs = 2000): UseCopyToClipboardResult {
   const [status, setStatus] = useState<CopyStatus>("idle");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mounted = useRef(true);
 
   const clear = useCallback(() => {
     if (timer.current !== null) {
@@ -27,13 +28,23 @@ export function useCopyToClipboard(resetMs = 2000): UseCopyToClipboardResult {
     }
   }, []);
 
-  // Don't set state on an unmounted panel — the reset outlives a quick close.
-  useEffect(() => clear, [clear]);
+  // Both halves are needed. Cancelling the timer alone misses the common case —
+  // the panel closes while the clipboard promise is still in flight, so there is
+  // no timer to cancel yet and the callback then schedules one nothing will
+  // clear. `mounted` is what actually stops the settle.
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      clear();
+    };
+  }, [clear]);
 
   const copy = useCallback(
     (text: string) => {
       clear();
       const settle = (next: CopyStatus) => {
+        if (!mounted.current) return;
         setStatus(next);
         timer.current = setTimeout(() => setStatus("idle"), resetMs);
       };

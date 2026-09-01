@@ -113,11 +113,13 @@ export function MetricsTabPanel({ runId, runState, run, dashboards }: MetricsTab
   const { enabled: aiEnabled } = useAiStatus();
   const [showInsights, setShowInsights] = useState(false);
   const insights = useRunInsights(runId);
-  // The analysis reads the WHOLE run, so this gate must not turn on the
-  // toolbar's range: a terminal run showing any data has a run to read, while a
-  // live one still needs a window or two before a summary says anything.
-  const secondsOfData = data ? data.series.tps.length * Math.max(1, data.bucketSize) : 0;
-  const insightsReady = hasChartData && (isTerminal || secondsOfData >= 30);
+  // The analysis reads the WHOLE run, so this gate reads the run — not the
+  // charts. `charts` follows the toolbar's range AND only runs while a chart
+  // section is open, so gating on it stranded the panel on "not yet" for anyone
+  // who had collapsed Throughput and Errors, however much data the run had.
+  const startedMs = run?.startedAt ? Date.parse(run.startedAt) : NaN;
+  const secondsRunning = Number.isNaN(startedMs) ? 0 : (Date.now() - startedMs) / 1000;
+  const insightsReady = isTerminal || secondsRunning >= 30;
   const insightsOpen = aiEnabled && showInsights;
   const insightsGenerate = insights.generate;
   const insightsKind = insights.status.kind;
