@@ -4673,7 +4673,7 @@ components:
       properties:
         runId:         { type: string }
         model:         { type: string }
-        promptVersion: { type: string, example: v4 }
+        promptVersion: { type: string, example: v6 }
         summary:       { type: string, description: "1–2 sentence plain-text overview." }
         findings:
           description: "2–5 observations, most important first."
@@ -4704,7 +4704,7 @@ components:
           items: { type: string }
           description: "The two run ids in the operator's submitted order (A, B)."
         model:         { type: string }
-        promptVersion: { type: string, example: v4 }
+        promptVersion: { type: string, example: v6 }
         summary:       { type: string, description: "1–2 sentence comparison of B relative to A." }
         findings:
           description: |
