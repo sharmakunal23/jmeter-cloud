@@ -1,14 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 642" width="960" height="642" role="img" aria-label="The metrics pipeline: JMeter writes a JTL row per sample, the worker tails and parses it, aggregates 15-second windows, buffers each envelope to disk, and POSTs it to the metrics-consumer, which routes by group and inserts first-write-wins into the group's fact table. The Metrics tab and Grafana read those facts back.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 642" width="1100" height="642" role="img" aria-label="The metrics pipeline: the JMeter worker writes a JTL row per sample, the runner tails and parses it, aggregates 15-second windows, buffers each envelope to disk, and POSTs it to the metrics consumer, which routes by group and inserts first-write-wins into the group's fact table. The Metrics tab and Grafana read those facts back.">
     <defs>
         <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
         </marker>
     </defs>
-
-    <rect x="0" y="0" width="960" height="642" fill="#ffffff"/>
-
+    <rect x="0" y="0" width="1100" height="642" fill="#ffffff"/>
     <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
-
         <text x="14" y="28" font-size="15" font-weight="700" fill="#0f172a">One JMeter sample &#8594; a live chart</text>
         <text x="14" y="48" font-size="11" fill="#64748b">Every hop, and the technology that does it. Windows are 15 s wide and grid-aligned.</text>
 
@@ -22,50 +19,48 @@
         </g>
 
         <g fill="none" stroke="#94a3b8" stroke-width="2">
-            <line x1="520" y1="132" x2="520" y2="174" marker-end="url(#arrow)"/>
-            <line x1="520" y1="226" x2="520" y2="268" marker-end="url(#arrow)"/>
-            <line x1="520" y1="320" x2="520" y2="362" marker-end="url(#arrow)"/>
-            <line x1="520" y1="414" x2="520" y2="456" marker-end="url(#arrow)"/>
-            <line x1="520" y1="508" x2="520" y2="550" marker-end="url(#arrow)"/>
-            <line x1="810" y1="550" x2="810" y2="508" marker-end="url(#arrow)"/>
+            <line x1="590" y1="132" x2="590" y2="174" marker-end="url(#arrow)"/>
+            <line x1="590" y1="226" x2="590" y2="268" marker-end="url(#arrow)"/>
+            <line x1="590" y1="320" x2="590" y2="362" marker-end="url(#arrow)"/>
+            <line x1="590" y1="414" x2="590" y2="456" marker-end="url(#arrow)"/>
+            <line x1="590" y1="508" x2="590" y2="550" marker-end="url(#arrow)"/>
+            <line x1="905" y1="550" x2="905" y2="508" marker-end="url(#arrow)"/>
         </g>
 
         <g font-size="11" fill="#64748b">
-            <text x="530" y="157">one row per sample</text>
-            <text x="530" y="251">tail &#183; parse columns</text>
-            <text x="530" y="345">one batch per window</text>
-            <text x="530" y="439">POST /api/v1/ingest?groupId=</text>
-            <text x="530" y="533">INSERT &#183; first write wins</text>
-            <text x="820" y="533">reads facts</text>
+            <text x="600" y="157">one row per sample</text>
+            <text x="600" y="251">tail &#183; parse columns</text>
+            <text x="600" y="345">one batch per window</text>
+            <text x="600" y="439">POST /api/v1/ingest?groupId=</text>
+            <text x="600" y="533">INSERT &#183; first write wins</text>
+            <text x="915" y="533">reads facts</text>
         </g>
 
-        <rect x="420" y="80" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="520" y="102" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">JMeter child</text>
-        <text x="520" y="119" text-anchor="middle" font-size="11" fill="#475569">child process &#183; one row / req</text>
+        <rect x="445" y="80" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="590" y="101" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">JMeter worker</text>
+        <text x="590" y="118" text-anchor="middle" font-size="11" fill="#475569">one JTL row per sample</text>
 
-        <rect x="420" y="174" width="200" height="52" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
-        <text x="520" y="196" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">results.jtl</text>
-        <text x="520" y="213" text-anchor="middle" font-size="11" fill="#475569">CSV &#183; tailed from .jtlOffset</text>
+        <rect x="445" y="174" width="290" height="52" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+        <text x="590" y="195" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">results.jtl</text>
+        <text x="590" y="212" text-anchor="middle" font-size="11" fill="#475569">CSV &#183; tailed from .jtlOffset</text>
 
-        <rect x="420" y="268" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="520" y="290" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">Window aggregator</text>
-        <text x="520" y="307" text-anchor="middle" font-size="11" fill="#475569">HDRHistogram &#183; 15 s windows</text>
+        <rect x="445" y="268" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="590" y="289" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">Window aggregator</text>
+        <text x="590" y="306" text-anchor="middle" font-size="11" fill="#475569">HDRHistogram &#183; 15 s windows</text>
 
-        <rect x="420" y="362" width="200" height="52" rx="8" fill="#f1f5f9" stroke="#334155" stroke-width="1.5"/>
-        <text x="520" y="384" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">Disk buffer + retry</text>
-        <text x="520" y="401" text-anchor="middle" font-size="11" fill="#475569">gzip &#183; written before sending</text>
+        <rect x="445" y="362" width="290" height="52" rx="8" fill="#f1f5f9" stroke="#334155" stroke-width="1.5"/>
+        <text x="590" y="383" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">Disk buffer + retry</text>
+        <text x="590" y="400" text-anchor="middle" font-size="11" fill="#475569">gzip &#183; written before sending</text>
 
-        <rect x="420" y="456" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="520" y="478" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">metrics-consumer</text>
-        <text x="520" y="495" text-anchor="middle" font-size="11" fill="#475569">routes by group &#183; 8083</text>
+        <rect x="445" y="456" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="590" y="477" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">card-zate-metrics-consumer</text>
+        <text x="590" y="494" text-anchor="middle" font-size="11" fill="#475569">routes by group &#183; 8083</text>
+        <rect x="760" y="456" width="290" height="52" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+        <text x="905" y="477" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">Metrics tab &#183; Grafana</text>
+        <text x="905" y="494" text-anchor="middle" font-size="11" fill="#475569">query-time aggregation</text>
 
-        <rect x="710" y="456" width="200" height="52" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
-        <text x="810" y="478" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">Metrics tab &#183; Grafana</text>
-        <text x="810" y="495" text-anchor="middle" font-size="11" fill="#475569">query-time aggregation</text>
-
-        <rect x="130" y="550" width="780" height="72" rx="8" fill="#f1f5f9" stroke="#334155" stroke-width="1.5"/>
-        <text x="520" y="580" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Database</text>
-        <text x="520" y="600" text-anchor="middle" font-size="11" fill="#475569">&#60;GROUP_ID&#62;_METRICS daily partitions &#183; _METRICS_H nightly archive</text>
-
+        <rect x="130" y="550" width="920" height="72" rx="8" fill="#f1f5f9" stroke="#334155" stroke-width="1.5"/>
+        <text x="590" y="580" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Database</text>
+        <text x="590" y="600" text-anchor="middle" font-size="11" fill="#475569">&#60;GROUP_ID&#62;_METRICS daily partitions &#183; _METRICS_H nightly archive</text>
     </g>
 </svg>

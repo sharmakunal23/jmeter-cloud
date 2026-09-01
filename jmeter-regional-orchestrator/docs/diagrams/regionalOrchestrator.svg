@@ -1,12 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 454" width="960" height="454" role="img" aria-label="The regional orchestrator: the global is its only client. It creates worker Pods through the Kubernetes API and relays the hub's worker calls over a path allow-list. Workers reach the hub's data services directly, never its control plane.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 454" width="1100" height="454" role="img" aria-label="The regional orchestrator: the performance platform is its only client. It creates worker Pods through the Kubernetes API and relays the hub's worker calls over a path allow-list. Workers reach the hub's data services directly, never its control plane.">
     <defs>
         <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
         </marker>
     </defs>
-    <rect x="0" y="0" width="960" height="454" fill="#ffffff"/>
+    <rect x="0" y="0" width="1100" height="454" fill="#ffffff"/>
     <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
-        <text x="14" y="28" font-size="15" font-weight="700" fill="#0f172a">jmeter-regional-orchestrator &#8212; the hub's arm inside one cluster</text>
+        <text x="14" y="28" font-size="15" font-weight="700" fill="#0f172a">card-zate-regional-orchestrator &#8212; the hub's arm inside one cluster</text>
         <text x="14" y="48" font-size="11" fill="#64748b">Stateless, and it never dials the hub. Workers reach the hub for data only &#8212; metrics and artifacts.</text>
 
         <g font-size="10" font-weight="600" fill="#64748b" letter-spacing="1">
@@ -17,49 +17,47 @@
         </g>
 
         <g fill="none" stroke="#94a3b8" stroke-width="2">
-            <line x1="520" y1="132" x2="520" y2="174" marker-end="url(#arrow)"/>
-            <line x1="520" y1="226" x2="520" y2="252"/>
-            <line x1="230" y1="252" x2="810" y2="252"/>
-            <line x1="230" y1="252" x2="230" y2="278" marker-end="url(#arrow)"/>
-            <line x1="810" y1="252" x2="810" y2="278" marker-end="url(#arrow)"/>
-            <line x1="330" y1="304" x2="710" y2="304" marker-end="url(#arrow)"/>
-            <line x1="810" y1="330" x2="810" y2="356"/>
-            <line x1="230" y1="356" x2="810" y2="356"/>
-            <line x1="230" y1="356" x2="230" y2="382" marker-end="url(#arrow)"/>
-            <line x1="810" y1="356" x2="810" y2="382" marker-end="url(#arrow)"/>
+            <line x1="590" y1="132" x2="590" y2="174" marker-end="url(#arrow)"/>
+            <line x1="590" y1="226" x2="590" y2="252"/>
+            <line x1="275" y1="252" x2="905" y2="252"/>
+            <line x1="275" y1="252" x2="275" y2="278" marker-end="url(#arrow)"/>
+            <line x1="905" y1="252" x2="905" y2="278" marker-end="url(#arrow)"/>
+            <line x1="420" y1="304" x2="760" y2="304" marker-end="url(#arrow)"/>
+            <line x1="905" y1="330" x2="905" y2="356"/>
+            <line x1="275" y1="356" x2="905" y2="356"/>
+            <line x1="275" y1="356" x2="275" y2="382" marker-end="url(#arrow)"/>
+            <line x1="905" y1="356" x2="905" y2="382" marker-end="url(#arrow)"/>
         </g>
 
         <g font-size="11" fill="#64748b">
-            <text x="530" y="157">/api/v1/pods &#183; /workers &#183; relay</text>
-            <text x="240" y="270">create &#183; delete &#183; list Pod</text>
-            <text x="820" y="270">relay: /test &#183; logs</text>
-            <text x="500" y="294">creates</text>
-            <text x="240" y="374">metrics</text>
-            <text x="820" y="374">artifacts</text>
+            <text x="600" y="157">/api/v1/pods &#183; /workers &#183; relay</text>
+            <text x="285" y="270">create &#183; delete &#183; list Pod</text>
+            <text x="915" y="270">relay: /test &#183; logs</text>
+            <text x="575" y="294">creates</text>
+            <text x="285" y="374">metrics</text>
+            <text x="915" y="374">artifacts</text>
         </g>
 
-        <rect x="420" y="80" width="200" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
-        <text x="520" y="102" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">global-orchestrator</text>
-        <text x="520" y="119" text-anchor="middle" font-size="11" fill="#475569">8082 &#183; the only client</text>
+        <rect x="445" y="80" width="290" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+        <text x="590" y="101" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">card-zate-performance-platform</text>
+        <text x="590" y="118" text-anchor="middle" font-size="11" fill="#475569">8082 &#183; the only client</text>
 
-        <rect x="420" y="174" width="200" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
-        <text x="520" y="196" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">regional-orchestrator</text>
-        <text x="520" y="213" text-anchor="middle" font-size="11" fill="#475569">8088 &#183; pods &#183; relay &#183; no state</text>
+        <rect x="445" y="174" width="290" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+        <text x="590" y="195" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">card-zate-regional-orchestrator</text>
+        <text x="590" y="212" text-anchor="middle" font-size="11" fill="#475569">8088 &#183; pods &#183; relay &#183; no state</text>
 
-        <rect x="130" y="278" width="200" height="52" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
-        <text x="230" y="300" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">Kubernetes API</text>
-        <text x="230" y="317" text-anchor="middle" font-size="11" fill="#475569">pods-only ServiceAccount</text>
+        <rect x="130" y="278" width="290" height="52" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="275" y="299" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">Kubernetes API</text>
+        <text x="275" y="316" text-anchor="middle" font-size="11" fill="#475569">pods-only ServiceAccount</text>
+        <rect x="760" y="278" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="905" y="299" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">worker Pods</text>
+        <text x="905" y="316" text-anchor="middle" font-size="11" fill="#475569">{podName}.workers &#183; 8080</text>
 
-        <rect x="710" y="278" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="810" y="300" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">worker Pods</text>
-        <text x="810" y="317" text-anchor="middle" font-size="11" fill="#475569">{podName}.workers &#183; 8080</text>
-
-        <rect x="130" y="382" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="230" y="404" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">metrics-consumer</text>
-        <text x="230" y="421" text-anchor="middle" font-size="11" fill="#475569">8083 &#183; ingest</text>
-
-        <rect x="710" y="382" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="810" y="404" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">document-service</text>
-        <text x="810" y="421" text-anchor="middle" font-size="11" fill="#475569">8084 &#183; plans &#183; results</text>
+        <rect x="130" y="382" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="275" y="403" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">card-zate-metrics-consumer</text>
+        <text x="275" y="420" text-anchor="middle" font-size="11" fill="#475569">8083 &#183; ingest</text>
+        <rect x="760" y="382" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="905" y="403" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">document-service</text>
+        <text x="905" y="420" text-anchor="middle" font-size="11" fill="#475569">8084 &#183; plans &#183; results</text>
     </g>
 </svg>

@@ -1,13 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 464" width="960" height="464" role="img" aria-label="The metrics consumer: workers POST a JSON batch to the ingest controller, which either rejects it terminally, writes it to the group's fact table, or asks the worker to retry. Poison envelopes are rejected at the edge; durability lives in the worker's disk buffer.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 464" width="1100" height="464" role="img" aria-label="The metrics consumer: runners POST a JSON batch to the ingest controller, which either rejects it terminally, writes it to the group's fact table, or asks the runner to retry. Poison envelopes are rejected at the edge; durability lives in the runner's disk buffer.">
     <defs>
         <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
         </marker>
     </defs>
-    <rect x="0" y="0" width="960" height="464" fill="#ffffff"/>
+    <rect x="0" y="0" width="1100" height="464" fill="#ffffff"/>
     <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
-        <text x="14" y="28" font-size="15" font-weight="700" fill="#0f172a">jmeter-metrics-consumer &#8212; HTTP ingest to the group's fact table</text>
-        <text x="14" y="48" font-size="11" fill="#64748b">Poison envelopes are rejected at the edge. Durability lives in the worker's disk buffer, not here.</text>
+        <text x="14" y="28" font-size="15" font-weight="700" fill="#0f172a">card-zate-metrics-consumer &#8212; HTTP ingest to the group's fact table</text>
+        <text x="14" y="48" font-size="11" fill="#64748b">Poison envelopes are rejected at the edge. Durability lives in the runner's disk buffer, not here.</text>
 
         <g font-size="10" font-weight="600" fill="#64748b" letter-spacing="1">
             <text x="14" y="110">1 &#183; WORKERS</text>
@@ -17,45 +17,43 @@
         </g>
 
         <g fill="none" stroke="#94a3b8" stroke-width="2">
-            <line x1="520" y1="132" x2="520" y2="174" marker-end="url(#arrow)"/>
-            <line x1="520" y1="226" x2="520" y2="252"/>
-            <line x1="230" y1="252" x2="810" y2="252"/>
-            <line x1="230" y1="252" x2="230" y2="278" marker-end="url(#arrow)"/>
-            <line x1="520" y1="252" x2="520" y2="278" marker-end="url(#arrow)"/>
-            <line x1="810" y1="252" x2="810" y2="278" marker-end="url(#arrow)"/>
-            <line x1="520" y1="330" x2="520" y2="372" marker-end="url(#arrow)"/>
+            <line x1="590" y1="132" x2="590" y2="174" marker-end="url(#arrow)"/>
+            <line x1="590" y1="226" x2="590" y2="252"/>
+            <line x1="275" y1="252" x2="905" y2="252"/>
+            <line x1="275" y1="252" x2="275" y2="278" marker-end="url(#arrow)"/>
+            <line x1="590" y1="252" x2="590" y2="278" marker-end="url(#arrow)"/>
+            <line x1="905" y1="252" x2="905" y2="278" marker-end="url(#arrow)"/>
+            <line x1="590" y1="330" x2="590" y2="372" marker-end="url(#arrow)"/>
         </g>
 
         <g font-size="11" fill="#64748b">
-            <text x="530" y="157">JSON WorkerMetricBatch</text>
-            <text x="240" y="270">undecodable &#183; unknown group</text>
-            <text x="530" y="270">accepted 202</text>
-            <text x="820" y="270">database down</text>
-            <text x="530" y="355">INSERT &#183; first write wins</text>
+            <text x="600" y="157">JSON WorkerMetricBatch</text>
+            <text x="285" y="270">undecodable &#183; unknown group</text>
+            <text x="600" y="270">accepted 202</text>
+            <text x="915" y="270">database down</text>
+            <text x="600" y="355">INSERT &#183; first write wins</text>
         </g>
 
-        <rect x="420" y="80" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="520" y="102" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">worker pods</text>
-        <text x="520" y="119" text-anchor="middle" font-size="11" fill="#475569">local-orchestrator &#215; N</text>
+        <rect x="445" y="80" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="590" y="101" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">worker pods</text>
+        <text x="590" y="118" text-anchor="middle" font-size="11" fill="#475569">card-zate-jmeter-runner &#215; N</text>
 
-        <rect x="420" y="174" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="520" y="196" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">IngestController</text>
-        <text x="520" y="213" text-anchor="middle" font-size="11" fill="#475569">/api/v1/ingest?groupId=</text>
+        <rect x="445" y="174" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="590" y="195" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">IngestController</text>
+        <text x="590" y="212" text-anchor="middle" font-size="11" fill="#475569">/api/v1/ingest?groupId=</text>
 
-        <rect x="130" y="278" width="200" height="52" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5,4"/>
-        <text x="230" y="300" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">terminal reject</text>
-        <text x="230" y="317" text-anchor="middle" font-size="11" fill="#475569">400 &#183; 413 &#8212; worker drops</text>
+        <rect x="130" y="278" width="290" height="52" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5,4"/>
+        <text x="275" y="299" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">terminal reject</text>
+        <text x="275" y="316" text-anchor="middle" font-size="11" fill="#475569">400 &#183; 413 &#8212; runner drops</text>
+        <rect x="445" y="278" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="590" y="299" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">WorkerMetricWriter</text>
+        <text x="590" y="316" text-anchor="middle" font-size="11" fill="#475569">routes via GROUP_REGISTRY</text>
+        <rect x="760" y="278" width="290" height="52" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5,4"/>
+        <text x="905" y="299" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">503 &#183; retry</text>
+        <text x="905" y="316" text-anchor="middle" font-size="11" fill="#475569">runner replays from disk</text>
 
-        <rect x="420" y="278" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="520" y="300" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">WorkerMetricWriter</text>
-        <text x="520" y="317" text-anchor="middle" font-size="11" fill="#475569">routes via GROUP_REGISTRY</text>
-
-        <rect x="710" y="278" width="200" height="52" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5,4"/>
-        <text x="810" y="300" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">503 &#183; retry</text>
-        <text x="810" y="317" text-anchor="middle" font-size="11" fill="#475569">worker replays from disk</text>
-
-        <rect x="130" y="372" width="780" height="72" rx="8" fill="#f1f5f9" stroke="#334155" stroke-width="1.5"/>
-        <text x="520" y="402" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Database</text>
-        <text x="520" y="422" text-anchor="middle" font-size="11" fill="#475569">dimensions get-or-create &#183; &#60;GROUP_ID&#62;_METRICS, first write wins</text>
+        <rect x="130" y="372" width="920" height="72" rx="8" fill="#f1f5f9" stroke="#334155" stroke-width="1.5"/>
+        <text x="590" y="402" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Database</text>
+        <text x="590" y="422" text-anchor="middle" font-size="11" fill="#475569">dimensions get-or-create &#183; &#60;GROUP_ID&#62;_METRICS, first write wins</text>
     </g>
 </svg>

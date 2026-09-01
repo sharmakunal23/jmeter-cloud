@@ -1,13 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 380" width="960" height="380" role="img" aria-label="One database, one schema: Flyway migrates CARDZATE_DB_GRAF as the owner, creating both the hosted metrics layout and the ORCH_* control plane. The metrics consumer inserts facts as the owner; the global orchestrator connects as scoped users.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 380" width="1100" height="380" role="img" aria-label="One database, one schema: the numbered migration scripts are applied as the owner, creating both the hosted metrics layout and the ORCH_* control plane. The metrics consumer inserts facts as the owner; the performance platform connects as scoped users.">
     <defs>
         <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
         </marker>
     </defs>
-    <rect x="0" y="0" width="960" height="380" fill="#ffffff"/>
+    <rect x="0" y="0" width="1100" height="380" fill="#ffffff"/>
     <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
         <text x="14" y="28" font-size="15" font-weight="700" fill="#0f172a">oracle &#8212; one database, one schema, role-scoped access</text>
-        <text x="14" y="48" font-size="11" fill="#64748b">Everything lives in CARDZATE_DB_GRAF. Flyway applies it as the owner; only two services hold a pool.</text>
+        <text x="14" y="48" font-size="11" fill="#64748b">Everything lives in CARDZATE_DB_GRAF. The migration scripts are applied as the owner; only two services hold a pool.</text>
 
         <g font-size="10" font-weight="600" fill="#64748b" letter-spacing="1">
             <text x="14" y="110">1 &#183; CLIENTS</text>
@@ -16,45 +16,43 @@
         </g>
 
         <g fill="none" stroke="#94a3b8" stroke-width="2">
-            <line x1="230" y1="132" x2="230" y2="174" marker-end="url(#arrow)"/>
-            <line x1="520" y1="132" x2="520" y2="174" marker-end="url(#arrow)"/>
-            <line x1="810" y1="132" x2="810" y2="174" marker-end="url(#arrow)"/>
-            <line x1="520" y1="132" x2="520" y2="145"/>
-            <line x1="118" y1="145" x2="520" y2="145"/>
+            <line x1="275" y1="132" x2="275" y2="174" marker-end="url(#arrow)"/>
+            <line x1="590" y1="132" x2="590" y2="174" marker-end="url(#arrow)"/>
+            <line x1="905" y1="132" x2="905" y2="174" marker-end="url(#arrow)"/>
+            <line x1="590" y1="132" x2="590" y2="145"/>
+            <line x1="118" y1="145" x2="590" y2="145"/>
             <line x1="118" y1="145" x2="118" y2="324"/>
             <line x1="118" y1="324" x2="130" y2="324" marker-end="url(#arrow)"/>
-            <line x1="810" y1="132" x2="810" y2="145"/>
-            <line x1="810" y1="145" x2="942" y2="145"/>
-            <line x1="942" y1="145" x2="942" y2="324"/>
-            <line x1="942" y1="324" x2="910" y2="324" marker-end="url(#arrow)"/>
+            <line x1="905" y1="132" x2="905" y2="145"/>
+            <line x1="905" y1="145" x2="1075" y2="145"/>
+            <line x1="1075" y1="145" x2="1075" y2="324"/>
+            <line x1="1075" y1="324" x2="1050" y2="324" marker-end="url(#arrow)"/>
         </g>
 
         <g font-size="11" fill="#64748b">
-            <text x="240" y="167">INSERT &#183; first wins</text>
-            <text x="530" y="167">DDL</text>
-            <text x="820" y="167">reads &#183; purge</text>
+            <text x="285" y="167">INSERT &#183; first wins</text>
+            <text x="600" y="167">DDL</text>
+            <text x="915" y="167">reads &#183; purge</text>
             <text x="128" y="271">DDL</text>
-            <text x="830" y="271">read/write</text>
+            <text x="915" y="271">read/write</text>
         </g>
 
-        <rect x="130" y="80" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="230" y="102" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">metrics-consumer</text>
-        <text x="230" y="119" text-anchor="middle" font-size="11" fill="#475569">connects as the owner</text>
+        <rect x="130" y="80" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="275" y="101" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">card-zate-metrics-consumer</text>
+        <text x="275" y="118" text-anchor="middle" font-size="11" fill="#475569">connects as the owner</text>
+        <rect x="445" y="80" width="290" height="52" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+        <text x="590" y="101" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">db-migration</text>
+        <text x="590" y="118" text-anchor="middle" font-size="11" fill="#475569">V1&#8230;V9 + group bundles</text>
+        <rect x="760" y="80" width="290" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+        <text x="905" y="101" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">card-zate-performance-platform</text>
+        <text x="905" y="118" text-anchor="middle" font-size="11" fill="#475569">three scoped users</text>
 
-        <rect x="420" y="80" width="200" height="52" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
-        <text x="520" y="102" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">flyway-migrate</text>
-        <text x="520" y="119" text-anchor="middle" font-size="11" fill="#475569">V1&#8230;V9 + R__group_&#42;</text>
+        <rect x="130" y="174" width="920" height="72" rx="8" fill="#f1f5f9" stroke="#334155" stroke-width="1.5"/>
+        <text x="590" y="204" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">metrics &#8212; the hosted layout</text>
+        <text x="590" y="224" text-anchor="middle" font-size="11" fill="#475569">LABEL &#183; RUN &#183; WORKER &#183; GROUP_REGISTRY &#183; &#60;GROUP_ID&#62;_METRICS and _METRICS_H per group</text>
 
-        <rect x="710" y="80" width="200" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
-        <text x="810" y="102" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">global-orchestrator</text>
-        <text x="810" y="119" text-anchor="middle" font-size="11" fill="#475569">three scoped users</text>
-
-        <rect x="130" y="174" width="780" height="72" rx="8" fill="#f1f5f9" stroke="#334155" stroke-width="1.5"/>
-        <text x="520" y="204" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">metrics &#8212; the hosted layout</text>
-        <text x="520" y="224" text-anchor="middle" font-size="11" fill="#475569">LABEL &#183; RUN &#183; WORKER &#183; GROUP_REGISTRY &#183; &#60;GROUP_ID&#62;_METRICS and _METRICS_H per group</text>
-
-        <rect x="130" y="288" width="780" height="72" rx="8" fill="#f1f5f9" stroke="#334155" stroke-width="1.5"/>
-        <text x="520" y="318" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">ORCH_* &#8212; the control plane</text>
-        <text x="520" y="338" text-anchor="middle" font-size="11" fill="#475569">ORCH_RUN &#183; ORCH_POD &#183; ORCH_REGION &#183; ORCH_WORKFLOW &#183; ORCH_CACHE &#183; ORCH_CLAIMS</text>
+        <rect x="130" y="288" width="920" height="72" rx="8" fill="#f1f5f9" stroke="#334155" stroke-width="1.5"/>
+        <text x="590" y="318" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">ORCH_* &#8212; the control plane</text>
+        <text x="590" y="338" text-anchor="middle" font-size="11" fill="#475569">ORCH_RUN &#183; ORCH_POD &#183; ORCH_REGION &#183; ORCH_WORKFLOW &#183; ORCH_CACHE &#183; ORCH_CLAIMS</text>
     </g>
 </svg>

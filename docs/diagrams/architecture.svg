@@ -1,19 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 662" width="960" height="662" role="img" aria-label="Service topology: the browser reaches nginx, which proxies to the global orchestrator and the document service. The global reaches workers only through each cluster's regional orchestrator. Workers POST metric windows to the consumer, and the global and the consumer are the only writers to the database.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 662" width="1100" height="662" role="img" aria-label="Service topology: nginx serves the SPA and proxies to the performance platform and the document service. The platform reaches workers only through each cluster's regional orchestrator. Workers POST metric windows to the consumer, and the platform and the consumer are the only writers to the database.">
     <defs>
         <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
         </marker>
     </defs>
-
-    <rect x="0" y="0" width="960" height="662" fill="#ffffff"/>
-
+    <rect x="0" y="0" width="1100" height="662" fill="#ffffff"/>
     <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
-
         <text x="14" y="28" font-size="15" font-weight="700" fill="#0f172a">jmeter-cloud &#8212; service topology</text>
-        <text x="14" y="48" font-size="11" fill="#64748b">One control plane, a stateless arm in each data center, and two writers to the one database.</text>
+        <text x="14" y="48" font-size="11" fill="#64748b">An operator drives it from the UI. One control plane, a stateless arm in each data center, two writers to the one database.</text>
 
         <g font-size="10" font-weight="600" fill="#64748b" letter-spacing="1">
-            <text x="14" y="110">1 &#183; OPERATOR</text>
+            <text x="14" y="110">1 &#183; EDGE</text>
             <text x="14" y="214">2 &#183; CONTROL</text>
             <text x="14" y="308">3 &#183; DATA CENTER</text>
             <text x="14" y="402">4 &#183; WORKERS</text>
@@ -22,66 +19,58 @@
         </g>
 
         <g fill="none" stroke="#94a3b8" stroke-width="2">
-            <line x1="330" y1="106" x2="420" y2="106" marker-end="url(#arrow)"/>
-            <line x1="520" y1="132" x2="520" y2="158"/>
-            <line x1="520" y1="158" x2="810" y2="158"/>
-            <line x1="520" y1="158" x2="520" y2="184" marker-end="url(#arrow)"/>
-            <line x1="810" y1="158" x2="810" y2="184" marker-end="url(#arrow)"/>
-            <line x1="520" y1="236" x2="520" y2="278" marker-end="url(#arrow)"/>
-            <line x1="520" y1="330" x2="520" y2="372" marker-end="url(#arrow)"/>
-            <line x1="520" y1="424" x2="520" y2="450"/>
-            <line x1="520" y1="450" x2="810" y2="450"/>
-            <line x1="520" y1="450" x2="520" y2="476" marker-end="url(#arrow)"/>
-            <line x1="810" y1="450" x2="810" y2="236" marker-end="url(#arrow)"/>
-            <line x1="520" y1="528" x2="520" y2="570" marker-end="url(#arrow)"/>
-            <line x1="420" y1="222" x2="118" y2="222"/>
+            <line x1="590" y1="132" x2="590" y2="158"/>
+            <line x1="590" y1="158" x2="905" y2="158"/>
+            <line x1="590" y1="158" x2="590" y2="184" marker-end="url(#arrow)"/>
+            <line x1="905" y1="158" x2="905" y2="184" marker-end="url(#arrow)"/>
+            <line x1="590" y1="236" x2="590" y2="278" marker-end="url(#arrow)"/>
+            <line x1="590" y1="330" x2="590" y2="372" marker-end="url(#arrow)"/>
+            <line x1="590" y1="424" x2="590" y2="450"/>
+            <line x1="590" y1="450" x2="905" y2="450"/>
+            <line x1="590" y1="450" x2="590" y2="476" marker-end="url(#arrow)"/>
+            <line x1="905" y1="450" x2="905" y2="236" marker-end="url(#arrow)"/>
+            <line x1="590" y1="528" x2="590" y2="570" marker-end="url(#arrow)"/>
+            <line x1="445" y1="222" x2="118" y2="222"/>
             <line x1="118" y1="222" x2="118" y2="606"/>
             <line x1="118" y1="606" x2="130" y2="606" marker-end="url(#arrow)"/>
         </g>
 
         <g font-size="11" fill="#64748b">
-            <text x="345" y="97">HTTPS</text>
-            <text x="530" y="176">/api/*</text>
-            <text x="820" y="176">/api/v1/blob/*</text>
-            <text x="530" y="261">/api/v1/pods &#183; /workers</text>
-            <text x="530" y="355">relays POST /test &#183; status</text>
-            <text x="820" y="440">plan &#183; results</text>
-            <text x="530" y="468">ingest &#183; every 15 s</text>
-            <text x="530" y="553">inserts &#183; first wins</text>
-            <text x="128" y="300">run state &#183; reads facts</text>
+            <text x="600" y="176">/api/*</text>
+            <text x="915" y="176">/api/v1/blob/*</text>
+            <text x="128" y="246">run state &#183; reads facts</text>
+            <text x="600" y="261">/api/v1/pods &#183; /workers</text>
+            <text x="600" y="355">relays POST /test &#183; status</text>
+            <text x="915" y="440">plan &#183; results</text>
+            <text x="600" y="468">ingest &#183; every 15 s</text>
+            <text x="600" y="553">inserts &#183; first wins</text>
         </g>
 
-        <rect x="130" y="80" width="200" height="52" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
-        <text x="230" y="102" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">Browser</text>
-        <text x="230" y="119" text-anchor="middle" font-size="11" fill="#475569">operator</text>
+        <rect x="445" y="80" width="290" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+        <text x="590" y="101" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">card-zate-performance-platform-ui</text>
+        <text x="590" y="118" text-anchor="middle" font-size="11" fill="#475569">nginx + React &#183; 8086</text>
 
-        <rect x="420" y="80" width="200" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
-        <text x="520" y="102" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">jmeter-cloud-ui</text>
-        <text x="520" y="119" text-anchor="middle" font-size="11" fill="#475569">nginx + React &#183; 8086</text>
+        <rect x="445" y="184" width="290" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+        <text x="590" y="205" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">card-zate-performance-platform</text>
+        <text x="590" y="222" text-anchor="middle" font-size="11" fill="#475569">runs &#183; capacity &#183; 8082</text>
+        <rect x="760" y="184" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="905" y="205" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">document-service</text>
+        <text x="905" y="222" text-anchor="middle" font-size="11" fill="#475569">plans &#183; data &#183; results &#183; 8084</text>
 
-        <rect x="420" y="184" width="200" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
-        <text x="520" y="206" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">global-orchestrator</text>
-        <text x="520" y="223" text-anchor="middle" font-size="11" fill="#475569">runs &#183; capacity &#183; 8082</text>
+        <rect x="445" y="278" width="290" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+        <text x="590" y="299" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">card-zate-regional-orchestrator</text>
+        <text x="590" y="316" text-anchor="middle" font-size="11" fill="#475569">pods &#183; relay &#183; 8088</text>
 
-        <rect x="710" y="184" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="810" y="206" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">document-service</text>
-        <text x="810" y="223" text-anchor="middle" font-size="11" fill="#475569">plans &#183; data &#183; results &#183; 8084</text>
+        <rect x="445" y="372" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="590" y="393" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">card-zate-jmeter-runner</text>
+        <text x="590" y="410" text-anchor="middle" font-size="11" fill="#475569">worker &#183; 8080 &#183; N per run</text>
 
-        <rect x="420" y="278" width="200" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
-        <text x="520" y="300" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">regional-orchestrator</text>
-        <text x="520" y="317" text-anchor="middle" font-size="11" fill="#475569">pods &#183; relay &#183; 8088</text>
+        <rect x="445" y="476" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="590" y="497" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">card-zate-metrics-consumer</text>
+        <text x="590" y="514" text-anchor="middle" font-size="11" fill="#475569">ingest &#183; 8083</text>
 
-        <rect x="420" y="372" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="520" y="394" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">local-orchestrator</text>
-        <text x="520" y="411" text-anchor="middle" font-size="11" fill="#475569">worker &#183; 8080 &#183; N per run</text>
-
-        <rect x="420" y="476" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="520" y="498" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">metrics-consumer</text>
-        <text x="520" y="515" text-anchor="middle" font-size="11" fill="#475569">ingest &#183; 8083</text>
-
-        <rect x="130" y="570" width="780" height="72" rx="8" fill="#f1f5f9" stroke="#334155" stroke-width="1.5"/>
-        <text x="520" y="600" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Database</text>
-        <text x="520" y="620" text-anchor="middle" font-size="11" fill="#475569">run state &#183; pod registry &#183; cache &#183; per-group fact tables</text>
-
+        <rect x="130" y="570" width="920" height="72" rx="8" fill="#f1f5f9" stroke="#334155" stroke-width="1.5"/>
+        <text x="590" y="600" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Database</text>
+        <text x="590" y="620" text-anchor="middle" font-size="11" fill="#475569">run state &#183; pod registry &#183; cache &#183; per-group fact tables</text>
     </g>
 </svg>

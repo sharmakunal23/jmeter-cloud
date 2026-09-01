@@ -1,12 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 632" width="960" height="632" role="img" aria-label="The local orchestrator, one per worker pod: the region relays the hub's start call, the stager fetches the plan and data files from the document service, JMeter runs as a child process, and the tailer aggregates 15-second windows and POSTs them to the metrics consumer. Results are uploaded back to the document service.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 632" width="1100" height="632" role="img" aria-label="The JMeter runner, one per worker pod: the region relays the hub's start call, the stager fetches the plan and data files from the document service, JMeter runs as a worker process, and the tailer aggregates 15-second windows and POSTs them to the metrics consumer. Results are uploaded back to the document service.">
     <defs>
         <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
         </marker>
     </defs>
-    <rect x="0" y="0" width="960" height="632" fill="#ffffff"/>
+    <rect x="0" y="0" width="1100" height="632" fill="#ffffff"/>
     <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
-        <text x="14" y="28" font-size="15" font-weight="700" fill="#0f172a">jmeter-local-orchestrator &#8212; one worker pod</text>
+        <text x="14" y="28" font-size="15" font-weight="700" fill="#0f172a">card-zate-jmeter-runner &#8212; one worker pod</text>
         <text x="14" y="48" font-size="11" fill="#64748b">Stage artifacts, launch JMeter, tail the JTL, aggregate 15-second windows, POST them to the consumer.</text>
 
         <g font-size="10" font-weight="600" fill="#64748b" letter-spacing="1">
@@ -19,61 +19,58 @@
         </g>
 
         <g fill="none" stroke="#94a3b8" stroke-width="2">
-            <line x1="520" y1="132" x2="520" y2="174" marker-end="url(#arrow)"/>
-            <line x1="520" y1="226" x2="520" y2="268" marker-end="url(#arrow)"/>
-            <line x1="420" y1="294" x2="330" y2="294" marker-end="url(#arrow)"/>
-            <line x1="520" y1="320" x2="520" y2="362" marker-end="url(#arrow)"/>
-            <line x1="520" y1="414" x2="520" y2="440"/>
-            <line x1="230" y1="440" x2="520" y2="440"/>
-            <line x1="230" y1="440" x2="230" y2="466" marker-end="url(#arrow)"/>
-            <line x1="520" y1="440" x2="520" y2="466" marker-end="url(#arrow)"/>
-            <line x1="520" y1="518" x2="520" y2="560" marker-end="url(#arrow)"/>
+            <line x1="590" y1="132" x2="590" y2="174" marker-end="url(#arrow)"/>
+            <line x1="590" y1="226" x2="590" y2="268" marker-end="url(#arrow)"/>
+            <line x1="445" y1="294" x2="420" y2="294" marker-end="url(#arrow)"/>
+            <line x1="590" y1="320" x2="590" y2="362" marker-end="url(#arrow)"/>
+            <line x1="590" y1="414" x2="590" y2="440"/>
+            <line x1="275" y1="440" x2="590" y2="440"/>
+            <line x1="275" y1="440" x2="275" y2="466" marker-end="url(#arrow)"/>
+            <line x1="590" y1="440" x2="590" y2="466" marker-end="url(#arrow)"/>
+            <line x1="590" y1="518" x2="590" y2="560" marker-end="url(#arrow)"/>
             <line x1="130" y1="492" x2="118" y2="492"/>
             <line x1="118" y1="492" x2="118" y2="294"/>
             <line x1="118" y1="294" x2="130" y2="294" marker-end="url(#arrow)"/>
         </g>
 
         <g font-size="11" fill="#64748b">
-            <text x="530" y="157">relayed by the region</text>
-            <text x="530" y="251">stage plan + data</text>
-            <text x="350" y="284">fetch</text>
-            <text x="530" y="345">launch</text>
-            <text x="240" y="458">results.jtl</text>
-            <text x="530" y="458">tail</text>
+            <text x="600" y="157">relayed by the region</text>
+            <text x="600" y="251">stage plan + data</text>
+            <text x="600" y="345">launch</text>
+            <text x="285" y="458">results.jtl</text>
+            <text x="600" y="458">tail</text>
             <text x="128" y="360">results.zip</text>
-            <text x="530" y="543">one batch per window</text>
+            <text x="600" y="543">one batch per window</text>
         </g>
 
-        <rect x="420" y="80" width="200" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
-        <text x="520" y="102" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">regional relay</text>
-        <text x="520" y="119" text-anchor="middle" font-size="11" fill="#475569">POST /api/v1/test &#183; drain</text>
+        <rect x="445" y="80" width="290" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+        <text x="590" y="101" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">regional relay</text>
+        <text x="590" y="118" text-anchor="middle" font-size="11" fill="#475569">POST /api/v1/test &#183; drain</text>
 
-        <rect x="420" y="174" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="520" y="196" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">REST API</text>
-        <text x="520" y="213" text-anchor="middle" font-size="11" fill="#475569">/api/v1 &#183; 8080</text>
+        <rect x="445" y="174" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="590" y="195" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">REST API</text>
+        <text x="590" y="212" text-anchor="middle" font-size="11" fill="#475569">/api/v1 &#183; 8080</text>
 
-        <rect x="130" y="268" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="230" y="290" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">document-service</text>
-        <text x="230" y="307" text-anchor="middle" font-size="11" fill="#475569">plan &#183; dataFiles &#183; plugins</text>
+        <rect x="130" y="268" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="275" y="289" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">document-service</text>
+        <text x="275" y="306" text-anchor="middle" font-size="11" fill="#475569">plan &#183; dataFiles &#183; plugins</text>
+        <rect x="445" y="268" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="590" y="289" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">ArtifactStager</text>
+        <text x="590" y="306" text-anchor="middle" font-size="11" fill="#475569">content-addressed cache</text>
 
-        <rect x="420" y="268" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="520" y="290" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">ArtifactStager</text>
-        <text x="520" y="307" text-anchor="middle" font-size="11" fill="#475569">content-addressed cache</text>
+        <rect x="445" y="362" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="590" y="383" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">JMeter worker</text>
+        <text x="590" y="400" text-anchor="middle" font-size="11" fill="#475569">runs the plan &#183; results.jtl</text>
 
-        <rect x="420" y="362" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="520" y="384" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">JMeter child</text>
-        <text x="520" y="401" text-anchor="middle" font-size="11" fill="#475569">runs the plan &#183; results.jtl</text>
+        <rect x="130" y="466" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="275" y="487" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">ResultUploader</text>
+        <text x="275" y="504" text-anchor="middle" font-size="11" fill="#475569">after the run ends</text>
+        <rect x="445" y="466" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="590" y="487" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">Tailer + aggregator</text>
+        <text x="590" y="504" text-anchor="middle" font-size="11" fill="#475569">15 s windows per label</text>
 
-        <rect x="130" y="466" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="230" y="488" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">ResultUploader</text>
-        <text x="230" y="505" text-anchor="middle" font-size="11" fill="#475569">after the run ends</text>
-
-        <rect x="420" y="466" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="520" y="488" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">Tailer + aggregator</text>
-        <text x="520" y="505" text-anchor="middle" font-size="11" fill="#475569">15 s windows per label</text>
-
-        <rect x="420" y="560" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="520" y="582" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">metrics-consumer</text>
-        <text x="520" y="599" text-anchor="middle" font-size="11" fill="#475569">POST /api/v1/ingest &#183; 8083</text>
+        <rect x="445" y="560" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="590" y="581" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">card-zate-metrics-consumer</text>
+        <text x="590" y="598" text-anchor="middle" font-size="11" fill="#475569">POST /api/v1/ingest &#183; 8083</text>
     </g>
 </svg>

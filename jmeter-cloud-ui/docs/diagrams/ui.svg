@@ -1,12 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 350" width="960" height="350" role="img" aria-label="UI request routing: the browser only ever talks to nginx, which serves the static bundle, proxies /api/v1/blob to the document-service, and proxies everything else under /api and /actuator to the global orchestrator.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 350" width="1100" height="350" role="img" aria-label="UI request routing: the browser only ever talks to nginx, which serves the static bundle, proxies /api/v1/blob to the document service, and proxies everything else under /api and /actuator to the performance platform.">
     <defs>
         <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
         </marker>
     </defs>
-    <rect x="0" y="0" width="960" height="350" fill="#ffffff"/>
+    <rect x="0" y="0" width="1100" height="350" fill="#ffffff"/>
     <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
-        <text x="14" y="28" font-size="15" font-weight="700" fill="#0f172a">jmeter-cloud-ui &#8212; single-origin via nginx</text>
+        <text x="14" y="28" font-size="15" font-weight="700" fill="#0f172a">card-zate-performance-platform-ui &#8212; single-origin via nginx</text>
         <text x="14" y="48" font-size="11" fill="#64748b">The browser only ever talks to nginx. It serves the SPA and reverse-proxies the API by path prefix.</text>
 
         <g font-size="10" font-weight="600" fill="#64748b" letter-spacing="1">
@@ -16,39 +16,37 @@
         </g>
 
         <g fill="none" stroke="#94a3b8" stroke-width="2">
-            <line x1="520" y1="132" x2="520" y2="174" marker-end="url(#arrow)"/>
-            <line x1="520" y1="226" x2="520" y2="252"/>
-            <line x1="230" y1="252" x2="810" y2="252"/>
-            <line x1="230" y1="252" x2="230" y2="278" marker-end="url(#arrow)"/>
-            <line x1="520" y1="252" x2="520" y2="278" marker-end="url(#arrow)"/>
-            <line x1="810" y1="252" x2="810" y2="278" marker-end="url(#arrow)"/>
+            <line x1="590" y1="132" x2="590" y2="174" marker-end="url(#arrow)"/>
+            <line x1="590" y1="226" x2="590" y2="252"/>
+            <line x1="275" y1="252" x2="905" y2="252"/>
+            <line x1="275" y1="252" x2="275" y2="278" marker-end="url(#arrow)"/>
+            <line x1="590" y1="252" x2="590" y2="278" marker-end="url(#arrow)"/>
+            <line x1="905" y1="252" x2="905" y2="278" marker-end="url(#arrow)"/>
         </g>
 
         <g font-size="11" fill="#64748b">
-            <text x="530" y="157">HTTPS</text>
-            <text x="240" y="270">everything else</text>
-            <text x="530" y="270">/api/* &#183; /actuator/*</text>
-            <text x="820" y="270">/api/v1/blob*</text>
+            <text x="600" y="157">HTTPS</text>
+            <text x="285" y="270">everything else</text>
+            <text x="600" y="270">/api/* &#183; /actuator/*</text>
+            <text x="915" y="270">/api/v1/blob*</text>
         </g>
 
-        <rect x="420" y="80" width="200" height="52" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
-        <text x="520" y="102" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">Browser</text>
-        <text x="520" y="119" text-anchor="middle" font-size="11" fill="#475569">React SPA &#183; uPlot charts</text>
+        <rect x="445" y="80" width="290" height="52" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="590" y="101" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">Browser</text>
+        <text x="590" y="118" text-anchor="middle" font-size="11" fill="#475569">React SPA &#183; uPlot charts</text>
 
-        <rect x="420" y="174" width="200" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
-        <text x="520" y="196" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">nginx</text>
-        <text x="520" y="213" text-anchor="middle" font-size="11" fill="#475569">8086 &#183; static + reverse proxy</text>
+        <rect x="445" y="174" width="290" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+        <text x="590" y="195" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">nginx</text>
+        <text x="590" y="212" text-anchor="middle" font-size="11" fill="#475569">8086 &#183; static + reverse proxy</text>
 
-        <rect x="130" y="278" width="200" height="52" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
-        <text x="230" y="300" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">static bundle</text>
-        <text x="230" y="317" text-anchor="middle" font-size="11" fill="#475569">index.html &#183; JS &#183; CSS</text>
-
-        <rect x="420" y="278" width="200" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
-        <text x="520" y="300" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">global-orchestrator</text>
-        <text x="520" y="317" text-anchor="middle" font-size="11" fill="#475569">8082 &#183; the platform API</text>
-
-        <rect x="710" y="278" width="200" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
-        <text x="810" y="300" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">document-service</text>
-        <text x="810" y="317" text-anchor="middle" font-size="11" fill="#475569">8084 &#183; the blob library</text>
+        <rect x="130" y="278" width="290" height="52" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+        <text x="275" y="299" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">static bundle</text>
+        <text x="275" y="316" text-anchor="middle" font-size="11" fill="#475569">index.html &#183; JS &#183; CSS</text>
+        <rect x="445" y="278" width="290" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+        <text x="590" y="299" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">card-zate-performance-platform</text>
+        <text x="590" y="316" text-anchor="middle" font-size="11" fill="#475569">8082 &#183; the platform API</text>
+        <rect x="760" y="278" width="290" height="52" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+        <text x="905" y="299" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">document-service</text>
+        <text x="905" y="316" text-anchor="middle" font-size="11" fill="#475569">8084 &#183; the blob library</text>
     </g>
 </svg>

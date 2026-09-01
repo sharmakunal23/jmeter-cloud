@@ -7,7 +7,7 @@ prose only says what a diagram cannot.
 2. [Pod registry — register, heartbeat, sweep, claim](#2-pod-registry--liveness-sweep-claim)
 3. [Data plane — metrics from JMeter to the UI](#3-data-plane--metrics-from-jmeter-to-the-ui)
 4. [Artifact plane — test plans, data files, results](#4-artifact-plane--test-plans-data-files-results)
-5. [Run lifecycle — local-orchestrator state machine](#5-run-lifecycle--local-orchestrator-state-machine)
+5. [Run lifecycle — card-zate-jmeter-runner state machine](#5-run-lifecycle--local-orchestrator-state-machine)
 6. [UI request routing — nginx fan-out](#6-ui-request-routing--nginx-fan-out)
 7. [Boot order — `docker compose up`](#7-boot-order--docker-compose-up)
 8. [Shutdown order — graceful drain on SIGTERM](#8-shutdown-order--graceful-drain-on-sigterm)
@@ -23,12 +23,12 @@ Solid arrows are requests, dashed arrows are replies; every line into `DB` is pe
 sequenceDiagram
     autonumber
     participant U  as Browser (UI)
-    participant NX as nginx (jmeter-cloud-ui)
-    participant GO as global-orchestrator
+    participant NX as nginx (card-zate-performance-platform-ui)
+    participant GO as card-zate-performance-platform
     participant DB as Database<br/>(CARDZATE_DB_GRAF · ORCH_* tables)
-    participant RO as regional-orchestrator<br/>(in the region's cluster)
-    participant LO as local-orchestrator-N<br/>(JMeter baked in)
-    participant JM as JMeter (child process)
+    participant RO as card-zate-regional-orchestrator<br/>(in the region's cluster)
+    participant LO as card-zate-jmeter-runner-N<br/>(JMeter baked in)
+    participant JM as JMeter (worker process)
 
     U->>NX: POST /api/v1/runs<br/>{ testPlanBlobId, fleetAllocation:[{region,count}], … }
     NX->>GO: forward (^~ /api/* proxy)
@@ -87,8 +87,8 @@ liveness truth, read once per region per tick:
 %%{init: {'theme':'base','themeVariables':{'primaryColor':'#eff6ff','primaryBorderColor':'#2563eb','primaryTextColor':'#0f172a','lineColor':'#94a3b8','fontFamily':'Segoe UI, Helvetica, Arial, sans-serif'}}}%%
 sequenceDiagram
     autonumber
-    participant GO as global-orchestrator<br/>(WorkerLivenessProbe, every 15 s)
-    participant RO as regional-orchestrator
+    participant GO as card-zate-performance-platform<br/>(WorkerLivenessProbe, every 15 s)
+    participant RO as card-zate-regional-orchestrator
     participant K8 as Kubernetes API
     participant DB as Database<br/>(ORCH_POD)
 
@@ -96,7 +96,7 @@ sequenceDiagram
 
     loop every 15 s, once per routed region
         GO->>RO: GET /api/v1/workers
-        RO->>K8: list Pods (managedBy=regional-orchestrator)
+        RO->>K8: list Pods (managedBy=card-zate-regional-orchestrator)
         RO-->>GO: [{ podName, ready, dead, reason, exitCode }]
         alt ready
             GO->>DB: UPDATE ORCH_POD SET LAST_HEARTBEAT=SYSTIMESTAMP, STATE='IDLE'
@@ -117,8 +117,8 @@ Operator-declared (static or direct-region) workers keep the heartbeat model:
 %%{init: {'theme':'base','themeVariables':{'primaryColor':'#eff6ff','primaryBorderColor':'#2563eb','primaryTextColor':'#0f172a','lineColor':'#94a3b8','fontFamily':'Segoe UI, Helvetica, Arial, sans-serif'}}}%%
 sequenceDiagram
     autonumber
-    participant LO as local-orchestrator pod<br/>(PodRegistrar bean)
-    participant GO as global-orchestrator
+    participant LO as card-zate-jmeter-runner pod<br/>(PodRegistrar bean)
+    participant GO as card-zate-performance-platform
     participant DB as Database<br/>(ORCH_POD)
     participant SW as PodSweeper @Scheduled<br/>(every 30 s)
 
@@ -154,9 +154,9 @@ re-registration needed.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  jmeter-local-orchestrator pod (image bakes JMeter 5.6.3)            │
+│  card-zate-jmeter-runner pod (image bakes JMeter 5.6.3)              │
 │                                                                      │
-│   JMeter (child)                                                     │
+│   JMeter (worker)                                                    │
 │       │                                                              │
 │       │ writes results.jtl (CSV, one row per request,                │
 │       │  user.properties baked in at image build)                    │
@@ -178,7 +178,7 @@ re-registration needed.
              │ body: WorkerMetricBatch   Authorization: METRICS_INGEST_AUTH
              ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  jmeter-metrics-consumer  (:8083)                                    │
+│  card-zate-metrics-consumer  (:8083)                                 │
 │                                                                      │
 │   ┌─ Jackson decode; required identity fields validated here so a    │
 │   │  semantically-broken envelope is a terminal 400, not a 503 loop  │
@@ -257,9 +257,9 @@ flowchart LR
     end
 
     subgraph "Path B — orchestrator's per-run upload (consumed by JMeter)"
-        U == "POST /api/v1/testPlan<br/>(per pod)" ==> LO[local-orchestrator]
+        U == "POST /api/v1/testPlan<br/>(per pod)" ==> LO[card-zate-jmeter-runner]
         LO -- "stage to BASE_DIR/testPlan/" --> POD["pod local disk"]
-        POD --> JM[JMeter child]
+        POD --> JM[JMeter worker]
         JM -- "writes results.jtl" --> POD
     end
 
@@ -273,7 +273,7 @@ live?" — swapping the backend is one `BlobStore` implementation.
 
 ---
 
-## 5. Run lifecycle — local-orchestrator state machine
+## 5. Run lifecycle — card-zate-jmeter-runner state machine
 
 One pod's state machine. `RunService.refreshAndGet` rolls many of these up into
 the run-level state.
@@ -319,7 +319,7 @@ talks to one origin.
 flowchart LR
     B["Browser<br/>http://localhost:8086"]
 
-    subgraph "jmeter-cloud-ui  (nginx + static SPA bundle)"
+    subgraph "card-zate-performance-platform-ui  (nginx + static SPA bundle)"
         NX{nginx routing}
     end
 
@@ -330,9 +330,9 @@ flowchart LR
     NX -- "proxy_pass<br/>(client_max_body_size 1024m,<br/>proxy_request_buffering off)" --> DS[document-service:8084]
 
     B == "/api/v1/runs[/...]<br/>/api/v1/applications[/...]<br/>/api/v1/applicationGroups[/...]<br/>/actuator/*" ==> NX
-    NX -- "proxy_pass" --> GO[global-orchestrator:8082]
+    NX -- "proxy_pass" --> GO[card-zate-performance-platform:8082]
 
-    GO -. "fan-out POST /test + status poll + log proxy<br/>through the region's relay<br/>(direct regions by baseUrl)" .-> LO[local-orchestrator:8080]
+    GO -. "fan-out POST /test + status poll + log proxy<br/>through the region's relay<br/>(direct regions by baseUrl)" .-> LO[card-zate-jmeter-runner:8080]
 
     GO -. "JDBC · three pools" .-> DB[(Database<br/>CARDZATE_DB_GRAF)]
 ```
@@ -356,21 +356,21 @@ below it from starting.
 ```
 oracle (healthy)
    │
-   ├─► flyway-migrate (one-shot)
+   ├─► db-migration (one-shot)
    │      │  Applies V1 (the hosted metrics layout)
    │      │  + V2 (the ORCH_* control plane)
    │      │  + R__group_<id> (each group's fact tables)
    │      │
-   │      ├─► metrics-consumer
-   │      └─► global-orchestrator
+   │      ├─► card-zate-metrics-consumer
+   │      └─► card-zate-performance-platform
 
 mailhog                              // dev SMTP sink, no dependents
 
-global-orchestrator (healthy) ──┐
-                                ├─► jmeter-cloud-ui
+card-zate-performance-platform (healthy) ──┐
+                                ├─► card-zate-performance-platform-ui
 document-service (healthy) ─────┘
 
-local-orchestrator workers           // not started by compose. STATIC (the
+card-zate-jmeter-runner workers           // not started by compose. STATIC (the
                                      // default): the operator runs and declares
                                      // them (driver.mjs worker). DYNAMIC: the hub
                                      // spins them through a kind regional
@@ -378,7 +378,7 @@ local-orchestrator workers           // not started by compose. STATIC (the
 ```
 
 **Time-to-healthy after `up`, images already built:** ~90 s from an empty
-Oracle volume (oracle ~40 s, flyway-migrate 5 s, the Spring Boot apps + UI
+Oracle volume (oracle ~40 s, db-migration 5 s, the Spring Boot apps + UI
 ~30-60 s in parallel); ~30 s with a warm volume. A cold *build* is ~5 min
 (`bootOrder.svg`).
 
@@ -403,12 +403,12 @@ SIGTERM received
 ┌──────────────────────────────────────────────────────────────────┐
 │ 2. runManager.shutdownGracefully(grace)                          │
 │       Blocks while the in-flight test (if any) goes:             │
-│         SIGTERM JMeter →                                          │
-│         JMeter exits →                                            │
-│         write sentinel →                                          │
-│         drain pipeline →                                          │
-│         publish final window →                                    │
-│         terminal state                                            │
+│         SIGTERM JMeter →                                         │
+│         JMeter exits →                                           │
+│         write sentinel →                                         │
+│         drain pipeline →                                         │
+│         publish final window →                                   │
+│         terminal state                                           │
 │       Tomcat is still up so operators can poll                   │
 │       GET /api/v1/test and watch the state transition.           │
 │       OrchestratorMain drains the dispatch queue at end-of-run,  │
