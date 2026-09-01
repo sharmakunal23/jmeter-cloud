@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { Paginator } from "./Paginator";
 import { useClientPagination } from "../hooks/useClientPagination";
@@ -57,6 +57,13 @@ export interface DataListProps<T> {
   /** Already filtered and sorted — newest first is the caller's decision. */
   rows: T[];
   rowKey: (row: T) => string;
+  /**
+   * Accessible name for a row's checkbox. Default is the row key, which is an
+   * id — say what the row IS instead wherever you can, because "select row
+   * 01ARJ…" tells a screen-reader user nothing about what they are about to
+   * delete.
+   */
+  rowSelectionLabel?: (row: T) => string;
   /** Noun for the paginator's count copy, plural. */
   itemNoun?: string;
   /** Shown in the body when there are no rows at all. */
@@ -80,6 +87,30 @@ export interface DataListProps<T> {
   toolbar?: ReactNode;
   /** Rows visible at once before the body scrolls. Default 10 — the default page size. */
   viewportRows?: number;
+  /**
+   * Groups consecutive rows under a heading row — the applications list bands
+   * its apps by application group. Rows must already be sorted so a group's
+   * rows are adjacent; the heading renders whenever the key changes, including
+   * at the top of a page a group spans into, so a page never opens on rows
+   * whose group is off-screen above.
+   */
+  rowGroup?: (row: T) => { key: string; label: ReactNode };
+  /**
+   * Server-paginated mode: `rows` is ONE page the caller already fetched, and
+   * the caller owns page/size. Without this the list pages the array it is
+   * given, which is what almost every caller wants.
+   *
+   * <p>In this mode the list does <b>not</b> prune selections for rows it
+   * cannot see — the other pages are not in `rows`, so pruning would silently
+   * drop everything the operator selected before paging.
+   */
+  pagination?: {
+    page: number;
+    pageSize: number;
+    total: number;
+    onPageChange: (page: number) => void;
+    onPageSizeChange: (size: number) => void;
+  };
 }
 
 /** Row height in px; mirrors `--dataList-row-height` in styles.css. */
@@ -88,11 +119,19 @@ const HEADER_HEIGHT = 40;
 
 export function DataList<T>({
   label, columns, rows, rowKey, itemNoun = "items", empty, loading = false,
-  resetKey, rowProps, bulkActions, toolbar, viewportRows = 10,
-  selectedIds: controlledIds, onSelectionChange,
+  resetKey, rowProps, bulkActions, toolbar, viewportRows = 10, rowSelectionLabel,
+  selectedIds: controlledIds, onSelectionChange, rowGroup, pagination,
 }: DataListProps<T>) {
-  const { page, setPage, pageItems, total, pageSize, setPageSize } =
-    useClientPagination(rows, resetKey);
+  // Always called (hooks cannot be conditional); ignored in server mode, where
+  // paging a single already-fetched page would be wrong.
+  const client = useClientPagination(rows, resetKey);
+  const serverPaged = pagination != null;
+  const page = serverPaged ? pagination.page : client.page;
+  const pageSize = serverPaged ? pagination.pageSize : client.pageSize;
+  const total = serverPaged ? pagination.total : client.total;
+  const pageItems = serverPaged ? rows : client.pageItems;
+  const setPage = serverPaged ? pagination.onPageChange : client.setPage;
+  const setPageSize = serverPaged ? pagination.onPageSizeChange : client.setPageSize;
 
   const [ownIds, setOwnIds] = useState<ReadonlySet<string>>(new Set());
   const controlled = controlledIds !== undefined;
@@ -113,14 +152,17 @@ export function DataList<T>({
   const selectable = (bulkActions?.length ?? 0) > 0 || controlled;
 
   // Drop selections whose row is gone — a poll that removes a row must not
-  // leave it selected and silently included in the next bulk action.
+  // leave it selected and silently included in the next bulk action. Skipped
+  // in server mode: `rows` is one page, so the rows a selection spans are
+  // simply not here to find.
   const presentIds = useMemo(() => new Set(rows.map(rowKey)), [rows, rowKey]);
   useEffect(() => {
+    if (serverPaged) return;
     setSelectedIds((prev) => {
       const next = new Set([...prev].filter((id) => presentIds.has(id)));
       return next.size === prev.size ? prev : next;
     });
-  }, [presentIds]);
+  }, [presentIds, serverPaged]);
 
   const selectedRows = useMemo(
     () => rows.filter((r) => selectedIds.has(rowKey(r))),
@@ -165,7 +207,7 @@ export function DataList<T>({
         <div className="dataList__toolbar">
           {toolbar}
           {(bulkActions?.length ?? 0) > 0 && selectedRows.length > 0 && (
-            <div className="dataList__bulk" role="group" aria-label={`${label} bulk actions`}>
+            <div className="dataList__bulk" role="toolbar" aria-label={`${label} bulk actions`}>
               <span className="dataList__bulkCount">{selectedRows.length} selected</span>
               {bulkActions!.map((a) => (
                 <button
@@ -233,11 +275,22 @@ export function DataList<T>({
                     <td colSpan={colCount}>{empty}</td>
                   </tr>
                 )
-                : pageItems.map((row) => {
+                : pageItems.map((row, i) => {
                     const id = rowKey(row);
                     const extra = rowProps?.(row) ?? {};
+                    const group = rowGroup?.(row);
+                    // A heading whenever the group changes — and at index 0, so
+                    // a page a group spans into still says which group it is.
+                    const opensGroup = group != null
+                      && (i === 0 || rowGroup!(pageItems[i - 1]!).key !== group.key);
                     return (
-                      <tr key={id} {...extra}>
+                      <Fragment key={id}>
+                      {opensGroup && (
+                        <tr className="dataList__groupRow">
+                          <td colSpan={colCount}>{group!.label}</td>
+                        </tr>
+                      )}
+                      <tr {...extra}>
                         {selectable && (
                           <td className="dataList__checkCell"
                               onClick={(e) => e.stopPropagation()}>
@@ -245,7 +298,7 @@ export function DataList<T>({
                               type="checkbox"
                               checked={selectedIds.has(id)}
                               onChange={() => toggleRow(id)}
-                              aria-label={`Select row ${id}`}
+                              aria-label={rowSelectionLabel?.(row) ?? `Select row ${id}`}
                             />
                           </td>
                         )}
@@ -253,6 +306,7 @@ export function DataList<T>({
                           <td key={c.key} className={c.className}>{c.cell(row)}</td>
                         ))}
                       </tr>
+                      </Fragment>
                     );
                   })}
           </tbody>

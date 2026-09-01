@@ -225,4 +225,64 @@ describe("DataList — the one list shape", () => {
     fireEvent.click(screen.getAllByRole("checkbox")[1]!);
     expect(screen.getByText("1 selected")).toBeInTheDocument();
   });
+
+  it("rowGroup bands consecutive rows, and repeats the heading on a page it spans into", () => {
+    const many: Row[] = [
+      ...Array.from({ length: 8 }, (_, i) => ({ id: `a${i}`, name: `alpha ${i}` })),
+      ...Array.from({ length: 8 }, (_, i) => ({ id: `b${i}`, name: `beta ${i}` })),
+    ];
+    render(
+      <DataList<Row> label="t" columns={columns} rows={many} rowKey={(r) => r.id} empty={<>none</>}
+                     rowGroup={(r) => ({ key: r.id[0]!, label: `group ${r.id[0]}` })} />);
+
+    // Page 1: 8 alphas + the first 2 betas — so BOTH headings appear.
+    expect(screen.getByText("group a")).toBeInTheDocument();
+    expect(screen.getByText("group b")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "next page" }));
+    // Page 2 is all betas — the heading repeats rather than leaving the page
+    // opening on rows whose group is off-screen above.
+    expect(screen.getByText("group b")).toBeInTheDocument();
+    expect(screen.queryByText("group a")).not.toBeInTheDocument();
+  });
+
+  it("server pagination renders the given page as-is and never pages it again", () => {
+    const onPageChange = vi.fn();
+    render(
+      <DataList<Row> label="t" columns={columns} rows={rows(25)} rowKey={(r) => r.id}
+                     empty={<>none</>}
+                     pagination={{ page: 2, pageSize: 25, total: 300,
+                                   onPageChange, onPageSizeChange: () => {} }} />);
+
+    // All 25 handed in are shown — the list must not slice a page it was given.
+    expect(screen.getAllByRole("row")).toHaveLength(26);
+    expect(screen.getByRole("navigation", { name: "pagination" })).toHaveTextContent("300");
+
+    fireEvent.click(screen.getByRole("button", { name: "next page" }));
+    expect(onPageChange).toHaveBeenCalledWith(3);
+  });
+
+  it("server pagination does NOT prune a selection made on another page", () => {
+    const onSelectionChange = vi.fn();
+    // "r99" is selected but is not on this page — pruning it would silently
+    // drop what the operator picked before paging.
+    render(
+      <DataList<Row> label="t" columns={columns} rows={rows(3)} rowKey={(r) => r.id}
+                     empty={<>none</>}
+                     bulkActions={[{ label: "Delete", onRun: () => {} }]}
+                     selectedIds={new Set(["r99"])}
+                     onSelectionChange={onSelectionChange}
+                     pagination={{ page: 2, pageSize: 3, total: 300,
+                                   onPageChange: () => {}, onPageSizeChange: () => {} }} />);
+
+    expect(onSelectionChange).not.toHaveBeenCalled();
+  });
+
+  it("a row's checkbox says what the row IS, not its id", () => {
+    renderList({
+      bulkActions: [{ label: "Delete", onRun: () => {} }],
+      rowSelectionLabel: (r: Row) => `Select ${r.name}`,
+    });
+    expect(screen.getByRole("checkbox", { name: "Select row 0" })).toBeInTheDocument();
+  });
 });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type DragEvent, type ChangeEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ChangeEvent } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -11,7 +11,7 @@ import {
 } from "../api/blobs";
 import { applicationsApi, type Application } from "../api/applications";
 import { DeleteBlobsConfirmDialog } from "../components/DeleteBlobsConfirmDialog";
-import { Paginator } from "../components/Paginator";
+import { DataList } from "../components/DataList";
 import { ToastView, useToast } from "../components/Toast";
 import { persistPageSize, readStoredPageSize } from "../hooks/useClientPagination";
 import { formatBytes, inferDownloadFilename } from "../lib/blobFile";
@@ -246,27 +246,25 @@ export function BlobsPage({ pinnedType, pinnedApplication, hideHeader }: BlobsPa
   // ── Selection + delete handlers ──────────────────────────────────
 
   const pageItems = list.status === "ok" ? list.listing.items : [];
-  const pageAllSelected = pageItems.length > 0 && pageItems.every((b) => selected.has(b.blobId));
-  const pageAnySelected = pageItems.some((b) => selected.has(b.blobId));
 
-  const toggleSelected = (blob: BlobMetadata) => {
+  /**
+   * The selection is stored as {@code blobId → blob} rather than as ids,
+   * because the delete dialog needs the metadata and a pick made three pages
+   * ago is no longer in {@code pageItems} to look up. DataList speaks ids, so
+   * this translates: removals come from the id set, additions are resolved
+   * against the page they were made on.
+   */
+  const selectedIds = useMemo(() => new Set(selected.keys()), [selected]);
+  const onSelectionChange = (next: ReadonlySet<string>) => {
     setSelected((prev) => {
-      const next = new Map(prev);
-      if (next.has(blob.blobId)) next.delete(blob.blobId);
-      else next.set(blob.blobId, blob);
-      return next;
-    });
-  };
-
-  /** Header checkbox — covers this page only; picks on other pages stand. */
-  const togglePageSelected = () => {
-    setSelected((prev) => {
-      const next = new Map(prev);
-      for (const b of pageItems) {
-        if (pageAllSelected) next.delete(b.blobId);
-        else next.set(b.blobId, b);
+      const out = new Map(prev);
+      for (const id of prev.keys()) if (!next.has(id)) out.delete(id);
+      for (const id of next) {
+        if (out.has(id)) continue;
+        const blob = pageItems.find((b) => b.blobId === id);
+        if (blob) out.set(id, blob);
       }
-      return next;
+      return out;
     });
   };
 
@@ -454,81 +452,74 @@ export function BlobsPage({ pinnedType, pinnedApplication, hideHeader }: BlobsPa
         <span className="runsToolbar__spacer" />
       </div>
 
-      {selected.size > 0 && (
-        <div className="bulkToolbar" role="toolbar" aria-label="Bulk actions for selected documents">
-          <span className="bulkToolbar__count">
-            {selected.size} selected
-          </span>
-          <button type="button" className="btn btn--ghost" onClick={() => setSelected(new Map())}>
-            Clear
-          </button>
-          <span className="bulkToolbar__spacer" />
-          <button
-            type="button"
-            className="btn btn--danger"
-            onClick={() => setPendingDelete([...selected.values()])}
-          >
-            Delete selected
-          </button>
-        </div>
-      )}
-
-      {list.status === "loading" && <p>loading…</p>}
       {list.status === "error" && <p className="text--error">{list.message}</p>}
-      {list.status === "ok" && list.listing.items.length === 0 && (
-        <p>No blobs yet. Drop one in above ☝️.</p>
-      )}
-      {list.status === "ok" && list.listing.items.length > 0 && (
-        <>
-          <table className="runsTable">
-            <thead>
-              <tr>
-                <th className="runsTable__check">
-                  <input
-                    type="checkbox"
-                    aria-label="Select all documents on this page"
-                    checked={pageAllSelected}
-                    ref={(el) => {
-                      // "Some but not all" is the third checkbox state, and it
-                      // is only settable from JS.
-                      if (el) el.indeterminate = !pageAllSelected && pageAnySelected;
-                    }}
-                    onChange={togglePageSelected}
-                  />
-                </th>
-                <th>File</th>
-                {!pinnedType && <th>Type</th>}
-                {!pinnedApplication && <th>Application</th>}
-                <th>Size</th>
-                <th>Uploaded</th>
-                <th>blobId</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {list.listing.items.map((b) => (
-                <BlobRow
-                  key={b.blobId}
-                  blob={b}
-                  selected={selected.has(b.blobId)}
-                  onToggleSelected={toggleSelected}
-                  onDelete={(blob) => setPendingDelete([blob])}
-                  showType={!pinnedType}
-                  showApplication={!pinnedApplication}
-                />
-              ))}
-            </tbody>
-          </table>
-          <Paginator
-            page={Math.floor(list.listing.offset / list.listing.limit) + 1}
-            pageSize={list.listing.limit}
-            total={list.listing.total}
-            label="documents"
-            onChange={(nextPage) => setOffset((nextPage - 1) * list.listing.limit)}
-            onPageSizeChange={setPageSize}
-          />
-        </>
-      )}
+
+      <DataList<BlobMetadata>
+        label="Documents"
+        loading={list.status === "loading"}
+        rows={list.status === "ok" ? list.listing.items : []}
+        rowKey={(b) => b.blobId}
+        rowSelectionLabel={(b) => `Select ${inferDownloadFilename(b)} (${b.blobId})`}
+        itemNoun="documents"
+        empty={<>
+          <strong>No documents yet.</strong>
+          <div>Drop one in above ☝️</div>
+        </>}
+        // Server-paginated: the listing endpoint returns one page, so the list
+        // must render it as-is rather than paging it again.
+        pagination={list.status === "ok" ? {
+          page: Math.floor(list.listing.offset / list.listing.limit) + 1,
+          pageSize: list.listing.limit,
+          total: list.listing.total,
+          onPageChange: (nextPage) => setOffset((nextPage - 1) * list.listing.limit),
+          onPageSizeChange: setPageSize,
+        } : undefined}
+        selectedIds={selectedIds}
+        onSelectionChange={onSelectionChange}
+        bulkActions={[
+          { label: "Delete selected", danger: true,
+            onRun: () => setPendingDelete([...selected.values()]) },
+        ]}
+        rowProps={(b) => (selected.has(b.blobId) ? { className: "blobRow--selected" } : {})}
+        columns={[
+          { key: "file", header: "File", cell: (b) => (
+            <>
+              <div className="mono blobRow__filename"><strong>{inferDownloadFilename(b)}</strong></div>
+              {b.description && <div className="text--muted blobRow__desc">{b.description}</div>}
+            </>
+          ) },
+          ...(!pinnedType ? [{ key: "type", header: "Type", cell: (b: BlobMetadata) => (
+            b.type
+              ? <span className={`badge badge--${b.type === "testPlan" ? "info" : "warn"}`}>{b.type}</span>
+              : <span className="text--muted">—</span>
+          ) }] : []),
+          ...(!pinnedApplication ? [{ key: "application", header: "Application", cell: (b: BlobMetadata) => (
+            b.application
+              ? <Link to={`/applications/${encodeURIComponent(b.application)}`} className="mono"
+                      title={`Open ${b.application} detail`}>{b.application}</Link>
+              : <span className="text--muted">—</span>
+          ) }] : []),
+          { key: "size", header: "Size", className: "dataList__num",
+            cell: (b) => formatBytes(b.sizeBytes) },
+          { key: "uploaded", header: "Uploaded",
+            cell: (b) => new Date(b.uploadedAt).toLocaleString() },
+          { key: "blobId", header: "blobId",
+            cell: (b) => <div className="mono blobRow__id">{b.blobId}</div> },
+          { key: "actions", header: <span className="visuallyHidden">actions</span>,
+            className: "runsTable__actions", cell: (b) => (
+              <>
+                <a href={`/api/v1/blob/${encodeURIComponent(b.blobId)}?download=true`}
+                   download={inferDownloadFilename(b)} className="btn btn--ghost btn--sm">
+                  Download
+                </a>
+                <button type="button" className="btn btn--ghost btn--sm text--error"
+                        onClick={() => setPendingDelete([b])}>
+                  Delete
+                </button>
+              </>
+            ) },
+        ]}
+      />
 
       {pendingDelete && pendingDelete.length > 0 && (
         <DeleteBlobsConfirmDialog
@@ -543,92 +534,6 @@ export function BlobsPage({ pinnedType, pinnedApplication, hideHeader }: BlobsPa
   );
 }
 
-function BlobRow({
-  blob,
-  selected,
-  onToggleSelected,
-  onDelete,
-  showType,
-  showApplication,
-}: {
-  blob: BlobMetadata;
-  selected: boolean;
-  onToggleSelected: (blob: BlobMetadata) => void;
-  onDelete: (blob: BlobMetadata) => void;
-  showType: boolean;
-  showApplication: boolean;
-}) {
-  // Phase IA-Documents (2026-05-12) — drop the operator-supplied "name"
-  // line; just show the filename. The two were almost always
-  // duplicates (e.g. "smoketest-checkout" vs "smoketest-checkout.jmx")
-  // and ate horizontal space without adding signal.
-  const filename = inferDownloadFilename(blob);
-  return (
-    <tr className={selected ? "blobRow--selected" : undefined}>
-      <td className="runsTable__check">
-        <input
-          type="checkbox"
-          aria-label={`Select ${filename} (${blob.blobId})`}
-          checked={selected}
-          onChange={() => onToggleSelected(blob)}
-        />
-      </td>
-      <td>
-        <div className="mono blobRow__filename"><strong>{filename}</strong></div>
-        {blob.description && (
-          <div className="text--muted blobRow__desc">{blob.description}</div>
-        )}
-      </td>
-      {showType && (
-        <td>
-          {blob.type ? (
-            <span className={`badge badge--${blob.type === "testPlan" ? "info" : "warn"}`}>
-              {blob.type}
-            </span>
-          ) : (
-            <span className="text--muted">—</span>
-          )}
-        </td>
-      )}
-      {showApplication && (
-        <td>
-          {blob.application ? (
-            <Link
-              to={`/applications/${encodeURIComponent(blob.application)}`}
-              className="mono"
-              title={`Open ${blob.application} detail`}
-            >
-              {blob.application}
-            </Link>
-          ) : (
-            <span className="text--muted">—</span>
-          )}
-        </td>
-      )}
-      <td>{formatBytes(blob.sizeBytes)}</td>
-      <td>{new Date(blob.uploadedAt).toLocaleString()}</td>
-      <td>
-        <div className="mono blobRow__id">{blob.blobId}</div>
-      </td>
-      <td>
-        <a
-          href={`/api/v1/blob/${encodeURIComponent(blob.blobId)}?download=true`}
-          download={filename}
-          className="btn btn--ghost"
-        >
-          Download
-        </a>
-        <button
-          type="button"
-          className="btn btn--ghost text--error"
-          onClick={() => onDelete(blob)}
-        >
-          Delete
-        </button>
-      </td>
-    </tr>
-  );
-}
 
 function UploadInProgress({
   upload,

@@ -6,6 +6,7 @@ import {
 } from "../api/workflows";
 import { formatRelative } from "../lib/time";
 import { AppListToolbar } from "../components/AppListToolbar";
+import { DataList } from "../components/DataList";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { InfoTip } from "../components/InfoTip";
 import { ExecutionStateChip } from "../components/workflow/ExecutionStateChip";
@@ -125,75 +126,60 @@ export function WorkflowListPage() {
         loading={loading}
       />
 
-      {loading ? (
-        <div className="emptyState"><p className="ink-soft">Loading…</p></div>
-      ) : filtered.length === 0 ? (
-        <div className="emptyState">
-          {all.length === 0 ? (
+      <DataList<Workflow>
+        label="Workflows"
+        loading={loading}
+        rows={filtered}
+        rowKey={(w) => w.workflowId}
+        itemNoun="workflows"
+        resetKey={search}
+        empty={all.length === 0 ? (
+          <>
+            <strong>No workflows in this group yet.</strong>
+            <div>A workflow chains health checks, load tests, waits, approvals and
+                 notifications — draw one and it runs itself.</div>
+          </>
+        ) : <>No workflows match &quot;{search}&quot;.</>}
+        rowProps={(w) => (w.enabled ? {} : { className: "isMuted" })}
+        columns={[
+          { key: "workflow", header: "Workflow", cell: (w) => (
             <>
-              <p>No workflows in this group yet.</p>
-              <p className="ink-soft">
-                A workflow chains health checks, load tests, waits, approvals and
-                notifications — draw one and it runs itself.
-              </p>
+              <Link to={`/workflows/${w.workflowId}`} className="runsTable__link">{w.name}</Link>
+              {!w.enabled && <span className="chip chip--muted" style={{ marginLeft: 8 }}>disabled</span>}
+              {w.description && (
+                <div className="ink-soft" style={{ fontSize: "0.82rem" }}>{w.description}</div>
+              )}
             </>
-          ) : (
-            <p className="ink-soft">No workflows match "{search}".</p>
-          )}
-        </div>
-      ) : (
-        <table className="runsTable workflowListTable">
-          <thead>
-            <tr>
-              <th scope="col">Workflow</th>
-              <th scope="col">Tasks</th>
-              <th scope="col">Last run</th>
-              <th scope="col">Updated</th>
-              <th scope="col" className="runsTable__actions">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((w) => (
-              <tr key={w.workflowId} className={w.enabled ? undefined : "isMuted"}>
-                <td>
-                  <Link to={`/workflows/${w.workflowId}`} className="runsTable__link">{w.name}</Link>
-                  {!w.enabled && <span className="chip chip--muted" style={{ marginLeft: 8 }}>disabled</span>}
-                  {w.description && (
-                    <div className="ink-soft" style={{ fontSize: "0.82rem" }}>{w.description}</div>
-                  )}
-                </td>
-                <td><TaskMix workflow={w} /></td>
-                <td>
-                  {w.lastExecution ? (
-                    <Link to={`/workflows/executions/${w.lastExecution.executionId}`} className="runsTable__link">
-                      <ExecutionStateChip state={w.lastExecution.state} />
-                      <span className="ink-soft" style={{ marginLeft: 6, fontSize: "0.82rem" }}>
-                        {formatRelative(w.lastExecution.startedAt)}
-                      </span>
-                    </Link>
-                  ) : (
-                    <span className="ink-soft">never run</span>
-                  )}
-                </td>
-                <td className="ink-soft" style={{ fontSize: "0.85rem" }}>
-                  {formatRelative(w.updatedAt)}
-                  {w.updatedBy ? <> by {w.updatedBy}</> : null}
-                </td>
-                <td className="runsTable__actions">
-                  <Link
-                    className="btn btn--ghost btn--sm"
-                    to={`/workflows/${w.workflowId}/edit`}
-                    state={{ from: here }}
-                  >Edit</Link>
-                  <button type="button" className="btn btn--ghost btn--sm" onClick={() => setPendingDelete(w)}>
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+          ) },
+          { key: "tasks", header: "Tasks", cell: (w) => <TaskMix workflow={w} /> },
+          { key: "lastRun", header: "Last run", cell: (w) => (
+            w.lastExecution ? (
+              <Link to={`/workflows/executions/${w.lastExecution.executionId}`} className="runsTable__link">
+                <ExecutionStateChip state={w.lastExecution.state} />
+                <span className="ink-soft" style={{ marginLeft: 6, fontSize: "0.82rem" }}>
+                  {formatRelative(w.lastExecution.startedAt)}
+                </span>
+              </Link>
+            ) : <span className="ink-soft">never run</span>
+          ) },
+          { key: "updated", header: "Updated", cell: (w) => (
+            <span className="ink-soft" style={{ fontSize: "0.85rem" }}>
+              {formatRelative(w.updatedAt)}{w.updatedBy ? <> by {w.updatedBy}</> : null}
+            </span>
+          ) },
+          { key: "actions", header: <span className="visuallyHidden">Actions</span>,
+            className: "runsTable__actions", cell: (w) => (
+              <>
+                <Link className="btn btn--ghost btn--sm"
+                      to={`/workflows/${w.workflowId}/edit`} state={{ from: here }}>Edit</Link>
+                <button type="button" className="btn btn--ghost btn--sm text--error"
+                        onClick={() => setPendingDelete(w)}>
+                  Delete
+                </button>
+              </>
+            ) },
+        ]}
+      />
 
       {pendingDelete && (
         <ConfirmDialog

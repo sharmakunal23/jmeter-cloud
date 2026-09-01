@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { formatRelative } from "../lib/time";
 
@@ -15,8 +15,7 @@ import { PurgeConfirmDialog } from "../components/PurgeConfirmDialog";
 import { useToast, ToastView } from "../components/Toast";
 import { HealthBadge } from "../components/HealthBadge";
 import { AppListToolbar } from "../components/AppListToolbar";
-import { Paginator } from "../components/Paginator";
-import { useClientPagination } from "../hooks/useClientPagination";
+import { DataList } from "../components/DataList";
 
 /**
  * D-AppRegistry — Applications surface.
@@ -101,7 +100,6 @@ export function ApplicationsListPage() {
   }, [state, search]);
   const groups = state.status === "ok" ? state.groups : [];
 
-  const { page, setPage, pageItems, total, pageSize, setPageSize } = useClientPagination(filteredApps, search);
 
   return (
     <section className="applicationsListPage">
@@ -191,18 +189,43 @@ export function ApplicationsListPage() {
         </div>
       )}
 
-      {state.status === "ok" && state.apps.length > 0 && filteredApps.length === 0 && (
-        <div className="emptyState">
-          <p className="ink-soft">No applications match "{search}".</p>
-        </div>
-      )}
-
-      {state.status === "ok" && filteredApps.length > 0 && (
-        <ApplicationListView apps={pageItems} groups={groups} aggregates={state.aggregates} />
-      )}
-
-      {state.status === "ok" && filteredApps.length > 0 && (
-        <Paginator page={page} pageSize={pageSize} total={total} label="applications" onChange={setPage} onPageSizeChange={setPageSize} />
+      {state.status === "ok" && state.apps.length > 0 && (
+        <DataList<Application>
+          label="Applications"
+          rows={filteredApps}
+          rowKey={(a) => a.applicationId}
+          itemNoun="applications"
+          resetKey={search}
+          empty={<>No applications match &quot;{search}&quot;.</>}
+          rowGroup={(a) => {
+            const h = groupHeading(a, groups);
+            return { key: h.key, label: <GroupHeading name={h.name} /> };
+          }}
+          columns={[
+            { key: "name", header: "Name", cell: (a) => (
+              <Link to={`/applications/${encodeURIComponent(a.name)}`}
+                    className="mono capacityListRow__name">{a.name}</Link>
+            ) },
+            { key: "health", header: "Health", cell: (a) => <HealthBadge app={a} compact /> },
+            { key: "sealId", header: "Seal ID",
+              cell: (a) => <span className="mono ink-soft">{a.sealId ?? "—"}</span> },
+            { key: "description", header: "Description", className: "appListTable__desc",
+              cell: (a) => a.description ?? <span className="ink-soft">—</span> },
+            { key: "runs", header: "Runs", className: "dataList__num",
+              cell: (a) => <span className="mono">{state.aggregates[a.name]?.totalRuns ?? 0}</span> },
+            { key: "active", header: "Active", className: "dataList__num",
+              cell: (a) => <span className="mono">{state.aggregates[a.name]?.activeRuns ?? 0}</span> },
+            { key: "lastRun", header: "Last run", cell: (a) => {
+              const last = state.aggregates[a.name]?.lastRun;
+              return last ? (
+                <>
+                  <span className={`badge badge--${badgeVariantForRunState(last.state)}`}>{last.state}</span>{" "}
+                  <span className="mono ink-soft">{formatRelative(last.createdAt)}</span>
+                </>
+              ) : <span className="ink-soft">—</span>;
+            } },
+          ]}
+        />
       )}
         </>
       )}
@@ -245,7 +268,6 @@ function ArchivedApplicationsView() {
   const [purgeApp, setPurgeApp] = useState<Application | null>(null);
   const { toast, showToast, dismiss } = useToast();
   const archivedApps = state.status === "ok" ? state.apps : [];
-  const { page, setPage, pageItems, total, pageSize, setPageSize } = useClientPagination(archivedApps);
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -277,41 +299,35 @@ function ArchivedApplicationsView() {
       )}
 
       {state.status === "ok" && state.apps.length > 0 && (
-        <table className="runsTable applicationListTable">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Seal ID</th>
-              <th aria-label="actions"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {pageItems.map((app) => (
-              <tr key={app.applicationId}>
-                <td>
-                  <span className="mono">{displayName(app.name)}</span>{" "}
-                  <span className="badge badge--info">archived</span>
-                </td>
-                <td className="mono ink-soft">{app.sealId ?? "—"}</td>
-                <td className="runsTable__actions">
-                  <button
-                    type="button"
-                    className="btn btn--sm btn--danger"
-                    onClick={() => setPurgeApp(app)}
-                    title="Permanently delete this application and all its data — cannot be undone"
-                    aria-label={`permanently delete application ${displayName(app.name)}`}
-                  >
-                    Delete permanently
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      {state.status === "ok" && state.apps.length > 0 && (
-        <Paginator page={page} pageSize={pageSize} total={total} label="archived applications" onChange={setPage} onPageSizeChange={setPageSize} />
+        <DataList<Application>
+          label="Archived applications"
+          rows={archivedApps}
+          rowKey={(a) => a.applicationId}
+          itemNoun="archived applications"
+          empty={<>Nothing archived.</>}
+          columns={[
+            { key: "name", header: "Name", cell: (a) => (
+              <>
+                <span className="mono">{displayName(a.name)}</span>{" "}
+                <span className="badge badge--info">archived</span>
+              </>
+            ) },
+            { key: "sealId", header: "Seal ID",
+              cell: (a) => <span className="mono ink-soft">{a.sealId ?? "—"}</span> },
+            { key: "actions", header: <span className="visuallyHidden">actions</span>,
+              className: "runsTable__actions", cell: (a) => (
+                <button
+                  type="button"
+                  className="btn btn--sm btn--ghost text--error"
+                  onClick={() => setPurgeApp(a)}
+                  title="Permanently delete this application and all its data — cannot be undone"
+                  aria-label={`permanently delete application ${displayName(a.name)}`}
+                >
+                  Delete permanently
+                </button>
+              ) },
+          ]}
+        />
       )}
 
       {purgeApp && (
@@ -344,69 +360,7 @@ function ArchivedApplicationsView() {
   );
 }
 
-// ── Table (list view) ─────────────────────────────────────────────
 
-function ApplicationListView({
-  apps, groups, aggregates,
-}: { apps: Application[]; groups: ApplicationGroup[]; aggregates: Record<string, AppAggregates> }) {
-  return (
-    <table className="runsTable applicationListTable">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Health</th>
-          <th>Seal ID</th>
-          <th>Description</th>
-          <th>Runs</th>
-          <th>Active</th>
-          <th>Last run</th>
-        </tr>
-      </thead>
-      <tbody>
-        {apps.map((app, i) => {
-          const agg = aggregates[app.name];
-          const heading = groupHeading(app, groups);
-          const first = i === 0 || groupHeading(apps[i - 1], groups).key !== heading.key;
-          return (
-            <Fragment key={app.applicationId}>
-            {first && (
-              <tr className="appGroupRow">
-                <td colSpan={7}><GroupHeading name={heading.name} /></td>
-              </tr>
-            )}
-            <tr>
-              <td>
-                <Link to={`/applications/${encodeURIComponent(app.name)}`} className="mono capacityListRow__name">
-                  {app.name}
-                </Link>
-              </td>
-              <td><HealthBadge app={app} compact /></td>
-              <td className="mono ink-soft">{app.sealId ?? "—"}</td>
-              <td className="appListTable__desc">
-                {app.description ?? <span className="ink-soft">—</span>}
-              </td>
-              <td className="mono">{agg?.totalRuns ?? 0}</td>
-              <td className="mono">{agg?.activeRuns ?? 0}</td>
-              <td>
-                {agg?.lastRun ? (
-                  <>
-                    <span className={`badge badge--${badgeVariantForRunState(agg.lastRun.state)}`}>
-                      {agg.lastRun.state}
-                    </span>{" "}
-                    <span className="mono ink-soft">
-                      {formatRelative(agg.lastRun.createdAt)}
-                    </span>
-                  </>
-                ) : <span className="ink-soft">—</span>}
-              </td>
-            </tr>
-            </Fragment>
-          );
-        })}
-      </tbody>
-    </table>
-  );
-}
 
 // HealthBadge moved to ../components/HealthBadge.tsx (Phase 5b — reused on Capacity list).
 
