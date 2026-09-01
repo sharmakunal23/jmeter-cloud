@@ -12,15 +12,12 @@ import { BulkPurgeRunsDialog } from "../components/BulkPurgeRunsDialog";
 import { RunsComparePage } from "./RunsComparePage";
 
 /**
- * 2026-05-16 — Compare 2 runs revival. The feature used to live on the
- * old flat /runs listing page; after the application-centric IA
- * cutover the page itself was removed, taking the compare entry
- * point with it. The behaviour is restored here, scoped to a single
- * app: checkbox per row → "Compare 2 runs →" button → URL becomes
- * `/applications/{app}?compare=A,B`, which renders the existing
- * {@link RunsComparePage}. The compare URL stays inside the
- * application's namespace so the back-link from compare lands on
- * the operator's previous page.
+ * Comparing two runs is an application-scoped action and this is its only
+ * entry point: checkbox per row → "Compare Results" → the URL becomes
+ * `/applications/{app}?compare=A,B`, which renders {@link RunsComparePage}.
+ *
+ * <p>The compare URL stays inside the application's namespace so the
+ * back-link from the comparison lands on the operator's previous page.
  */
 const MAX_COMPARE_SELECTION = 2;
 

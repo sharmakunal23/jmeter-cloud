@@ -45,9 +45,9 @@ export function RunsComparePage({ runIds, appName }: { runIds: string[]; appName
   const backHref = appName ? `/applications/${encodeURIComponent(appName)}` : "/applications";
   const backLabel = appName ? `← Back to ${appName}` : "← Back to runs";
   // Distinct + length validation up front. The compare URL is
-  // operator-controlled (RunsListPage builds it from checkbox state,
-  // but a hand-typed URL could carry duplicates / 1 / 3+); show a clear
-  // error rather than half-rendering the panel.
+  // operator-controlled (ApplicationDetailPage's "Compare Results" builds it
+  // from checkbox state, but a hand-typed URL could carry duplicates / 1 / 3+);
+  // show a clear error rather than half-rendering the panel.
   //
   // `runIds` is a FRESH array on every render (both call sites build it
   // with `parseCompareIds(...)` in their own render). Memoise `distinctIds`

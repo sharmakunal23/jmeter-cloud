@@ -1322,12 +1322,15 @@ h4 { font-size: var(--fs-sm); }
   text-shadow: 0 0 2px rgba(255, 255, 255, 0.7);
 }
 
+/* This page's toolbar row (counts + Compare/Clear/Archive). Same 0.5rem to
+   the table as `.dataList__toolbar` leaves, so its list sits as tight as
+   every DataList — this table is hand-rolled and does not get that for free. */
 .appDetailChips {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 0.6rem;
-  margin: 0.4rem 0 1rem;
+  margin: 0.4rem 0 0.5rem;
 }
 /* Action chips (Compare Results / Clear) reuse the chip shell so they
    sit visually paired with Total runs / Active instead of breaking
@@ -3882,19 +3885,7 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
 
 .runsToolbar__spacer { flex: 1; }
 
-.runsToolbar__selected {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.85rem;
-  color: var(--ink-soft);
-}
 
-.runsToolbar__refreshed {
-  font-size: 0.8rem;
-  color: var(--ink-soft);
-  white-space: nowrap;
-}
 
 .runsTable__check { width: 1.5rem; padding-right: 0; }
 .runsTable__actions { text-align: right; white-space: nowrap; }
