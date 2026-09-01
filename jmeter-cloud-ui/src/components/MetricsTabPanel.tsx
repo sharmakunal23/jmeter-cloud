@@ -18,11 +18,14 @@ import { useRunInsights } from "../hooks/useRunInsights";
 import { RunInsightsPanel } from "./RunInsightsPanel";
 import { AggregateReport, aggregateReportCsv } from "./metrics/AggregateReport";
 import { downloadCsv } from "../lib/download";
+import { ChartCard } from "./charts/ChartCard";
 import { ChartModal, type ChartSpec } from "./charts/ChartModal";
+import { PercentilePicker } from "./charts/PercentilePicker";
+import { PERCENTILE_LABELS, percentileSeries, type Percentile } from "../lib/percentiles";
 import { KeyMetrics } from "./metrics/KeyMetrics";
 import { MetricsSection, useSectionOpen } from "./metrics/MetricsSection";
 import {
-  TimeseriesChart, type TimeseriesSeries, formatCompactDuration, formatCompactNumber, formatPercent,
+  type TimeseriesSeries, formatCompactDuration, formatCompactNumber, formatPercent,
 } from "./charts/TimeseriesChart";
 
 /**
@@ -157,9 +160,21 @@ export function MetricsTabPanel({ runId, runState, run, dashboards }: MetricsTab
           </MetricsSection>
 
           <MetricsSection id="throughput" title="Throughput and response time" open={throughputOpen} onToggle={toggleThroughput}
-            meta={throughputOpen ? splitMeta(view.split) : undefined}>
+            meta={throughputOpen ? splitMeta(view.split) : undefined}
+            // Only while split: the unsplit chart draws all four percentiles at
+            // once, so there is nothing to choose. MetricsSection renders
+            // controls only while the section is open, so the buttons cannot be
+            // reached when the chart they steer is collapsed.
+            controls={view.split !== "none" ? (
+              <PercentilePicker
+                value={view.percentile}
+                onChange={(percentile) => updateView({ percentile })}
+                label="Response time percentile"
+              />
+            ) : undefined}>
             {hasChartData ? (
-              <ChartGrid data={data} split={view.split} panels="throughput" syncKey={syncKey} resetVersion={resetVersion} onEnlarge={setEnlarged} />
+              <ChartGrid data={data} split={view.split} panels="throughput" percentile={view.percentile}
+                         syncKey={syncKey} resetVersion={resetVersion} onEnlarge={setEnlarged} />
             ) : (
               <EmptyCharts loading={charts.status.kind === "loading" && data === null} runState={runState} />
             )}
@@ -168,7 +183,8 @@ export function MetricsTabPanel({ runId, runState, run, dashboards }: MetricsTab
           <MetricsSection id="errors" title="Errors" open={errorsOpen} onToggle={toggleErrors}
             meta={errorsOpen ? splitMeta(view.split) : undefined}>
             {hasChartData ? (
-              <ChartGrid data={data} split={view.split} panels="errors" syncKey={syncKey} resetVersion={resetVersion} onEnlarge={setEnlarged} />
+              <ChartGrid data={data} split={view.split} panels="errors" percentile={view.percentile}
+                         syncKey={syncKey} resetVersion={resetVersion} onEnlarge={setEnlarged} />
             ) : (
               <EmptyCharts loading={charts.status.kind === "loading" && data === null} runState={runState} />
             )}
@@ -360,10 +376,12 @@ function LabelControls({ id, selection, onChange }: {
 
 interface ChartGridProps {
   data: MetricsTimeseries; split: MetricsSplit; panels: "throughput" | "errors";
+  /** Which response-time series the split chart draws; ignored when unsplit. */
+  percentile: Percentile;
   syncKey: string; resetVersion: number; onEnlarge: (chart: ChartSpec) => void;
 }
 
-function ChartGrid({ data, split, panels, syncKey, resetVersion, onEnlarge }: ChartGridProps) {
+function ChartGrid({ data, split, panels, percentile, syncKey, resetVersion, onEnlarge }: ChartGridProps) {
   const groups = split === "application" ? data.applications : split === "region" ? data.regions : undefined;
   const keys = useMemo(() => (groups ? Object.keys(groups).sort() : []), [groups]);
   // The split is applied only when the payload carries it — never flash empty on the first refresh after switching.
@@ -371,18 +389,20 @@ function ChartGrid({ data, split, panels, syncKey, resetVersion, onEnlarge }: Ch
   const by = split === "application" ? "application" : "region";
 
   const throughput = useMemo<TimeseriesSeries[]>(() => splitMode
-    ? splitSeries(groups!, keys, "tps")
+    ? splitSeries(groups!, keys, (g) => g.tps)
     : [{ label: "TPS", color: SERIES_COLOR.tps, data: data.series.tps }], [data, groups, keys, splitMode]);
   const responseTime = useMemo<TimeseriesSeries[]>(() => {
-    if (splitMode) return splitSeries(groups!, keys, "avgRtMs");
+    // Split: one line per group, so exactly one percentile — the picker's.
+    // Unsplit: one line each, so all four at once.
+    if (splitMode) return splitSeries(groups!, keys, (g) => percentileSeries(g, percentile));
     const s: TimeseriesSeries[] = [{ label: "Avg", color: SERIES_COLOR.avg, data: data.series.avgRtMs }];
     if (data.series.p90Ms?.length) s.push({ label: "P90", color: SERIES_COLOR.p90, data: data.series.p90Ms });
     if (data.series.p95Ms?.length) s.push({ label: "P95", color: SERIES_COLOR.p95, data: data.series.p95Ms });
     if (data.series.p99Ms?.length) s.push({ label: "P99", color: SERIES_COLOR.p99, data: data.series.p99Ms });
     return s;
-  }, [data, groups, keys, splitMode]);
+  }, [data, groups, keys, splitMode, percentile]);
   const errorPct = useMemo<TimeseriesSeries[]>(() => splitMode
-    ? splitSeries(groups!, keys, "errorPct")
+    ? splitSeries(groups!, keys, (g) => g.errorPct)
     : [{ label: "Error %", color: SERIES_COLOR.error, data: data.series.errorPct }], [data, groups, keys, splitMode]);
   const errorCodes = useMemo<TimeseriesSeries[]>(() => errorCodeSeries(data.series), [data]);
 
@@ -392,7 +412,8 @@ function ChartGrid({ data, split, panels, syncKey, resetVersion, onEnlarge }: Ch
     ? [
         { title: splitMode ? `Throughput by ${by}` : "Throughput", series: throughput, yLabel: "requests / s",
           formatValue: one, formatAxisValue: formatCompactNumber },
-        { title: splitMode ? `Response time (avg) by ${by}` : "Response time", series: responseTime, yLabel: "ms",
+        { title: splitMode ? `Response time (${PERCENTILE_LABELS[percentile]}) by ${by}` : "Response time",
+          series: responseTime, yLabel: "ms",
           formatValue: one, formatAxisValue: formatCompactDuration },
       ]
     : [
@@ -404,31 +425,12 @@ function ChartGrid({ data, split, panels, syncKey, resetVersion, onEnlarge }: Ch
   return (
     <div className="metricsPanel__chartGrid">
       {cards.map((c) => (
-        <ChartCard key={c.title} chart={c} syncKey={syncKey} resetVersion={resetVersion} onEnlarge={onEnlarge} />
+        <ChartCard key={c.title} chart={c} height={CHART_HEIGHT} syncKey={syncKey} resetVersion={resetVersion} onEnlarge={onEnlarge} />
       ))}
     </div>
   );
 }
 
-/** A chart in its card, with the enlarge control in the corner. */
-function ChartCard({ chart, syncKey, resetVersion, onEnlarge }: {
-  chart: ChartSpec; syncKey: string; resetVersion: number; onEnlarge: (chart: ChartSpec) => void;
-}) {
-  return (
-    <div className="chartCard">
-      <button
-        type="button"
-        className="chartCard__enlarge"
-        onClick={() => onEnlarge(chart)}
-        title="Enlarge"
-        aria-label={`Enlarge ${chart.title}`}
-      >
-        ⤢
-      </button>
-      <TimeseriesChart {...chart} height={CHART_HEIGHT} syncKey={syncKey} resetVersion={resetVersion} />
-    </div>
-  );
-}
 
 function LabelCharts({ data, syncKey, resetVersion, onEnlarge }: {
   data: MetricsTimeseries; syncKey: string; resetVersion: number; onEnlarge: (chart: ChartSpec) => void;
@@ -449,7 +451,7 @@ function LabelCharts({ data, syncKey, resetVersion, onEnlarge }: {
   return (
     <div className="metricsPanel__chartGrid">
       {cards.map((c) => (
-        <ChartCard key={c.title} chart={c} syncKey={syncKey} resetVersion={resetVersion} onEnlarge={onEnlarge} />
+        <ChartCard key={c.title} chart={c} height={CHART_HEIGHT} syncKey={syncKey} resetVersion={resetVersion} onEnlarge={onEnlarge} />
       ))}
     </div>
   );
@@ -467,10 +469,16 @@ function EmptyCharts({ loading, runState }: { loading: boolean; runState: RunSta
 
 // ── helpers ────────────────────────────────────────────────────────────
 
+/**
+ * One line per group. Takes a picker rather than a key name so the response
+ * time can be any of the four percentiles without a second function.
+ */
 function splitSeries(
-  groups: Record<string, MetricsTimeseriesSeries>, keys: string[], metric: "tps" | "avgRtMs" | "errorPct",
+  groups: Record<string, MetricsTimeseriesSeries>,
+  keys: string[],
+  pick: (series: MetricsTimeseriesSeries) => TimeseriesPoint[],
 ): TimeseriesSeries[] {
-  return keys.map((k, i) => ({ label: k, color: colorForKey(k, i), data: groups[k]![metric] }));
+  return keys.map((k, i) => ({ label: k, color: colorForKey(k, i), data: pick(groups[k]!) }));
 }
 
 /**

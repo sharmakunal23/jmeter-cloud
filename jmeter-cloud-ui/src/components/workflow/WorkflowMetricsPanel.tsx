@@ -6,15 +6,16 @@ import {
 } from "../../api/runs";
 import type { WorkflowTask } from "../../api/workflows";
 import { colorForKey } from "../../lib/chartColors";
-import {
-  PERCENTILE_LABELS, errorPctByBucket, foldStats, percentileSeries, sumByBucket,
-  type Percentile,
-} from "../../lib/workflowMetrics";
+import { errorPctByBucket, foldStats, sumByBucket } from "../../lib/workflowMetrics";
+import { PERCENTILE_LABELS, percentileSeries, type Percentile } from "../../lib/percentiles";
 import { usePanelQuery } from "../../hooks/usePanelQuery";
 import { useRefreshTick } from "../../hooks/useRefreshTick";
 import { statsFor } from "../metrics/KeyMetrics";
 import { MetricsSection, useSectionOpen } from "../metrics/MetricsSection";
-import { TimeseriesChart, type TimeseriesSeries } from "../charts/TimeseriesChart";
+import { ChartCard } from "../charts/ChartCard";
+import { ChartModal, type ChartSpec } from "../charts/ChartModal";
+import { PercentilePicker } from "../charts/PercentilePicker";
+import { type TimeseriesSeries } from "../charts/TimeseriesChart";
 
 /**
  * The execution's load tests as one dashboard, laid out like the hosted
@@ -58,6 +59,8 @@ async function collect<T extends object>(
 export function WorkflowMetricsPanel({ tasks, live }: WorkflowMetricsPanelProps) {
   const [granularity, setGranularity] = useState<MetricsGranularity>(60);
   const [percentile, setPercentile] = useState<Percentile>("avg");
+  /** The chart shown enlarged, or null. Same control the run's Metrics tab has. */
+  const [enlarged, setEnlarged] = useState<ChartSpec | null>(null);
 
   const [keyOpen, toggleKey] = useSectionOpen("wfKeyMetrics");
   const [summaryOpen, toggleSummary] = useSectionOpen("wfSummary");
@@ -221,31 +224,22 @@ export function WorkflowMetricsPanel({ tasks, live }: WorkflowMetricsPanelProps)
             // charts of the same height stopped looking like it. MetricsSection
             // renders controls only while the section is open, so the buttons
             // cannot be reached when the charts they steer are collapsed.
-            controls={
-              <div className="percentilePicker" role="group" aria-label="Response time percentile">
-                {(Object.keys(PERCENTILE_LABELS) as Percentile[]).map((p) => (
-                  <button
-                    key={p}
-                    type="button"
-                    className={`btn btn--ghost btn--sm${percentile === p ? " isActive" : ""}`}
-                    aria-pressed={percentile === p}
-                    onClick={() => setPercentile(p)}
-                  >
-                    {PERCENTILE_LABELS[p]}
-                  </button>
-                ))}
-              </div>
-            }
+            controls={<PercentilePicker value={percentile} onChange={setPercentile} />}
           >
           {chartRows.length === 0 ? (
             <p className="ink-soft">{seriesLoading ? "Loading metrics…" : "No samples yet."}</p>
           ) : (
           <div className="workflowMetrics__charts">
-            <TimeseriesChart title="Throughput by application (req/s)" series={throughput} height={CHART_HEIGHT} />
-            <TimeseriesChart
-              title={`Response time by application — ${PERCENTILE_LABELS[percentile]} (ms)`}
-              series={responseTime}
-              height={CHART_HEIGHT}
+            <ChartCard
+              chart={{ title: "Throughput by application (req/s)", series: throughput }}
+              height={CHART_HEIGHT} onEnlarge={setEnlarged}
+            />
+            <ChartCard
+              chart={{
+                title: `Response time by application — ${PERCENTILE_LABELS[percentile]} (ms)`,
+                series: responseTime,
+              }}
+              height={CHART_HEIGHT} onEnlarge={setEnlarged}
             />
           </div>
           )}
@@ -256,16 +250,20 @@ export function WorkflowMetricsPanel({ tasks, live }: WorkflowMetricsPanelProps)
             <p className="ink-soft">{seriesLoading ? "Loading metrics…" : "No samples yet."}</p>
           ) : (
           <div className="workflowMetrics__charts">
-            <TimeseriesChart
-              title="Error % by application"
-              series={[...errorRate, ...overallErrorPct]}
-              height={CHART_HEIGHT}
+            <ChartCard
+              chart={{ title: "Error % by application", series: [...errorRate, ...overallErrorPct] }}
+              height={CHART_HEIGHT} onEnlarge={setEnlarged}
             />
-            <TimeseriesChart title="Error codes across the execution (per second)" series={codeSeries} height={CHART_HEIGHT} />
+            <ChartCard
+              chart={{ title: "Error codes across the execution (per second)", series: codeSeries }}
+              height={CHART_HEIGHT} onEnlarge={setEnlarged}
+            />
           </div>
           )}
           </MetricsSection>
       </>
+
+      <ChartModal chart={enlarged} onClose={() => setEnlarged(null)} />
     </div>
   );
 }

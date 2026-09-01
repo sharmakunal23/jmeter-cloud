@@ -11,27 +11,9 @@
 
 import type { MetricsTimeseriesSeries, RunSummaryStats, TimeseriesPoint } from "../api/runs";
 
-/** Which response-time series the chart is showing. */
-export type Percentile = "avg" | "p90" | "p95" | "p99";
-
-export const PERCENTILE_LABELS: Record<Percentile, string> = {
-  avg: "Average",
-  p90: "P90",
-  p95: "P95",
-  p99: "P99",
-};
-
-export function percentileSeries(
-  series: MetricsTimeseriesSeries,
-  which: Percentile,
-): TimeseriesPoint[] {
-  switch (which) {
-    case "avg": return series.avgRtMs;
-    case "p90": return series.p90Ms ?? [];
-    case "p95": return series.p95Ms ?? [];
-    case "p99": return series.p99Ms ?? [];
-  }
-}
+// The percentile vocabulary (`Percentile`, `PERCENTILE_LABELS`,
+// `percentileSeries`) lives in `lib/percentiles.ts` — both Metrics tabs use it,
+// so it is not this module's to own.
 
 /**
  * One headline across every run of an execution. Throughput adds up (each run

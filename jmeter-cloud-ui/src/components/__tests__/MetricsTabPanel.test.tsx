@@ -8,15 +8,18 @@ import { emptySummary, emptyTimeseries, rollup, summary, timeseries } from "./me
 //    is asserted without uPlot; the API is mocked at the client boundary so
 //    the test drives the real hooks, sections and view state. ──
 const chartCalls = vi.hoisted(() => ({
-  instances: [] as Array<{ title: string; seriesLabels: string[]; height?: number; syncKey?: string; resetVersion?: number }>,
+  instances: [] as Array<{ title: string; seriesLabels: string[]; firstValues: Array<number | undefined>;
+                           height?: number; syncKey?: string; resetVersion?: number }>,
 }));
 vi.mock("../charts/TimeseriesChart", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../charts/TimeseriesChart")>();
   return {
     ...actual,
-    TimeseriesChart: (props: { title: string; series: Array<{ label: string }>; height?: number; syncKey?: string; resetVersion?: number }) => {
+    TimeseriesChart: (props: { title: string; series: Array<{ label: string; data?: Array<{ v: number }> }>;
+                               height?: number; syncKey?: string; resetVersion?: number }) => {
       chartCalls.instances.push({
         title: props.title, seriesLabels: props.series.map((s) => s.label),
+        firstValues: props.series.map((s) => s.data?.[0]?.v),
         height: props.height, syncKey: props.syncKey, resetVersion: props.resetVersion,
       });
       return (
@@ -196,6 +199,54 @@ describe("MetricsTabPanel — charts", () => {
     expect(throughput.seriesLabels).toEqual(["na-east", "na-west"]);
     expect(chartTitles()).toContain("Error codes");   // the total, as on the hosted dashboard
     expect(screen.getAllByRole("option").map((o) => o.textContent)).not.toContain("By application");
+  });
+
+  it("split by region offers Average / P90 / P95 / P99, and the chart follows the pick", async () => {
+    api.timeseries.mockImplementation((_id: string, _s: AbortSignal, opts: { byRegion?: boolean }) =>
+      Promise.resolve(opts.byRegion
+        ? timeseries({ regions: { "na-east": timeseries().series, "na-west": timeseries().series } })
+        : timeseries()));
+    renderPanel("RUNNING", "?split=region");
+    await waitFor(() => expect(chartTitles()).toContain("Response time (Average) by region"));
+
+    const picker = screen.getByRole("group", { name: /response time percentile/i });
+    expect(within(picker).getAllByRole("button").map((b) => b.textContent))
+      .toEqual(["Average", "P90", "P95", "P99"]);
+
+    chartCalls.instances.length = 0;
+    fireEvent.click(within(picker).getByRole("button", { name: "P95" }));
+
+    // The title says which, and the plotted values are the p95 series (300 in
+    // the fixture) rather than the average (120) — a title alone would pass
+    // even if the chart kept drawing averages.
+    await waitFor(() => expect(chartTitles()).toContain("Response time (P95) by region"));
+    const rt = chartCalls.instances.find((c) => c.title === "Response time (P95) by region")!;
+    expect(rt.seriesLabels).toEqual(["na-east", "na-west"]);
+    expect(rt.firstValues).toEqual([300, 300]);
+    // A view choice, so it is in the link like range/granularity/split.
+    expect(location.search).toContain("rt=p95");
+  });
+
+  it("no split, no picker — that chart already draws all four percentiles at once", async () => {
+    renderPanel("RUNNING");
+    await waitFor(() => expect(chartTitles()).toContain("Response time"));
+    expect(screen.queryByRole("group", { name: /response time percentile/i })).not.toBeInTheDocument();
+    const rt = chartCalls.instances.find((c) => c.title === "Response time")!;
+    expect(rt.seriesLabels).toEqual(["Avg", "P90", "P95", "P99"]);
+  });
+
+  it("the picker is out of reach while its section is collapsed", async () => {
+    api.timeseries.mockImplementation((_id: string, _s: AbortSignal, opts: { byRegion?: boolean }) =>
+      Promise.resolve(opts.byRegion
+        ? timeseries({ regions: { "na-east": timeseries().series } })
+        : timeseries()));
+    renderPanel("RUNNING", "?split=region");
+    const picker = await screen.findByRole("group", { name: /response time percentile/i });
+    expect(picker).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Throughput and response time/i }));
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: /response time percentile/i })).not.toBeInTheDocument());
   });
 
   it("Reset zoom bumps resetVersion on every chart and is disabled without data", async () => {

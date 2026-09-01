@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 const mocks = vi.hoisted(() => ({ summary: vi.fn(), timeseries: vi.fn() }));
 vi.mock("../../api/runs", async (importOriginal) => {
@@ -85,6 +85,31 @@ describe("WorkflowMetricsPanel", () => {
     // two rates either — that only holds when the runs overlap completely.
     await waitFor(() => expect(screen.getByText("2.7")).toBeInTheDocument());
     expect(screen.getByText("All applications")).toBeInTheDocument();
+  });
+
+  it("every chart can be enlarged, the same control the run's Metrics tab has", async () => {
+    render(<WorkflowMetricsPanel tasks={TASKS} live={false} />);
+
+    // Throughput + response time are open by default; Errors is not.
+    const enlarge = await screen.findAllByRole("button", { name: /^Enlarge / });
+    expect(enlarge.map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Enlarge Throughput by application (req/s)",
+      "Enlarge Response time by application — Average (ms)",
+    ]);
+
+    fireEvent.click(enlarge[0]!);
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getAllByText("Throughput by application (req/s)").length).toBeGreaterThan(0);
+  });
+
+  it("the percentile pick names the response-time chart, so the enlarged copy says which one", async () => {
+    render(<WorkflowMetricsPanel tasks={TASKS} live={false} />);
+    const picker = await screen.findByRole("group", { name: /response time percentile/i });
+    fireEvent.click(within(picker).getByRole("button", { name: "P99" }));
+
+    await waitFor(() => expect(
+      screen.getByRole("button", { name: "Enlarge Response time by application — P99 (ms)" }),
+    ).toBeInTheDocument());
   });
 
   it("with no load tests it says so instead of rendering an empty board", () => {

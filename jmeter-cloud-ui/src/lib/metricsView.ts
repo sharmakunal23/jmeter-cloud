@@ -1,4 +1,5 @@
 import type { MetricsGranularity, MetricsSplit, MetricsWindow } from "../api/runs";
+import { PERCENTILE_ORDER, type Percentile } from "./percentiles";
 
 /**
  * What the Metrics tab shows, carried in the page URL (`?range=30m&granularity=30
@@ -32,6 +33,12 @@ export interface MetricsViewState {
   labels: LabelSelection;
   /** The Aggregate report's controls (`reportLabel`, `reportTop`) — independent of the charts'. */
   report: LabelSelection;
+  /**
+   * Which response-time series a SPLIT chart draws (`rt` in the URL). Ignored
+   * while `split` is "none": that chart draws all four at once, because one
+   * line each is readable and one line per region per percentile is not.
+   */
+  percentile: Percentile;
 }
 
 export const LIVE_DEFAULT_RANGE: MetricsWindow = "30m";
@@ -76,6 +83,7 @@ const PARAM_LABEL = "label";
 const PARAM_TOP = "top";
 const PARAM_REPORT_LABEL = "reportLabel";
 const PARAM_REPORT_TOP = "reportTop";
+const PARAM_PERCENTILE = "rt";
 const LABEL_PREFIX_MAX = 100;
 
 export function defaultRange(isTerminal: boolean): MetricsWindow {
@@ -86,6 +94,7 @@ export function defaultView(isTerminal: boolean): MetricsViewState {
   return {
     range: defaultRange(isTerminal), granularity: DEFAULT_GRANULARITY, split: "none",
     labels: { prefix: "", limit: DEFAULT_LABEL_LIMIT }, report: { prefix: "", limit: DEFAULT_LABEL_LIMIT },
+    percentile: "avg",
   };
 }
 
@@ -95,6 +104,7 @@ export function parseMetricsView(params: URLSearchParams, isTerminal: boolean): 
   const range = params.get(PARAM_RANGE);
   const granularity = params.get(PARAM_GRANULARITY);
   const split = params.get(PARAM_SPLIT);
+  const percentile = params.get(PARAM_PERCENTILE);
   return {
     range: RANGE_OPTIONS.some((o) => o.value === range) ? (range as MetricsWindow) : d.range,
     granularity: granularity === "15" || granularity === "30" || granularity === "60"
@@ -102,6 +112,7 @@ export function parseMetricsView(params: URLSearchParams, isTerminal: boolean): 
     split: SPLIT_OPTIONS.some((o) => o.value === split) ? (split as MetricsSplit) : d.split,
     labels: selection(params.get(PARAM_LABEL), params.get(PARAM_TOP)),
     report: selection(params.get(PARAM_REPORT_LABEL), params.get(PARAM_REPORT_TOP)),
+    percentile: PERCENTILE_ORDER.includes(percentile as Percentile) ? (percentile as Percentile) : d.percentile,
   };
 }
 
@@ -123,6 +134,7 @@ export function writeMetricsView(params: URLSearchParams, view: MetricsViewState
   setOrDelete(next, PARAM_TOP, view.labels.limit === DEFAULT_LABEL_LIMIT ? null : String(view.labels.limit));
   setOrDelete(next, PARAM_REPORT_LABEL, view.report.prefix.trim() || null);
   setOrDelete(next, PARAM_REPORT_TOP, view.report.limit === DEFAULT_LABEL_LIMIT ? null : String(view.report.limit));
+  setOrDelete(next, PARAM_PERCENTILE, view.percentile === d.percentile ? null : view.percentile);
   return next;
 }
 
