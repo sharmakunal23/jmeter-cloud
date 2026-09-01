@@ -1,10 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 
 /** Page-size choices offered by the paginator's rows-per-page picker. */
-export const LIST_PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const;
+export const LIST_PAGE_SIZE_OPTIONS = [15, 25, 50, 100] as const;
 
-/** Every list opens on the top 10; the picker goes up to 100. */
-export const DEFAULT_LIST_PAGE_SIZE = 10;
+/**
+ * Every list opens on the top 15; the picker goes up to 100.
+ *
+ * <p>15 rather than 10 because the list viewport is a fixed height either way,
+ * and at 10 the bottom of it sat empty on an ordinary window — the page size
+ * and {@code DataList}'s {@code viewportRows} are the same number for exactly
+ * that reason, so a full first page fills the box.
+ */
+export const DEFAULT_LIST_PAGE_SIZE = 15;
 
 /** ONE stored preference — picking a page size on any list applies to all of them. */
 const PAGE_SIZE_STORAGE_KEY = "jmeterCloud.listPageSize";

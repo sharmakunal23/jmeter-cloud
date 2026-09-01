@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { Paginator } from "./Paginator";
-import { useClientPagination } from "../hooks/useClientPagination";
+import { DEFAULT_LIST_PAGE_SIZE, useClientPagination } from "../hooks/useClientPagination";
 
 /**
  * The one list in this app. Every table an operator scans — runs, documents,
@@ -16,8 +16,8 @@ import { useClientPagination } from "../hooks/useClientPagination";
  * nothing below them moves as data arrives. A page whose layout reflows on
  * every poll is the thing this replaces.
  *
- * <p><b>It opens on the newest 10.</b> Page size is the operator's shared
- * preference (10 / 25 / 50 / 100, persisted across every list by
+ * <p><b>It opens on the newest 15.</b> Page size is the operator's shared
+ * preference (15 / 25 / 50 / 100, persisted across every list by
  * {@code useClientPagination}), and callers hand rows in already sorted —
  * newest first is the caller's job, because only it knows which column means
  * "recent".
@@ -85,7 +85,11 @@ export interface DataListProps<T> {
   onSelectionChange?: (next: ReadonlySet<string>) => void;
   /** Rendered in the toolbar beside the bulk actions (a search box, a filter). */
   toolbar?: ReactNode;
-  /** Rows visible at once before the body scrolls. Default 10 — the default page size. */
+  /**
+   * Rows visible at once before the body scrolls. Defaults to the default page
+   * size, so a full first page fills the box exactly and a larger page size
+   * scrolls inside the same height rather than growing the page.
+   */
   viewportRows?: number;
   /**
    * Groups consecutive rows under a heading row — the applications list bands
@@ -119,7 +123,7 @@ const HEADER_HEIGHT = 40;
 
 export function DataList<T>({
   label, columns, rows, rowKey, itemNoun = "items", empty, loading = false,
-  resetKey, rowProps, bulkActions, toolbar, viewportRows = 10, rowSelectionLabel,
+  resetKey, rowProps, bulkActions, toolbar, viewportRows = DEFAULT_LIST_PAGE_SIZE, rowSelectionLabel,
   selectedIds: controlledIds, onSelectionChange, rowGroup, pagination,
 }: DataListProps<T>) {
   // Always called (hooks cannot be conditional); ignored in server mode, where

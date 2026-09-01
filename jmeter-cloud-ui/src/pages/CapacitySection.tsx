@@ -1,3 +1,4 @@
+import { createContext, useContext, useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 
 import { ClustersIcon, ReservationsIcon } from "../components/Icons";
@@ -13,12 +14,34 @@ import { ClustersIcon, ReservationsIcon } from "../components/Icons";
  * outside this shell: it is a detail page with its own title and a back
  * link, not a third tab.
  */
+/**
+ * The active tab's status line, published up to the section heading.
+ *
+ * <p>It is a <b>string</b>, not a node, on purpose: the setter runs from an
+ * effect, and a node would be a fresh object every render, so the effect would
+ * fire every render and re-render forever.
+ */
+const StatusSlot = createContext<(text: string | null) => void>(() => {});
+
+/** Called by the active tab; the text appears beside the section's `<h1>`. */
+export function useCapacitySectionStatus(text: string | null): void {
+  const setStatus = useContext(StatusSlot);
+  useEffect(() => {
+    setStatus(text);
+    return () => setStatus(null);
+  }, [setStatus, text]);
+}
+
 export function CapacitySection() {
+  const [status, setStatus] = useState<string | null>(null);
   return (
     <section className="capacitySection">
       <header className="pageHeader pageHeader--section">
         <div className="pageHeader__titleGroup">
           <h1>Capacity</h1>
+          {/* The tab's status reads as part of the title, not as a line the
+              body has to make room for. */}
+          {status && <small className="ink-soft" aria-live="polite">{status}</small>}
         </div>
       </header>
 
@@ -35,7 +58,9 @@ export function CapacitySection() {
         </NavLink>
       </nav>
 
-      <Outlet />
+      <StatusSlot.Provider value={setStatus}>
+        <Outlet />
+      </StatusSlot.Provider>
     </section>
   );
 }

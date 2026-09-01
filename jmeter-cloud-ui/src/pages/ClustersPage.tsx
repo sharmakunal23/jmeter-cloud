@@ -5,6 +5,7 @@ import { AppListToolbar } from "../components/AppListToolbar";
 import { ClusterFormDialog } from "../components/ClusterFormDialog";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataList } from "../components/DataList";
+import { useCapacitySectionStatus } from "./CapacitySection";
 import { ToastView, useToast } from "../components/Toast";
 import { useVisiblePolling } from "../hooks/useVisiblePolling";
 import { formatRelative } from "../lib/time";
@@ -96,18 +97,16 @@ export function ClustersPage() {
     }
   }
 
+  useCapacitySectionStatus(
+    state.status === "ok"
+      ? isPaused ? "Polling paused (tab hidden)" : `Refreshed ${formatRelative(state.refreshedAt.toISOString())}`
+      : state.status === "loading" ? "Loading…" : null);
+
   return (
     <section>
-      {/* No <h1> here — the Capacity section shell owns it; this row carries
-          the tab's own status line and actions. */}
+      {/* No <h1> and no status line here — the Capacity section shell owns
+          both. This header carries only the tab's own actions. */}
       <header className="pageHeader">
-        <div className="pageHeader__titleGroup">
-          <small className="ink-soft" aria-live="polite">
-            {state.status === "ok"
-              ? isPaused ? "Polling paused (tab hidden)" : `Refreshed ${formatRelative(state.refreshedAt.toISOString())}`
-              : state.status === "loading" ? "Loading…" : ""}
-          </small>
-        </div>
         <div className="pageHeader__actions">
           <button className="btn btn--primary" onClick={() => setAdding(true)}>+ Add cluster</button>
         </div>

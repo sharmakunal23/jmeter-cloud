@@ -31,22 +31,23 @@ beforeEach(() => {
 });
 
 describe("DataList — the one list shape", () => {
-  it("opens on the top 10 and offers 10 / 25 / 50 / 100", () => {
+  it("opens on the top 15 and offers 15 / 25 / 50 / 100", () => {
     renderList();
 
     expect(screen.getAllByRole("row")).toHaveLength(DEFAULT_LIST_PAGE_SIZE + 1); // + header
     expect(screen.getByText("row 0")).toBeInTheDocument();
-    expect(screen.queryByText("row 10")).not.toBeInTheDocument();
+    expect(screen.queryByText(`row ${DEFAULT_LIST_PAGE_SIZE}`)).not.toBeInTheDocument();
 
     const picker = screen.getByLabelText("rows per page") as HTMLSelectElement;
     expect([...picker.options].map((o) => Number(o.value))).toEqual([...LIST_PAGE_SIZE_OPTIONS]);
+    expect(LIST_PAGE_SIZE_OPTIONS[0]).toBe(DEFAULT_LIST_PAGE_SIZE);
     expect(LIST_PAGE_SIZE_OPTIONS[LIST_PAGE_SIZE_OPTIONS.length - 1]).toBe(100);
   });
 
   it("the page size is a shared preference — picking one persists it for every list", () => {
     const { unmount } = renderList();
     fireEvent.change(screen.getByLabelText("rows per page"), { target: { value: "25" } });
-    expect(screen.getAllByRole("row")).toHaveLength(26);
+    expect(screen.getAllByRole("row")).toHaveLength(26);   // 25 + header
     unmount();
 
     renderList();
@@ -74,7 +75,7 @@ describe("DataList — the one list shape", () => {
 
     const after = (container.querySelector(".dataList__viewport") as HTMLElement).style.height;
     expect(after).toBe(before);          // the box is a viewport, not the page
-    expect(screen.getAllByRole("row").length).toBeGreaterThan(11);   // ...and it really did page to 100
+    expect(screen.getAllByRole("row").length).toBeGreaterThan(DEFAULT_LIST_PAGE_SIZE + 1); // ...and it really did page to 100
   });
 
   it("an empty list is still the same height — nothing below it moves as data arrives", () => {
@@ -112,10 +113,10 @@ describe("DataList — the one list shape", () => {
     renderList({ bulkActions: [{ label: "Delete", onRun }] });
 
     fireEvent.click(screen.getAllByRole("checkbox")[0]!);   // header
-    expect(screen.getByText("10 selected")).toBeInTheDocument();
+    expect(screen.getByText(`${DEFAULT_LIST_PAGE_SIZE} selected`)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-    expect(onRun.mock.calls[0]![0]).toHaveLength(10);
+    expect(onRun.mock.calls[0]![0]).toHaveLength(DEFAULT_LIST_PAGE_SIZE);
   });
 
   it("a selection survives paging, so a bulk action can span pages deliberately", () => {
@@ -124,11 +125,12 @@ describe("DataList — the one list shape", () => {
 
     fireEvent.click(screen.getAllByRole("checkbox")[1]!);        // r0 on page 1
     fireEvent.click(screen.getByRole("button", { name: "next page" }));
-    fireEvent.click(screen.getAllByRole("checkbox")[1]!);        // r10 on page 2
+    fireEvent.click(screen.getAllByRole("checkbox")[1]!);        // first row of page 2
 
     expect(screen.getByText("2 selected")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-    expect(onRun.mock.calls[0]![0].map((r: Row) => r.id)).toEqual(["r0", "r10"]);
+    expect(onRun.mock.calls[0]![0].map((r: Row) => r.id))
+      .toEqual(["r0", `r${DEFAULT_LIST_PAGE_SIZE}`]);
   });
 
   it("a row that disappears on a poll drops out of the selection rather than being silently acted on", () => {
@@ -235,7 +237,7 @@ describe("DataList — the one list shape", () => {
       <DataList<Row> label="t" columns={columns} rows={many} rowKey={(r) => r.id} empty={<>none</>}
                      rowGroup={(r) => ({ key: r.id[0]!, label: `group ${r.id[0]}` })} />);
 
-    // Page 1: 8 alphas + the first 2 betas — so BOTH headings appear.
+    // Page 1 holds all 8 alphas and spills into the betas — BOTH headings appear.
     expect(screen.getByText("group a")).toBeInTheDocument();
     expect(screen.getByText("group b")).toBeInTheDocument();
 

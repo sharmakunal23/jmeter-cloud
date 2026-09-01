@@ -18,6 +18,7 @@ vi.mock("../../api/runs", async () => {
 });
 
 import { runsApi } from "../../api/runs";
+import { DEFAULT_LIST_PAGE_SIZE } from "../../hooks/useClientPagination";
 
 const mocks = runsApi as unknown as {
   listPage: ReturnType<typeof vi.fn>;
@@ -56,65 +57,65 @@ function renderAt(path: string) {
 }
 
 describe("ApplicationDetailPage", () => {
-  it("calls runsApi.listPage with the appName from the URL + offset=0 + the shared page size (10)", async () => {
-    mocks.listPage.mockResolvedValue({ runs: [], total: 0, offset: 0, limit: 10 });
+  it("calls runsApi.listPage with the appName from the URL + offset=0 + the shared page size", async () => {
+    mocks.listPage.mockResolvedValue({ runs: [], total: 0, offset: 0, limit: DEFAULT_LIST_PAGE_SIZE });
     renderAt("/applications/checkout-svc");
     await waitFor(() => expect(mocks.listPage).toHaveBeenCalled());
     expect(mocks.listPage.mock.calls[0][0]).toEqual(
-      expect.objectContaining({ application: "checkout-svc", offset: 0, limit: 10 }),
+      expect.objectContaining({ application: "checkout-svc", offset: 0, limit: DEFAULT_LIST_PAGE_SIZE }),
     );
   });
 
   it("header shows a Templates link to the app's template page", async () => {
-    mocks.listPage.mockResolvedValue({ runs: [], total: 0, offset: 0, limit: 10 });
+    mocks.listPage.mockResolvedValue({ runs: [], total: 0, offset: 0, limit: DEFAULT_LIST_PAGE_SIZE });
     renderAt("/applications/checkout-svc");
     const link = await screen.findByRole("link", { name: /Templates/i });
     expect(link.getAttribute("href")).toBe("/templates/checkout-svc");
   });
 
   it("shows empty-state when no runs", async () => {
-    mocks.listPage.mockResolvedValue({ runs: [], total: 0, offset: 0, limit: 10 });
+    mocks.listPage.mockResolvedValue({ runs: [], total: 0, offset: 0, limit: DEFAULT_LIST_PAGE_SIZE });
     renderAt("/applications/checkout-svc");
     await waitFor(() => expect(screen.getByText(/No runs for/i)).toBeInTheDocument());
   });
 
   it("renders a row per run; each row links to the per-app run detail URL", async () => {
     const runs = [fixtureRun("01J0RUN001"), fixtureRun("01J0RUN002")];
-    mocks.listPage.mockResolvedValue({ runs, total: 2, offset: 0, limit: 10 });
+    mocks.listPage.mockResolvedValue({ runs, total: 2, offset: 0, limit: DEFAULT_LIST_PAGE_SIZE });
     renderAt("/applications/checkout-svc");
     await waitFor(() => expect(screen.getByText("01J0RUN001")).toBeInTheDocument());
     const link = screen.getByRole("link", { name: "01J0RUN001" }) as HTMLAnchorElement;
     expect(link.getAttribute("href")).toBe("/applications/checkout-svc/runs/01J0RUN001");
   });
 
-  it("?page=2 in the URL drives offset=10 in the API call", async () => {
-    mocks.listPage.mockResolvedValue({ runs: [], total: 100, offset: 10, limit: 10 });
+  it("?page=2 in the URL drives offset=<pageSize> in the API call", async () => {
+    mocks.listPage.mockResolvedValue({ runs: [], total: 100, offset: DEFAULT_LIST_PAGE_SIZE, limit: DEFAULT_LIST_PAGE_SIZE });
     renderAt("/applications/checkout-svc?page=2");
     await waitFor(() => expect(mocks.listPage).toHaveBeenCalled());
     expect(mocks.listPage.mock.calls[0][0]).toEqual(
-      expect.objectContaining({ application: "checkout-svc", offset: 10, limit: 10 }),
+      expect.objectContaining({ application: "checkout-svc", offset: DEFAULT_LIST_PAGE_SIZE, limit: DEFAULT_LIST_PAGE_SIZE }),
     );
   });
 
   it("clicking Next on the paginator navigates to ?page=2", async () => {
     const runs = Array.from({ length: 10 }, (_, i) => fixtureRun(`R${i.toString().padStart(3, "0")}`));
-    mocks.listPage.mockResolvedValue({ runs, total: 100, offset: 0, limit: 10 });
+    mocks.listPage.mockResolvedValue({ runs, total: 100, offset: 0, limit: DEFAULT_LIST_PAGE_SIZE });
     renderAt("/applications/checkout-svc");
     await waitFor(() => expect(screen.getByRole("button", { name: /next page/i })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: /next page/i }));
     // Re-fetch fired with new offset. The page issues TWO calls per
     // fetch cycle (paginated + activeOnly); look for the paginated
-    // one carrying offset=10 specifically.
+    // one carrying the second page offset specifically.
     await waitFor(() => {
       const offsetCalls = mocks.listPage.mock.calls
         .map((c) => c[0])
-        .filter((arg) => arg && (arg as { offset?: number }).offset === 10);
+        .filter((arg) => arg && (arg as { offset?: number }).offset === DEFAULT_LIST_PAGE_SIZE);
       expect(offsetCalls.length).toBeGreaterThanOrEqual(1);
     });
   });
 
   it("Total runs chip reflects total from the API response", async () => {
-    mocks.listPage.mockResolvedValue({ runs: [fixtureRun("X")], total: 73, offset: 0, limit: 10 });
+    mocks.listPage.mockResolvedValue({ runs: [fixtureRun("X")], total: 73, offset: 0, limit: DEFAULT_LIST_PAGE_SIZE });
     renderAt("/applications/checkout-svc");
     await waitFor(() => {
       const chips = document.querySelectorAll('.appDetailChip');
@@ -126,7 +127,7 @@ describe("ApplicationDetailPage", () => {
   it("Active chip reflects the count from the activeOnly fetch", async () => {
     // First call (paginated) → 1 run, total 1; second call (activeOnly) → 4 runs.
     mocks.listPage
-      .mockResolvedValueOnce({ runs: [fixtureRun("X")], total: 1, offset: 0, limit: 10 })
+      .mockResolvedValueOnce({ runs: [fixtureRun("X")], total: 1, offset: 0, limit: DEFAULT_LIST_PAGE_SIZE })
       .mockResolvedValueOnce({
         runs: Array.from({ length: 4 }, (_, i) => fixtureRun(`A${i}`)),
         total: 4, offset: 0, limit: 200,

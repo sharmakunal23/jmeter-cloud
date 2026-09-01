@@ -7,6 +7,7 @@ import { capacityApi, type ReconcileWorkersResult } from "../api/capacity";
 import { useVisiblePolling } from "../hooks/useVisiblePolling";
 import { AppListToolbar } from "../components/AppListToolbar";
 import { DataList } from "../components/DataList";
+import { useCapacitySectionStatus } from "./CapacitySection";
 import { useRowLink } from "../hooks/useRowLink";
 import { ReconcileWorkersDialog } from "../components/ReconcileWorkersDialog";
 
@@ -149,6 +150,14 @@ export function CapacityListPage() {
     }
   }
 
+  // Above the early return below: a hook after a conditional return runs on
+  // some renders and not others, which React rejects outright.
+  useCapacitySectionStatus(
+    state.status === "error" ? null
+      : state.status === "loading" ? "Loading…"
+      : isPaused ? "Polling paused (tab hidden)"
+      : `Refreshed ${formatRelative((state as Extract<State, {status:"ok"}>).refreshedAt.toISOString())}`);
+
   if (state.status === "error") return <p className="text--error">{state.message}</p>;
 
   // Loading state renders the same chrome (header, toolbar, table) with
@@ -161,18 +170,10 @@ export function CapacityListPage() {
 
   return (
     <section className="capacityPage">
-      {/* No <h1> here — the Capacity section shell owns it; this row carries
-          the tab's own status line and actions. */}
+      {/* No <h1> and no status line here — the Capacity section shell owns
+          both, so the status reads beside the title instead of costing the
+          body a row. This header carries only the tab's own actions. */}
       <header className="pageHeader">
-        <div className="pageHeader__titleGroup">
-          <small className="ink-soft" aria-live="polite">
-            {loading
-              ? "Loading…"
-              : isPaused
-                ? "Polling paused (tab hidden)"
-                : `Refreshed ${formatRelative((state as Extract<State, {status:"ok"}>).refreshedAt.toISOString())}`}
-          </small>
-        </div>
         <div className="capacityPage__regionTotals">
           {loading ? (
             <span className="skeleton skeleton--chip" aria-hidden="true" />
