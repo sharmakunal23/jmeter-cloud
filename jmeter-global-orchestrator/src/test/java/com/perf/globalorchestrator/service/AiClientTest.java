@@ -18,7 +18,7 @@ class AiClientTest {
 
     private AiClient client(int maxTokens) {
         return new AiClient(new ObjectMapper(), "test-key", "claude-opus-5",
-                "https://api.anthropic.com", maxTokens, "high", "adaptive", true);
+                "https://api.anthropic.com", maxTokens, "high", "adaptive", true, "default");
     }
 
     @Test
@@ -87,7 +87,7 @@ class AiClientTest {
     @DisplayName("no API key means disabled, and complete() refuses before any call")
     void disabledWithoutKey() {
         AiClient off = new AiClient(new ObjectMapper(), "  ", "claude-opus-5",
-                "https://api.anthropic.com/", 8192, "high", "adaptive", true);
+                "https://api.anthropic.com/", 8192, "high", "adaptive", true, "default");
         assertThat(off.isEnabled()).isFalse();
         assertThatThrownBy(() -> off.complete("sys", "user"))
                 .isInstanceOf(AiClient.AiDisabledException.class);
