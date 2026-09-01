@@ -204,7 +204,7 @@ export function ApplicationsListPage() {
           columns={[
             { key: "name", header: "Name", cell: (a) => (
               <Link to={`/applications/${encodeURIComponent(a.name)}`}
-                    className="mono capacityListRow__name">{a.name}</Link>
+                    className="mono listRow__name">{a.name}</Link>
             ) },
             { key: "health", header: "Health", cell: (a) => <HealthBadge app={a} compact /> },
             { key: "sealId", header: "Seal ID",

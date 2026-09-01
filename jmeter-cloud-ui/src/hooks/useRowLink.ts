@@ -11,12 +11,17 @@ import type { HTMLAttributes } from "react";
  * and the keyboard half is the half that gets forgotten. Cells with their own
  * controls must still stop propagation — the row's click would otherwise fire
  * behind a button.
+ *
+ * <p>Pass {@code extraClass} for a caller's own row state (a severity tint, a
+ * selected row) — it is merged, never substituted, so a row can never gain a
+ * modifier and lose the clickable affordance in the same edit.
  */
 export function useRowLink() {
   const navigate = useNavigate();
   return useCallback(
-    (href: string, ariaLabel: string): HTMLAttributes<HTMLTableRowElement> & { tabIndex: number } => ({
-      className: "capacityListRow capacityListRow--clickable",
+    (href: string, ariaLabel: string, extraClass?: string):
+      HTMLAttributes<HTMLTableRowElement> & { tabIndex: number } => ({
+      className: `listRow listRow--clickable${extraClass ? ` ${extraClass}` : ""}`,
       role: "link",
       "aria-label": ariaLabel,
       tabIndex: 0,

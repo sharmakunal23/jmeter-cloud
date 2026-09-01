@@ -87,12 +87,18 @@ export function AutomationPage() {
 
   return (
     <section className="automationPage">
-      <div className="pageHeader">
-        <h1>Automation</h1>
-        {state.status === "ok" && (
-          <span className="ink-soft">Refreshed {formatRelative(state.refreshedAt.toISOString())}</span>
-        )}
-      </div>
+      <header className="pageHeader pageHeader--section">
+        <div className="pageHeader__titleGroup">
+          <h1>Automation</h1>
+          {/* Beside the title, not opposite it — the same place Capacity puts
+              its refresh line, so the body starts at the tabs on both. */}
+          {state.status === "ok" && (
+            <small className="ink-soft" aria-live="polite">
+              Refreshed {formatRelative(state.refreshedAt.toISOString())}
+            </small>
+          )}
+        </div>
+      </header>
 
       <TabStrip tabs={tabs} active={tab} onChange={setTab}
                 idPrefix="automation" ariaLabel="Automation sections" />

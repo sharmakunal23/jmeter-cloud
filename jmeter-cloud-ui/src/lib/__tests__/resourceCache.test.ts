@@ -26,7 +26,7 @@ describe("resourceCache — single-flight", () => {
     const loader = vi.fn(() => new Promise<string[]>((r) => { release = r; }));
 
     const a = cached("k", loader);
-    const b = cached("k", loader, { force: true });
+    const b = cached("k", loader, { fresh: true });
     release(["v"]);
 
     expect(await a).toEqual(["v"]);
@@ -37,7 +37,7 @@ describe("resourceCache — single-flight", () => {
   it("releases the in-flight slot when the request settles, so the next miss refetches", async () => {
     const loader = vi.fn(async () => ["a"]);
     await cached("k", loader);
-    await cached("k", loader, { force: true });
+    await cached("k", loader, { fresh: true });
     expect(loader).toHaveBeenCalledTimes(2);
   });
 });
@@ -67,12 +67,12 @@ describe("resourceCache — TTL", () => {
     now.mockRestore();
   });
 
-  it("force bypasses the TTL — a poller sees a change the tick it lands", async () => {
+  it("fresh bypasses the TTL — a poller sees a change the tick it lands", async () => {
     let value = "first";
     const loader = vi.fn(async () => value);
     expect(await cached("k", loader)).toBe("first");
     value = "second";
-    expect(await cached("k", loader, { force: true })).toBe("second");
+    expect(await cached("k", loader, { fresh: true })).toBe("second");
   });
 });
 
@@ -163,7 +163,7 @@ describe("resourceCache — failures", () => {
     expect(await cached("k", loader)).toBe("good");
 
     fail = true;
-    await expect(cached("k", loader, { force: true })).rejects.toThrow("blip");
+    await expect(cached("k", loader, { fresh: true })).rejects.toThrow("blip");
 
     expect(peek("k")).toBe("good");
     fail = false;

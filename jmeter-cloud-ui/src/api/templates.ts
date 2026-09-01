@@ -85,7 +85,7 @@ export const templatesApi = {
         uploadedAt: b.uploadedAt,
         sizeBytes: b.sizeBytes,
       }));
-    }, { signal, force: opts?.fresh }),
+    }, { signal, fresh: opts?.fresh }),
 
   /** Save a new template. Returns the persisted blob's ID. */
   save: async (

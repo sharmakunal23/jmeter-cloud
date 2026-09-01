@@ -174,7 +174,7 @@ export function CapacityListPage() {
           both, so the status reads beside the title instead of costing the
           body a row. This header carries only the tab's own actions. */}
       <header className="pageHeader">
-        <div className="capacityPage__regionTotals">
+        <div className="pageHeader__actions">
           {loading ? (
             <span className="skeleton skeleton--chip" aria-hidden="true" />
           ) : regionEntries.length === 0 ? (
@@ -227,11 +227,11 @@ export function CapacityListPage() {
         rowProps={(r) => {
           const ratio = r.maxAvailable > 0 ? (r.ready + r.inUse) / r.maxAvailable : 0;
           const variant = ratio >= 1 ? "err" : ratio >= 0.8 ? "warn" : "ok";
-          const base = rowLink(`/capacity/groups/${encodeURIComponent(r.group.groupId)}`,
-                               `Open capacity for ${r.group.name}`);
           // The row is tinted by how full the pool is — the one signal an
-          // operator scans this page for.
-          return { ...base, className: `${base.className} capacityListRow--${variant}` };
+          // operator scans this page for. The tint rides along with the
+          // link props rather than replacing their class.
+          return rowLink(`/capacity/groups/${encodeURIComponent(r.group.groupId)}`,
+                         `Open capacity for ${r.group.name}`, `listRow--${variant}`);
         }}
         columns={[
           { key: "name", header: "Group",
@@ -239,7 +239,7 @@ export function CapacityListPage() {
             sortDirection: sortKey === "name" ? sortDir : null,
             cell: (r) => (
               <Link to={`/capacity/groups/${encodeURIComponent(r.group.groupId)}`}
-                    className="capacityListRow__name"
+                    className="listRow__name"
                     onClick={(e) => e.stopPropagation()}>
                 {r.group.name}
               </Link>

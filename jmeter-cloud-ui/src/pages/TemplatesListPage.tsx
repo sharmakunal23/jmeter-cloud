@@ -130,7 +130,7 @@ export function TemplatesListPage() {
               : `Refreshed ${formatRelative((state as Extract<State, {status:"ok"}>).refreshedAt.toISOString())}`}
           </small>
         </div>
-        <div className="capacityPage__regionTotals">
+        <div className="pageHeader__actions">
           {loading ? (
             <span className="skeleton skeleton--chip" aria-hidden="true" />
           ) : (
@@ -172,7 +172,7 @@ export function TemplatesListPage() {
             sortDirection: sortKey === "name" ? sortDir : null,
             cell: (r) => (
               <Link to={`/templates/${encodeURIComponent(r.app.name)}`}
-                    className="mono capacityListRow__name"
+                    className="mono listRow__name"
                     onClick={(e) => e.stopPropagation()}>
                 {r.app.name}
               </Link>

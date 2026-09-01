@@ -105,16 +105,20 @@ export function PluginsPage() {
   return (
     <section>
       <header className="pageHeader">
-        <div className="formField__labelRow">
-          <h1>Plugins</h1>
-          <InfoTip label="About plugins">
-            Shared JMeter plugin jars, selectable per run in the launcher — one
-            version per plugin name.
-          </InfoTip>
+        <div className="pageHeader__titleGroup">
+          <div className="formField__labelRow">
+            <h1>Plugins</h1>
+            <InfoTip label="About plugins">
+              Shared JMeter plugin jars, selectable per run in the launcher — one
+              version per plugin name.
+            </InfoTip>
+          </div>
         </div>
-        <button type="button" className="btn btn--primary" onClick={() => setAddOpen(true)}>
-          + Add plugin
-        </button>
+        <div className="pageHeader__actions">
+          <button type="button" className="btn btn--primary" onClick={() => setAddOpen(true)}>
+            + Add plugin
+          </button>
+        </div>
       </header>
 
       <AppListToolbar
@@ -137,7 +141,11 @@ export function PluginsPage() {
         rowKey={(p) => p.pluginId}
         itemNoun="plugins"
         resetKey={search}
-        empty={items.length === 0 ? (
+        // A failed load is not an empty library — saying "No plugins yet."
+        // under the error banner tells the operator their plugins are gone.
+        empty={list.status === "error" ? (
+          <>Could not load the plugin library.</>
+        ) : items.length === 0 ? (
           <>
             <strong>No plugins yet.</strong>
             <div>Upload a JMeter plugin jar — or a zip of the plugin plus its dependency

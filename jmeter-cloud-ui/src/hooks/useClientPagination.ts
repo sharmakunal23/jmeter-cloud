@@ -38,8 +38,9 @@ export function persistPageSize(next: number): void {
  * changes. The page is additionally clamped to the valid range, so a
  * shrinking result set never leaves the operator stranded on an empty page.
  *
- * <p>The page size is the operator's shared preference (10 default, up to
- * 100 — {@code setPageSize} persists it for every list at once); pass
+ * <p>The page size is the operator's shared preference
+ * ({@link DEFAULT_LIST_PAGE_SIZE}, up to 100 — {@code setPageSize} persists it
+ * for every list at once); pass
  * {@code fixedPageSize} to pin a bounded surface (e.g. a modal table) to its
  * own size and leave the shared preference untouched.
  */

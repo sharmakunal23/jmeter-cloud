@@ -139,7 +139,7 @@ export const applicationsApi = {
   list: (signal?: AbortSignal, opts?: { fresh?: boolean }) =>
     cached(`${APPLICATIONS_CACHE}:list`,
       () => requestJson<Application[]>("GET", "/api/v1/applications"),
-      { signal, force: opts?.fresh }),
+      { signal, fresh: opts?.fresh }),
 
   /** Archived view — only soft-deleted (hidden) apps, the hard-delete/purge surface. */
   listHidden: (signal?: AbortSignal) =>

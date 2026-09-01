@@ -86,7 +86,7 @@ export const pluginsApi = {
   list: (signal?: AbortSignal, opts?: { fresh?: boolean }) =>
     cached(`${PLUGINS_CACHE}:list`,
       () => request<PluginSummary[]>("GET", "/api/v1/plugins"),
-      { signal, force: opts?.fresh }),
+      { signal, fresh: opts?.fresh }),
   create: async (req: CreatePluginRequest, signal?: AbortSignal) => {
     const created = await request<PluginSummary>("POST", "/api/v1/plugins", req, signal);
     invalidate(PLUGINS_CACHE);

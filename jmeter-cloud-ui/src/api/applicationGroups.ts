@@ -103,7 +103,7 @@ export const applicationGroupsApi = {
   list: (signal?: AbortSignal, opts?: { fresh?: boolean }) =>
     cached(`${APPLICATION_GROUPS_CACHE}:list`,
       () => requestJson<ApplicationGroup[]>("GET", "/api/v1/applicationGroups"),
-      { signal, force: opts?.fresh }),
+      { signal, fresh: opts?.fresh }),
 
   /**
    * One group. Cached because the run launcher, the run detail page and the
@@ -115,7 +115,7 @@ export const applicationGroupsApi = {
     cached(`${APPLICATION_GROUPS_CACHE}:get:${groupId}`,
       () => requestJson<ApplicationGroup>(
         "GET", `/api/v1/applicationGroups/${encodeURIComponent(groupId)}`),
-      { signal, force: opts?.fresh }),
+      { signal, fresh: opts?.fresh }),
 
   create: async (body: CreateApplicationGroupRequest, signal?: AbortSignal) => {
     const created = await requestJson<ApplicationGroup>("POST", "/api/v1/applicationGroups", body, signal);

@@ -290,7 +290,9 @@ export function BlobsPage({ pinnedType, pinnedApplication, hideHeader }: BlobsPa
       {!hideHeader && (
         <header className="pageHeader">
           <h1>Blob library</h1>
-          <Link to="/templates/new" className="btn">+ New run</Link>
+          <div className="pageHeader__actions">
+            <Link to="/templates/new" className="btn">+ New run</Link>
+          </div>
         </header>
       )}
 
@@ -478,7 +480,10 @@ export function BlobsPage({ pinnedType, pinnedApplication, hideHeader }: BlobsPa
         onSelectionChange={onSelectionChange}
         bulkActions={[
           { label: "Delete selected", danger: true,
-            onRun: () => setPendingDelete([...selected.values()]) },
+            // Server-paged: the ids are the whole selection, `rows` only the
+            // visible part of it. Resolve from the page's own store.
+            onRun: (_rows, ids) =>
+              setPendingDelete([...ids].map((id) => selected.get(id)).filter((b): b is BlobMetadata => !!b)) },
         ]}
         rowProps={(b) => (selected.has(b.blobId) ? { className: "blobRow--selected" } : {})}
         columns={[

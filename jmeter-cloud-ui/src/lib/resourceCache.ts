@@ -56,7 +56,7 @@ export interface CachedOptions {
   /** Serve a stored value younger than this without a request. Default 30 s. */
   ttlMs?: number;
   /** Ignore any stored value and refetch, while still sharing one in-flight request. */
-  force?: boolean;
+  fresh?: boolean;
   /**
    * The caller's abort signal. Aborting rejects *this* caller with an
    * `AbortError` — exactly what an un-cached `fetch` did — but does **not**
@@ -68,7 +68,7 @@ export interface CachedOptions {
 /**
  * The cached value for `key`, fetching through `loader` on a miss.
  *
- * <p>An in-flight request is shared even when `force` is set, so a burst of
+ * <p>An in-flight request is shared even when `fresh` is set, so a burst of
  * "refresh now" clicks is still one request. A rejected load is never cached —
  * the next call retries — and it leaves any previously stored value in place,
  * so a transient failure does not blank a page that was working.
@@ -78,11 +78,11 @@ export function cached<T>(
   loader: (signal?: AbortSignal) => Promise<T>,
   opts: CachedOptions = {},
 ): Promise<T> {
-  const { ttlMs = DEFAULT_TTL_MS, force = false, signal } = opts;
+  const { ttlMs = DEFAULT_TTL_MS, fresh = false, signal } = opts;
   const entry = entries.get(key) as Entry<T> | undefined;
 
   if (entry?.inFlight) return abortable(entry.inFlight, signal);
-  if (!force && entry && entry.value !== undefined && Date.now() - entry.storedAt < ttlMs) {
+  if (!fresh && entry && entry.value !== undefined && Date.now() - entry.storedAt < ttlMs) {
     return abortable(Promise.resolve(entry.value), signal);
   }
 

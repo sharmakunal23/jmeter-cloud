@@ -753,6 +753,14 @@ h4 { font-size: var(--fs-sm); }
 /* Shared right-side actions group for list-page headers (primary action +
    view-mode toggle + any header buttons). Same flex shape the other list
    tabs use for their totals group, so every tab's header lines up. */
+/* THE page-header convention, one shape everywhere: `.pageHeader` is a
+   space-between row of at most two children — `.pageHeader__titleGroup` on the
+   left (h1 + its ⓘ and/or "Refreshed …") and `.pageHeader__actions` on the
+   right (the primary button, chips, toggles). A tab page has no title of its
+   own (the section shell owns it), so `.pageHeader__actions` is the row's only
+   child and lands at the LEFT edge — which is why "+ Add cluster" and
+   "+ Workflow schedule" both sit under their tab strip, not opposite it.
+   Never add a third child or a bespoke header row; both break the alignment. */
 .pageHeader__actions {
   display: flex;
   align-items: center;
@@ -3496,12 +3504,6 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
 
 /* AUTOMATION-3 — the three sections of /automation share one shell. */
 .schedulesSection { margin-bottom: 2rem; }
-/* The tab already names the section, so this row carries only the ⓘ and the add
-   button — as one right-aligned cluster, so neither floats. */
-.schedulesSection__head {
-  display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem;
-  margin-bottom: 0.75rem; min-height: 2rem;
-}
 .schedulesSection__empty { font-size: var(--fs-sm); }
 .schedulesSection__recipients { font-size: var(--fs-xs); }
 
@@ -4788,13 +4790,6 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
 
 /* ── Phase 5b — Capacity LIST page (rebuilt to match Applications IA) ─── */
 
-.capacityPage__regionTotals {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
 .capacityListToolbar {
   display: flex;
   justify-content: space-between;
@@ -4814,9 +4809,9 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
 .capacityListTable th.num,
 .capacityListTable td.num { text-align: right; }
 .capacityListTable .capacityBar { width: 8rem; }
-.capacityListRow--warn td { background: rgba(245, 158, 11, 0.05); }
-.capacityListRow--err  td { background: rgba(220, 38, 38, 0.06); }
-.capacityListRow__name { font-weight: 600; }
+.listRow--warn td { background: rgba(245, 158, 11, 0.05); }
+.listRow--err  td { background: rgba(220, 38, 38, 0.06); }
+.listRow__name { font-weight: 600; }
 
 .sortHeader {
   background: none;
@@ -4923,15 +4918,15 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
 
 /* ── Phase 5c — Capacity polish (clickable rows, skeleton, toast CTA) ── */
 
-.capacityListRow--clickable {
+.listRow--clickable {
   cursor: pointer;
   transition: background-color 0.12s ease;
 }
-.capacityListRow--clickable:hover td,
-.capacityListRow--clickable:focus td {
+.listRow--clickable:hover td,
+.listRow--clickable:focus td {
   background: rgba(14, 165, 233, 0.06);
 }
-.capacityListRow--clickable:focus {
+.listRow--clickable:focus {
   outline: 2px solid rgba(14, 165, 233, 0.6);
   outline-offset: -2px;
 }
@@ -4996,9 +4991,9 @@ select.formSelect:disabled { background-color: #f1f5f9; cursor: not-allowed; }
   height: 0.5rem;
   border-radius: 999px;
 }
-.capacityListRow--skeleton { cursor: default; }
-.capacityListRow--skeleton:hover td,
-.capacityListRow--skeleton:focus td { background: transparent; }
+.listRow--skeleton { cursor: default; }
+.listRow--skeleton:hover td,
+.listRow--skeleton:focus td { background: transparent; }
 
 /* ── Region picker (Capacity tab) — USA map + checklist ──────────────── */
 

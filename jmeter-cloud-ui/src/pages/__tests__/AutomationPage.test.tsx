@@ -220,6 +220,40 @@ describe("AutomationPage — three sections, group-scoped", () => {
     expect(await screen.findByText(/No scaling schedules/)).toBeInTheDocument();
   });
 
+  it("the tab's add button leads its header row — the same left placement every tab uses", async () => {
+    cron.list.mockResolvedValue([job({ cronJobId: "c1", name: "nightly", kind: "LAUNCH_WORKFLOW", groupId: "cps" })]);
+    renderPage();
+
+    const add = await screen.findByRole("button", { name: "+ Workflow schedule" });
+    const row = add.closest(".pageHeader__actions");
+    expect(row).not.toBeNull();
+    // First control in the row: the ⓘ trails it, so the button sits at the
+    // left edge exactly as "+ Add cluster" does on Capacity → Clusters.
+    expect(row!.firstElementChild).toBe(add);
+  });
+
+  it("filters the visible schedules by name and says so when nothing matches", async () => {
+    cron.list.mockResolvedValue([
+      job({ cronJobId: "c1", name: "nightly regression", kind: "LAUNCH_WORKFLOW", groupId: "cps" }),
+      job({ cronJobId: "c2", name: "weekly soak", kind: "LAUNCH_WORKFLOW", groupId: "cps" }),
+    ]);
+    renderPage();
+
+    expect(await screen.findByText("nightly regression")).toBeInTheDocument();
+    const filter = screen.getByRole("searchbox", { name: /Filter schedules by name/i });
+    expect(screen.getByText("2 of 2 schedules")).toBeInTheDocument();
+
+    fireEvent.change(filter, { target: { value: "soak" } });
+    expect(screen.queryByText("nightly regression")).not.toBeInTheDocument();
+    expect(screen.getByText("weekly soak")).toBeInTheDocument();
+    expect(screen.getByText("1 of 2 schedules")).toBeInTheDocument();
+
+    fireEvent.change(filter, { target: { value: "zzz" } });
+    // A filter that matches nothing is not the first-run empty state.
+    expect(screen.getByText(/No schedules match/)).toBeInTheDocument();
+    expect(screen.queryByText(/No workflow schedules/)).not.toBeInTheDocument();
+  });
+
   it("asks the backend once for every schedule — the page does not fetch per group", async () => {
     renderPage();
     await screen.findByRole("tablist", { name: "Automation sections" });

@@ -45,9 +45,15 @@ export interface DataListBulkAction<T> {
   label: string;
   /** Rendered in a danger style and confirmed by the caller. */
   danger?: boolean;
-  onRun: (selected: T[]) => void;
+  /**
+   * Run the action. {@code selected} holds the selected rows the list can see —
+   * in server-paged mode that is the current page only, so a caller whose
+   * selection spans pages must act on {@code selectedIds} and resolve the rows
+   * from its own store.
+   */
+  onRun: (selected: T[], selectedIds: ReadonlySet<string>) => void;
   /** Disable for a selection this action cannot handle. */
-  disabled?: (selected: T[]) => boolean;
+  disabled?: (selected: T[], selectedIds: ReadonlySet<string>) => boolean;
 }
 
 export interface DataListProps<T> {
@@ -202,6 +208,14 @@ export function DataList<T>({
     });
   }
 
+  /**
+   * What the bulk bar counts and acts on. In server-paged mode the selection
+   * spans pages the list has never seen, so `selectedRows` is only the visible
+   * part of it — counting that would contradict what the action then does, and
+   * would hide the bar entirely on a page with nothing ticked.
+   */
+  const selectionCount = serverPaged ? selectedIds.size : selectedRows.length;
+
   const colCount = columns.length + (selectable ? 1 : 0);
   const bodyHeight = viewportRows * ROW_HEIGHT;
 
@@ -210,16 +224,16 @@ export function DataList<T>({
       {(toolbar || selectable) && (
         <div className="dataList__toolbar">
           {toolbar}
-          {(bulkActions?.length ?? 0) > 0 && selectedRows.length > 0 && (
+          {(bulkActions?.length ?? 0) > 0 && selectionCount > 0 && (
             <div className="dataList__bulk" role="toolbar" aria-label={`${label} bulk actions`}>
-              <span className="dataList__bulkCount">{selectedRows.length} selected</span>
+              <span className="dataList__bulkCount">{selectionCount} selected</span>
               {bulkActions!.map((a) => (
                 <button
                   key={a.label}
                   type="button"
                   className={`btn btn--sm ${a.danger ? "btn--ghost text--error" : "btn--ghost"}`}
-                  disabled={a.disabled?.(selectedRows) ?? false}
-                  onClick={() => a.onRun(selectedRows)}
+                  disabled={a.disabled?.(selectedRows, selectedIds) ?? false}
+                  onClick={() => a.onRun(selectedRows, selectedIds)}
                 >
                   {a.label}
                 </button>

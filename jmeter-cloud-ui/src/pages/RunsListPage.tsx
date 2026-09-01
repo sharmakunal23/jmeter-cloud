@@ -145,7 +145,9 @@ function RunsTable({ searchParams, setSearchParams }: RunsTableProps) {
     <section>
       <header className="pageHeader">
         <h1>Runs</h1>
-        <Link to="/applications" className="btn btn--primary">+ New run</Link>
+        <div className="pageHeader__actions">
+          <Link to="/applications" className="btn btn--primary">+ New run</Link>
+        </div>
       </header>
 
       <div className="runsToolbar">

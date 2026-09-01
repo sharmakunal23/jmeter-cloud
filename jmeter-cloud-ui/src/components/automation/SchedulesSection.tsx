@@ -1,6 +1,7 @@
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
 import { cronJobsApi, CronJobApiError, type CronJobSummary } from "../../api/automation";
+import { AppListToolbar } from "../AppListToolbar";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { DataList, type DataListColumn } from "../DataList";
 import { InfoTip } from "../InfoTip";
@@ -70,7 +71,15 @@ export function SchedulesSection({
   const [pendingBulk, setPendingBulk] = useState<CronJobSummary[] | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [search, setSearch] = useState("");
   const { toast, showToast, dismiss } = useToast();
+
+  // Narrowing happens on rows already in hand — the schedule list is small and
+  // fetched whole, so filtering costs no round-trip.
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return q ? jobs.filter((j) => j.name.toLowerCase().includes(q)) : jobs;
+  }, [jobs, search]);
 
   async function runAction(id: string, action: () => Promise<unknown>, successMsg: string) {
     setBusyId(id);
@@ -162,23 +171,36 @@ export function SchedulesSection({
           noise. The name stays in the accessibility tree so the document
           outline and the section's aria-label still work. */}
       <h2 className="visuallyHidden">{title}</h2>
-      <div className="schedulesSection__head">
-        {/* The ⓘ sits with the add button rather than alone on the left: one
-            control cluster reads as deliberate, a floating icon does not. */}
-        <InfoTip label={`About ${title}`}>{info}</InfoTip>
-        <button type="button" className="btn btn--primary btn--sm" onClick={() => setShowCreate(true)}>
-          + {addLabel}
-        </button>
-      </div>
+      {/* The tab strip above already names this section, so the header row
+          carries only the tab's own actions — which puts them at the left
+          edge, the shape every tab page uses (Capacity → Clusters). */}
+      <header className="pageHeader">
+        <div className="pageHeader__actions">
+          <button type="button" className="btn btn--primary" onClick={() => setShowCreate(true)}>
+            + {addLabel}
+          </button>
+          <InfoTip label={`About ${title}`}>{info}</InfoTip>
+        </div>
+      </header>
 
       <ToastView toast={toast} onDismiss={dismiss} />
 
+      <AppListToolbar
+        noun="schedule"
+        search={search}
+        onSearchChange={setSearch}
+        count={visible.length}
+        total={jobs.length}
+      />
+
       <DataList<CronJobSummary>
         label={title}
-        rows={jobs}
+        rows={visible}
         rowKey={(j) => j.cronJobId}
         itemNoun="schedules"
-        empty={empty}
+        // The first-run copy tells the operator what a schedule here is for; a
+        // filter that matches nothing is a different situation and says so.
+        empty={jobs.length === 0 ? empty : <>No schedules match &quot;{search}&quot;.</>}
         columns={[
           { key: "name", header: "Name", cell: (j) => <strong>{j.name}</strong> },
           ...columns.map((c): DataListColumn<CronJobSummary> => ({

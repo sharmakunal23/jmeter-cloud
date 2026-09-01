@@ -280,6 +280,36 @@ describe("DataList — the one list shape", () => {
     expect(onSelectionChange).not.toHaveBeenCalled();
   });
 
+  it("server pagination: the bulk bar counts the WHOLE selection and survives a page with none of it", () => {
+    const onRun = vi.fn();
+    // Three picked on an earlier page, none on this one. The bar must still be
+    // reachable, and its count must be what Delete would actually delete.
+    render(
+      <DataList<Row> label="t" columns={columns} rows={rows(3)} rowKey={(r) => r.id}
+                     empty={<>none</>}
+                     bulkActions={[{ label: "Delete", danger: true, onRun }]}
+                     selectedIds={new Set(["r90", "r91", "r92"])}
+                     onSelectionChange={() => {}}
+                     pagination={{ page: 2, pageSize: 3, total: 300,
+                                   onPageChange: () => {}, onPageSizeChange: () => {} }} />);
+
+    expect(screen.getByText("3 selected")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    // The rows argument holds only what this page can see; the ids are the
+    // whole selection, which is what a cross-page caller must act on.
+    const [visibleRows, ids] = onRun.mock.calls[0];
+    expect(visibleRows).toEqual([]);
+    expect([...ids].sort()).toEqual(["r90", "r91", "r92"]);
+  });
+
+  it("client pagination still counts the rows it holds", () => {
+    const onRun = vi.fn();
+    renderList({ bulkActions: [{ label: "Delete", onRun }],
+                 rowSelectionLabel: (r: Row) => `Select ${r.name}` });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select row 0" }));
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
+  });
+
   it("a row's checkbox says what the row IS, not its id", () => {
     renderList({
       bulkActions: [{ label: "Delete", onRun: () => {} }],
