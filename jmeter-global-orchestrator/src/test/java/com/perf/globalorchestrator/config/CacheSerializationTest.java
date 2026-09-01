@@ -184,6 +184,28 @@ class CacheSerializationTest {
     }
 
     @Test
+    @DisplayName("a stored row naming a class outside the allow-list is refused, not instantiated")
+    void refusesForeignTypeTag() {
+        // What an attacker who can write one ORCH_CACHE row would try: name a
+        // class the service never caches and let the decode construct it.
+        byte[] forged = gzip(("{\"@class\":\"java.io.File\",\"path\":\"/etc/passwd\"}")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertThatThrownBy(() -> deserialize(forged))
+                .hasStackTraceContaining("java.io.File")
+                .hasStackTraceContaining("denied resolution");
+    }
+
+    private static byte[] gzip(byte[] raw) {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        try (java.util.zip.GZIPOutputStream gz = new java.util.zip.GZIPOutputStream(out)) {
+            gz.write(raw);
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+        return out.toByteArray();
+    }
+
+    @Test
     @DisplayName("a corrupt stored value fails loudly rather than returning a half-read object")
     void corruptValueThrows() {
         assertThatThrownBy(() -> deserialize(new byte[] {1, 2, 3, 4}))

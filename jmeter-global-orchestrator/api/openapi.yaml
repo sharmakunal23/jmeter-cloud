@@ -2275,7 +2275,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/CronJobSummary" }
         "400":
-          description: INVALID_REQUEST / INVALID_CRON / UNKNOWN_APPLICATION / TEMPLATE_UNAVAILABLE
+          description: INVALID_REQUEST / INVALID_CRON / UNKNOWN_WORKFLOW / UNKNOWN_APPLICATION_GROUP / REGION_NOT_CONFIGURED
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }

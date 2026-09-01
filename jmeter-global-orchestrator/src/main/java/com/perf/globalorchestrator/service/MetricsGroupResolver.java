@@ -88,6 +88,12 @@ public class MetricsGroupResolver {
      * operator repointed a group. The row is a handful of columns behind an
      * indexed key, so reading it per query costs nothing worth having a
      * consistency bug for.
+     *
+     * <p>The amortisation this gave up is small by construction: every caller
+     * resolves <b>once per metrics API call</b>, not once per series, so a
+     * run-detail page polling every 5 s adds one indexed lookup per poll. A
+     * short per-instance TTL would buy that back and put the replicas out of
+     * step again — don't.
      */
     private GroupRow group(String groupId) {
         return registry.findGroup(groupId).orElse(null);

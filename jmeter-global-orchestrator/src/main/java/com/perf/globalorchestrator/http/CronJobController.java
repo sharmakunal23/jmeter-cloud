@@ -1,12 +1,8 @@
 package com.perf.globalorchestrator.http;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.perf.globalorchestrator.client.DocumentServiceClient;
-import com.perf.globalorchestrator.client.DocumentServiceClient.TemplateUnavailableException;
-import com.perf.globalorchestrator.client.TemplateBody;
 import com.perf.globalorchestrator.domain.Actor;
 import com.perf.globalorchestrator.domain.ApplicationGroup;
-import com.perf.globalorchestrator.domain.Application;
 import com.perf.globalorchestrator.domain.CronJob;
 import com.perf.globalorchestrator.domain.CronJobFire;
 import com.perf.globalorchestrator.domain.CronJobKind;
@@ -15,7 +11,6 @@ import com.perf.globalorchestrator.domain.Workflow;
 import com.perf.globalorchestrator.observability.MdcEnrichmentFilter;
 import com.perf.globalorchestrator.repo.GroupCapacityRepository;
 import com.perf.globalorchestrator.repo.WorkflowRepository;
-import com.perf.globalorchestrator.repo.ApplicationRepository;
 import com.perf.globalorchestrator.repo.CronJobFireHistoryRepository;
 import com.perf.globalorchestrator.repo.CronJobRepository;
 import com.perf.globalorchestrator.repo.ApplicationGroupRepository;
@@ -471,12 +466,6 @@ public class CronJobController {
     public ResponseEntity<Map<String, String>> handleUnknownWorkflow(UnknownWorkflowException e) {
         return ResponseEntity.badRequest()
                 .body(Map.of("code", "UNKNOWN_WORKFLOW", "message", e.getMessage()));
-    }
-
-    @ExceptionHandler(TemplateUnavailableException.class)
-    public ResponseEntity<Map<String, String>> handleTemplate(TemplateUnavailableException e) {
-        return ResponseEntity.badRequest()
-                .body(Map.of("code", "TEMPLATE_UNAVAILABLE", "message", e.getMessage()));
     }
 
     @ExceptionHandler(CronJobConflictException.class)

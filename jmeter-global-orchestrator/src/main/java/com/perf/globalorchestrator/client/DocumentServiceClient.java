@@ -285,8 +285,9 @@ public class DocumentServiceClient {
     }
 
     /**
-     * The template could not be fetched or parsed. Controller maps to 400
-     * {@code TEMPLATE_UNAVAILABLE} at create/update; a fire records FAILED.
+     * The template could not be fetched or parsed. Its only caller is
+     * {@code LoadTestTaskExecutor}, which fails that workflow task with the
+     * message — no controller maps it, so it must never escape to a request.
      */
     public static class TemplateUnavailableException extends RuntimeException {
         public TemplateUnavailableException(String message) { super(message); }

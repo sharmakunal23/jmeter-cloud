@@ -46,8 +46,19 @@ public final class CacheValueCodec {
         ObjectMapper mapper = JsonMapper.builder()
                 .addModule(new JavaTimeModule())
                 .build();
+        // The `@class` tag in a stored row decides what gets instantiated on the
+        // next cache hit, so the validator is the boundary, not decoration:
+        // allowing every subtype of Object would let anything able to write an
+        // ORCH_CACHE row choose a class to construct. The cached values are this
+        // service's own records plus JDK containers — nothing else may be named.
         mapper.activateDefaultTyping(
-                BasicPolymorphicTypeValidator.builder().allowIfBaseType(Object.class).build(),
+                BasicPolymorphicTypeValidator.builder()
+                        .allowIfSubType("com.perf.globalorchestrator.")
+                        .allowIfSubType("java.util.")
+                        .allowIfSubType("java.math.")   // BigDecimal — what the JDBC driver hands back
+                        .allowIfSubType("java.time.")
+                        .allowIfSubType("java.lang.")
+                        .build(),
                 ObjectMapper.DefaultTyping.EVERYTHING,
                 JsonTypeInfo.As.PROPERTY);
         return mapper;

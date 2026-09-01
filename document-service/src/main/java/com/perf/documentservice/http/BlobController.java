@@ -177,9 +177,10 @@ public class BlobController {
     /**
      * One blob's bytes. <b>A blob is immutable</b> — there is no update verb, so
      * a given {@code blobId} always answers with the same bytes, and the
-     * response is cacheable for a year with a strong {@code ETag} (the content's
-     * own sha256). A repeat read of a test plan, data file or plugin jar
-     * therefore costs the browser nothing and this service nothing.
+     * response carries a strong {@code ETag} (the content's own sha256), so a
+     * repeat read of a test plan, data file or plugin jar costs a 304 rather
+     * than the bytes. See {@link #BLOB_CACHE_CONTROL} for why the window is an
+     * hour and not the blob's lifetime.
      *
      * <p>{@code private}, not {@code public}: a blob may hold a test plan or a
      * data file with sensitive content, and the UI's nginx sits in front — the
@@ -200,7 +201,7 @@ public class BlobController {
         if (matchesEtag(ifNoneMatch, etag)) {
             return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
                     .header(HttpHeaders.ETAG, etag)
-                    .header(HttpHeaders.CACHE_CONTROL, IMMUTABLE_BLOB_CACHE_CONTROL)
+                    .header(HttpHeaders.CACHE_CONTROL, BLOB_CACHE_CONTROL)
                     .build();
         }
 
@@ -212,7 +213,7 @@ public class BlobController {
                 .contentType(type)
                 .contentLength(meta.sizeBytes())
                 .header(HttpHeaders.ETAG, etag)
-                .header(HttpHeaders.CACHE_CONTROL, IMMUTABLE_BLOB_CACHE_CONTROL)
+                .header(HttpHeaders.CACHE_CONTROL, BLOB_CACHE_CONTROL)
                 .header("X-blobId", meta.blobId())
                 .header("X-sha256", meta.sha256());
         if (download) {
@@ -223,13 +224,26 @@ public class BlobController {
         return rb.body(new InputStreamResource(stream));
     }
 
-    /** A year, and `immutable` so a reload does not even revalidate. */
-    static final String IMMUTABLE_BLOB_CACHE_CONTROL = "private, max-age=31536000, immutable";
+    /**
+     * An hour of free reuse, then a conditional request the ETag answers 304.
+     *
+     * <p>Not a year and not {@code immutable}: a blob's <i>bytes</i> never
+     * change, but a blob can be <i>deleted</i>, and {@code immutable} tells the
+     * browser not to revalidate even on an explicit reload — a deleted test
+     * plan would keep rendering from the operator's own disk for a year with no
+     * request reaching this service. {@code must-revalidate} makes the deletion
+     * visible one hour later at worst, and costs a 304 rather than the bytes.
+     */
+    static final String BLOB_CACHE_CONTROL = "private, max-age=3600, must-revalidate";
 
     /**
      * RFC 9110 {@code If-None-Match}: a comma-separated list, or {@code *}.
      * A {@code W/} weak prefix is stripped — weak comparison is the right one
      * for a GET, and it is what a proxy that re-encoded the body would send back.
+     *
+     * <p>Splitting on the comma is safe only because this endpoint's ETag is a
+     * quoted hex digest: give it a tag that can contain a comma and this must
+     * become a real list parse.
      */
     static boolean matchesEtag(String ifNoneMatch, String etag) {
         if (ifNoneMatch == null || ifNoneMatch.isBlank()) return false;

@@ -33,6 +33,15 @@ class RunFailureReasonTest {
         return out;
     }
 
+    /** Bodyless failures — a status code and nothing else, as a dead relay produces. */
+    private static Map<String, RunService.FanoutOutcome> codedOutcomes(int... codes) {
+        Map<String, RunService.FanoutOutcome> out = new LinkedHashMap<>();
+        for (int i = 0; i < codes.length; i++) {
+            out.put("w" + i, new RunService.FanoutOutcome(MemberState.FAILED, codes[i], null));
+        }
+        return out;
+    }
+
     @Test
     @DisplayName("workers agreeing on one cause: that cause IS the diagnosis")
     void oneSharedCause() throws Exception {
@@ -54,15 +63,27 @@ class RunFailureReasonTest {
     }
 
     @Test
-    @DisplayName("no reason at all still produces a usable line, never a null or a crash")
+    @DisplayName("no reason and no status code still produces a usable line, never a null or a crash")
     void noReasons() throws Exception {
-        assertThat(reasonFor(outcomes(null, ""))).isEqualTo("all 2 fan-out(s) rejected");
+        assertThat(reasonFor(codedOutcomes(0, 0))).isEqualTo("all 2 fan-out(s) rejected");
     }
 
     @Test
-    @DisplayName("a worker's raw error body cannot overflow STATE_REASON and fail the state write")
-    void longReasonIsClipped() throws Exception {
+    @DisplayName("a bodyless transport failure names the status code — 'all fan-outs rejected' alone points nowhere")
+    void statusCodeWhenNoBody() throws Exception {
+        assertThat(reasonFor(codedOutcomes(502, 502)))
+                .isEqualTo("all 2 fan-out(s) rejected — HTTP 502 from every worker with no reason body");
+        assertThat(reasonFor(codedOutcomes(502, 503)))
+                .contains("HTTP 502/503").contains("no reason body");
+    }
+
+    @Test
+    @DisplayName("a worker's raw error body is passed through whole — the column clamp is the repository's")
+    void longReasonIsNotClippedHere() throws Exception {
+        // Bounding STATE_REASON belongs to RunRepository (OracleBind.text), which
+        // every write of the column goes through. Clamping here as well means two
+        // clamps, and the wrong one gets fixed. OracleBindTest owns the width.
         String r = reasonFor(outcomes("x".repeat(9000)));
-        assertThat(r).hasSizeLessThanOrEqualTo(4000).endsWith("…");
+        assertThat(r).hasSizeGreaterThan(4000).contains("all 1 fan-out(s) rejected");
     }
 }

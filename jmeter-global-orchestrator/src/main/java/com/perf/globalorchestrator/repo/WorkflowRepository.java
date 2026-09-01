@@ -105,6 +105,27 @@ public class WorkflowRepository {
         return updated == 0 ? Optional.empty() : findById(workflowId);
     }
 
+    /**
+     * Take the workflow's row lock so one launch of it runs at a time across
+     * every replica. {@code WorkflowService.launch} decides "already running?"
+     * by counting executions, and a plain count-then-insert lets two callers —
+     * the scheduler's tick and an operator's Run now — both read zero and both
+     * insert. Returns false when the workflow is gone.
+     *
+     * <p>PK equality, so the plan is an INDEX UNIQUE SCAN; the caller's
+     * transaction is short and makes no HTTP call while holding it.
+     */
+    public boolean lockForLaunch(String workflowId) {
+        try {
+            jdbc.queryForObject(
+                    "SELECT WORKFLOW_ID FROM ORCH_WORKFLOW WHERE WORKFLOW_ID=? FOR UPDATE",
+                    String.class, workflowId);
+            return true;
+        } catch (EmptyResultDataAccessException e) {
+            return false;
+        }
+    }
+
     public Optional<Workflow> findById(String workflowId) {
         try {
             return Optional.ofNullable(jdbc.queryForObject(
@@ -122,7 +143,6 @@ public class WorkflowRepository {
         return jdbc.update("DELETE FROM ORCH_WORKFLOW WHERE WORKFLOW_ID=?", workflowId) > 0;
     }
 
-    /** {@code groupId → workflow count} for the Workflows landing page; one statement for every group. */
     /**
      * {@code workflowId → name} for every workflow. One small query so a list
      * that references workflows renders in a single round-trip instead of one
@@ -135,6 +155,7 @@ public class WorkflowRepository {
         return out;
     }
 
+    /** {@code groupId → workflow count} for the Workflows landing page; one statement for every group. */
     public Map<String, Integer> countsByGroup() {
         Map<String, Integer> out = new HashMap<>();
         jdbc.query("SELECT GROUP_ID, COUNT(*) AS N FROM ORCH_WORKFLOW GROUP BY GROUP_ID",

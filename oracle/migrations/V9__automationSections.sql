@@ -72,6 +72,13 @@ ALTER TABLE ORCH_CRON_JOB ADD (
     WORKFLOW_ID VARCHAR2(64 CHAR)    -- LAUNCH_WORKFLOW only; deliberately no FK (see below)
 );
 
+-- V2's KIND checks name the OLD kinds, so they must go BEFORE the rows are
+-- re-kinded: rewriting PROVISION_REGION to SCALE_OUT under the live
+-- ORCH_CRON_JOB_KIND_CHK is ORA-02290, and it only fires on a database that
+-- already holds a scale schedule — a fresh one updates zero rows and looks fine.
+ALTER TABLE ORCH_CRON_JOB DROP CONSTRAINT ORCH_CRON_JOB_KIND_CHK;
+ALTER TABLE ORCH_CRON_JOB DROP CONSTRAINT ORCH_CRON_JOB_KIND_FIELDS_CHK;
+
 -- The scale kinds already operated on the application's group — this only
 -- removes the hop.
 UPDATE ORCH_CRON_JOB j
@@ -92,8 +99,6 @@ ALTER TABLE ORCH_CRON_JOB_FIRE_HISTORY RENAME COLUMN RUN_ID TO EXECUTION_ID;
 -- 3. Constraints — uniqueness re-keyed to the group, fields re-keyed to kind.
 -- ═══════════════════════════════════════════════════════════════════════
 ALTER TABLE ORCH_CRON_JOB DROP CONSTRAINT ORCH_CRON_JOB_APP_NAME_UQ;
-ALTER TABLE ORCH_CRON_JOB DROP CONSTRAINT ORCH_CRON_JOB_KIND_CHK;
-ALTER TABLE ORCH_CRON_JOB DROP CONSTRAINT ORCH_CRON_JOB_KIND_FIELDS_CHK;
 ALTER TABLE ORCH_CRON_JOB DROP (APPLICATION_NAME, TEMPLATE_BLOB_ID);
 
 -- Platform reports carry a NULL group, and Oracle lets only an all-NULL key

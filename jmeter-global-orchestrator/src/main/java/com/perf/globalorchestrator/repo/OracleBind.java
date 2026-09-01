@@ -6,6 +6,11 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.SqlParameterValue;
 import org.springframework.jdbc.core.support.SqlLobValue;
 
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.charset.CharsetEncoder;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.sql.CallableStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -91,10 +96,25 @@ final class OracleBind {
      * values are cut with a marker rather than raising ORA-12899 mid-transaction
      * — a 5,000-character exception message must not fail the state change it
      * explains. Null passes through.
+     *
+     * <p>The budget is <b>bytes</b>, not characters. With
+     * {@code MAX_STRING_SIZE=STANDARD} a {@code VARCHAR2(4000 CHAR)} column
+     * still tops out at 4,000 bytes, so 4,000 characters of anything
+     * multi-byte — a worker's error body, a name with an accent — is
+     * ORA-12899 on a char-counted clamp. The cut never splits a code point.
      */
-    static String text(String value, int maxChars) {
-        if (value == null || value.length() <= maxChars) return value;
-        return value.substring(0, maxChars - 1) + "…";
+    static String text(String value, int maxBytes) {
+        if (value == null) return value;
+        byte[] utf8 = value.getBytes(StandardCharsets.UTF_8);
+        if (utf8.length <= maxBytes) return value;
+        // "…" is 3 bytes in UTF-8; the encoder stops on a character boundary,
+        // so the result is always <= maxBytes.
+        CharsetEncoder enc = StandardCharsets.UTF_8.newEncoder()
+                .onMalformedInput(CodingErrorAction.REPLACE)
+                .onUnmappableCharacter(CodingErrorAction.REPLACE);
+        CharBuffer in = CharBuffer.wrap(value);
+        enc.encode(in, ByteBuffer.allocate(Math.max(0, maxBytes - 3)), true);
+        return value.substring(0, in.position()) + "…";
     }
 
     /**
@@ -115,9 +135,9 @@ final class OracleBind {
         return out.toString();
     }
 
-    /** Width of the free-text columns (`stateReason`, `reason`, `errorReason`, `description`). */
+    /** Byte width of the free-text columns (`stateReason`, `reason`, `errorReason`, `description`). */
     static final int TEXT_CHARS = 4000;
-    /** Width of the name-like columns (`actor`, `initiatedBy`, names). */
+    /** Byte width of the name-like columns (`actor`, `initiatedBy`, names). */
     static final int NAME_CHARS = 255;
 
     /** Bind value for a {@code CLOB} JSON column; null binds SQL NULL. */

@@ -132,6 +132,46 @@ class WorkflowDbTest extends OracleDbTestSupport {
     }
 
     @Test
+    @DisplayName("the launch lock serialises one workflow — a second launcher waits for the first to commit")
+    void launchLockSerialisesOneWorkflow() throws Exception {
+        Workflow wf = freshWorkflow(freshGroup(), "Serialised");
+        TransactionTemplate tx = new TransactionTemplate(txManager);
+        CountDownLatch held = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            // Holder takes the row lock and sits on it.
+            Future<?> holder = pool.submit(() -> tx.execute(st -> {
+                assertThat(workflows.lockForLaunch(wf.workflowId())).isTrue();
+                held.countDown();
+                try { release.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                return null;
+            }));
+            assertThat(held.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+
+            // The second launcher must NOT get through while the first holds it —
+            // that block is the whole guard against two executions of one graph.
+            Future<Boolean> contender = pool.submit(() -> tx.execute(st ->
+                    workflows.lockForLaunch(wf.workflowId())));
+            assertThatThrownBy(() -> contender.get(2, java.util.concurrent.TimeUnit.SECONDS))
+                    .isInstanceOf(java.util.concurrent.TimeoutException.class);
+
+            release.countDown();
+            holder.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(contender.get(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("locking a workflow that is gone says so instead of throwing")
+    void launchLockOnAMissingWorkflow() {
+        assertThat(workflows.lockForLaunch("01NOSUCHWORKFLOW")).isFalse();
+    }
+
+    @Test
     @DisplayName("the claim leases an execution — a second tick at the same instant gets nothing")
     void claimLeasesTheExecution() {
         Workflow wf = freshWorkflow(freshGroup(), "Claimable");

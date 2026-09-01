@@ -338,6 +338,14 @@ public class WorkflowService {
      */
     @Transactional
     public WorkflowExecution launch(String workflowId, Actor actor) {
+        // Serialise launches of THIS workflow before reading how many are
+        // running: the check below is a count-then-insert, so without the lock
+        // the scheduler's tick and an operator's "Run now" both read zero and
+        // both insert — two executions of one graph, each capacity-cleared
+        // against the same reservation.
+        if (!workflows.lockForLaunch(workflowId)) {
+            throw new WorkflowNotFoundException(workflowId);
+        }
         Workflow workflow = requireWorkflow(workflowId);
         if (!workflow.enabled()) {
             throw new WorkflowDisabledException(workflowId);

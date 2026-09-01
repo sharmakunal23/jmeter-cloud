@@ -275,20 +275,30 @@ public class RunService {
                 .map(FanoutOutcome::reason)
                 .filter(r -> r != null && !r.isBlank())
                 .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
-        if (distinct.isEmpty()) return base;
+        // A transport failure carries a status code and no body — the exact shape
+        // an operator hits when the relay cannot reach the workers. Saying "502
+        // from every worker" points at the network; saying nothing points nowhere.
+        if (distinct.isEmpty()) {
+            Set<Integer> codes = outcomes.values().stream()
+                    .map(FanoutOutcome::statusCode)
+                    .filter(c -> c > 0)
+                    .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+            if (codes.isEmpty()) return base;
+            return base + " — HTTP " + (codes.size() == 1
+                    ? codes.iterator().next() + " from every worker"
+                    : codes.stream().map(String::valueOf)
+                            .collect(java.util.stream.Collectors.joining("/")))
+                    + " with no reason body";
+        }
         String detail = distinct.size() == 1
                 ? distinct.iterator().next()
                 // Workers disagreeing is itself the signal — name one and say so.
                 : distinct.size() + " different reasons, first: " + distinct.iterator().next();
-        String composed = base + " — " + detail;
-        // ORCH_RUN.STATE_REASON is VARCHAR2(4000 CHAR); a worker's reason is
-        // its raw error body, so clip rather than fail the state write.
-        return composed.length() <= STATE_REASON_CHARS
-                ? composed : composed.substring(0, STATE_REASON_CHARS - 1) + "…";
+        // Not clamped here: every write of STATE_REASON goes through
+        // RunRepository, which bounds it to the column once. Two clamps means
+        // the wrong one is the one that gets fixed.
+        return base + " — " + detail;
     }
-
-    /** Width of {@code ORCH_RUN.STATE_REASON}. */
-    private static final int STATE_REASON_CHARS = 4000;
 
     /**
      * A launch that must provision workers first returns at once with the run
