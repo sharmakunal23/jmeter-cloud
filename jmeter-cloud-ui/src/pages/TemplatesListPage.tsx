@@ -142,15 +142,15 @@ export function TemplatesListPage() {
         </div>
       </header>
 
-      <AppListToolbar
-        search={search}
-        onSearchChange={setSearch}
-        count={sortedFiltered.length}
-        total={totalRowCount}
-        loading={loading}
-      />
 
       <DataList<RowAggregate>
+        toolbar={<AppListToolbar
+          search={search}
+          onSearchChange={setSearch}
+          count={sortedFiltered.length}
+          total={totalRowCount}
+          loading={loading}
+        />}
         label="Applications"
         loading={loading}
         rows={sortedFiltered}

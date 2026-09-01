@@ -150,48 +150,47 @@ function RunsTable({ searchParams, setSearchParams }: RunsTableProps) {
         </div>
       </header>
 
-      <div className="runsToolbar">
-        <label className="filterToggle">
-          <input
-            type="checkbox"
-            checked={activeOnly}
-            onChange={(e) => toggleActiveOnly(e.target.checked)}
-          />
-          Active only (hide COMPLETED / FAILED / ABORTED)
-        </label>
-
-        <span className="runsToolbar__spacer" />
-
-        {/* Compare stays visible and disabled rather than appearing with a
-            selection: a control you can see is how you learn the feature
-            exists, and its tooltip says exactly what to do next. */}
-        {compareUrl ? (
-          <Link to={compareUrl} className="btn btn--primary">
-            Compare 2 runs →
-          </Link>
-        ) : (
-          <button
-            type="button"
-            className="btn"
-            disabled
-            title={selected.size === 1
-              ? "Select one more run to compare (the comparison view shows exactly two)"
-              : "Select two runs to compare"}
-          >
-            Compare selected
-          </button>
-        )}
-
-        <span className="runsToolbar__refreshed">
-          {lastRefreshed
-            ? `refreshed ${formatRelative(lastRefreshed)}`
-            : "loading…"}
-        </span>
-      </div>
-
       {state.status === "error" && <p className="text--error">{state.message}</p>}
 
       <DataList<Run>
+        toolbar={<div className="runsToolbar">
+          <label className="filterToggle">
+            <input
+              type="checkbox"
+              checked={activeOnly}
+              onChange={(e) => toggleActiveOnly(e.target.checked)}
+            />
+            Active only (hide COMPLETED / FAILED / ABORTED)
+          </label>
+
+          <span className="runsToolbar__spacer" />
+
+          {/* Compare stays visible and disabled rather than appearing with a
+              selection: a control you can see is how you learn the feature
+              exists, and its tooltip says exactly what to do next. */}
+          {compareUrl ? (
+            <Link to={compareUrl} className="btn btn--primary">
+              Compare 2 runs →
+            </Link>
+          ) : (
+            <button
+              type="button"
+              className="btn"
+              disabled
+              title={selected.size === 1
+                ? "Select one more run to compare (the comparison view shows exactly two)"
+                : "Select two runs to compare"}
+            >
+              Compare selected
+            </button>
+          )}
+
+          <span className="runsToolbar__refreshed">
+            {lastRefreshed
+              ? `refreshed ${formatRelative(lastRefreshed)}`
+              : "loading…"}
+          </span>
+        </div>}
         label="Runs"
         loading={state.status === "loading"}
         rows={state.status === "ok" ? state.runs : []}

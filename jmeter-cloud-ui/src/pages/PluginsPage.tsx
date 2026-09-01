@@ -121,20 +121,20 @@ export function PluginsPage() {
         </div>
       </header>
 
-      <AppListToolbar
-        noun="plugin"
-        search={search}
-        onSearchChange={setSearch}
-        count={filtered.length}
-        total={items.length}
-        loading={list.status === "loading"}
-      />
 
       {list.status === "error" && (
         <div className="formError" role="alert">{list.message}</div>
       )}
 
       <DataList<PluginSummary>
+        toolbar={<AppListToolbar
+          noun="plugin"
+          search={search}
+          onSearchChange={setSearch}
+          count={filtered.length}
+          total={items.length}
+          loading={list.status === "loading"}
+        />}
         label="Plugins"
         loading={list.status === "loading"}
         rows={filtered}

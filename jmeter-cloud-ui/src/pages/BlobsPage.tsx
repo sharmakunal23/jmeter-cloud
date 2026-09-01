@@ -410,53 +410,52 @@ export function BlobsPage({ pinnedType, pinnedApplication, hideHeader }: BlobsPa
 
       <hr className="hr" />
 
-      <div className="runsToolbar">
-        {!pinnedType && (
-          // The Type dropdown is redundant on the Documents tabs;
-          // keep it as a fallback when BlobsPage is consumed without
-          // pinnedType (e.g. from a future surface).
-          <label className="filterToggle">
-            Type:&nbsp;
-            <select
-              value={typeFilter}
-              onChange={(e) => {
-                setTypeFilter(e.target.value);
-                setOffset(0);
-              }}
-            >
-              <option value="">All</option>
-              {TYPES.map((t) => (
-                <option key={t} value={t}>{t}</option>
-              ))}
-            </select>
-          </label>
-        )}
-        {/* Application filter — only when not already scoped via pinnedApplication
-            (Phase IA-Documents 2026-05-12 — the URL conveys the app on
-            the Documents detail page, so the dropdown is redundant). */}
-        {!pinnedApplication && (
-          <label className="filterToggle">
-            Application:&nbsp;
-            <select
-              value={appFilter}
-              onChange={(e) => {
-                setAppFilter(e.target.value);
-                setOffset(0);
-              }}
-            >
-              <option value="">All</option>
-              {applications.map((a) => (
-                <option key={a.applicationId} value={a.name}>{a.name}</option>
-              ))}
-            </select>
-          </label>
-        )}
-        <span className="runsToolbar__spacer" />
-      </div>
-
       {list.status === "error" && <p className="text--error">{list.message}</p>}
 
       <DataList<BlobMetadata>
+        toolbar={<div className="runsToolbar">
+          {!pinnedType && (
+            // The Type dropdown is redundant on the Documents tabs;
+            // keep it as a fallback when BlobsPage is consumed without
+            // pinnedType (e.g. from a future surface).
+            <label className="filterToggle">
+              Type:&nbsp;
+              <select
+                value={typeFilter}
+                onChange={(e) => {
+                  setTypeFilter(e.target.value);
+                  setOffset(0);
+                }}
+              >
+                <option value="">All</option>
+                {TYPES.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          {/* Application filter — only when not already scoped via pinnedApplication
+              (Phase IA-Documents 2026-05-12 — the URL conveys the app on
+              the Documents detail page, so the dropdown is redundant). */}
+          {!pinnedApplication && (
+            <label className="filterToggle">
+              Application:&nbsp;
+              <select
+                value={appFilter}
+                onChange={(e) => {
+                  setAppFilter(e.target.value);
+                  setOffset(0);
+                }}
+              >
+                <option value="">All</option>
+                {applications.map((a) => (
+                  <option key={a.applicationId} value={a.name}>{a.name}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          <span className="runsToolbar__spacer" />
+        </div>}
         label="Documents"
         loading={list.status === "loading"}
         rows={list.status === "ok" ? list.listing.items : []}

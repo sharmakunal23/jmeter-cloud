@@ -60,16 +60,16 @@ export function WorkflowGroupsPage() {
 
       {error && <div className="banner banner--error" role="alert">{error}</div>}
 
-      <AppListToolbar
-        noun="group"
-        search={search}
-        onSearchChange={setSearch}
-        count={filtered.length}
-        total={all.length}
-        loading={loading}
-      />
 
       <DataList<WorkflowGroupSummary>
+        toolbar={<AppListToolbar
+          noun="group"
+          search={search}
+          onSearchChange={setSearch}
+          count={filtered.length}
+          total={all.length}
+          loading={loading}
+        />}
         label="Workflow groups"
         loading={loading}
         rows={filtered}

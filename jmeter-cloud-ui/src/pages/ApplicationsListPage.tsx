@@ -86,6 +86,10 @@ export function ApplicationsListPage() {
     setRefreshSeq((n) => n + 1);
   }
 
+  // Read once, so the always-rendered list can reach them without narrowing
+  // `state` at every cell.
+  const aggregates = state.status === "ok" ? state.aggregates : {};
+
   // Apply the search filter once so the toolbar count + the grid + the
   // list view all stay in sync (avoid three independent narrowings).
   const filteredApps = useMemo<Application[]>(() => {
@@ -164,39 +168,40 @@ export function ApplicationsListPage() {
 
       {!archived && (
         <>
-      <AppListToolbar
-        search={search}
-        onSearchChange={setSearch}
-        count={filteredApps.length}
-        total={state.status === "ok" ? state.apps.length : 0}
-        loading={state.status === "loading"}
-      />
-
-      {state.status === "loading" && <p className="ink-soft">Loading applications…</p>}
       {state.status === "error" && <p className="text--error">{state.message}</p>}
 
-      {state.status === "ok" && state.apps.length === 0 && (
-        <div className="emptyState">
-          <p>No applications registered yet.</p>
-          <p className="ink-soft">
-            Register one to launch runs against it. Health-check endpoints
-            (optional) will be polled every minute.
-          </p>
-          <button type="button" className="btn btn--primary"
-                  onClick={() => setShowCreate(true)}>
-            + Register your first application
-          </button>
-        </div>
-      )}
-
-      {state.status === "ok" && state.apps.length > 0 && (
-        <DataList<Application>
+      {/* Always rendered, so the filter row inside it is always there: a
+          skeleton while loading, the first-run copy when the registry is
+          empty. A page that swaps the list out for an empty <div> loses its
+          filter and moves everything below it. */}
+      <DataList<Application>
+          toolbar={<AppListToolbar
+            search={search}
+            onSearchChange={setSearch}
+            count={filteredApps.length}
+            total={state.status === "ok" ? state.apps.length : 0}
+            loading={state.status === "loading"}
+          />}
           label="Applications"
+          loading={state.status === "loading"}
           rows={filteredApps}
           rowKey={(a) => a.applicationId}
           itemNoun="applications"
           resetKey={search}
-          empty={<>No applications match &quot;{search}&quot;.</>}
+          empty={state.status === "error" ? (
+            <>Could not load the application registry.</>
+          ) : state.status === "ok" && state.apps.length === 0 ? (
+            <>
+              <strong>No applications registered yet.</strong>
+              <div>Register one to launch runs against it — health-check endpoints
+                   (optional) are polled every minute.</div>
+              <button type="button" className="btn btn--primary"
+                      style={{ marginTop: "0.6rem" }}
+                      onClick={() => setShowCreate(true)}>
+                + Register your first application
+              </button>
+            </>
+          ) : <>No applications match &quot;{search}&quot;.</>}
           rowGroup={(a) => {
             const h = groupHeading(a, groups);
             return { key: h.key, label: <GroupHeading name={h.name} /> };
@@ -212,11 +217,11 @@ export function ApplicationsListPage() {
             { key: "description", header: "Description", className: "appListTable__desc",
               cell: (a) => a.description ?? <span className="ink-soft">—</span> },
             { key: "runs", header: "Runs", className: "dataList__num",
-              cell: (a) => <span className="mono">{state.aggregates[a.name]?.totalRuns ?? 0}</span> },
+              cell: (a) => <span className="mono">{aggregates[a.name]?.totalRuns ?? 0}</span> },
             { key: "active", header: "Active", className: "dataList__num",
-              cell: (a) => <span className="mono">{state.aggregates[a.name]?.activeRuns ?? 0}</span> },
+              cell: (a) => <span className="mono">{aggregates[a.name]?.activeRuns ?? 0}</span> },
             { key: "lastRun", header: "Last run", cell: (a) => {
-              const last = state.aggregates[a.name]?.lastRun;
+              const last = aggregates[a.name]?.lastRun;
               return last ? (
                 <>
                   <span className={`badge badge--${badgeVariantForRunState(last.state)}`}>{last.state}</span>{" "}
@@ -226,7 +231,6 @@ export function ApplicationsListPage() {
             } },
           ]}
         />
-      )}
         </>
       )}
 

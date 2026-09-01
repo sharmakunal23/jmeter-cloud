@@ -310,6 +310,23 @@ describe("DataList — the one list shape", () => {
     expect(screen.getByText("1 selected")).toBeInTheDocument();
   });
 
+  it("the caller's toolbar shares ONE row with the bulk bar — no second, reserved row", () => {
+    renderList({
+      toolbar: <div data-testid="filter">filter</div>,
+      bulkActions: [{ label: "Delete", onRun: () => {} }],
+      rowSelectionLabel: (r: Row) => `Select ${r.name}`,
+    });
+    // Exactly one toolbar row, and the filter lives in it. A list that renders
+    // its filter above DataList pays for a second row that stays empty until
+    // something is selected — 44px of dead space only selectable lists had.
+    expect(document.querySelectorAll(".dataList__toolbar")).toHaveLength(1);
+    expect(screen.getByTestId("filter").closest(".dataList__toolbar")).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select row 0" }));
+    expect(document.querySelectorAll(".dataList__toolbar")).toHaveLength(1);
+    expect(screen.getByText("1 selected").closest(".dataList__toolbar")).not.toBeNull();
+  });
+
   it("a row's checkbox says what the row IS, not its id", () => {
     renderList({
       bulkActions: [{ label: "Delete", onRun: () => {} }],

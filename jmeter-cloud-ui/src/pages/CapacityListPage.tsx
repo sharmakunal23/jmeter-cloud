@@ -201,16 +201,16 @@ export function CapacityListPage() {
         </div>
       </header>
 
-      <AppListToolbar
-        noun="group"
-        search={search}
-        onSearchChange={setSearch}
-        count={sortedFiltered.length}
-        total={totalRowCount}
-        loading={loading}
-      />
 
       <DataList<RowAggregate>
+        toolbar={<AppListToolbar
+          noun="group"
+          search={search}
+          onSearchChange={setSearch}
+          count={sortedFiltered.length}
+          total={totalRowCount}
+          loading={loading}
+        />}
         label="Application groups"
         loading={loading}
         rows={sortedFiltered}

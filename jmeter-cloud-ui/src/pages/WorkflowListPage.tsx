@@ -117,16 +117,16 @@ export function WorkflowListPage() {
 
       {error && <div className="banner banner--error" role="alert">{error}</div>}
 
-      <AppListToolbar
-        noun="workflow"
-        search={search}
-        onSearchChange={setSearch}
-        count={filtered.length}
-        total={all.length}
-        loading={loading}
-      />
 
       <DataList<Workflow>
+        toolbar={<AppListToolbar
+          noun="workflow"
+          search={search}
+          onSearchChange={setSearch}
+          count={filtered.length}
+          total={all.length}
+          loading={loading}
+        />}
         label="Workflows"
         loading={loading}
         rows={filtered}

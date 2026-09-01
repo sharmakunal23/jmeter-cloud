@@ -112,38 +112,33 @@ export function ClustersPage() {
         </div>
       </header>
 
-      <AppListToolbar
-        search={search}
-        onSearchChange={setSearch}
-        count={filtered.length}
-        total={clusters.length}
-        loading={state.status === "loading"}
-        noun="cluster"
-      />
-
-      {state.status === "error" ? (
-        <div className="emptyState">
-          <p>Could not load the cluster registry.</p>
-          <p className="ink-soft">{state.message}</p>
-        </div>
-      ) : state.status === "ok" && clusters.length === 0 ? (
-        <div className="emptyState">
-          <p>No clusters registered yet.</p>
-          <p className="ink-soft">
-            Deploy a jmeter-regional-orchestrator into the data center, then add the cluster here —
-            registration validates the endpoint before anything can run there.
-          </p>
-        </div>
-      ) : null}
-
       <DataList<ClusterStatus>
+        toolbar={<AppListToolbar
+          search={search}
+          onSearchChange={setSearch}
+          count={filtered.length}
+          total={clusters.length}
+          loading={state.status === "loading"}
+          noun="cluster"
+        />}
         label="Clusters"
         loading={state.status === "loading"}
         rows={filtered}
         rowKey={(c) => c.region}
         itemNoun="clusters"
         resetKey={search}
-        empty={<>No clusters match &quot;{search}&quot;.</>}
+        empty={state.status === "error" ? (
+          <>
+            <strong>Could not load the cluster registry.</strong>
+            <div className="ink-soft">{state.message}</div>
+          </>
+        ) : clusters.length === 0 ? (
+          <>
+            <strong>No clusters registered yet.</strong>
+            <div>Deploy a jmeter-regional-orchestrator into the data center, then add the cluster
+                 here — registration validates the endpoint before anything can run there.</div>
+          </>
+        ) : <>No clusters match &quot;{search}&quot;.</>}
         columns={[
           { key: "cluster", header: "Cluster", cell: (c) => (
             <div className="clusterCell">

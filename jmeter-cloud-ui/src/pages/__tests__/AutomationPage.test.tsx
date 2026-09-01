@@ -243,6 +243,10 @@ describe("AutomationPage — three sections, group-scoped", () => {
     const filter = screen.getByRole("searchbox", { name: /Filter schedules by name/i });
     expect(screen.getByText("2 of 2 schedules")).toBeInTheDocument();
 
+    // The filter shares the list's toolbar row rather than sitting above it,
+    // so the gap to the table is the same on every list in the app.
+    expect(filter.closest(".dataList__toolbar")).not.toBeNull();
+
     fireEvent.change(filter, { target: { value: "soak" } });
     expect(screen.queryByText("nightly regression")).not.toBeInTheDocument();
     expect(screen.getByText("weekly soak")).toBeInTheDocument();

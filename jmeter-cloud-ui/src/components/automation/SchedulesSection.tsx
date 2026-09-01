@@ -185,15 +185,14 @@ export function SchedulesSection({
 
       <ToastView toast={toast} onDismiss={dismiss} />
 
-      <AppListToolbar
-        noun="schedule"
-        search={search}
-        onSearchChange={setSearch}
-        count={visible.length}
-        total={jobs.length}
-      />
-
       <DataList<CronJobSummary>
+        toolbar={<AppListToolbar
+          noun="schedule"
+          search={search}
+          onSearchChange={setSearch}
+          count={visible.length}
+          total={jobs.length}
+        />}
         label={title}
         rows={visible}
         rowKey={(j) => j.cronJobId}
